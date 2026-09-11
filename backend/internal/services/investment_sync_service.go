@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
@@ -75,6 +77,7 @@ type investmentSyncService struct {
 	holdingRepo           repository.HoldingRepository
 	investmentTxnRepo     repository.InvestmentTransactionRepository
 	portfolioSnapshotRepo repository.PortfolioSnapshotRepository
+	userAccountRepo       repository.UserAccountRepository
 	plaidService          PlaidService
 	cacheGens             *cache.Generations
 }
@@ -128,6 +131,13 @@ func NewInvestmentSyncService(
 	holdingRepo repository.HoldingRepository,
 	investmentTxnRepo repository.InvestmentTransactionRepository,
 	portfolioSnapshotRepo repository.PortfolioSnapshotRepository,
+	// userAccountRepo carries the investment backfill obligation
+	// (user_accounts.investment_backfill_requested_at, #1631 M4). A POSITIONAL dependency, not a
+	// SetX setter like analytics and cache invalidation above: those are optional and nil-safe
+	// because losing them costs a metric or a cache miss, whereas a nil here would silently
+	// abandon every backfill a user asked for. The compiler is the right place to catch a missed
+	// wiring for an obligation.
+	userAccountRepo repository.UserAccountRepository,
 	plaidService PlaidService,
 	logger *slog.Logger,
 ) InvestmentSyncService {
@@ -143,6 +153,7 @@ func NewInvestmentSyncService(
 		holdingRepo:           holdingRepo,
 		investmentTxnRepo:     investmentTxnRepo,
 		portfolioSnapshotRepo: portfolioSnapshotRepo,
+		userAccountRepo:       userAccountRepo,
 		plaidService:          plaidService,
 	}
 }
@@ -232,6 +243,78 @@ func (s *investmentSyncService) ProcessWebhook(ctx context.Context, webhook *dom
 	return nil
 }
 
+// describeHoldingDuplicateDifferences lists, field by field, how a DISCARDED duplicate holding
+// disagreed with the row kept for its (account_id, security_id) pair. An empty result means the
+// two rows were identical, which is the likely real case — a provider repeating a row — and makes
+// discarding one a lossless no-op that is still visible in the logs.
+//
+// Why this function exists at all, instead of arithmetic (#1639, correcting #1631's first attempt):
+// a merge that summed the two rows produced a number no reader could trace back to anything Plaid
+// sent, and it silently doubled the position. Naming the contradiction leaves it a contradiction.
+//
+// A nil is ABSENT, not zero, and absent-vs-known is reported as a difference rather than treated as
+// a match: "Plaid reported no cost basis here and $600 there" is exactly the disagreement that must
+// not disappear. Values are compared by what they point AT, never by pointer identity.
+func describeHoldingDuplicateDifferences(kept, discarded domain.Holding) []string {
+	diffs := make([]string, 0, 5)
+	if kept.Quantity != discarded.Quantity {
+		diffs = append(diffs, "quantity: kept "+formatFloatForLog(kept.Quantity)+
+			", discarded "+formatFloatForLog(discarded.Quantity))
+	}
+	for _, f := range []struct {
+		name            string
+		kept, discarded *float64
+	}{
+		{"institution_value", kept.InstitutionValue, discarded.InstitutionValue},
+		{"institution_price", kept.InstitutionPrice, discarded.InstitutionPrice},
+		{"cost_basis", kept.CostBasis, discarded.CostBasis},
+	} {
+		if !optionalFloatsEqual(f.kept, f.discarded) {
+			diffs = append(diffs, f.name+": kept "+formatOptionalFloatForLog(f.kept)+
+				", discarded "+formatOptionalFloatForLog(f.discarded))
+		}
+	}
+	if !optionalStringsEqual(kept.CurrencyCode, discarded.CurrencyCode) {
+		diffs = append(diffs, "currency_code: kept "+formatOptionalStringForLog(kept.CurrencyCode)+
+			", discarded "+formatOptionalStringForLog(discarded.CurrencyCode))
+	}
+	return diffs
+}
+
+func optionalFloatsEqual(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func optionalStringsEqual(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// formatFloatForLog renders an amount the way a human reads it back out of a log line: 1650, not
+// 1.65e+03 and not 1650.000000.
+func formatFloatForLog(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+func formatOptionalFloatForLog(v *float64) string {
+	if v == nil {
+		return "absent"
+	}
+	return formatFloatForLog(*v)
+}
+
+func formatOptionalStringForLog(v *string) string {
+	if v == nil {
+		return "absent"
+	}
+	return *v
+}
+
 // SyncHoldings fetches the complete holdings snapshot from Plaid and atomically
 // replaces all holdings per account. Since Plaid returns a full snapshot (no delta),
 // we delete existing holdings and insert fresh ones inside a single DB transaction.
@@ -255,7 +338,7 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 	}
 
 	// Upsert securities and build plaid_security_id → internal UUID map
-	domainSecurities := mapPlaidSecuritiesToDomain(resp.Securities)
+	domainSecurities := mapPlaidSecuritiesToDomain(resp.Securities, s.logger)
 	securityMap, err := s.securityRepo.UpsertBatch(ctx, domainSecurities)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upsert securities: %w", err)
@@ -348,6 +431,46 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 		}
 
 		domainHoldings := make([]domain.Holding, 0, len(plaidHoldings))
+		// Production DLQ 2026-09-11 (dead_letter_jobs.id 9 = river_job.id 350,
+		// webhook_processing): holdings is
+		// UNIQUE (account_id, security_id), so a payload carrying one security twice for one
+		// account cannot be written AT ALL — every attempt fails identically until the job dead-
+		// letters, and the account's holdings stop syncing entirely. Two payloads produce that:
+		// Plaid listing the security twice for the account, and two distinct plaid_security_ids
+		// resolving to ONE securities row (the forked-identity problem #1631's consolidation
+		// columns exist for). Both arrive here as two elements with the same internal SecurityID,
+		// so the FIRST is kept and the rest are discarded on that key — and the log names every
+		// plaid_security_id involved, so the two remain distinguishable after the fact instead of
+		// being flattened into "some duplicate".
+		//
+		// ⚠ #1639 corrects this: the duplicates used to be SUMMED, on the theory that two rows were
+		// two lots of one position. Plaid's own SDK says they are not (plaid/model_holding.go):
+		// Quantity is "the total quantity of the asset held" and CostBasis "the total cost basis of
+		// the holding (e.g., the total amount spent to acquire all assets currently in the
+		// holding)". One Holding row IS the complete current position for the pair — which is why
+		// the table is unique on it. Two rows are therefore the same position stated twice, and
+		// summing them doubled the user's holdings, every portfolio total over them and every
+		// allocation percentage derived from them, silently.
+		//
+		// So: pick one row, whole, and do NO arithmetic across duplicates. First-wins rather than
+		// refusing the account outright because refusing returns us to the dead-lettered job this
+		// fix exists to end, and because picking is bounded-wrong (the stored figure is one of the
+		// two the provider actually sent) where summing is unbounded-wrong (the stored figure is
+		// one the provider never sent, and grows with every repetition). It is a deliberate trade,
+		// not laziness: the row we did not keep is named in full in the log below.
+		//
+		// Two consequences fall out of taking one row WHOLE, rather than being handled separately:
+		// a figure and the currency_code it is denominated in always travel together, so no sum of
+		// dollars and euros can be labelled "USD" (which is what defeated is_mixed_currency
+		// detection — it inspects persisted holding currency codes only); and an ABSENT cost basis
+		// stays absent rather than adopting the duplicate's figure as a complete total and
+		// fabricating an unrealized gain from it.
+		//
+		// None of this is the fix for a concurrent sync racing this one — that one is fixed where
+		// it lives, by the per-account advisory lock in holdingRepository.ReplaceForAccount. This
+		// only makes a self-inconsistent PAYLOAD writable, and says so out loud when it does.
+		indexBySecurity := make(map[string]int, len(plaidHoldings))
+		plaidIDsBySecurity := make(map[string][]string, len(plaidHoldings))
 		skippedAny := false
 		for _, ph := range plaidHoldings {
 			internalSecurityID, ok := securityMap[ph.SecurityId]
@@ -372,12 +495,44 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 			h.InstitutionValue = &instValue
 			instPrice := ph.InstitutionPrice
 			h.InstitutionPrice = &instPrice
+			// #1631 M8a: the currency of the three figures just assigned. Read from the HOLDING,
+			// not from the security: Plaid prices a foreign-currency security in USD while the
+			// institution reports the position in its own currency, so these are two different
+			// facts and conflating them would hide the exact mismatch this records.
+			h.CurrencyCode = plaidCurrencyCode(ph.IsoCurrencyCode.Get(), ph.UnofficialCurrencyCode.Get(),
+				s.logger, "holding of security "+ph.SecurityId+" in account "+plaidAccountID)
 
 			if cb := ph.CostBasis.Get(); cb != nil {
 				val := *cb
 				h.CostBasis = &val
 			}
 
+			plaidIDsBySecurity[internalSecurityID] = append(plaidIDsBySecurity[internalSecurityID], ph.SecurityId)
+
+			if existing, seen := indexBySecurity[internalSecurityID]; seen {
+				rowsSeen := len(plaidIDsBySecurity[internalSecurityID])
+				s.logger.Warn("discarded a duplicate holding: each Plaid holding row is the COMPLETE "+
+					"position for its (account, security), so the first is kept whole and the rest are "+
+					"dropped without arithmetic",
+					"account_id", internalAccountID,
+					"plaid_account_id", plaidAccountID,
+					"security_id", internalSecurityID,
+					"plaid_security_id", ph.SecurityId,
+					"plaid_security_ids_for_this_security", plaidIDsBySecurity[internalSecurityID],
+					"rows_seen_for_this_security", rowsSeen,
+					"rows_discarded_for_this_security", rowsSeen-1,
+					"plaid_holdings_in_payload", len(plaidHoldings),
+					// Empty when the discarded row was identical to the kept one — the likely real
+					// case, and then this whole line records a lossless no-op. Non-empty means the
+					// provider contradicted itself, and names both values so it reads as the
+					// contradiction it is instead of disappearing into an untraceable number.
+					"differences", describeHoldingDuplicateDifferences(domainHoldings[existing], h),
+					"item_id", linkedItem.ID,
+				)
+				continue
+			}
+
+			indexBySecurity[internalSecurityID] = len(domainHoldings)
 			domainHoldings = append(domainHoldings, h)
 		}
 
@@ -388,6 +543,20 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 
 		capturedDay, err := s.holdingRepo.ReplaceForAccount(ctx, internalAccountID, linkedItem.UserID, domainHoldings)
 		if err != nil {
+			// Production DLQ 2026-09-11: five identical attempts dead-lettered carrying only the
+			// constraint name, with nothing in the logs about the payload behind them. The two
+			// counts are what make a repeat diagnosable without a production query — a payload
+			// count above the row count means duplicates were merged, and equal counts mean the
+			// collision came from rows already in the table.
+			s.logger.Error("holdings replace failed",
+				"item_id", linkedItem.ID,
+				"account_id", internalAccountID,
+				"plaid_account_id", plaidAccountID,
+				"plaid_holdings_in_payload", len(plaidHoldings),
+				"holdings_rows_written", len(domainHoldings),
+				"distinct_securities", len(indexBySecurity),
+				"error", err,
+			)
 			return result, fmt.Errorf("failed to replace holdings for account %s: %w", internalAccountID, err)
 		}
 		// #1569 T9.1 item C: the aggregate below must be filed under the day the ROWS were filed
@@ -463,8 +632,16 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 }
 
 // SyncInvestmentTransactions fetches investment transactions using offset-based pagination.
-// On incremental sync, startDate = investments_last_synced_date - 1 day (safety overlap).
-// On first sync, uses a 2-year lookback. Updates investments_last_synced_date only on full success.
+//
+// Start date, in precedence order:
+//  1. the FULL lookback, if any chain on this item carries an outstanding backfill obligation
+//     (user_accounts.investment_backfill_requested_at — the owner re-included a previously
+//     excluded chain and we owe it history we never stored);
+//  2. investments_last_synced_date - 1 day (safety overlap), on an incremental sync;
+//  3. the full lookback, on a first sync.
+//
+// investments_last_synced_date advances ONLY when the run stored every row Plaid delivered — see
+// domain.InvestmentTransactionSyncResult.AnyTransactionDropped.
 func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, linkedItem *domain.LinkedItem) (*domain.InvestmentTransactionSyncResult, error) {
 	// Issue #1531 Task 10b-2a-ii: same "any commit, then bump" defer as SyncHoldings above —
 	// a page that commits transactions before a LATER page fails must still bump.
@@ -480,29 +657,14 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 	now := time.Now().UTC()
 	endDate := now.Format("2006-01-02") // Today in YYYY-MM-DD format
 
-	var startDate string
-	if linkedItem.InvestmentsLastSyncedDate != nil {
-		// Incremental sync: overlap by 1 day so we don't miss transactions posted
-		// after the previous sync's cutoff (unique constraint ensures idempotency).
-		startDate = linkedItem.InvestmentsLastSyncedDate.AddDate(0, 0, -investmentTxnOverlapDays).Format("2006-01-02")
-		s.logger.Info("incremental investment transaction sync",
-			"item_id", linkedItem.ID,
-			"start_date", startDate,
-		)
-	} else {
-		// First sync: 2-year lookback for full history
-		startDate = now.AddDate(-investmentTxnLookbackYears, 0, 0).Format("2006-01-02")
-		s.logger.Info("first investment transaction sync, using lookback",
-			"item_id", linkedItem.ID,
-			"start_date", startDate,
-			"lookback_years", investmentTxnLookbackYears,
-		)
-	}
-
 	// Build account maps for transaction → account ID and user_account_id resolution.
 	// userAccountMap carries the stable user_account_id (survives Plaid re-links)
 	// so investment transactions written here have the chain-expansion key set on
 	// insert (mirrors the banking UpsertBatch approach — Issue #1109).
+	//
+	// ⚠ This block runs BEFORE the start date is chosen (#1631 M4), which is a change from the
+	// original ordering: the backfill obligation is a property of the ACCOUNTS on this item, so the
+	// window cannot be decided until they are known.
 	//
 	// Issue #1569 round 11 task 1: this MUST be GetByLinkedItemIDIncludingRetained, not
 	// GetByLinkedItemID. Unlike SyncHoldings above (which wipes-and-reinserts via
@@ -519,6 +681,14 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 	}
 	accountMap := make(map[string]string, len(accounts))
 	userAccountMap := make(map[string]*string, len(accounts))
+	// excludedPlaidAccountIDs is a SEPARATE set rather than an absence from accountMap, because
+	// absence already means something else and something worse. See mapPlaidInvestmentTransactions.
+	excludedPlaidAccountIDs := make(map[string]struct{})
+	// includedChainIDs is ordered and de-duplicated: it becomes a query parameter, and a stable
+	// order keeps the SQL, the logs and the tests deterministic when an item carries several
+	// accounts on one chain (which a re-link chain routinely does).
+	var includedChainIDs []string
+	seenChain := make(map[string]struct{})
 	for _, a := range accounts {
 		// #1537 (F14): same guard as SyncHoldings above — see that comment for why the repository
 		// assertions cannot catch this. These rows go to UpsertBatch carrying linkedItem.UserID.
@@ -531,11 +701,102 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 			)
 			continue
 		}
+		if a.ExcludeInvestmentSync {
+			// #1631 M4: the owner asked us not to ingest this chain's investment activity, because
+			// Plaid reports the same brokerage cash movement through /transactions/sync as well and
+			// storing both double-counts it. Logged at INFO with an explicit "deliberately
+			// excluded" phrasing: the Warn in mapPlaidInvestmentTransactions means "we lost an
+			// account we should have had", and the two must not be confusable at 3am.
+			s.logger.Info("deliberately excluded account from investment transaction ingestion "+
+				"(user set exclude_investment_sync on its chain); this is not a lost account",
+				"linked_item_id", linkedItem.ID,
+				"account_id", a.ID,
+				"user_account_id", a.UserAccountID,
+			)
+			excludedPlaidAccountIDs[a.PlaidAccountID] = struct{}{}
+			continue
+		}
 		accountMap[a.PlaidAccountID] = a.ID
 		userAccountMap[a.PlaidAccountID] = a.UserAccountID
+		if a.UserAccountID != nil {
+			if _, seen := seenChain[*a.UserAccountID]; !seen {
+				seenChain[*a.UserAccountID] = struct{}{}
+				includedChainIDs = append(includedChainIDs, *a.UserAccountID)
+			}
+		}
 	}
 
 	result := &domain.InvestmentTransactionSyncResult{}
+
+	// Consume any outstanding backfill obligation. Asking only about the INCLUDED chains is the
+	// point: a chain that is still excluded owes nothing, and honouring a marker on it would
+	// re-fetch history we are about to refuse to store anyway.
+	//
+	// ⚠ This also resolves, without having to choose, which linked item a backfill belongs to. A
+	// chain spans re-links, so user_account → linked_item is not one-to-one; because the obligation
+	// lives on the chain row, whichever live item currently carries that account discharges it.
+	//
+	// ⚠ linkedItem.UserID is passed so the SQL, not this loop, enforces the tenant boundary. The
+	// account-owner guard above checks each ACCOUNT's user_id and says nothing about the owner of
+	// the CHAIN it points at, so one mis-assigned accounts.user_account_id would otherwise let this
+	// sync read — and, worse, discharge below — another user's obligation. A discharged obligation
+	// is invisible to every read, so it is the one failure here nothing downstream would reveal.
+	pendingBackfills, err := s.userAccountRepo.PendingInvestmentBackfills(ctx, includedChainIDs, linkedItem.UserID)
+	if err != nil {
+		// Non-fatal, and deliberately so: an unreadable marker must not stop the ordinary
+		// incremental sync for every OTHER account on this item. The obligation is durable on the
+		// row, so the next run retries it — that is the whole reason it is not a queued job.
+		s.logger.Warn("failed to read investment backfill obligations; continuing with the "+
+			"ordinary window (the obligation stays on the row and will be retried)",
+			"linked_item_id", linkedItem.ID,
+			"error", err,
+		)
+		pendingBackfills = nil
+	}
+	var backfillChainIDs []string
+	var newestBackfillMarker time.Time
+	for _, id := range includedChainIDs {
+		requestedAt, owed := pendingBackfills[id]
+		if !owed {
+			continue
+		}
+		backfillChainIDs = append(backfillChainIDs, id)
+		if requestedAt.After(newestBackfillMarker) {
+			newestBackfillMarker = requestedAt
+		}
+	}
+	result.BackfilledChains = len(backfillChainIDs)
+
+	var startDate string
+	switch {
+	case len(backfillChainIDs) > 0:
+		// The obligation outranks the watermark: the excluded period is precisely the period the
+		// incremental window does NOT cover.
+		startDate = now.AddDate(-investmentTxnLookbackYears, 0, 0).Format("2006-01-02")
+		s.logger.Info("investment transaction backfill: widening the window to the full lookback "+
+			"because a chain was re-included after being excluded",
+			"item_id", linkedItem.ID,
+			"start_date", startDate,
+			"lookback_years", investmentTxnLookbackYears,
+			"chains", len(backfillChainIDs),
+		)
+	case linkedItem.InvestmentsLastSyncedDate != nil:
+		// Incremental sync: overlap by 1 day so we don't miss transactions posted
+		// after the previous sync's cutoff (unique constraint ensures idempotency).
+		startDate = linkedItem.InvestmentsLastSyncedDate.AddDate(0, 0, -investmentTxnOverlapDays).Format("2006-01-02")
+		s.logger.Info("incremental investment transaction sync",
+			"item_id", linkedItem.ID,
+			"start_date", startDate,
+		)
+	default:
+		// First sync: 2-year lookback for full history
+		startDate = now.AddDate(-investmentTxnLookbackYears, 0, 0).Format("2006-01-02")
+		s.logger.Info("first investment transaction sync, using lookback",
+			"item_id", linkedItem.ID,
+			"start_date", startDate,
+			"lookback_years", investmentTxnLookbackYears,
+		)
+	}
 
 	var offset int32
 	const pageSize int32 = investmentTxnPageSize
@@ -549,10 +810,15 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 
 		result.PagesProcessed++
 
-		// Upsert securities for this page, building plaid_security_id → UUID map
+		// Upsert securities for this page, building plaid_security_id → UUID map.
+		//
+		// ⚠ Securities are upserted for EXCLUDED accounts too, and that is deliberate (#1631 M4):
+		// securities are shared reference data keyed by plaid_security_id, not per-account history,
+		// the write is cheap and idempotent, and a security a sibling account also holds must not
+		// go missing because some other account on the item is excluded.
 		securityMap := make(map[string]string)
 		if len(resp.Securities) > 0 {
-			domainSecurities := mapPlaidSecuritiesToDomain(resp.Securities)
+			domainSecurities := mapPlaidSecuritiesToDomain(resp.Securities, s.logger)
 			securityMap, err = s.securityRepo.UpsertBatch(ctx, domainSecurities)
 			if err != nil {
 				return result, fmt.Errorf("failed to upsert securities on page %d: %w", result.PagesProcessed, err)
@@ -561,7 +827,14 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 		}
 
 		// Map and upsert investment transactions for this page
-		domainTxns := mapPlaidInvestmentTransactions(resp.InvestmentTransactions, linkedItem.UserID, accountMap, userAccountMap, securityMap, s.logger)
+		domainTxns, drops := mapPlaidInvestmentTransactions(
+			resp.InvestmentTransactions, linkedItem.UserID,
+			accountMap, userAccountMap, excludedPlaidAccountIDs, securityMap, s.logger,
+		)
+		result.TransactionsExcluded += drops.excluded
+		result.TransactionsDroppedUnmappedAccount += drops.unmappedAccount
+		result.TransactionsDroppedUnparsableDate += drops.unparsableDate
+		result.TransactionsDroppedUnresolvedSecurity += drops.unresolvedSecurity
 		if len(domainTxns) > 0 {
 			inserted, err := s.investmentTxnRepo.UpsertBatch(ctx, domainTxns)
 			if err != nil {
@@ -586,15 +859,57 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 		}
 	}
 
-	// Update investments_last_synced_date ONLY on full success (all pages processed)
-	// Truncate now to midnight UTC (endDate already in this format)
-	today := now.Truncate(24 * time.Hour)
-	if err := s.linkedItemRepo.UpdateInvestmentsLastSyncedDate(ctx, linkedItem.ID, today); err != nil {
-		// Non-fatal: data is stored; log warning and continue
-		s.logger.Warn("failed to update investments_last_synced_date",
+	// #1631 (M7, merged into M4): the watermark is a promise that everything before it is STORED.
+	// It used to advance on "no page returned an HTTP error", which let a dropped row become
+	// permanent — the next run starts at lastSynced - 1 day and never asks for that date again.
+	// A drop is now a reason to leave the cursor where it is, so the very next run re-fetches the
+	// same window and gets another chance once the missing account or security shows up.
+	//
+	// ⚠ The cost, stated honestly: a PERMANENTLY undroppable row (a date Plaid will always send
+	// malformed) pins the cursor indefinitely, and every run then re-fetches the whole window. That
+	// is a repeated cost, not a loss — the upserts are idempotent — and the Dropped* counters in
+	// the completion log below name the offending reason so it can be fixed rather than tolerated.
+	if result.AnyTransactionDropped() {
+		s.logger.Warn("NOT advancing investments_last_synced_date: this run failed to store rows "+
+			"Plaid delivered, and advancing the cursor past them would make the loss permanent",
 			"item_id", linkedItem.ID,
-			"error", err,
+			"dropped_unmapped_account", result.TransactionsDroppedUnmappedAccount,
+			"dropped_unparsable_date", result.TransactionsDroppedUnparsableDate,
+			"dropped_unresolved_security", result.TransactionsDroppedUnresolvedSecurity,
 		)
+	} else {
+		// Update investments_last_synced_date on a run that stored everything it was given.
+		// Truncate now to midnight UTC (endDate already in this format).
+		//
+		// ⚠ An EXCLUDED row does not block this. The window was fully processed; the owner asked us
+		// not to store part of it. See AnyTransactionDropped's doc comment.
+		today := now.Truncate(24 * time.Hour)
+		if err := s.linkedItemRepo.UpdateInvestmentsLastSyncedDate(ctx, linkedItem.ID, today); err != nil {
+			// Non-fatal: data is stored; log warning and continue
+			s.logger.Warn("failed to update investments_last_synced_date",
+				"item_id", linkedItem.ID,
+				"error", err,
+			)
+		}
+
+		// Discharge the backfill obligation, and ONLY here — inside the same "stored everything"
+		// branch as the watermark. A lossy run did not finish the backfill, so the marker must
+		// survive for the next run. That is also what makes the obligation recoverable across a
+		// crash: nothing but a clean run clears it.
+		if len(backfillChainIDs) > 0 {
+			if err := s.userAccountRepo.ClearInvestmentBackfillRequests(ctx, backfillChainIDs, linkedItem.UserID, newestBackfillMarker); err != nil {
+				// Non-fatal: the backfill itself succeeded and its rows are committed. The
+				// surviving marker costs one more full-lookback re-fetch, whose upserts are
+				// idempotent — strictly better than the alternative failure mode of clearing an
+				// obligation that was never met.
+				s.logger.Warn("investment backfill completed but its obligation could not be "+
+					"cleared; the next sync will redo it (idempotently)",
+					"item_id", linkedItem.ID,
+					"chains", len(backfillChainIDs),
+					"error", err,
+				)
+			}
+		}
 	}
 
 	s.logger.Info("investment transactions sync complete",
@@ -602,14 +917,24 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 		"pages", result.PagesProcessed,
 		"inserted", result.TransactionsInserted,
 		"skipped", result.TransactionsSkipped,
+		"excluded", result.TransactionsExcluded,
+		"backfilled_chains", result.BackfilledChains,
+		"dropped_unmapped_account", result.TransactionsDroppedUnmappedAccount,
+		"dropped_unparsable_date", result.TransactionsDroppedUnparsableDate,
+		"dropped_unresolved_security", result.TransactionsDroppedUnresolvedSecurity,
 		"securities_upserted", result.SecuritiesUpserted,
 	)
 
 	if s.analytics != nil {
 		s.analytics.Capture(linkedItem.UserID, phclient.EventInvestmentTransactionsSynced, map[string]interface{}{
-			"pages_processed":       result.PagesProcessed,
-			"transactions_inserted": result.TransactionsInserted,
-			"transactions_skipped":  result.TransactionsSkipped,
+			"pages_processed":                          result.PagesProcessed,
+			"transactions_inserted":                    result.TransactionsInserted,
+			"transactions_skipped":                     result.TransactionsSkipped,
+			"transactions_excluded":                    result.TransactionsExcluded,
+			"backfilled_chains":                        result.BackfilledChains,
+			"transactions_dropped_unmapped_account":    result.TransactionsDroppedUnmappedAccount,
+			"transactions_dropped_unparsable_date":     result.TransactionsDroppedUnparsableDate,
+			"transactions_dropped_unresolved_security": result.TransactionsDroppedUnresolvedSecurity,
 		})
 	}
 
@@ -621,7 +946,7 @@ func (s *investmentSyncService) SyncInvestmentTransactions(ctx context.Context, 
 // ============================================================================
 
 // mapPlaidSecuritiesToDomain converts Plaid SDK security objects to domain.Security.
-func mapPlaidSecuritiesToDomain(plaidSecs []plaid.Security) []domain.Security {
+func mapPlaidSecuritiesToDomain(plaidSecs []plaid.Security, logger *slog.Logger) []domain.Security {
 	result := make([]domain.Security, 0, len(plaidSecs))
 	for _, ps := range plaidSecs {
 		sec := domain.Security{
@@ -635,31 +960,160 @@ func mapPlaidSecuritiesToDomain(plaidSecs []plaid.Security) []domain.Security {
 		sec.ISIN = ps.Isin.Get()
 		sec.CUSIP = ps.Cusip.Get()
 		sec.IsCashEquivalent = ps.IsCashEquivalent.Get()
+		sec.InstitutionSecurityID = ps.InstitutionSecurityId.Get()
+		sec.ProxySecurityID = ps.ProxySecurityId.Get()
 		sec.ClosePrice = ps.ClosePrice.Get()
-		sec.ClosePriceAsOf = ps.ClosePriceAsOf.Get()
+		sec.ClosePriceAsOf = parsePlaidDate(ps.ClosePriceAsOf.Get())
+		sec.CurrencyCode = plaidCurrencyCode(ps.IsoCurrencyCode.Get(), ps.UnofficialCurrencyCode.Get(),
+			logger, "security "+ps.SecurityId)
+		sec.Name = synthesizeSecurityName(sec.Name, sec.TickerSymbol, ps.SecurityId)
 		result = append(result, sec)
 	}
 	return result
+}
+
+// synthesizeSecurityName fills in a security's Name when Plaid sends a null or blank one (#1631).
+//
+// Root cause: Security.Validate()'s first rule is "name is required", but Validate() is never
+// called on this sync path (securityRepository.UpsertBatch does not validate either), and the
+// `name VARCHAR(500) NOT NULL` column constraint is satisfied by an empty string — so nothing
+// caught it, and production has securities with name = "".
+//
+// Synthesising is deliberate, not "call Validate() and skip": refusing the row would drop a
+// security that an investment transaction already references, and UpsertBatch's ON CONFLICT never
+// repairs `security_id` on a later sync (the same trap noted on parsePlaidDate above). A named
+// fallback keeps the row resolvable while still being honest that this is a synthesised label,
+// not provider data.
+func synthesizeSecurityName(name string, tickerSymbol *string, plaidSecurityID string) string {
+	if trimmed := strings.TrimSpace(name); trimmed != "" {
+		return trimmed
+	}
+	if tickerSymbol != nil {
+		if trimmed := strings.TrimSpace(*tickerSymbol); trimmed != "" {
+			return trimmed
+		}
+	}
+	return "Security " + plaidSecurityID
+}
+
+// plaidCurrencyCode collapses Plaid's two currency fields into the one column this schema keeps
+// (#1631 M8a).
+//
+// Plaid guarantees exactly one of them is non-null: iso_currency_code carries an ISO-4217 code,
+// and unofficial_currency_code carries a code for a currency that HAS no ISO code —
+// cryptocurrencies and the currencies of certain countries. Both answer the same question ("what
+// unit is this figure in"), and an aggregate only needs the currency IDENTITY to compare, so
+// storing them in two columns would double the threading for no reader.
+//
+// ⚠ The unofficial code is taken rather than dropped, which is where this departs from
+// accounts.currency_code (account_service.go reads iso_currency_code only). Dropping it would
+// record a crypto position as having NO currency, and NULL is defined to mean "unknown, does not
+// conflict with anything" — so a Bitcoin holding would have silently joined a USD portfolio's sum
+// as though it were dollars. That is the precise failure this whole task exists to stop.
+//
+// Returns nil when Plaid sends neither, or sends a blank one: absent is recorded as absent.
+//
+// #1631 I5: currency_code is VARCHAR(16) (migration 000202) and Postgres HARD-ERRORS (22001) on a
+// value that overflows it rather than truncating. Before this, a Plaid unofficial_currency_code
+// longer than 16 bytes turned into "failed to upsert securities on page N", aborting the whole
+// UpsertBatch page — the watermark never advanced, and that item's investment sync stayed broken
+// on every subsequent run until code changed. logger and label are for that one Warn only; label
+// identifies which row hit the limit (a Plaid security/account/transaction id) for triage.
+//
+// It drops only the FIELD, never the record — the same principle parsePlaidDate states two
+// functions down for its own optional field.
+const maxCurrencyCodeLen = 16
+
+func plaidCurrencyCode(iso, unofficial *string, logger *slog.Logger, label string) *string {
+	for _, candidate := range []*string{iso, unofficial} {
+		if candidate == nil {
+			continue
+		}
+		trimmed := strings.TrimSpace(*candidate)
+		if trimmed == "" {
+			continue
+		}
+		if len(trimmed) > maxCurrencyCodeLen {
+			if logger != nil {
+				logger.Warn("dropping currency_code: exceeds the column's 16-byte limit",
+					"value", trimmed, "length", len(trimmed), "for", label)
+			}
+			continue
+		}
+		return &trimmed
+	}
+	return nil
+}
+
+// parsePlaidDate converts a Plaid date-only string ("YYYY-MM-DD") into a *time.Time, returning nil
+// for an absent or unparsable value.
+//
+// ⚠ It drops only the FIELD, never the record — deliberately unlike the transaction-date handling in
+// mapPlaidInvestmentTransactions, which skips the whole row. That asymmetry is the point (#1631):
+// close_price_as_of is optional pricing metadata, whereas skipping the record here would write a
+// security with no identity, and UpsertBatch's ON CONFLICT never repairs a row afterwards. A
+// malformed optional date must not be able to cost us the security.
+func parsePlaidDate(s *string) *time.Time {
+	if s == nil || *s == "" {
+		return nil
+	}
+	t, err := time.Parse("2006-01-02", *s)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
+
+// investmentTxnDrops counts, BY REASON, the Plaid investment transactions one mapping pass did not
+// turn into a domain row.
+//
+// Separate fields rather than one total (#1631): `excluded` is the owner's instruction being
+// carried out and leaves the sync free to advance its watermark, while the other three are losses
+// that must pin it. Collapsing them was how a securityMap miss came to be indistinguishable from a
+// cash-only transaction for two releases.
+type investmentTxnDrops struct {
+	excluded           int
+	unmappedAccount    int
+	unparsableDate     int
+	unresolvedSecurity int
 }
 
 // mapPlaidInvestmentTransactions converts Plaid investment transactions to domain types,
 // resolving account IDs, user_account_ids, and security IDs using the provided maps.
 // user_account_id is the stable chain-expansion key (Issue #1109): setting it here on
 // insert ensures pre-relink rows remain visible after a Plaid re-link.
-// Transactions for unmapped accounts are silently skipped (logged as warning).
+//
+// It returns the rows to persist AND a per-reason account of what it refused, because every reason
+// it refuses for is invisible to the caller otherwise — which is exactly the defect #1631 fixes.
+//
+// ⚠ excludedPlaidAccountIDs is checked BEFORE accountMap and is not the same thing as being absent
+// from it. An excluded account is one the owner told us to ignore (INFO, expected, harmless); an
+// account absent from accountMap is one we should have had and do not (WARN, a real fault, and the
+// reason the caller then refuses to advance the cursor). Merging them would make a routine
+// preference look like a data-integrity incident in production logs, and vice versa.
 func mapPlaidInvestmentTransactions(
 	plaidTxns []plaid.InvestmentTransaction,
 	userID string,
 	accountMap map[string]string,
 	userAccountMap map[string]*string,
+	excludedPlaidAccountIDs map[string]struct{},
 	securityMap map[string]string,
 	logger *slog.Logger,
-) []domain.InvestmentTransaction {
+) ([]domain.InvestmentTransaction, investmentTxnDrops) {
 	result := make([]domain.InvestmentTransaction, 0, len(plaidTxns))
+	var drops investmentTxnDrops
 
 	for _, pt := range plaidTxns {
+		if _, excluded := excludedPlaidAccountIDs[pt.AccountId]; excluded {
+			// No log line per transaction: the account-level INFO in SyncInvestmentTransactions
+			// already said this once, and a brokerage can deliver thousands of rows per page.
+			drops.excluded++
+			continue
+		}
+
 		internalAccountID, ok := accountMap[pt.AccountId]
 		if !ok {
+			drops.unmappedAccount++
 			if logger != nil {
 				logger.Warn("no internal account for investment transaction, skipping",
 					"plaid_account_id", pt.AccountId,
@@ -670,6 +1124,7 @@ func mapPlaidInvestmentTransactions(
 
 		date, err := time.Parse("2006-01-02", pt.Date)
 		if err != nil {
+			drops.unparsableDate++
 			if logger != nil {
 				logger.Warn("failed to parse investment transaction date, skipping",
 					"investment_transaction_id", pt.InvestmentTransactionId,
@@ -691,14 +1146,32 @@ func mapPlaidInvestmentTransactions(
 			Date:                         date,
 		}
 
-		// Resolve security ID (nil for cash transactions)
+		// Resolve security ID. A genuinely absent security_id means a CASH transaction and is the
+		// normal case for a dividend or a fee.
+		//
+		// ⚠ A security_id Plaid SENT but we could not resolve is a different thing entirely, and
+		// until #1631 it fell through this block silently: SecurityID stayed nil, and per the
+		// schema comment on investment_transactions.security_id a NULL there MEANS "cash-only".
+		// The row was therefore stored as a lie, indistinguishable from a real cash movement, with
+		// no warning, no counter and no metric. SyncHoldings refuses to write an account's holdings
+		// at all for this same class of failure (an unmapped security) rather than write a wrong
+		// row; the ledger path now matches it — the row is refused, counted, and the caller declines
+		// to advance the cursor so the next run can retry once the security resolves.
 		if plaidSecID := pt.SecurityId.Get(); plaidSecID != nil && *plaidSecID != "" {
-			if securityMap != nil {
-				if internalSecID, ok := securityMap[*plaidSecID]; ok {
-					txn.SecurityID = &internalSecID
-					txn.PlaidSecurityID = *plaidSecID
+			internalSecID, resolved := securityMap[*plaidSecID]
+			if !resolved {
+				drops.unresolvedSecurity++
+				if logger != nil {
+					logger.Warn("investment transaction references a security this page did not "+
+						"resolve, refusing to store it as cash-only",
+						"investment_transaction_id", pt.InvestmentTransactionId,
+						"plaid_security_id", *plaidSecID,
+					)
 				}
+				continue
 			}
+			txn.SecurityID = &internalSecID
+			txn.PlaidSecurityID = *plaidSecID
 		}
 
 		// Optional fields
@@ -708,9 +1181,11 @@ func mapPlaidInvestmentTransactions(
 		txn.Quantity = &pt.Quantity
 		txn.Price = &pt.Price
 		txn.Fees = pt.Fees.Get()
+		txn.CurrencyCode = plaidCurrencyCode(pt.IsoCurrencyCode.Get(), pt.UnofficialCurrencyCode.Get(),
+			logger, "investment transaction "+pt.InvestmentTransactionId)
 
 		result = append(result, txn)
 	}
 
-	return result
+	return result, drops
 }

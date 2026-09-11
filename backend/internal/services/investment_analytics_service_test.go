@@ -53,6 +53,22 @@ func (m *MockInvestmentAnalyticsRepository) IncomeSummary(ctx context.Context, u
 	return args.Get(0).(*domain.IncomeSummary), args.Error(1)
 }
 
+func (m *MockInvestmentAnalyticsRepository) PositionReconciliation(ctx context.Context, userID string) (*domain.PositionReconciliationReport, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.PositionReconciliationReport), args.Error(1)
+}
+
+func (m *MockInvestmentAnalyticsRepository) PositionReconciliationSummary(ctx context.Context) (*domain.PositionReconciliationSummary, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.PositionReconciliationSummary), args.Error(1)
+}
+
 // ============================================================================
 // GetAllocationBreakdown
 // ============================================================================
@@ -271,4 +287,53 @@ func TestInvestmentAnalyticsService_GetIncomeSummary_PropagatesError(t *testing.
 
 	assert.Nil(t, result)
 	assert.ErrorContains(t, err, "GetIncomeSummary")
+}
+
+// ============================================================================
+// GetPositionReconciliation (#1631 M8b)
+// ============================================================================
+
+func TestInvestmentAnalyticsService_GetPositionReconciliation_DelegatesAndReturns(t *testing.T) {
+	repo := new(MockInvestmentAnalyticsRepository)
+	svc := NewInvestmentAnalyticsService(repo)
+	ctx := context.Background()
+	userID := "user-reconcile"
+
+	ticker := "AGG"
+	expected := &domain.PositionReconciliationReport{
+		Drifts: []domain.PositionReconciliationMember{
+			{
+				AccountID:       "acct-1",
+				SecurityID:      "sec-1",
+				PlaidSecurityID: "plaid-sec-1",
+				TickerSymbol:    &ticker,
+				SecurityName:    "iShares Core U.S. Aggregate Bond ETF",
+				HoldingQuantity: 100.0,
+				LedgerQuantity:  95.0,
+				Delta:           5.0,
+			},
+		},
+		SuppressedPreWindowCount: 3,
+		TotalPositionsChecked:    4,
+	}
+	repo.On("PositionReconciliation", ctx, userID).Return(expected, nil)
+
+	result, err := svc.GetPositionReconciliation(ctx, userID)
+
+	require.NoError(t, err)
+	assert.Equal(t, expected, result)
+	repo.AssertExpectations(t)
+}
+
+func TestInvestmentAnalyticsService_GetPositionReconciliation_PropagatesError(t *testing.T) {
+	repo := new(MockInvestmentAnalyticsRepository)
+	svc := NewInvestmentAnalyticsService(repo)
+	ctx := context.Background()
+
+	repo.On("PositionReconciliation", ctx, "user-err").Return(nil, errors.New("timeout"))
+
+	result, err := svc.GetPositionReconciliation(ctx, "user-err")
+
+	assert.Nil(t, result)
+	assert.ErrorContains(t, err, "GetPositionReconciliation")
 }

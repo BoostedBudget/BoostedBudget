@@ -512,3 +512,77 @@ describe('AllocationDonutChart failed read', () => {
     expect(screen.queryByTestId('echarts-chart')).toBeNull()
   })
 })
+
+// #1631 CX1: tooltip and legend formatted every slice as dollars. The breakdown carries its own
+// currency verdict and it was thrown away, so a GBP portfolio's donut read in dollars and a mixed
+// one claimed a currency the backend had explicitly refused to name.
+describe('AllocationDonutChart currency (#1631 CX1)', () => {
+  beforeEach(() => {
+    mockUseDarkMode.mockReturnValue(false)
+    MockEChartsChart.mockClear()
+  })
+
+  const buckets = [
+    { security_type: 'Equity', asset_class: 'stock', total_value: 1000, percentage: 100, holding_count: 1 },
+  ]
+
+  const legendText = () => {
+    const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+      legend?: { formatter?: (n: string) => string }
+    }
+    const formatter = option?.legend?.formatter
+    expect(formatter).toBeDefined()
+    // The legend key is the aggregated slice label, which securityTypeLabel derives from
+    // security_type -- read it back off the series rather than guessing it.
+    const series = (MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+      series?: Array<{ data?: Array<{ name: string }> }>
+    })?.series
+    const sliceName = series?.[0]?.data?.[0]?.name ?? ''
+    return formatter!(sliceName)
+  }
+
+  it('formats slices in the currency the breakdown states', () => {
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: { total_value: 1000, buckets, currency_code: 'GBP', is_mixed_currency: false },
+      isLoading: false,
+      isError: false,
+      // The shared mock factory infers `data: undefined`, so every seeded payload in this file
+      // is a type error against it. Cast rather than widen the ceiling (#1631 CX1).
+    } as never)
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+
+    const out = legendText()
+    expect(out).toContain('£')
+    expect(out).not.toContain('$')
+  })
+
+  // The sibling: an unlabelled breakdown keeps today's dollar rendering. Unknown is not a conflict.
+  it('keeps the dollar rendering for an unlabelled breakdown', () => {
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: { total_value: 1000, buckets, is_mixed_currency: false },
+      isLoading: false,
+      isError: false,
+      // The shared mock factory infers `data: undefined`, so every seeded payload in this file
+      // is a type error against it. Cast rather than widen the ceiling (#1631 CX1).
+    } as never)
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+
+    expect(legendText()).toContain('$')
+  })
+
+  it('declares a mixed-currency breakdown instead of labelling it', () => {
+    mockUseGetPortfolioAllocationBreakdown.mockReturnValue({
+      data: { total_value: 1000, buckets, is_mixed_currency: true },
+      isLoading: false,
+      isError: false,
+      // The shared mock factory infers `data: undefined`, so every seeded payload in this file
+      // is a type error against it. Cast rather than widen the ceiling (#1631 CX1).
+    } as never)
+    render(<AllocationDonutChart config={DEFAULT_CONFIG} />)
+
+    expect(screen.getByText(/mixed currencies/i)).toBeDefined()
+    const out = legendText()
+    expect(out).not.toContain('$')
+    expect(out).not.toContain('£')
+  })
+})

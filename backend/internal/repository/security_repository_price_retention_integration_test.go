@@ -31,6 +31,13 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 )
 
+// truncateToDate drops the clock from a timestamp so a fixture value compares equal to what a
+// Postgres DATE column returns. #1631 changed domain.Security.ClosePriceAsOf from *string to
+// *time.Time, because the column is a DATE and pgx cannot scan one into a string.
+func truncateToDate(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
 func TestSecurityRepository_UpsertBatch_NullPriceDoesNotEraseTheLastKnownOne_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -42,7 +49,7 @@ func TestSecurityRepository_UpsertBatch_NullPriceDoesNotEraseTheLastKnownOne_Int
 	repo := NewSecurityRepository(tx)
 	plaidID := fmt.Sprintf("sec-s12-%d", time.Now().UnixNano())
 
-	closeAsOf := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	closeAsOf := truncateToDate(time.Now().AddDate(0, 0, -1))
 	instAsOf := time.Now().Add(-2 * time.Hour)
 	closePrice := 187.42
 	instPrice := 187.55
@@ -77,7 +84,7 @@ func TestSecurityRepository_UpsertBatch_NullPriceDoesNotEraseTheLastKnownOne_Int
 	require.NoError(t, err)
 
 	var afterClose, afterInst *float64
-	var afterCloseAsOf *time.Time //nolint:staticcheck // close_price_as_of is a DATE column
+	var afterCloseAsOf *time.Time
 	var afterInstAsOf *time.Time
 	require.NoError(t, tx.QueryRow(ctx, `
 		SELECT close_price, close_price_as_of, institution_price, institution_price_as_of
@@ -97,6 +104,85 @@ func TestSecurityRepository_UpsertBatch_NullPriceDoesNotEraseTheLastKnownOne_Int
 	require.NotNil(t, afterInstAsOf, "institution_price_as_of must be retained alongside institution_price")
 }
 
+// TestSecurityRepository_UpsertBatch_NullCashEquivalentFlagDoesNotEraseAKnownOne_Integration pins
+// the #1631 C1 fix beside the price-retention cases above: is_cash_equivalent moved to the
+// RETAINED side of the ON CONFLICT, for the same reason as the prices — securities is shared
+// across ALL users, and a payload that omits the flag (Plaid's NullableBool decodes an absent
+// value as nil) must not silently NULL out a previously-known FALSE.
+//
+// This flag is load-bearing in a way ticker/type/isin/cusip are not: NormalizeTradeType and
+// TradeTypeToSQLPredicate's structural rule (investment_trade_type.go) key the dividend/reinvest/
+// cash partition on it being affirmatively FALSE, and IncomeSummary's dollar total depends on the
+// same partition. A NULLed flag would revert every reinvest/dividend row for this security back to
+// Cash and erase it from reported income for every user holding it — the exact regression this
+// test exists to catch before it reaches production a second time.
+func TestSecurityRepository_UpsertBatch_NullCashEquivalentFlagDoesNotEraseAKnownOne_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck // always rolled back on the shared integration DB
+
+	repo := NewSecurityRepository(tx)
+	plaidID := fmt.Sprintf("sec-1631-c1-%d", time.Now().UnixNano())
+	ticker := "ETF1"
+
+	// Sync 1: the provider affirmatively says this security is NOT cash-equivalent.
+	notCashEquiv := false
+	_, err = repo.UpsertBatch(ctx, []domain.Security{{
+		PlaidSecurityID:  plaidID,
+		Name:             "Example ETF",
+		TickerSymbol:     &ticker,
+		IsCashEquivalent: &notCashEquiv,
+	}})
+	require.NoError(t, err)
+
+	var gotFlag *bool
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT is_cash_equivalent FROM securities WHERE plaid_security_id = $1`, plaidID,
+	).Scan(&gotFlag))
+	require.NotNil(t, gotFlag, "arrangement: the first sync must actually have stored the flag")
+	assert.False(t, *gotFlag)
+
+	// Sync 2: the SAME security, from a payload that omits the flag entirely (nil, exactly what
+	// mapPlaidSecuritiesToDomain produces for an absent Plaid NullableBool). This is the write
+	// that used to erase the known FALSE for every user holding this security.
+	_, err = repo.UpsertBatch(ctx, []domain.Security{{
+		PlaidSecurityID: plaidID,
+		Name:            "Example ETF",
+		TickerSymbol:    &ticker,
+	}})
+	require.NoError(t, err)
+
+	var afterFlag *bool
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT is_cash_equivalent FROM securities WHERE plaid_security_id = $1`, plaidID,
+	).Scan(&afterFlag))
+	require.NotNil(t, afterFlag, "a sync omitting is_cash_equivalent must not erase the last known "+
+		"value — securities is shared across ALL users, and this flag now drives the dividend/"+
+		"reinvest/cash classification partition and IncomeSummary's dollar total for every one of them")
+	assert.False(t, *afterFlag, "the previously-known FALSE must survive a payload that says nothing")
+
+	// A payload that DOES carry a value must still win — retention is for nil only, not stale-forever.
+	nowCashEquiv := true
+	_, err = repo.UpsertBatch(ctx, []domain.Security{{
+		PlaidSecurityID:  plaidID,
+		Name:             "Example ETF",
+		TickerSymbol:     &ticker,
+		IsCashEquivalent: &nowCashEquiv,
+	}})
+	require.NoError(t, err)
+
+	var updatedFlag *bool
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT is_cash_equivalent FROM securities WHERE plaid_security_id = $1`, plaidID,
+	).Scan(&updatedFlag))
+	require.NotNil(t, updatedFlag)
+	assert.True(t, *updatedFlag, "a payload that DOES carry the flag must still overwrite — this is "+
+		"retention of an omitted value, not a one-way ratchet")
+}
+
 func TestSecurityRepository_UpsertBatch_ANewPriceStillWins_Integration(t *testing.T) {
 	// The discriminating case. A repository that simply never updated prices would satisfy the test
 	// above and would freeze every valuation in the product.
@@ -111,9 +197,9 @@ func TestSecurityRepository_UpsertBatch_ANewPriceStillWins_Integration(t *testin
 	plaidID := fmt.Sprintf("sec-s12-move-%d", time.Now().UnixNano())
 
 	oldPrice := 100.00
-	oldAsOf := time.Now().AddDate(0, 0, -3).Format("2006-01-02")
+	oldAsOf := truncateToDate(time.Now().AddDate(0, 0, -3))
 	newPrice := 111.11
-	newAsOf := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	newAsOf := truncateToDate(time.Now().AddDate(0, 0, -1))
 
 	_, err = repo.UpsertBatch(ctx, []domain.Security{{
 		PlaidSecurityID: plaidID, Name: "Mover", ClosePrice: &oldPrice, ClosePriceAsOf: &oldAsOf,
@@ -168,8 +254,8 @@ func TestSecurityRepository_UpsertBatch_AsOfTravelsWithItsPrice_Integration(t *t
 	plaidID := fmt.Sprintf("sec-s12-pair-%d", time.Now().UnixNano())
 
 	oldPrice := 100.00
-	oldAsOf := "2026-01-05"
-	staleButFresherAsOf := "2026-08-20"
+	oldAsOf := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
+	staleButFresherAsOf := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
 	instPrice := 100.50
 	oldInstAsOf := time.Date(2026, 1, 5, 12, 0, 0, 0, time.UTC)
 	fresherInstAsOf := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)

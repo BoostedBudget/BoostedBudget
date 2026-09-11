@@ -3,7 +3,7 @@ import { useGetSystemHealth } from '@boostedbudget/api-client/endpoints/admin/ad
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent';
 import { ANALYTICS_EVENTS } from '../../../shared/analytics';
 import { SummaryCard } from '@/features/admin';
-import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle, Users, Timer, UserCheck, UserX, History } from 'lucide-react';
+import { Activity, AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle, Users, Timer, UserCheck, UserX, History, GitFork } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 
@@ -143,6 +143,29 @@ export function HealthDashboardPage() {
   const rejectedWebhookAttemptsByProvider = rejectedWebhookAttemptsAvailable
     ? data.rejected_webhook_attempts_24h.by_provider
     : {};
+
+  // #1631 M8b I5. Same fail-closed shape and the same optional-chaining guard as every gauge
+  // above: a FAILED derivation and a genuine zero fork count both arrive as identical zero-valued
+  // fields, and `forked_security_identities` itself can be absent entirely on an older cached
+  // response or mid-rolling-deploy. See domain.ForkedSecurityIdentityMetrics (backend) — a group is
+  // two or more `securities` rows sharing one institution_security_id under different
+  // plaid_security_id values, the shape a Plaid corporate action can fork one instrument's
+  // identity into. Detection only: nothing here (or on the backend) merges anything.
+  //
+  const forkedSecurityIdentitiesAvailable = data.forked_security_identities?.available;
+
+  // #1631 M8b N1/I1. Same fail-closed shape and the same optional-chaining guard as every gauge
+  // above: a FAILED derivation and a genuine all-clear both arrive as identical zero-valued
+  // fields, and `position_reconciliation` itself can be absent entirely on an older cached
+  // response or mid-rolling-deploy. See domain.PositionReconciliationSummary (backend).
+  //
+  // ⚠ drift_count IS NOT A CONFIRMED-PROBLEM COUNT. See
+  // domain.PositionReconciliationReport's "NOT YET FULLY ACTIONABLE" doc comment (backend): a
+  // position opened before Plaid's 2-year lookback and topped up ever since (DCA, auto-invest,
+  // dividend reinvestment) still reports a drift equal to its entire pre-window base, and that
+  // shape is expected to be the DOMINANT contributor to this count today, not a rare residual.
+  // The card's helper text below carries this caveat so the number is never read as a to-do list.
+  const positionReconciliationAvailable = data.position_reconciliation?.available;
 
   return (
     <div className="p-8 max-w-[1400px] mx-auto max-md:p-4">
@@ -490,6 +513,122 @@ export function HealthDashboardPage() {
               />
             ))}
         </div>
+      </section>
+
+      {/* Shared Institution Security IDs Section (#1631 M8b, narrowed by CX7) — a Plaid corporate
+          action can reissue plaid_security_id, silently forking one real instrument's identity
+          into multiple `securities` rows with separate transaction/holding histories. Detection
+          only: nothing here (or on the backend) merges anything.
+
+          ⚠ CX7: this is a CANDIDATE count, not a confirmed fork count, and the section used to
+          claim otherwise. institution_security_id is documented INSTITUTION-SCOPED — it is "the
+          identifier given to the security by the institution" — while the grouping behind this
+          number has no institution dimension at all, because `securities` carries no institution
+          column and is shared across every user and every provider. Two institutions that happen
+          to reuse the same internal id therefore group together and are indistinguishable, from
+          here, from one instrument whose Plaid id was reissued. The heading, the card title and
+          the helper text all say candidate for that reason: the metric must not assert a fork it
+          cannot establish.
+
+          Per-group member detail (which securities share the id, `.groups`) is in the generated
+          API client but not rendered here yet — only the count renders. Listing the members is a
+          UI follow-up, not blocked on generation, and is what would let an operator settle a
+          candidate by eye.
+
+          Scope discipline, matching every other gauge section on this page: this only makes the
+          count VISIBLE. Whether a non-zero count should degrade `data.status` is a product
+          decision this task never asked for, so `data.status` is untouched — and a candidate
+          count is not something to gate anything on regardless. */}
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Shared Institution Security IDs</h2>
+        <p className="mt-0 mb-4 text-sm text-muted-foreground max-w-2xl">
+          Groups of securities rows sharing one institution_security_id under different Plaid
+          security ids — the shape a corporate-action reissue leaves behind. A review list, not a
+          problem count.
+        </p>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
+          <SummaryCard
+            title="Candidate Groups"
+            value={forkedSecurityIdentitiesAvailable ? data.forked_security_identities.group_count.toString() : 'Unavailable'}
+            icon={<GitFork size={24} />}
+            status={!forkedSecurityIdentitiesAvailable ? 'warning' : 'neutral'}
+          />
+        </div>
+        <p className="mt-3 mb-0 text-xs text-muted-foreground max-w-2xl">
+          These are candidates, not confirmed forks. institution_security_id is institution-scoped,
+          and this grouping has no institution dimension — securities rows carry no institution —
+          so two institutions reusing the same internal id land in one group and cannot be told
+          apart from a genuine reissue. Check the members before acting on a group.
+        </p>
+      </section>
+
+      {/* Position Reconciliation Section (#1631 M8b I1/N1) — the trade-vs-position diagnostic's
+          own admin gauge: how many active holdings' quantities disagree with what the trade
+          ledger (buys, sells, reinvestments, transfers/splits) implies. Global across every user,
+          matching the Forked Security Identities section above.
+
+          ⚠ "Drift Positions" IS NOT A CONFIRMED-PROBLEM COUNT — see
+          domain.PositionReconciliationReport's "NOT YET FULLY ACTIONABLE" doc comment (backend).
+          A position opened before Plaid's 2-year lookback and topped up ever since (DCA,
+          auto-invest, dividend reinvestment) still reports a drift equal to its entire pre-window
+          base, and that shape is expected to be the DOMINANT contributor to this count today, not
+          a rare residual. The card's own helper text repeats this so the number is never read in
+          isolation from its caveat.
+
+          "Suppressed (Pre-Window)" is the sibling count this diagnostic COULD exclude — positions
+          with no buy anywhere in the ledger, the one case Plaid's lookback edge can be proven to
+          explain. It is informational, not a second problem count.
+
+          Scope discipline, matching every other gauge section on this page: this only makes the
+          counts VISIBLE. Whether a non-zero drift count should degrade `data.status` is a product
+          decision this task never asked for, so `data.status` is untouched — and DriftCount is
+          not yet trustworthy enough to gate anything on regardless, per the caveat above.
+
+          ⚠ #1631 CX6: the card itself renders NEUTRAL at any count, not warning. It was yellow
+          on any nonzero count, which — given the caveat two paragraphs up says the DCA population
+          is expected to dominate — made an ordinary portfolio paint this dashboard permanently
+          yellow. A gauge that is always yellow teaches an operator to stop reading it, which is
+          precisely what the caveat exists to prevent. */}
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Position Reconciliation</h2>
+        <p className="mt-0 mb-4 text-sm text-muted-foreground max-w-2xl">
+          Active holdings whose quantity disagrees with what the trade ledger implies. Not yet a
+          confirmed-problem count — see below.
+        </p>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
+          <SummaryCard
+            title="Drift Positions"
+            value={positionReconciliationAvailable ? data.position_reconciliation.drift_count.toString() : 'Unavailable'}
+            // An alert triangle is the same claim the warning colour was making. This is a
+            // diagnostic reading, not an alarm (#1631 CX6).
+            icon={<Activity size={24} />}
+            // #1631 CX6: NEUTRAL when available, at any count. This metric's own documentation
+            // says a long-held DCA position reports its entire pre-window base as drift forever
+            // and is expected to be the DOMINANT population, so a warning here makes an ordinary
+            // portfolio render permanently yellow — which trains an operator to ignore the
+            // dashboard, the exact outcome that documentation says it wants to avoid. Unavailable
+            // stays a warning, because unknown is not zero.
+            status={!positionReconciliationAvailable ? 'warning' : 'neutral'}
+          />
+          <SummaryCard
+            title="Suppressed (Pre-Window)"
+            value={positionReconciliationAvailable ? data.position_reconciliation.suppressed_pre_window_count.toString() : 'Unavailable'}
+            icon={<Clock size={24} />}
+            status={!positionReconciliationAvailable ? 'warning' : 'neutral'}
+          />
+          <SummaryCard
+            title="Total Positions Checked"
+            value={positionReconciliationAvailable ? data.position_reconciliation.total_positions_checked.toString() : 'Unavailable'}
+            icon={<Landmark size={24} />}
+            status={!positionReconciliationAvailable ? 'warning' : 'neutral'}
+          />
+        </div>
+        <p className="mt-3 mb-0 text-xs text-muted-foreground max-w-2xl">
+          Drift Positions is NOT a confirmed-problem count: a long-held position topped up by
+          ongoing contributions (DCA, auto-invest, dividend reinvestment) reports a drift equal to
+          its entire pre-2-year-lookback base, and this is expected to be the dominant contributor
+          today — investigate before treating a non-zero count as a to-do list.
+        </p>
       </section>
 
       {/* Job Queues Section */}

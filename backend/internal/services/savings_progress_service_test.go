@@ -766,8 +766,17 @@ func TestSavingsProgressService_GetProgressSummary(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 700.0, summary.TotalSaved)   // 500 + 200
 		assert.Equal(t, 1500.0, summary.TotalTarget) // 1000 + 500
-		// 700/1500*100 = 46.67
-		assert.Equal(t, 46.67, summary.OverallPercentComplete)
+		// 700/1500*100 = 46.666666666666664, UNROUNDED.
+		//
+		// ⚠ This asserted 46.67 until #1636. The service used to fold it with its own local
+		// roundToCents, one layer below where the money-representation ADR puts the rounding
+		// boundary; that fold moved up to the handler (roundSavingsProgressSummary in
+		// huma/operations/money_rounding.go), so 46.67 is now what the CLIENT sees and this is
+		// what the service hands over. Changing this line back would mean a second fold had been
+		// reintroduced here.
+		assert.InDelta(t, 46.6666666, summary.OverallPercentComplete, 1e-6)
+		assert.NotEqual(t, 46.67, summary.OverallPercentComplete,
+			"the edge rounds this, not the service")
 		assert.Equal(t, 2, summary.GoalCount)
 		assert.Equal(t, 0, summary.CompletedGoalCount)
 	})
@@ -781,11 +790,77 @@ func TestClampNonNegative(t *testing.T) {
 	assert.Equal(t, 100.0, clampNonNegative(100.0))
 }
 
-func TestRoundToCents(t *testing.T) {
-	assert.Equal(t, 1.23, roundToCents(1.234))
-	assert.Equal(t, 1.24, roundToCents(1.235))
-	assert.Equal(t, 0.0, roundToCents(0.0))
-	assert.Equal(t, 333.33, roundToCents(333.3333333))
+// TestSavingsProgress_PersistedAmountIsCanonicalisedToCents replaces the former unit test of the
+// local `roundToCents` helper, which this file no longer has. (Its old name is deliberately not
+// written out here: TestEveryCitedTestNameResolves reads a cited test name as a claim that the
+// test exists, and this one does not any more.)
+//
+// #1636 moved the PRESENTATION fold up to the handler, per
+// docs/decisions/2026-09-11-money-representation-float64-and-the-rounding-boundary.md Decision 3
+// — see roundSavingsProgressSummary in huma/operations/money_rounding.go, and the guard
+// TestEveryMoneyFieldOnAnInvestmentResponseIsRoundedAtTheEdge that now watches it. The pure
+// arithmetic of the fold is pinned in internal/money (TestToCents_OrdinaryRounding and, for the
+// honest limitation, TestToCents_IsNotDecimalExact_TheADRsStatedLimitation).
+//
+// What is left to test HERE is the thing that did NOT move and must not: the value written to
+// savings_goals.current_amount is canonicalised before it is stored, because the database is not
+// a presentation surface and no API edge can reach a figure once it is a row. A percentage-basis
+// goal is used because that branch multiplies a balance by a fraction, which is how a long binary
+// tail actually gets manufactured — 863.42 x 0.37 is 319.4654000000000 something in float64.
+func TestSavingsProgress_PersistedAmountIsCanonicalisedToCents(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
+
+	pct := 0.37
+	goal := makeGoal("g1", "u1", "acc1", domain.ProgressBasisAccountPercentage, 10000, 0)
+	goal.AccountPercentage = &pct
+
+	balance := 863.42
+	raw := balance * pct
+	require.NotEqual(t, 319.47, raw, "precondition: the product carries a tail the fold removes")
+
+	accountRepo.On("GetByIDAndUser", mock.Anything, "acc1", "u1").Return(&domain.Account{
+		ID:             "acc1",
+		Status:         domain.AccountStatusActive,
+		CurrentBalance: &balance,
+		UpdatedAt:      time.Now(),
+	}, nil)
+	// The exact float64 the repository is handed. A tail here would be stored.
+	goalRepo.On("UpdateCurrentAmount", mock.Anything, "g1", mock.Anything, 319.47, mock.Anything, mock.Anything).Return(nil)
+
+	got, err := svc.RecomputeGoal(context.Background(), goal)
+
+	require.NoError(t, err)
+	assert.Equal(t, 319.47, got, "the amount the row now holds, folded")
+	goalRepo.AssertExpectations(t)
+}
+
+// TestSavingsProgress_SummaryLeavesRoundingToTheEdge is the other half of the #1636 move: this
+// service must now hand the handler UNROUNDED figures, so that the handler's fold is the only
+// one and cannot be made redundant (and then quietly deleted) by a second one underneath it.
+func TestSavingsProgress_SummaryLeavesRoundingToTheEdge(t *testing.T) {
+	goalRepo := &mockSavingsProgressGoalRepo{}
+	contribRepo := &mockSavingsProgressContribRepo{}
+	accountRepo := &mockSavingsProgressAccountRepo{}
+	svc := newTestProgressService(goalRepo, contribRepo, accountRepo)
+
+	// 1 / 3 of the target, which no number of decimal places can state.
+	goal := makeGoal("g1", "u1", "", domain.ProgressBasisManual, 3000, 1000)
+	goalRepo.On("GetActiveByUserID", mock.Anything, "u1").Return([]*domain.SavingsGoal{goal}, nil)
+	goalRepo.On("CountCompletedByUserID", mock.Anything, "u1").Return(0, nil)
+	contribRepo.On("SumConfirmedByGoal", mock.Anything, "g1").Return(0.0, nil)
+
+	summary, err := svc.GetProgressSummary(context.Background(), "u1")
+
+	require.NoError(t, err)
+	require.Len(t, summary.Goals, 1)
+	assert.InDelta(t, 33.3333333, summary.Goals[0].PercentComplete, 1e-6,
+		"unrounded — 33.33 here would mean the service is still folding")
+	assert.NotEqual(t, 33.33, summary.Goals[0].PercentComplete)
+	assert.InDelta(t, 33.3333333, summary.OverallPercentComplete, 1e-6)
+	assert.NotEqual(t, 33.33, summary.OverallPercentComplete)
 }
 
 // TestSavingsProgress_TerminalAccountWithNoBalance_FreezesOnBothBases is the shape the repository

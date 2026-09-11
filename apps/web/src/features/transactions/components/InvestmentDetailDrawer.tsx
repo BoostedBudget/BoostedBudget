@@ -7,7 +7,7 @@ import {
 } from '@/components/ui/sheet'
 import { ActivityTypeChip } from '@/shared/components/ActivityTypeChip'
 import { formatTransactionAmount } from '@/shared/transactions/amount'
-import { formatCurrencyFull } from '@/shared/charts/formatters'
+import { formatPortfolioAmount } from '@/features/investments/utils/portfolioCurrency'
 import type { Account } from '@/features/accounts/types'
 import type { InvestmentActivity } from '../types'
 import { formatDate } from '@/shared/transactions/dates'
@@ -60,6 +60,7 @@ export function InvestmentDetailDrawer({
     investment_quantity,
     investment_price,
     investment_fees,
+    currency_code,
     amount,
     account_id,
     date,
@@ -81,8 +82,23 @@ export function InvestmentDetailDrawer({
   const securityDisplay = security_name ?? '—'
   const tickerDisplay = ticker_symbol ?? '—'
   const quantityDisplay = investment_quantity != null ? `${investment_quantity} shares` : '—'
-  const priceDisplay = investment_price != null ? formatCurrencyFull(investment_price) : '—'
-  const feesDisplay = investment_fees == null || investment_fees === 0 ? '—' : formatCurrencyFull(investment_fees)
+  // #1631 CX1: price and fees render in the currency the ROW states, not in dollars.
+  // formatCurrencyFull hard-coded the dollar, so a GBP trade read "$150.00" — the UI asserting a
+  // unit the backend never claimed. `currency_code` is passed straight through so every one of
+  // portfolioCurrency's states survives: a named code renders in that currency, absent/null
+  // renders as dollars (the pre-000202 legacy base, deliberately unchanged), and a code that
+  // fails the three-letter test renders UNLABELLED rather than guessing. `is_mixed_currency` is
+  // omitted rather than passed as false: that flag is about an aggregate refusing to name a
+  // currency, and a single transaction is in exactly one currency.
+  const currencyFields = { currency_code }
+  const priceDisplay =
+    investment_price != null ? formatPortfolioAmount(investment_price, currencyFields) : '—'
+  // #1631: fees is 0.00 on all 1,192 production rows — this institution never populates it. A
+  // "Fees: —" row would read as "we confirmed no fee was charged" when the truth is "we don't
+  // know", so the row is hidden entirely rather than shown with a placeholder. Naming a currency
+  // does not change that: a 0.00 charge is still not worth a line.
+  const hasFees = investment_fees != null && investment_fees !== 0
+  const feesDisplay = hasFees ? formatPortfolioAmount(investment_fees, currencyFields) : null
 
   const amountFormatted = formatTransactionAmount(amount)
 
@@ -123,11 +139,13 @@ export function InvestmentDetailDrawer({
             </span>
           </DetailRow>
 
-          <DetailRow label="Fees">
-            <span data-ph-mask="" data-testid="fees-value">
-              {feesDisplay}
-            </span>
-          </DetailRow>
+          {hasFees && (
+            <DetailRow label="Fees">
+              <span data-ph-mask="" data-testid="fees-value">
+                {feesDisplay}
+              </span>
+            </DetailRow>
+          )}
 
           <DetailRow label="Amount">
             <span

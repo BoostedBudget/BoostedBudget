@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/rules"
@@ -126,8 +127,10 @@ func (s *categorizationRuleService) PreviewRule(
 		}
 		result.MatchCount++
 		result.Matches = append(result.Matches, domain.RulePreviewMatch{
-			TransactionID:   tx.ID,
-			Date:            tx.Date,
+			TransactionID: tx.ID,
+			// transactions.date is a DATE column; format it as the calendar day rather than
+			// handing the wire a timestamp (#1631).
+			Date:            tx.Date.Format(time.DateOnly),
 			Name:            tx.Name,
 			MerchantName:    tx.MerchantName,
 			Amount:          tx.Amount,

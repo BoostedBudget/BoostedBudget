@@ -43,6 +43,7 @@ export interface SavingsGoal {
   created_at: string;
   currency_code: string;
   current_amount: number;
+  /** UTC calendar day (YYYY-MM-DD) this goal's deadline; omitted when no deadline is set */
   deadline?: string;
   deleted_at?: string;
   description?: string;

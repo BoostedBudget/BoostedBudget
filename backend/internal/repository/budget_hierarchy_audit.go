@@ -304,7 +304,7 @@ func (r *budgetRepository) AuditBudgetHierarchy(ctx context.Context, budget *dom
 	flaggedEscapingIDs := budgetHierarchyAuditSortedKeys(flaggedEscaping)
 	reason := budgetHierarchyAuditReason(outcome, flaggedDuplicateIDs, flaggedEscapingIDs, categoriesRepaired)
 
-	// flagged_category_ids is the DEPRECATED untyped union column (migration 000197) — still
+	// flagged_category_ids is the DEPRECATED untyped union column (migration 000202) — still
 	// populated for anything querying this table directly, but no longer read back by Go code:
 	// the two typed columns below are what ListBudgetHierarchyAuditFindings and the admin API
 	// actually expose, so a combined finding (both shapes present on the same budget) stays
@@ -419,7 +419,7 @@ func (r *budgetRepository) BudgetIDsWithUnexaminedHierarchy(ctx context.Context,
 // pgx's default type registry has no built-in codec for scanning a uuid[] column into a Go
 // []string — every category id here is already a UUID stored as text everywhere else this
 // codebase surfaces one (domain.BudgetCategory.ID is a string), so the cast loses nothing. The
-// deprecated untyped flagged_category_ids column (migration 000197) is deliberately NOT selected
+// deprecated untyped flagged_category_ids column (migration 000202) is deliberately NOT selected
 // here — see its own column comment.
 const listBudgetHierarchyAuditFindingsSQL = `
 	SELECT budget_id::text, user_id::text, outcome, reason, categories_examined, categories_repaired,

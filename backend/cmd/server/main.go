@@ -1628,6 +1628,12 @@ func main() {
 					holdingRepo,
 					investmentTxnRepo,
 					portfolioSnapshotRepo,
+					// #1631 M4: carries the investment backfill obligation recorded on
+					// user_accounts.investment_backfill_requested_at when an owner re-includes a
+					// previously excluded chain. A fresh repository rather than a shared handle
+					// because this file constructs one per consumer already (see
+					// userAccountService above); the repository is stateless.
+					repository.NewUserAccountRepository(db, fieldEncryptor),
 					plaidService,
 					appLogger,
 				)
@@ -2055,6 +2061,20 @@ func main() {
 					accountService.SetJobQueue(jobQueue)
 					appLogger.Info("Account service connected to job queue for auto-sync")
 				}
+				// #1631 M4: nudge an investment-transactions sync when the owner re-includes a
+				// previously excluded chain, so the recorded backfill obligation is honoured now
+				// instead of at Plaid's next INVESTMENTS_TRANSACTIONS webhook — which for a quiet
+				// brokerage can be months away.
+				//
+				// ⚠ Wired HERE, alongside the other post-River SetJobQueue calls, and NOT beside
+				// NewUserAccountService: `jobQueue` is nil until the River client is built a few
+				// lines above, so the earlier site would have silently wired a no-op nudge. The
+				// obligation itself lives on the user_accounts row and is honoured by whichever
+				// sync runs next, so even a missed wiring costs latency, not data.
+				if userAccountService != nil {
+					userAccountService.SetInvestmentBackfillEnqueuer(jobQueue, accountRepo, appLogger)
+					appLogger.Info("User account service connected to job queue for investment backfill nudges")
+				}
 				if plaidSyncWorker != nil {
 					plaidSyncWorker.SetJobQueue(jobQueue)
 					appLogger.Info("Plaid sync worker connected to job queue for follow-up jobs")
@@ -2277,6 +2297,15 @@ func main() {
 			// always reports false), so /admin/health's cache_enabled field has a live signal to
 			// report regardless of whether caching is actually turned on for this deployment.
 			cacheInstance,
+			// #1631 M8b: backs the "forked security identities" section on /admin/health. The SAME
+			// repository investment sync uses, narrowed at the interface
+			// (services.ForkedSecurityIdentityLister) to FindForkedIdentities alone, same
+			// discipline as plaidOrphanedItemRepo and invalidWebhookAttemptRepo above.
+			securityRepo,
+			// #1631 M8b I1: backs the global position-reconciliation drift gauge on /admin/health.
+			// The SAME repository the investment analytics endpoints use, narrowed at the interface
+			// (services.PositionReconciliationSummarizer) to PositionReconciliationSummary alone.
+			investmentAnalyticsRepo,
 		)
 
 		// Issue #633: Dead letter queue admin service.

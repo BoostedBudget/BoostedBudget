@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "inter",
+        "createdAt": "2026-09-11T16:17:05.590Z",
+        "reason": "CLAUDE.md:607 names Inter as the primary typeface as a deliberate, checked-in brand decision"
+      }
+    ]
+  }
+}

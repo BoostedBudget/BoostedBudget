@@ -17,6 +17,7 @@ package repository
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -216,6 +217,65 @@ func TestUserAccountRepository_UpdatePrimaryTypeAndSubtype_CrossTenantRow_Untouc
 		victimUAID).Scan(&primaryType, &primarySubtype))
 	assert.Equal(t, "depository", primaryType, "the other tenant's primary_type must not change")
 	assert.Equal(t, "checking", primarySubtype, "the other tenant's primary_subtype must not change")
+}
+
+// TestTenantScopedWrites_UserAccountRepository_ClearInvestmentBackfillRequests is the #1631 M4
+// addition, and it is the one case in this file whose victim would never find out.
+//
+// The other two cross-tenant writes here flip a visible flag or a type label: the victim, or a
+// support engineer, can see the wrong value and ask why. Discharging an investment backfill
+// obligation removes the ONLY record that history is owed, and nothing anywhere reports "a backfill
+// that should have happened did not" — the sync simply never widens its window again, and the
+// user's excluded period stays missing past Plaid's 2-year serving limit. Silent and unrecoverable.
+//
+// The concrete hole this closes: investmentSyncService.SyncInvestmentTransactions checks
+// a.UserID != linkedItem.UserID for each ACCOUNT, but the chain ids it collects come from
+// a.UserAccountID, whose owner it never verifies. One mis-assigned accounts.user_account_id was
+// enough. The first version of these two methods took no userID at all and rested on that caller
+// check, which is exactly the "caller discipline" this file's header rejects.
+func TestTenantScopedWrites_UserAccountRepository_ClearInvestmentBackfillRequests(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	actorID, _, _ := seedTenantFixture(ctx, t, tx, "ts1631-bf-actor")
+	_, _, victimUAID := seedTenantFixture(ctx, t, tx, "ts1631-bf-victim")
+
+	// The victim is owed a backfill.
+	owedAt := time.Now().UTC().Add(-time.Hour)
+	_, err = tx.Exec(ctx,
+		`UPDATE user_accounts SET investment_backfill_requested_at = $2 WHERE id = $1`,
+		victimUAID, owedAt)
+	require.NoError(t, err)
+
+	repo := NewUserAccountRepository(tx, newTestFieldEncryptor(t))
+
+	// The actor's sync tries to discharge it. Note this returns NO error: unlike the two writes
+	// above, zero rows affected is a legitimate outcome here (a marker superseded mid-run), so the
+	// row count cannot distinguish "refused a stranger" from "nothing left to clear". That is
+	// precisely why the predicate must be in the SQL — there is no error channel to fall back on.
+	require.NoError(t, repo.ClearInvestmentBackfillRequests(ctx,
+		[]string{victimUAID.String()}, actorID.String(), time.Now().UTC()))
+
+	var stillOwed *time.Time
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT investment_backfill_requested_at FROM user_accounts WHERE id = $1`, victimUAID).
+		Scan(&stillOwed))
+	require.NotNil(t, stillOwed,
+		"another tenant's sync discharged this user's backfill obligation. Nothing reads this "+
+			"column but the sync, so the victim's excluded history would simply never be "+
+			"re-fetched, with no error and no way to notice")
+	assert.WithinDuration(t, owedAt, *stillOwed, time.Millisecond)
+
+	// And the read half must not leak it either — a sync that can SEE a foreign obligation would
+	// widen its own Plaid window on the strength of another tenant's row.
+	pending, err := repo.PendingInvestmentBackfills(ctx, []string{victimUAID.String()}, actorID.String())
+	require.NoError(t, err)
+	assert.Empty(t, pending,
+		"PendingInvestmentBackfills must not return a chain the caller does not own")
 }
 
 // seedTenantAccount inserts an accounts row for an existing user/linked_item fixture and returns

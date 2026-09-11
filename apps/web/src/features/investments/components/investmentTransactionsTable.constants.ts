@@ -4,6 +4,21 @@
  * does not flag non-component exports (lint rule only applies to .tsx files).
  */
 
+import type { InvestmentTransaction } from '@boostedbudget/api-client/models/investmentTransaction'
+
+/**
+ * #1631 C1: single source of truth for the classified activity type. The Type column's SORT
+ * accessor and its chip RENDER used to write this fallback separately -- `render` fell back to
+ * the raw `type` for a row missing `activity_type` (omitempty), but `key: 'activity_type'` did
+ * not, so that same row displayed its classified chip while sorting under `undefined`. Both call
+ * sites now call this one function, so they cannot diverge again.
+ */
+export function activityTypeSortValue(
+  r: Pick<InvestmentTransaction, 'activity_type' | 'type'>,
+): string {
+  return r.activity_type ?? r.type
+}
+
 /** Column IDs in display order — version key for useTablePreferences. */
 export const TXN_COLUMN_IDS = [
   'date',

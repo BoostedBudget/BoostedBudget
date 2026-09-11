@@ -157,7 +157,7 @@ var allowedHistoryDeletes = map[string]historyDeleteAllowance{
 
 	// The savings-goal purge. Distinct from the repository's `Delete`
 	// (savings_goal_repository.go:405), which TOMBSTONES (#1569 task 8). ⚠ `DeleteGoal` is the
-	// SERVICE verb (services/savings_goal_service.go:499); there is no repository method by that
+	// SERVICE verb (services/savings_goal_service.go:508); there is no repository method by that
 	// name, and this reason used to claim there was.
 	//
 	// ⚠ REVERSED (#1569 round 14). This entry used to say `deleted_at IS NOT NULL` was "deliberately

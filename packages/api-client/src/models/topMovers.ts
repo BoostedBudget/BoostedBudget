@@ -35,8 +35,11 @@ import type { TopMoverItem } from './topMoverItem';
 export interface TopMovers {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  excluded_by_currency_count: number;
   /** @nullable */
   gainers: TopMoverItem[] | null;
   /** @nullable */
   losers: TopMoverItem[] | null;
+  ranking_currency_code?: string;
+  unknown_currency_count: number;
 }

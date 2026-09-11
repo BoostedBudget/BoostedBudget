@@ -132,7 +132,7 @@ func (m *mockSavingsProgressService) GetProgressSummary(_ context.Context, _ str
 func createTestSavingsGoal() *domain.SavingsGoal {
 	now := time.Now()
 	deadline := now.AddDate(0, 6, 0)
-	return &domain.SavingsGoal{
+	g := &domain.SavingsGoal{
 		ID:            "goal-123",
 		UserID:        "user-123",
 		Name:          "Emergency Fund",
@@ -145,6 +145,8 @@ func createTestSavingsGoal() *domain.SavingsGoal {
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
+	g.PopulateDateDisplay()
+	return g
 }
 
 // TestCreateSavingsGoal_Success tests successful savings goal creation.
@@ -386,13 +388,24 @@ func TestPurgeSavingsGoal_ReachesTheServiceAndMapsThePrecondition(t *testing.T) 
 	})
 }
 
-// TestCreateSavingsGoalRequest_DeadlineDecoding tests JSON unmarshaling of deadline
-// field (RFC3339 format required, bare YYYY-MM-DD rejected).
+// TestCreateSavingsGoalRequest_DeadlineDecoding tests JSON unmarshaling of the deadline field.
+//
+// #1631 Batch F2 REVERSES this test's prior behavior: it used to assert that a bare YYYY-MM-DD
+// date was REJECTED (RFC3339 required). That was the actual defect this batch fixes — the DB
+// column is a Postgres DATE, so a caller sending the plain calendar day it is documented as
+// should not 422. RFC3339 must ALSO keep working: the current frontend
+// (CreateSavingsGoalDialog.tsx) sends `new Date(dateOnly).toISOString()`, an RFC3339 timestamp,
+// and that must not regress. See domain/flexible_date.go.
 func TestCreateSavingsGoalRequest_DeadlineDecoding(t *testing.T) {
-	t.Run("rejects bare YYYY-MM-DD date string", func(t *testing.T) {
+	t.Run("accepts bare YYYY-MM-DD date string", func(t *testing.T) {
 		var req domain.CreateSavingsGoalRequest
 		err := json.Unmarshal([]byte(`{"name":"Test","target_amount":1000,"account_id":"550e8400-e29b-41d4-a716-446655440000","deadline":"2026-12-31"}`), &req)
-		assert.Error(t, err, "bare YYYY-MM-DD should fail to unmarshal into *time.Time")
+		require.NoError(t, err, "a bare YYYY-MM-DD date must be accepted — it is the DATE column's own documented shape")
+		require.NotNil(t, req.Deadline)
+		asTime := time.Time(*req.Deadline)
+		assert.Equal(t, 2026, asTime.Year())
+		assert.Equal(t, 12, int(asTime.Month()))
+		assert.Equal(t, 31, asTime.Day())
 	})
 
 	t.Run("accepts RFC3339 datetime string", func(t *testing.T) {
@@ -400,9 +413,16 @@ func TestCreateSavingsGoalRequest_DeadlineDecoding(t *testing.T) {
 		err := json.Unmarshal([]byte(`{"name":"Test","target_amount":1000,"account_id":"550e8400-e29b-41d4-a716-446655440000","deadline":"2026-12-31T00:00:00Z"}`), &req)
 		require.NoError(t, err)
 		require.NotNil(t, req.Deadline)
-		assert.Equal(t, 2026, req.Deadline.Year())
-		assert.Equal(t, 12, int(req.Deadline.Month()))
-		assert.Equal(t, 31, req.Deadline.Day())
+		asTime := time.Time(*req.Deadline)
+		assert.Equal(t, 2026, asTime.Year())
+		assert.Equal(t, 12, int(asTime.Month()))
+		assert.Equal(t, 31, asTime.Day())
+	})
+
+	t.Run("rejects garbage", func(t *testing.T) {
+		var req domain.CreateSavingsGoalRequest
+		err := json.Unmarshal([]byte(`{"name":"Test","target_amount":1000,"account_id":"550e8400-e29b-41d4-a716-446655440000","deadline":"not-a-date"}`), &req)
+		assert.Error(t, err)
 	})
 
 	t.Run("accepts missing deadline as nil", func(t *testing.T) {

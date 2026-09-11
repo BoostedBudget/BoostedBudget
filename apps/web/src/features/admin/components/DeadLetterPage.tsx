@@ -14,6 +14,7 @@ import {
   getGetAdminDeadLetterJobStatsQueryKey,
 } from '@boostedbudget/api-client/endpoints/admin/admin'
 import { mutationFailureMessage } from '../lib/mutationFailureMessage'
+import { parseJobErrors, pgErrorSummary } from '../lib/parseJobErrors'
 import { SummaryCard } from '@/features/admin'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -25,11 +26,12 @@ import { DataTable, TablePagination, useTablePreferences } from '@/shared/compon
 import type { ColumnDef } from '@/shared/components/DataTable'
 
 // eslint-disable-next-line react-refresh/only-export-components
-export const ADMIN_DLQ_COLUMN_IDS = ['kind', 'queue', 'user_id', 'failed_at', 'retried_at', 'notes'] as const
+export const ADMIN_DLQ_COLUMN_IDS = ['kind', 'queue', 'last_error', 'user_id', 'failed_at', 'retried_at', 'notes'] as const
 
 const inputClass = 'px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:border-primary'
 const selectInputClass = `${inputClass} cursor-pointer transition-colors`
 const buttonClass = 'inline-flex items-center px-3.5 py-2 border border-border rounded-md bg-background text-foreground text-sm font-medium cursor-pointer transition-colors hover:bg-muted disabled:opacity-45 disabled:cursor-not-allowed'
+const rowActionButtonClass = 'inline-flex items-center px-2.5 py-1.5 border rounded-md bg-background text-[0.8125rem] font-medium cursor-pointer transition-colors disabled:opacity-45 disabled:cursor-not-allowed'
 
 export function DeadLetterPage() {
   const [autoRefresh, setAutoRefresh] = useState(true)
@@ -108,6 +110,40 @@ export function DeadLetterPage() {
       render: (job) => (
         <span className="font-mono text-[0.8125rem] text-muted-foreground">{job.queue}</span>
       ),
+    },
+    // #1631: the queue used to be scannable only by job kind, so five dead-letters from one
+    // holdings sync looked exactly like five unrelated failures. SQLSTATE and constraint name
+    // are schema identifiers — NOT row values — which is why this column is deliberately NOT in
+    // maskedColumnIds: masking it would delete the only signal it carries. Everything that CAN
+    // quote a row value (pg detail/hint/message, the error chain, the raw message) is confined to
+    // JobErrorList in the detail modal, where each field is individually masked.
+    {
+      id: 'last_error',
+      header: 'Last Error',
+      hideable: true,
+      resizable: true,
+      defaultSize: 200,
+      minSize: 120,
+      render: (job) => {
+        const summary = pgErrorSummary(parseJobErrors(job.errors))
+        if (!summary) {
+          return (
+            <span className="text-[0.8125rem] text-muted-foreground" data-testid="dlq-no-pg-error">
+              —
+            </span>
+          )
+        }
+        return (
+          <span className="flex items-center gap-1.5 min-w-0">
+            {summary.code && <Badge variant="destructive">{summary.code}</Badge>}
+            {summary.constraintName && (
+              <code className="font-mono text-[0.75rem] text-muted-foreground overflow-hidden text-ellipsis whitespace-nowrap">
+                {summary.constraintName}
+              </code>
+            )}
+          </span>
+        )
+      },
     },
     {
       id: 'user_id',
@@ -444,7 +480,7 @@ export function DeadLetterPage() {
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
-                  className="inline-flex items-center px-2.5 py-1.5 border border-border rounded-md bg-background text-foreground text-[0.8125rem] font-medium cursor-pointer transition-colors hover:bg-primary hover:border-primary hover:text-primary-foreground disabled:opacity-45 disabled:cursor-not-allowed"
+                  className={cn(rowActionButtonClass, 'border-border text-foreground hover:bg-primary hover:border-primary hover:text-primary-foreground')}
                   onClick={() => handleRetry(job.id)}
                   disabled={!!job.retried_at || retryMutation.isPending}
                   aria-label={`Retry job ${job.id}`}
@@ -453,7 +489,7 @@ export function DeadLetterPage() {
                 </button>
                 <button
                   type="button"
-                  className="inline-flex items-center px-2.5 py-1.5 border border-destructive/30 rounded-md bg-background text-destructive text-[0.8125rem] font-medium cursor-pointer transition-colors hover:bg-destructive/10 disabled:opacity-45 disabled:cursor-not-allowed"
+                  className={cn(rowActionButtonClass, 'border-destructive/30 text-destructive hover:bg-destructive/10')}
                   onClick={() => setConfirmDeleteJobId(job.id)}
                   disabled={deleteMutation.isPending}
                   aria-label={`Delete job ${job.id}`}

@@ -303,7 +303,7 @@ func (m *mockCustomCategoryRepoForBudget) DeleteWithReassignment(ctx context.Con
 func createTestBudget() *domain.Budget {
 	now := time.Now()
 	endDate := now.AddDate(0, 1, 0)
-	return &domain.Budget{
+	b := &domain.Budget{
 		ID:           "budget-123",
 		UserID:       "user-123",
 		Name:         "Monthly Budget",
@@ -326,6 +326,8 @@ func createTestBudget() *domain.Budget {
 			},
 		},
 	}
+	b.PopulateDateDisplay()
+	return b
 }
 
 // TestCreateBudget_Success tests successful budget creation.

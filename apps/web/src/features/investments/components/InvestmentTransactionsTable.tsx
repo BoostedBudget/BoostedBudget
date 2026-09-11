@@ -2,17 +2,25 @@ import { useState } from 'react'
 import { useInfiniteInvestmentTransactions } from '@/features/investments/hooks/useInfiniteInvestmentTransactions'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, SortState, FilterState } from '@/shared/components/DataTable'
-import { formatCurrency } from '@/shared/charts/formatters'
+import { formatPortfolioAmount } from '../utils/portfolioCurrency'
 import type { InvestmentTransaction } from '@boostedbudget/api-client/models/investmentTransaction'
 import { ActivityTypeChip } from '@/shared/components/ActivityTypeChip'
 import {
   TXN_COLUMN_IDS,
   MASKED_COLUMN_IDS,
   buildInvestmentVirtualization,
+  activityTypeSortValue,
 } from './investmentTransactionsTable.constants'
 
-const formatOrDefault = (value: number | null | undefined): string =>
-  value != null ? formatCurrency(value) : '--'
+// #1631 CX1: formatted in the currency the ROW states, not the dollar. An investment account can
+// hold positions in several currencies at once, so the per-row code is the only one that can be
+// right here -- there is no portfolio-level verdict that applies to an individual trade.
+// fractionDigits 0 preserves exactly what formatCurrency rendered; this change moves the SYMBOL
+// and nothing else.
+const formatOrDefault = (
+  value: number | null | undefined,
+  row: { currency_code?: string },
+): string => (value != null ? formatPortfolioAmount(value, row, 0) : '--')
 
 interface InvestmentTransactionsTableProps {
   dateRange: { start_date: string; end_date: string }
@@ -55,8 +63,16 @@ export function InvestmentTransactionsTable({
     {
       id: 'type',
       header: 'Type',
-      key: 'type',
-      render: (r) => <ActivityTypeChip activityType={r.type} />,
+      // ⚠ the SORT accessor must move with the render (#1631). This column passed the RAW Plaid
+      // `type` to a chip the transactions feed feeds a NORMALIZED value, so this page could never
+      // show Dividend or Reinvest and disagreed with the feed about the same row. A prior fix
+      // moved the fallback into `render` only, which left `key: 'activity_type'` -- with no
+      // fallback -- as the sort accessor: a row missing `activity_type` (omitempty) DISPLAYED its
+      // classified chip while SORTING under `undefined`, interleaved with rows sorting under their
+      // real value. `activityTypeSortValue` is now the only place either fallback is written, so
+      // sort and render read the identical value for every row.
+      sortAccessor: activityTypeSortValue,
+      render: (r) => <ActivityTypeChip activityType={activityTypeSortValue(r)} />,
     },
     {
       id: 'security',
@@ -77,7 +93,7 @@ export function InvestmentTransactionsTable({
       key: 'price',
       numeric: true,
       align: 'right',
-      render: (r) => formatOrDefault(r.price),
+      render: (r) => formatOrDefault(r.price, r),
     },
     {
       id: 'amount',
@@ -87,7 +103,7 @@ export function InvestmentTransactionsTable({
       // date order; client-side sort would only reorder the loaded subset.
       numeric: true,
       align: 'right',
-      render: (r) => formatCurrency(r.amount),
+      render: (r) => formatPortfolioAmount(r.amount, r, 0),
     },
     {
       id: 'fees',
@@ -95,7 +111,7 @@ export function InvestmentTransactionsTable({
       key: 'fees',
       numeric: true,
       align: 'right',
-      render: (r) => (r.fees != null && r.fees > 0 ? formatCurrency(r.fees) : '--'),
+      render: (r) => (r.fees != null && r.fees > 0 ? formatPortfolioAmount(r.fees, r, 0) : '--'),
     },
   ]
 

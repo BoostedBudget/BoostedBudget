@@ -5,11 +5,12 @@
  */
 
 import { Switch } from '@/components/ui/switch'
-import { ACTIVITY_TYPE_CONFIG } from '@/shared/components/ActivityTypeChip'
+import { ACTIVITY_TYPE_CONFIG, ACTIVITY_TYPES } from '@/shared/components/ActivityTypeChip'
 import type { ActivityType } from '../../types'
 
-// Static array avoids Object.keys() at module level — cross-chunk TDZ in Rolldown prod bundle.
-const ACTIVITY_TYPES: ActivityType[] = ['buy', 'sell', 'dividend', 'reinvest', 'fee', 'cash', 'other']
+// ACTIVITY_TYPES is imported rather than re-declared here (#1631). It remains a hand-written
+// literal at its definition site for the same reason this file used to hold its own copy:
+// Object.keys() at module level trips a cross-chunk TDZ in the Rolldown production bundle.
 
 interface TransactionInvestmentFilterProps {
   includeInvestmentActivity: boolean

@@ -354,7 +354,7 @@ func hasSnapshotOutsideAccountMap(snapshots []domain.BalanceSnapshot, accountMap
 // not an instant one. A FUTURE date is deliberately not historical: it is a current-figure question
 // wearing a different label.
 func asOfIsHistorical(asOfDate time.Time) bool {
-	return asOfDate.Before(time.Now().UTC().Truncate(24 * time.Hour))
+	return asOfDate.Before(domain.CalendarDayUTC(time.Now()))
 }
 
 // mergeMissingAccounts copies entries from src into dst for keys dst does not already hold.
@@ -777,9 +777,9 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 		return s.getBalanceSummaryHousehold(ctx, userID, filters)
 	}
 	// Determine the date for balance snapshot
-	asOfDate := time.Now().UTC().Truncate(24 * time.Hour)
+	asOfDate := domain.CalendarDayUTC(time.Now())
 	if filters != nil && filters.AsOfDate != nil {
-		asOfDate = filters.AsOfDate.Truncate(24 * time.Hour)
+		asOfDate = domain.CalendarDayUTC(*filters.AsOfDate)
 	}
 
 	// Both sides of this response are anchored on asOfDate: the current figures are the latest
@@ -915,9 +915,10 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 			// leaves periodComparison nil), and reporting "no change" for a disconnection is
 			// exactly the user-visible lie #1537 round 10 exists to remove.
 			return &domain.BalanceSummaryResponse{
-				AsOfDate:     asOfDate,
-				TotalBalance: totalBalance,
-				ByType:       byType,
+				AsOfDate:        asOfDate,
+				AsOfDateDisplay: domain.FormatCalendarDayUTC(asOfDate),
+				TotalBalance:    totalBalance,
+				ByType:          byType,
 			}, nil
 		}
 		previousBalance := baselineBalanceForComparison(previousSnapshots, accountMap, historicalMap, accountTypes, true)
@@ -937,6 +938,7 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 
 	return &domain.BalanceSummaryResponse{
 		AsOfDate:         asOfDate,
+		AsOfDateDisplay:  domain.FormatCalendarDayUTC(asOfDate),
 		TotalBalance:     totalBalance,
 		ByType:           byType,
 		PeriodComparison: periodComparison,
@@ -1087,9 +1089,9 @@ func (s *dashboardService) historicalAccountMap(
 // GetSnapshotsAsOfForUser(endOfDay(asOfDate)) and this one matches it.
 func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.BalanceSummaryResponse, error) {
 	scope := filters.HouseholdScope
-	asOfDate := time.Now().UTC().Truncate(24 * time.Hour)
+	asOfDate := domain.CalendarDayUTC(time.Now())
 	if filters.AsOfDate != nil {
-		asOfDate = filters.AsOfDate.Truncate(24 * time.Hour)
+		asOfDate = domain.CalendarDayUTC(*filters.AsOfDate)
 	}
 
 	// currentCutoff is derived from asOfDate, so the snapshot query and the account-map query
@@ -1217,9 +1219,10 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 				// Omit the comparison rather than compute it over the wrong universe — see the
 				// personal path's identical guard for why silence beats a false "no change".
 				return &domain.BalanceSummaryResponse{
-					AsOfDate:     asOfDate,
-					TotalBalance: totalBalance,
-					ByType:       byType,
+					AsOfDate:        asOfDate,
+					AsOfDateDisplay: domain.FormatCalendarDayUTC(asOfDate),
+					TotalBalance:    totalBalance,
+					ByType:          byType,
 				}, nil
 			}
 			historicalMap = buildChainAwareAccountMap(historicalAccounts)
@@ -1239,6 +1242,7 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 
 	return &domain.BalanceSummaryResponse{
 		AsOfDate:         asOfDate,
+		AsOfDateDisplay:  domain.FormatCalendarDayUTC(asOfDate),
 		TotalBalance:     totalBalance,
 		ByType:           byType,
 		PeriodComparison: periodComparison,
@@ -1261,15 +1265,15 @@ func endOfDay(d time.Time) time.Time {
 // GetBalanceHistory returns time series balance data for charts
 func (s *dashboardService) GetBalanceHistory(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.BalanceHistoryResponse, error) {
 	// Default to last 30 days if not specified
-	endDate := time.Now().UTC().Truncate(24 * time.Hour)
+	endDate := domain.CalendarDayUTC(time.Now())
 	startDate := endDate.AddDate(0, 0, -30)
 
 	if filters != nil {
 		if filters.StartDate != nil {
-			startDate = filters.StartDate.Truncate(24 * time.Hour)
+			startDate = domain.CalendarDayUTC(*filters.StartDate)
 		}
 		if filters.EndDate != nil {
-			endDate = filters.EndDate.Truncate(24 * time.Hour)
+			endDate = domain.CalendarDayUTC(*filters.EndDate)
 		}
 	}
 
@@ -1302,9 +1306,10 @@ func (s *dashboardService) GetBalanceHistory(ctx context.Context, userID string,
 	snapshots := make([]domain.BalanceHistorySnapshot, len(history))
 	for i, point := range history {
 		snapshots[i] = domain.BalanceHistorySnapshot{
-			Date:    point.Date,
-			Balance: point.TotalBalance,
-			ByType:  point.ByType,
+			Date:        point.Date,
+			DateDisplay: point.Date.Format(time.DateOnly),
+			Balance:     point.TotalBalance,
+			ByType:      point.ByType,
 		}
 	}
 
@@ -1314,10 +1319,12 @@ func (s *dashboardService) GetBalanceHistory(ctx context.Context, userID string,
 	}
 
 	return &domain.BalanceHistoryResponse{
-		StartDate:   startDate,
-		EndDate:     endDate,
-		Granularity: granularity,
-		Snapshots:   snapshots,
+		StartDate:        startDate,
+		StartDateDisplay: domain.FormatCalendarDayUTC(startDate),
+		EndDate:          endDate,
+		EndDateDisplay:   domain.FormatCalendarDayUTC(endDate),
+		Granularity:      granularity,
+		Snapshots:        snapshots,
 	}, nil
 }
 
@@ -1406,9 +1413,9 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 		return s.getNetWorthHousehold(ctx, userID, filters)
 	}
 	// Determine the date for net worth calculation
-	asOfDate := time.Now().UTC().Truncate(24 * time.Hour)
+	asOfDate := domain.CalendarDayUTC(time.Now())
 	if filters != nil && filters.AsOfDate != nil {
-		asOfDate = filters.AsOfDate.Truncate(24 * time.Hour)
+		asOfDate = domain.CalendarDayUTC(*filters.AsOfDate)
 	}
 
 	// as_of_date anchors BOTH sides here too — see GetBalanceSummary's identical read.
@@ -1580,6 +1587,7 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 			// change" for a disconnection is exactly the lie this fix removes.
 			return &domain.NetWorthResponse{
 				AsOfDate:         asOfDate,
+				AsOfDateDisplay:  domain.FormatCalendarDayUTC(asOfDate),
 				NetWorth:         netWorth,
 				TotalAssets:      totalAssets,
 				TotalLiabilities: totalLiabilities,
@@ -1649,6 +1657,7 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 
 	return &domain.NetWorthResponse{
 		AsOfDate:         asOfDate,
+		AsOfDateDisplay:  domain.FormatCalendarDayUTC(asOfDate),
 		NetWorth:         netWorth,
 		TotalAssets:      totalAssets,
 		TotalLiabilities: totalLiabilities,
@@ -1665,9 +1674,9 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 // personal path — see getBalanceSummaryHousehold's comment for the behavior this replaced.
 func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.NetWorthResponse, error) {
 	scope := filters.HouseholdScope
-	asOfDate := time.Now().UTC().Truncate(24 * time.Hour)
+	asOfDate := domain.CalendarDayUTC(time.Now())
 	if filters.AsOfDate != nil {
-		asOfDate = filters.AsOfDate.Truncate(24 * time.Hour)
+		asOfDate = domain.CalendarDayUTC(*filters.AsOfDate)
 	}
 
 	// currentCutoff is derived from asOfDate and reused for both calls below — see the identical
@@ -1819,6 +1828,7 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 					// personal path's identical guard.
 					return &domain.NetWorthResponse{
 						AsOfDate:         asOfDate,
+						AsOfDateDisplay:  domain.FormatCalendarDayUTC(asOfDate),
 						NetWorth:         netWorth,
 						TotalAssets:      totalAssets,
 						TotalLiabilities: totalLiabilities,
@@ -1883,6 +1893,7 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 
 	return &domain.NetWorthResponse{
 		AsOfDate:         asOfDate,
+		AsOfDateDisplay:  domain.FormatCalendarDayUTC(asOfDate),
 		NetWorth:         netWorth,
 		TotalAssets:      totalAssets,
 		TotalLiabilities: totalLiabilities,
@@ -1894,15 +1905,15 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 // GetNetWorthHistory returns time series net worth data for charts
 func (s *dashboardService) GetNetWorthHistory(ctx context.Context, userID string, filters *domain.DashboardFilters) (*domain.NetWorthHistoryResponse, error) {
 	// Default to last 30 days if not specified
-	endDate := time.Now().UTC().Truncate(24 * time.Hour)
+	endDate := domain.CalendarDayUTC(time.Now())
 	startDate := endDate.AddDate(0, 0, -30)
 
 	if filters != nil {
 		if filters.StartDate != nil {
-			startDate = filters.StartDate.Truncate(24 * time.Hour)
+			startDate = domain.CalendarDayUTC(*filters.StartDate)
 		}
 		if filters.EndDate != nil {
-			endDate = filters.EndDate.Truncate(24 * time.Hour)
+			endDate = domain.CalendarDayUTC(*filters.EndDate)
 		}
 	}
 
@@ -1978,6 +1989,7 @@ func (s *dashboardService) GetNetWorthHistory(ctx context.Context, userID string
 
 		snapshots[i] = domain.NetWorthHistorySnapshot{
 			Date:             point.Date,
+			DateDisplay:      point.Date.Format(time.DateOnly),
 			NetWorth:         netWorth,
 			TotalAssets:      totalAssets,
 			TotalLiabilities: totalLiabilities,
@@ -1990,9 +2002,11 @@ func (s *dashboardService) GetNetWorthHistory(ctx context.Context, userID string
 	}
 
 	return &domain.NetWorthHistoryResponse{
-		StartDate:   startDate,
-		EndDate:     endDate,
-		Granularity: granularity,
-		Snapshots:   snapshots,
+		StartDate:        startDate,
+		StartDateDisplay: domain.FormatCalendarDayUTC(startDate),
+		EndDate:          endDate,
+		EndDateDisplay:   domain.FormatCalendarDayUTC(endDate),
+		Granularity:      granularity,
+		Snapshots:        snapshots,
 	}, nil
 }

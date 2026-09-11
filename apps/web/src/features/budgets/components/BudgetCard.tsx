@@ -10,6 +10,7 @@ import { Link } from 'react-router';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { formatDate } from '@/shared/transactions/dates';
 import { BudgetProgressBar } from './BudgetProgressBar';
 import { computeBudgetMetrics } from '../types';
 import { getBudgetDetailPath } from '../constants';
@@ -36,14 +37,6 @@ function formatCurrency(amount: number, currencyCode: string): string {
   } catch {
     return `${currencyCode} ${amount.toFixed(2)}`;
   }
-}
-
-/**
- * Format date for display
- */
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 /**
@@ -98,8 +91,8 @@ export function BudgetCard({ budget, onDelete }: BudgetCardProps) {
       <div className="flex justify-between items-center text-sm">
         <span className="font-medium text-foreground">{formatPeriod(budget.period)}</span>
         <span className="budget-card__dates text-muted-foreground">
-          {formatDate(budget.start_date)}
-          {budget.end_date && ` - ${formatDate(budget.end_date)}`}
+          {formatDate(budget.start_date, { omitYear: true })}
+          {budget.end_date && ` - ${formatDate(budget.end_date, { omitYear: true })}`}
         </span>
       </div>
 

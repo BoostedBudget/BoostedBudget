@@ -36,6 +36,7 @@ import type { PeriodComparisonData } from './periodComparisonData';
 export interface BalanceSummaryResponse {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  /** UTC calendar day (YYYY-MM-DD) this balance summary is as of */
   as_of_date: string;
   by_type: BalanceSummaryResponseByType;
   period_comparison?: PeriodComparisonData;

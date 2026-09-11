@@ -43,6 +43,7 @@ export { WebhooksPage } from './components/WebhooksPage'
 export { WebhookDetailModal } from './components/WebhookDetailModal'
 export { DeadLetterPage } from './components/DeadLetterPage'
 export { DeadLetterDetailModal } from './components/DeadLetterDetailModal'
+export { JobErrorList } from './components/JobErrorList'
 export { PlaidOrphanedItemsPage } from './components/PlaidOrphanedItemsPage'
 
 // Hooks for user management (Issue #644)
@@ -56,6 +57,10 @@ export type { AdminSubscriptionDetailOutputBody } from './hooks/useAdminSubscrip
 // Hooks for webhook management (Issue #747)
 export { useWebhookFilters } from './hooks/useWebhookFilters'
 export type { UseWebhookFiltersResult, WebhookFilters } from './hooks/useWebhookFilters'
+
+// DLQ structured error parsing (Issue #1631)
+export { parseJobErrors, pgErrorSummary } from './lib/parseJobErrors'
+export type { ParsedJobError, PgErrorContext, PgErrorSummary } from './lib/parseJobErrors'
 
 // Hooks for DLQ management (Issue #633)
 export { useDeadLetterFilters } from './hooks/useDeadLetterFilters'

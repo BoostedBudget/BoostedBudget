@@ -78,6 +78,15 @@ make test-scripts           # The 26 shell guard suites: 24 in scripts/__tests__
                              # `.git/hooks`, `.sample` files only; no husky, no lefthook), and none
                              # should be the sole home of a guard: a hook is bypassable with
                              # `--no-verify` and does not exist in a fresh clone.
+                             # ⚠ Do not read this as "nothing runs before a push". There IS a
+                             # CLAUDE CODE hook, `.claude/hooks/pre-push-checks.sh`, which runs
+                             # bun audit, govulncheck, `make check-bundle-size` and the MCP
+                             # artifact check and BLOCKS the push on failure. It is not a git
+                             # hook: it fires only inside a Claude Code session, so a human's
+                             # `git push` never sees it and the sentence above stays true. It is
+                             # also why a Claude session can be blocked by a gate a teammate
+                             # pushing the same commit would sail past — if a push is refused
+                             # with a bundle-size or artifact failure, that hook is why.
                              # ⚠ **CI is not a single platform any more** (#1598). `e2e-test` and
                              # `lighthouse-audit` run on ephemeral Ubuntu (`ubicloud-standard-2`);
                              # the other 38 jobs stay on the macOS pool. A shell guard that runs
@@ -108,9 +117,12 @@ make -C backend lint        # golangci-lint
 # integration tests" step also requires CACHE_REDIS_TEST_URL and REDIS_TEST_URL — leaving
 # either unset makes 30 tests t.Skip() silently (they do NOT fail), which hid a real
 # regression for two rounds. The complete local command, against this repo's standing
-# Docker containers (boostedbudget-db on 5434, boostedbudget-redis-cache on 6380,
+# Docker containers (boostedbudget-db on 5432, boostedbudget-redis-cache on 6380,
+                             # (⚠ said 5434 until #1631 verified it against a running stack:
+                             #  `docker ps` shows boostedbudget-db publishing 0.0.0.0:5432->5432.
+                             #  The redis ports, 6380 and 6379, were and remain correct.)
 # boostedbudget-redis-ratelimit on 6379):
-#   DATABASE_URL="postgres://devuser:devpass@localhost:5434/freshcheck?sslmode=disable" \
+#   DATABASE_URL="postgres://devuser:devpass@localhost:5432/freshcheck?sslmode=disable" \
 #   CACHE_REDIS_TEST_URL="redis://localhost:6380" \
 #   REDIS_TEST_URL="redis://localhost:6379" \
 #   ./scripts/summarize-go-test.sh go test -tags integration -p 1 -count=1 ./internal/...
@@ -613,7 +625,12 @@ BoostedBudget serves a broad spectrum: from financially anxious individuals seek
 - **Color contrast**: Minimum 4.5:1 for normal text, 3:1 for large text and UI components
 - **Keyboard navigation**: All interactive elements must be keyboard accessible with visible focus indicators
 - **Screen readers**: Semantic HTML, proper ARIA labels, meaningful alt text
-- **Motion**: All animations respect `prefers-reduced-motion` (already implemented)
+- **Motion**: `animate-spin`/`animate-pulse` (112 combined call sites) are covered globally by an
+  unlayered `@media (prefers-reduced-motion: reduce)` rule in `apps/web/src/index.css` (slows
+  rather than freezes — a frozen spinner reads as a hung page), guarded by `index.css.test.ts`.
+  `tw-animate-css` animations (`animate-in`/`animate-out`, 16 combined call sites) and any bespoke
+  `@keyframes` are NOT covered by that rule and must opt in per call site (e.g.
+  `motion-reduce:transition-none`) — see #1631.
 - **Color independence**: Information never conveyed by color alone (colorblind-safe chart palette already in place)
 
 ### Design Principles

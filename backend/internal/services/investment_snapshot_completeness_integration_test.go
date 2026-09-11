@@ -126,6 +126,7 @@ func TestSyncHoldings_PermanentlyAbsentAccount_StillWritesSnapshot(t *testing.T)
 		holdingRepo,
 		nil, // investmentTxnRepo — unused by SyncHoldings
 		snapshotRepo,
+		nil, // userAccountRepo — only SyncInvestmentTransactions consumes backfill obligations
 		mockPlaid,
 		nil, // logger
 	)
