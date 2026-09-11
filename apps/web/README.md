@@ -40,7 +40,7 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 **Claude Code pre-push hook:** The Claude Code hook at `.claude/hooks/pre-push-checks.sh` invokes `make check-bundle-size` on every push that touches frontend files, enforcing both size-limit budgets AND the orphan-chunk guard automatically.
 
 **Current footprints** — baseline established post-#1225 (Vite 8 / Rolldown `codeSplitting.groups` migration).
-**Measured at commit `9665e163` (2026-09-11, #1631) via `make check-bundle-size` — every value re-measured in one run.** This table is a point-in-time snapshot, not a live check — if it's older than the last budget or dependency change, re-run `make check-bundle-size` and update every value (and this stamp) before trusting it. Do not hand-edit individual numbers without re-measuring the whole table in one run.
+**Measured at commit `36a663d4` (2026-09-11, #1631) via `make check-bundle-size` — every value re-measured in one run.** This table is a point-in-time snapshot, not a live check — if it's older than the last budget or dependency change, re-run `make check-bundle-size` and update every value (and this stamp) before trusting it. Do not hand-edit individual numbers without re-measuring the whole table in one run.
 
 | Chunk | Budget | Actual (gzip) | Headroom |
 |-------|--------|---------------|----------|
@@ -51,29 +51,29 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 | `charts` | 230 kB | 223.14 kB | 6.86 kB |
 | `api-client` | 10 kB | 7.94 kB | 2.06 kB |
 | `shared` | 40 kB | 38.35 kB | 1.65 kB |
-| `layout-chrome` | 2.5 kB | 2.20 kB | 0.30 kB |
-| `header` | 3.6 kB | 3.29 kB | 0.31 kB |
-| `admin` | 24 kB | 20.26 kB | 3.74 kB |
+| `layout-chrome` | 2.5 kB | 2.21 kB | 0.29 kB |
+| `header` | 3.6 kB | 3.28 kB | 0.32 kB |
+| `admin` | 24 kB | 20.29 kB | 3.71 kB |
 | `accounts` | 20 kB | 16.49 kB | 3.51 kB |
 | `auto-categorization` | 18.5 kB | 15.54 kB | 2.96 kB |
 | `billing` | 15 kB | 11.46 kB | 3.54 kB |
 | `budgets` | 25 kB | 21.18 kB | 3.82 kB |
-| `dashboard` | 20 kB | 16.36 kB | 3.64 kB |
+| `dashboard` | 20 kB | 16.37 kB | 3.63 kB |
 | `legal` | 20 kB | 17.45 kB | 2.55 kB |
 | `net-worth` | 6 kB | 4.71 kB | 1.29 kB |
 | `profile` | 12 kB | 9.39 kB | 2.61 kB |
-| `reports` | 7.5 kB | 7.34 kB | 0.16 kB |
+| `reports` | 7.5 kB | 7.33 kB | 0.17 kB |
 | `boosts` | 22 kB | 18.77 kB | 3.23 kB |
 | `household` | 9 kB | 8.58 kB | 0.42 kB |
 | `mcp` | 13 kB | 8.41 kB | 4.59 kB |
 | `savings` | 12 kB | 11.33 kB | 0.67 kB |
-| `transactions` | 22 kB | 15.84 kB | 6.16 kB |
+| `transactions` | 22 kB | 15.87 kB | 6.13 kB |
 | `custom-category-manager` | 7 kB | 3.72 kB | 3.28 kB |
 | `category-editor` | 4 kB | 1.64 kB | 2.36 kB |
 | `css` | 68 kB | 23.14 kB | 44.86 kB |
 | `planning` | 2 kB | 0.69 kB | 1.31 kB |
 | `insights` | 2 kB | 0.75 kB | 1.25 kB |
-| `investments` | 7.5 kB | 7.44 kB | 0.06 kB |
+| `investments` | 8.5 kB | 7.50 kB | 1.00 kB |
 
 *Excludes `rolldown-runtime`, `preload-helper`, and `css` — framework/runtime and global-stylesheet budgets, not per-feature or vendor-family chunks. All three sit at ≤35% of their limit as of the same measurement, so they're omitted here as low-risk; they're still enforced in `.size-limit.json`.*
 *`layout-chrome` and `header` are newly LISTED, not newly created: both are real chunks with real budgets in `.size-limit.json` that the previous stamp (2026-08-11) simply predates. An absent row here never meant an absent budget — the orphan-chunk guard, not this table, is what makes a budget mandatory.*
