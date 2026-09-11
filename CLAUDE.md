@@ -613,7 +613,12 @@ BoostedBudget serves a broad spectrum: from financially anxious individuals seek
 - **Color contrast**: Minimum 4.5:1 for normal text, 3:1 for large text and UI components
 - **Keyboard navigation**: All interactive elements must be keyboard accessible with visible focus indicators
 - **Screen readers**: Semantic HTML, proper ARIA labels, meaningful alt text
-- **Motion**: All animations respect `prefers-reduced-motion` (already implemented)
+- **Motion**: `animate-spin`/`animate-pulse` (112 combined call sites) are covered globally by an
+  unlayered `@media (prefers-reduced-motion: reduce)` rule in `apps/web/src/index.css` (slows
+  rather than freezes — a frozen spinner reads as a hung page), guarded by `index.css.test.ts`.
+  `tw-animate-css` animations (`animate-in`/`animate-out`, 16 combined call sites) and any bespoke
+  `@keyframes` are NOT covered by that rule and must opt in per call site (e.g.
+  `motion-reduce:transition-none`) — see #1631.
 - **Color independence**: Information never conveyed by color alone (colorblind-safe chart palette already in place)
 
 ### Design Principles
