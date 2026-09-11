@@ -120,3 +120,39 @@ func TestIncomeSummary_CapitalGainDistribution_IsIncome_Integration(t *testing.T
 	assert.InDelta(t, 40.00, summary.TotalIncome, 0.001,
 		"a capital-gain distribution is investment income")
 }
+
+// TestIncomeSummary_TransferTypeDepositAgainstRealSecurity_IsNotIncome_Integration pins #1631 I1:
+// the structural rule (and the subtype-literal rule beside it) must be gated on it.type = 'cash',
+// exactly as NormalizeTradeType and TradeTypeToSQLPredicate gate the same rule. Without the gate,
+// an ACATS/in-kind movement posted as type='transfer', subtype='deposit' against a real security
+// was counted as a dividend here while the feed labelled the same row Transfer — and with the
+// -SUM(amount) negation, a large transfer IN read as that much dividend income.
+func TestIncomeSummary_TransferTypeDepositAgainstRealSecurity_IsNotIncome_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "inv-1631-i1")
+
+	id := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO investment_transactions
+			(id, user_id, account_id, security_id, plaid_investment_transaction_id,
+			 type, subtype, name, amount, date)
+		VALUES ($1, $2, $3, $4, $5, 'transfer', 'deposit', 'ACATS in-kind transfer', -50000.00, '2026-03-15')
+	`, id, userID, accountID, secID, "acats-transfer-"+id.String())
+	require.NoError(t, err)
+
+	summary, err := NewInvestmentAnalyticsRepository(tx).IncomeSummary(
+		ctx, userID.String(), mustParseDate("2026-03-01"), mustParseDate("2026-03-31"))
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+
+	assert.InDelta(t, 0, summary.TotalIncome, 0.001,
+		"a type='transfer' deposit against a real security is a Transfer everywhere else in this "+
+			"codebase (investment_trade_type.go); IncomeSummary must not count it as a dividend "+
+			"just because its subtype happens to be 'deposit'")
+}
