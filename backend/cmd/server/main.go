@@ -929,6 +929,10 @@ func main() {
 		boostExecutionRepo := repository.NewBoostExecutionRepository(db)
 		boostExecutionService := services.NewBoostExecutionService(boostExecutionRepo, transferSuggestionRepo, boostRepo, nil)
 		boostExecutionService.SetAnalytics(phClient)
+		// Issue #1630 review round 2: without this, a category_rollover boost's sub-allocation
+		// check has no live budget-category data to verify against and fails CLOSED (skips)
+		// every execution rather than trusting a possibly-stale triggerData snapshot.
+		boostExecutionService.SetBudgetCategoryRepo(budgetRepo)
 		appLogger.Info("Boost execution service initialized")
 
 		// Issue #972: Wire budget sync → rule engine so budget_updated events are not silently dropped.
