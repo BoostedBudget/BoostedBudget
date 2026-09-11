@@ -146,12 +146,20 @@ func (r *securityRepository) UpsertBatch(ctx context.Context, securities []domai
 // CountForkedIdentityGroups: a non-blank institution_security_id spanning 2+ distinct
 // plaid_security_id values. One definition, so a future tweak (e.g. tightening what counts as
 // "blank") cannot desync the listing from the count the way #1631 exists to avoid elsewhere.
+//
+// ⚠ COUNT(*), not COUNT(DISTINCT plaid_security_id) — deliberately. plaid_security_id carries a
+// UNIQUE constraint (`unique_plaid_security_id`, migration 000051), so within one
+// institution_security_id group every plaid_security_id value is already distinct by
+// construction; COUNT(DISTINCT ...) and COUNT(*) are identical here, and the plain form is what
+// lets a covering index on (institution_security_id) alone — see migration 000199 — satisfy this
+// query with an index-only scan. COUNT(DISTINCT ...) would force a HashAggregate that also has to
+// materialize plaid_security_id per group, defeating the index migration 000199 exists for.
 const forkedIdentityGroupsSQL = `
 	SELECT institution_security_id
 	FROM securities
 	WHERE institution_security_id IS NOT NULL AND btrim(institution_security_id) <> ''
 	GROUP BY institution_security_id
-	HAVING COUNT(DISTINCT plaid_security_id) > 1
+	HAVING COUNT(*) > 1
 `
 
 // FindForkedIdentities returns the full member listing for every forked-identity group. See

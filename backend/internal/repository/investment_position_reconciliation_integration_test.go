@@ -128,6 +128,100 @@ func TestPositionReconciliation_ReinvestmentSharesCountTowardTheLedger_Integrati
 	assert.Equal(t, 0, report.SuppressedPreWindowCount)
 }
 
+// TestPositionReconciliation_StructuralWithdrawalReinvestmentCountsTowardTheLedger_Integration is
+// the PRODUCTION shape the plain "dividend reinvestment" test above does NOT exercise. #1631's own
+// NormalizeTradeType doc comment records that this brokerage NEVER emits the "dividend
+// reinvestment" subtype literal — it reports a reinvestment as a bare cash/withdrawal row against
+// the security, caught only by the STRUCTURAL branch (a cash movement against a security Plaid did
+// not flag is_cash_equivalent=true). The 42.93 reinvested shares this issue cites come from exactly
+// this shape. seedInvestmentFixture's security omits is_cash_equivalent, which defaults to FALSE,
+// so SecurityIsStructuralSQL's `IS FALSE` check is already satisfied without any extra seeding.
+func TestPositionReconciliation_StructuralWithdrawalReinvestmentCountsTowardTheLedger_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "recon-structural-reinvest")
+
+	withdrawal := "withdrawal"
+	seedReconTxn(ctx, t, tx, userID, accountID, secID, "buy", nil, 100, "2025-01-01")
+	// Structural reinvestment: type='cash', subtype='withdrawal' (NOT a literal reinvest subtype),
+	// against a security this fixture leaves is_cash_equivalent=FALSE — the exact shape production
+	// data has for this brokerage.
+	seedReconTxn(ctx, t, tx, userID, accountID, secID, "cash", &withdrawal, 2.93, "2025-06-01")
+	seedReconHolding(ctx, t, tx, userID, accountID, secID, 102.93)
+
+	repo := NewInvestmentAnalyticsRepository(tx)
+	report, err := repo.PositionReconciliation(ctx, userID.String())
+	require.NoError(t, err)
+
+	assert.Empty(t, report.Drifts,
+		"102.93 = 100 buy + 2.93 structurally-reinvested shares — a ledger that only recognised the "+
+			"literal 'dividend reinvestment' subtype would miss this brokerage's cash/withdrawal form "+
+			"entirely and wrongly report a 2.93-share drift")
+	assert.Equal(t, 0, report.SuppressedPreWindowCount)
+}
+
+// TestPositionReconciliation_StockSplitCountsTowardTheLedger_Integration is the C2 fix's own test:
+// a stock split (type='transfer', subtype='split') modifies holdings.quantity with no
+// corresponding buy/sell/reinvest row. Plaid's own docs call type='transfer' "activity that
+// modifies a position, but not through buy/sell activity" — before this fix the ledger ignored
+// ALL type='transfer' rows, so every split on a held position produced a permanent, un-suppressed
+// drift (the position has a buy, so the pre-window proxy would not catch it either).
+func TestPositionReconciliation_StockSplitCountsTowardTheLedger_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "recon-split")
+
+	split := "split"
+	seedReconTxn(ctx, t, tx, userID, accountID, secID, "buy", nil, 100, "2025-01-01")
+	// A 2-for-1 split: Plaid represents the 100 NEW shares as a transfer/split row.
+	seedReconTxn(ctx, t, tx, userID, accountID, secID, "transfer", &split, 100, "2025-06-01")
+	seedReconHolding(ctx, t, tx, userID, accountID, secID, 200)
+
+	repo := NewInvestmentAnalyticsRepository(tx)
+	report, err := repo.PositionReconciliation(ctx, userID.String())
+	require.NoError(t, err)
+
+	assert.Empty(t, report.Drifts,
+		"200 = 100 original + 100 split-issued shares — a ledger that ignored type='transfer' rows "+
+			"would report a permanent 100-share drift after every split on a held position")
+	assert.Equal(t, 0, report.SuppressedPreWindowCount)
+}
+
+// TestPositionReconciliation_InKindTransferCountsTowardTheLedger_Integration covers the OTHER
+// type='transfer' shape: an in-kind/ACATS transfer of shares between accounts, which Plaid also
+// types 'transfer' but WITHOUT the 'split' subtype. Both must count toward the ledger net.
+func TestPositionReconciliation_InKindTransferCountsTowardTheLedger_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, _, accountID, secID := seedInvestmentFixture(ctx, t, tx, "recon-acats")
+
+	seedReconTxn(ctx, t, tx, userID, accountID, secID, "buy", nil, 50, "2025-01-01")
+	// An in-kind transfer INTO this account from another brokerage — no subtype, not a split.
+	seedReconTxn(ctx, t, tx, userID, accountID, secID, "transfer", nil, 25, "2025-06-01")
+	seedReconHolding(ctx, t, tx, userID, accountID, secID, 75)
+
+	repo := NewInvestmentAnalyticsRepository(tx)
+	report, err := repo.PositionReconciliation(ctx, userID.String())
+	require.NoError(t, err)
+
+	assert.Empty(t, report.Drifts,
+		"75 = 50 bought + 25 shares transferred in-kind — a ledger that ignored type='transfer' rows "+
+			"would report a permanent 25-share drift")
+	assert.Equal(t, 0, report.SuppressedPreWindowCount)
+}
+
 // TestPositionReconciliation_NoOpeningBuyIsSuppressedNotReported_Integration is the pre-window
 // suppression rule's own test: a position with ONLY a sell in the ledger (no buy at all) could
 // not have been opened inside Plaid's 2-year lookback, so a quantity mismatch here must land in
@@ -176,4 +270,34 @@ func TestPositionReconciliation_HoldingWithNoLedgerRowsAtAllIsSuppressed_Integra
 	assert.Empty(t, report.Drifts)
 	assert.Equal(t, 1, report.SuppressedPreWindowCount)
 	assert.Equal(t, 1, report.TotalPositionsChecked)
+}
+
+// TestPositionReconciliationSummary_AggregatesAcrossUsers_Integration proves the GLOBAL
+// /admin/health gauge (#1631 M8b I1) counts positions across MORE THAN ONE user, unlike
+// PositionReconciliation which is scoped to a single userID.
+func TestPositionReconciliationSummary_AggregatesAcrossUsers_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// User A: a real drift (has a buy, mismatched quantity).
+	userA, _, accountA, secA := seedInvestmentFixture(ctx, t, tx, "recon-summary-a")
+	seedReconTxn(ctx, t, tx, userA, accountA, secA, "buy", nil, 100, "2025-01-01")
+	seedReconHolding(ctx, t, tx, userA, accountA, secA, 150)
+
+	// User B: a suppressed pre-window position (no buy in the ledger).
+	userB, _, accountB, secB := seedInvestmentFixture(ctx, t, tx, "recon-summary-b")
+	seedReconTxn(ctx, t, tx, userB, accountB, secB, "sell", nil, -5, "2025-01-01")
+	seedReconHolding(ctx, t, tx, userB, accountB, secB, 45)
+
+	repo := NewInvestmentAnalyticsRepository(tx)
+	summary, err := repo.PositionReconciliationSummary(ctx)
+	require.NoError(t, err)
+
+	assert.GreaterOrEqual(t, summary.DriftCount, int64(1), "user A's drift must be counted globally")
+	assert.GreaterOrEqual(t, summary.SuppressedPreWindowCount, int64(1), "user B's suppressed pair must be counted globally")
+	assert.GreaterOrEqual(t, summary.TotalPositionsChecked, int64(2))
+	assert.True(t, summary.Available)
 }

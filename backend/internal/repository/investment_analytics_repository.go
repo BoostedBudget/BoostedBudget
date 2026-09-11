@@ -42,10 +42,16 @@ type InvestmentAnalyticsRepository interface {
 
 	// PositionReconciliation is a DIAGNOSTIC, never a correction (#1631 M8b): it compares each
 	// active investment holding's quantity against the net share delta domain.TradeTypeToSQLPredicate's
-	// buy/sell/reinvest partition implies from investment_transactions, and reports the mismatches
-	// worth an operator's attention. See domain.PositionReconciliationReport's doc comment for the
-	// 2-year-lookback suppression rule that keeps this from flagging every long-held position.
+	// buy/sell/reinvest partition (plus type='transfer' rows) implies from investment_transactions,
+	// and reports the mismatches worth an operator's attention. See
+	// domain.PositionReconciliationReport's doc comment for the 2-year-lookback suppression rule and
+	// for why Drifts is NOT yet fully actionable.
 	PositionReconciliation(ctx context.Context, userID string) (*domain.PositionReconciliationReport, error)
+
+	// PositionReconciliationSummary is the GLOBAL admin-health gauge sibling of
+	// PositionReconciliation (#1631 M8b I1): the same classification, aggregated across every
+	// user's active holdings as counts rather than one user's Drifts list.
+	PositionReconciliationSummary(ctx context.Context) (*domain.PositionReconciliationSummary, error)
 }
 
 type investmentAnalyticsRepository struct {
@@ -847,30 +853,43 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 	}, nil
 }
 
-// PositionReconciliation compares each active holding's quantity against the net share delta
-// implied by the trade ledger, and reports the drifts — see domain.PositionReconciliationReport's
-// doc comment for the arithmetic, the 2-year-lookback suppression rule, and why this never writes
-// anything.
+// positionReconciliationLedgerFilterSQL renders the WHERE fragment for "this
+// investment_transactions row moves the position's share count" — the ledger side of the
+// reconciliation. It is buy/sell/reinvest (domain.TradeTypeToSQLPredicate's partition, reused
+// rather than re-derived — see the file-level comment on domain/investment_reconciliation.go) OR
+// ANY type='transfer' row regardless of subtype.
 //
-// ONE ROUND TRIP: the ledger aggregate (per account+security net quantity, and whether it
-// contains an opening buy) is computed in a CTE and LEFT JOINed onto the live holdings, rather
-// than fetched with a second query — a holding with NO matching ledger CTE row (no transactions
-// at all for that security/account) still needs to be evaluated, which COALESCE below handles as
-// a ledger quantity of 0 with no buy observed — exactly the "cannot evaluate, presumed
-// pre-window" case.
-func (r *investmentAnalyticsRepository) PositionReconciliation(ctx context.Context, userID string) (*domain.PositionReconciliationReport, error) {
-	// The buy/sell/reinvest partition is domain.TradeTypeToSQLPredicate's, not re-derived here —
-	// see the file-level comment on domain/investment_reconciliation.go for why a second copy of
-	// "which rows count" is exactly the failure class #1631 exists to close.
-	predicate, predArgs := domain.TradeTypeToSQLPredicate(
-		[]string{domain.TradeTypeBuy, domain.TradeTypeSell, domain.TradeTypeReinvest}, "it", "sec")
+// ⚠ The `OR it.type = 'transfer'` half is NOT optional and is not the same as
+// domain.TradeTypeTransfer. That bucket deliberately EXCLUDES corporate-action subtypes (a stock
+// split, subtype='split') because NormalizeTradeType displays a split as "Other", not "Transfer" —
+// a display-layer call domain/investment_trade_type.go documents. But display and reconciliation
+// answer different questions: Plaid's own docs describe type='transfer' as "activity that
+// modifies a position, but not through buy/sell activity", covering BOTH a split and an in-kind/
+// ACATS share transfer between accounts, and both change holdings.quantity with no accompanying
+// buy/sell/reinvest row. A reconciliation that used TradeTypeToSQLPredicate's Transfer bucket
+// (subtype-filtered) would still show a permanent drift after every split. Summing plain
+// `type = 'transfer'` here, unfiltered by subtype, is what closes that gap.
+func positionReconciliationLedgerFilterSQL(tradePredicate string) string {
+	return "(" + tradePredicate + " OR it.type = 'transfer')"
+}
 
-	// userID is bound AFTER the predicate's own placeholders so TradeTypeToSQLPredicate's internal
-	// numbering (which always starts at $1) does not collide with it.
-	userIdx := len(predArgs) + 1
-	args := append(append([]any{}, predArgs...), userID)
+// buildPositionReconciliationQuery renders the shared SQL body behind both PositionReconciliation
+// (per user, full Drifts detail) and PositionReconciliationSummary (global, counts only) — one
+// query text, one JOIN structure, so the two can never quietly diverge about which rows are
+// "the same position". userIdx is the bind position for the user_id filter; scopeToUser controls
+// whether that filter is applied at all (false for the global admin gauge, which aggregates
+// every user's active holdings by design — see domain.PositionReconciliationSummary's doc
+// comment).
+func buildPositionReconciliationQuery(tradePredicate string, userIdx int, scopeToUser bool) string {
+	ledgerUserFilter := ""
+	holdingsUserFilter := ""
+	if scopeToUser {
+		ledgerUserFilter = fmt.Sprintf("AND it.user_id = $%d", userIdx)
+		holdingsUserFilter = fmt.Sprintf("AND h.user_id = $%d", userIdx)
+	}
+	ledgerFilter := positionReconciliationLedgerFilterSQL(tradePredicate)
 
-	query := fmt.Sprintf(`
+	return fmt.Sprintf(`
 		WITH ledger AS (
 			SELECT
 				it.account_id,
@@ -879,9 +898,9 @@ func (r *investmentAnalyticsRepository) PositionReconciliation(ctx context.Conte
 				BOOL_OR(it.type = 'buy') AS has_buy
 			FROM investment_transactions it
 			LEFT JOIN securities sec ON sec.id = it.security_id
-			WHERE it.user_id = $%[2]d
-			  AND it.security_id IS NOT NULL
+			WHERE it.security_id IS NOT NULL
 			  AND it.quantity IS NOT NULL
+			  %[2]s
 			GROUP BY it.account_id, it.security_id
 		)
 		SELECT
@@ -899,9 +918,32 @@ func (r *investmentAnalyticsRepository) PositionReconciliation(ctx context.Conte
 		JOIN accounts a ON a.id = h.account_id AND `+currentStateAccountLeg("a")+` AND a.type = 'investment'
 		JOIN securities sec ON sec.id = h.security_id
 		LEFT JOIN ledger ON ledger.account_id = h.account_id AND ledger.security_id = h.security_id
-		WHERE h.user_id = $%[2]d
-		  AND h.quantity <> 0
-	`, predicate, userIdx)
+		WHERE h.quantity <> 0
+		%[3]s
+	`, ledgerFilter, ledgerUserFilter, holdingsUserFilter)
+}
+
+// PositionReconciliation compares each active holding's quantity against the net share delta
+// implied by the trade ledger, and reports the drifts — see domain.PositionReconciliationReport's
+// doc comment for the arithmetic, the 2-year-lookback suppression rule, why Drifts is not yet
+// fully actionable, and why this never writes anything.
+//
+// ONE ROUND TRIP: the ledger aggregate (per account+security net quantity, and whether it
+// contains an opening buy) is computed in a CTE and LEFT JOINed onto the live holdings, rather
+// than fetched with a second query — a holding with NO matching ledger CTE row (no transactions
+// at all for that security/account) still needs to be evaluated, which COALESCE below handles as
+// a ledger quantity of 0 with no buy observed — exactly the "cannot evaluate, presumed
+// pre-window" case.
+func (r *investmentAnalyticsRepository) PositionReconciliation(ctx context.Context, userID string) (*domain.PositionReconciliationReport, error) {
+	predicate, predArgs := domain.TradeTypeToSQLPredicate(
+		[]string{domain.TradeTypeBuy, domain.TradeTypeSell, domain.TradeTypeReinvest}, "it", "sec")
+
+	// userID is bound AFTER the predicate's own placeholders so TradeTypeToSQLPredicate's internal
+	// numbering (which always starts at $1) does not collide with it.
+	userIdx := len(predArgs) + 1
+	args := append(append([]any{}, predArgs...), userID)
+
+	query := buildPositionReconciliationQuery(predicate, userIdx, true)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -937,4 +979,53 @@ func (r *investmentAnalyticsRepository) PositionReconciliation(ctx context.Conte
 	}
 
 	return report, nil
+}
+
+// PositionReconciliationSummary is the GLOBAL admin gauge behind
+// SystemHealthResponse's position-reconciliation section (#1631 M8b I1): the SAME
+// classification as PositionReconciliation, aggregated as counts across every user's active
+// holdings rather than materializing one user's Drifts list. Shares
+// buildPositionReconciliationQuery and domain.ClassifyPositionReconciliationMember with
+// PositionReconciliation so the two can never classify the same row differently.
+func (r *investmentAnalyticsRepository) PositionReconciliationSummary(ctx context.Context) (*domain.PositionReconciliationSummary, error) {
+	predicate, predArgs := domain.TradeTypeToSQLPredicate(
+		[]string{domain.TradeTypeBuy, domain.TradeTypeSell, domain.TradeTypeReinvest}, "it", "sec")
+
+	query := buildPositionReconciliationQuery(predicate, 0, false)
+
+	rows, err := r.db.Query(ctx, query, predArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("PositionReconciliationSummary: %w", err)
+	}
+	defer rows.Close()
+
+	summary := &domain.PositionReconciliationSummary{}
+	for rows.Next() {
+		var accountID, securityID, plaidSecurityID, securityName string
+		var tickerSymbol *string
+		var holdingQuantity, ledgerQuantity float64
+		var hasBuy bool
+		if err := rows.Scan(
+			&accountID, &securityID, &plaidSecurityID, &tickerSymbol, &securityName,
+			&holdingQuantity, &ledgerQuantity, &hasBuy,
+		); err != nil {
+			return nil, fmt.Errorf("PositionReconciliationSummary scan: %w", err)
+		}
+		summary.TotalPositionsChecked++
+
+		isDrift, isSuppressed := domain.ClassifyPositionReconciliationMember(holdingQuantity-ledgerQuantity, hasBuy)
+		switch {
+		case isDrift:
+			summary.DriftCount++
+		case isSuppressed:
+			summary.SuppressedPreWindowCount++
+		}
+	}
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("PositionReconciliationSummary rows: %w", rows.Err())
+	}
+
+	// The scan completed with no error — this is a VERIFIED aggregate, possibly a real zero.
+	summary.Available = true
+	return summary, nil
 }
