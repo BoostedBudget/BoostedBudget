@@ -287,11 +287,23 @@ func derefOr(s *string, fallback string) string {
 	return *s
 }
 
+// TestTradeTypeToSQLPredicate_SingleBucket, and TestTradeTypeToSQLPredicate_TableAlias below, used
+// `assert.Contains(clause, wantClause)` — flagged in #1631 requirements batch H as the same weak-
+// assertion defect class H5 fixed on the Go classifier side, just on the SQL-predicate-generator
+// side. A substring assertion passes on a predicate that ALSO contains extra, wrong clauses (a
+// stray `OR true`, a duplicated bucket, a missing paren that changes precedence) as long as the one
+// substring happens to still appear somewhere in the (possibly-corrupted) output. Both tests below
+// now assert the FULL generated clause via `assert.Equal`, constructed from the same exported/
+// package-visible building blocks TradeTypeToSQLPredicate itself composes from
+// (NormalizedSubtypeSQL, sqlInPlaceholders, StructuralDividendSQL, the canonical subtype slices) —
+// this still catches a composition bug (wrong join operator, wrong parens, wrong alias placement,
+// an extra/missing clause) without hand-copying the placeholder numbering as a brittle string
+// literal.
 func TestTradeTypeToSQLPredicate_SingleBucket(t *testing.T) {
 	tests := []struct {
 		name          string
 		activityTypes []string
-		wantClause    string // just check it's non-empty and mention the right type
+		want          string
 		wantNoClause  bool
 	}{
 		{
@@ -302,17 +314,17 @@ func TestTradeTypeToSQLPredicate_SingleBucket(t *testing.T) {
 		{
 			name:          "buy",
 			activityTypes: []string{"buy"},
-			wantClause:    "type = 'buy'",
+			want:          "type = 'buy'",
 		},
 		{
 			name:          "sell",
 			activityTypes: []string{"sell"},
-			wantClause:    "type = 'sell'",
+			want:          "type = 'sell'",
 		},
 		{
 			name:          "multiple types",
 			activityTypes: []string{"buy", "sell"},
-			wantClause:    "buy", // partial check — just verify it contains a key token
+			want:          "type = 'buy' OR type = 'sell'",
 		},
 	}
 	for _, tt := range tests {
@@ -322,8 +334,7 @@ func TestTradeTypeToSQLPredicate_SingleBucket(t *testing.T) {
 			if tt.wantNoClause {
 				assert.Empty(t, clause)
 			} else {
-				assert.NotEmpty(t, clause)
-				assert.Contains(t, clause, tt.wantClause)
+				assert.Equal(t, tt.want, clause)
 			}
 		})
 	}
@@ -333,51 +344,56 @@ func TestTradeTypeToSQLPredicate_SingleBucket(t *testing.T) {
 // the type/subtype column references to prevent "column reference is ambiguous" errors
 // when the query JOINs accounts (which also has type/subtype columns).
 func TestTradeTypeToSQLPredicate_TableAlias(t *testing.T) {
+	sub := NormalizedSubtypeSQL("it.subtype")
+	dividendAndCapitalGain := append(append([]string{}, dividendSubtypes...), capitalGainSubtypes...)
+
 	tests := []struct {
 		name          string
 		activityTypes []string
 		tableAlias    string
-		wantContains  string
-		wantAbsent    string // must NOT appear (bare column name)
+		want          string
 	}{
 		{
 			name:          "buy with alias qualifies type",
 			activityTypes: []string{"buy"},
 			tableAlias:    "it",
-			wantContains:  "it.type = 'buy'",
-			wantAbsent:    "type = 'buy'", // this partial match would also hit "it.type = 'buy'"
+			want:          "it.type = 'buy'",
 		},
 		{
 			name:          "sell with alias qualifies type",
 			activityTypes: []string{"sell"},
 			tableAlias:    "it",
-			wantContains:  "it.type = 'sell'",
+			want:          "it.type = 'sell'",
 		},
 		{
 			name:          "dividend with alias qualifies subtype",
 			activityTypes: []string{"dividend"},
 			tableAlias:    "it",
-			// #1631: compared through the NULL-safe normalised expression, not the raw column.
-			wantContains: NormalizedSubtypeSQL("it.subtype") + " IN",
+			// #1631: compared through the NULL-safe normalised expression, not the raw column, and
+			// OR'd with the structural fallback — the exact clause TradeTypeToSQLPredicate's
+			// TradeTypeDividend case renders.
+			want: fmt.Sprintf("(%s = 'cash' AND (%s IN (%s) OR %s))",
+				"it.type", sub, sqlInPlaceholders(1, len(dividendAndCapitalGain)),
+				StructuralDividendSQL(sub, "it.amount", "it.quantity", "sec")),
 		},
 		{
 			name:          "fee with alias qualifies both type and subtype",
 			activityTypes: []string{"fee"},
 			tableAlias:    "it",
-			wantContains:  "it.type = 'fee'",
+			want: fmt.Sprintf("(%s = 'fee' OR (%s = 'cash' AND %s IN (%s)))",
+				"it.type", "it.type", sub, sqlInPlaceholders(1, len(feeTaxSubtypes))),
 		},
 		{
 			name:          "empty alias produces unqualified columns",
 			activityTypes: []string{"buy"},
 			tableAlias:    "",
-			wantContains:  "type = 'buy'",
+			want:          "type = 'buy'",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clause, _ := TradeTypeToSQLPredicate(tt.activityTypes, tt.tableAlias, "sec")
-			assert.NotEmpty(t, clause)
-			assert.Contains(t, clause, tt.wantContains)
+			assert.Equal(t, tt.want, clause)
 		})
 	}
 }
