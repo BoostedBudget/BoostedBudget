@@ -470,8 +470,8 @@ type UpdateSavingsGoalRequest struct {
 // Magnitude is ABS(amount) — always positive (Codex C9 / #1303 sign-inversion guard).
 type SavingsInflowTransaction struct {
 	ID        string  `json:"id"`
-	Magnitude float64 `json:"magnitude"` // ABS(amount) — positive magnitude
-	Date      string  `json:"date"`      // YYYY-MM-DD
+	Magnitude float64 `json:"magnitude"`          // ABS(amount) — positive magnitude
+	Date      string  `json:"date" format:"date"` // YYYY-MM-DD
 }
 
 // SavingsGoal-related errors.
