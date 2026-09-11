@@ -203,6 +203,10 @@ func (h *InvestmentHandler) GetHoldings(ctx context.Context, input *GetHoldingsI
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
+	// The rounding boundary (#1636) — see money_rounding.go. Quantity and institution_price are
+	// deliberately left exact.
+	roundHoldingViews(holdings)
+
 	return &GetHoldingsOutput{
 		Body: struct {
 			Holdings []*domain.HoldingView `json:"holdings"`
@@ -217,6 +221,7 @@ func (h *InvestmentHandler) GetPortfolioSummary(ctx context.Context, input *GetP
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+	roundPortfolioSummary(summary) // #1636 rounding boundary — money_rounding.go
 	return &GetPortfolioSummaryOutput{Body: summary}, nil
 }
 
@@ -237,6 +242,8 @@ func (h *InvestmentHandler) GetPortfolioHistory(ctx context.Context, input *GetP
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+
+	roundPortfolioHistoryPoints(history.Points) // #1636 rounding boundary — money_rounding.go
 
 	out := &GetPortfolioHistoryOutput{}
 	out.Body.History = history.Points
@@ -296,6 +303,10 @@ func (h *InvestmentHandler) GetInvestmentTransactions(ctx context.Context, input
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+
+	// #1636 rounding boundary — money_rounding.go. ⚠ Quantity and Price stay exact: they are
+	// DECIMAL(18,8) and sit directly beside Amount, which is money.
+	roundInvestmentTransactions(txns)
 
 	return &GetInvestmentTransactionsOutput{
 		Body: struct {
@@ -363,6 +374,7 @@ func (h *InvestmentHandler) GetPortfolioAllocationBreakdown(ctx context.Context,
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+	roundAllocationBreakdown(result) // #1636 rounding boundary — money_rounding.go
 	return &GetPortfolioAllocationBreakdownOutput{Body: result}, nil
 }
 
@@ -377,6 +389,7 @@ func (h *InvestmentHandler) GetTopMovers(ctx context.Context, input *GetTopMover
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+	roundTopMovers(result) // #1636 rounding boundary — money_rounding.go
 	return &GetTopMoversOutput{Body: result}, nil
 }
 
@@ -386,6 +399,7 @@ func (h *InvestmentHandler) GetInvestmentGainLossSummary(ctx context.Context, in
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+	roundGainLossSummary(result) // #1636 rounding boundary — money_rounding.go
 	return &GetInvestmentGainLossSummaryOutput{Body: result}, nil
 }
 
@@ -406,6 +420,7 @@ func (h *InvestmentHandler) GetInvestmentIncomeSummary(ctx context.Context, inpu
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+	roundIncomeSummary(result) // #1636 rounding boundary — money_rounding.go
 	return &GetInvestmentIncomeSummaryOutput{Body: result}, nil
 }
 
