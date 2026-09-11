@@ -40,6 +40,7 @@ export interface Transaction {
   account?: Account;
   account_id: string;
   amount: number;
+  /** UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted when the provider gave none */
   authorized_date?: string;
   category_override_date?: string;
   category_override_kind?: string;
@@ -47,6 +48,7 @@ export interface Transaction {
   created_at: string;
   custom_category_override_display?: string;
   custom_category_override_id?: string;
+  /** UTC calendar day (YYYY-MM-DD) the transaction posted */
   date: string;
   deleted_at?: string;
   deleted_reason?: TransactionDeletedReason;

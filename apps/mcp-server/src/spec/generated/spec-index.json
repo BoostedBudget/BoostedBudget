@@ -10655,7 +10655,8 @@
         },
         {
           "name": "authorized_date",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted when the provider gave none"
         },
         {
           "name": "category_override_date",
@@ -10686,7 +10687,8 @@
         {
           "name": "date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) the transaction posted"
         },
         {
           "name": "deleted_at",
@@ -10905,7 +10907,8 @@
         },
         {
           "name": "authorized_date",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted when the provider gave none"
         },
         {
           "name": "category_override_date",
@@ -10936,7 +10939,8 @@
         {
           "name": "date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) the transaction posted"
         },
         {
           "name": "deleted_at",
@@ -11172,7 +11176,8 @@
         },
         {
           "name": "authorized_date",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted when the provider gave none"
         },
         {
           "name": "category_override_date",
@@ -11203,7 +11208,8 @@
         {
           "name": "date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) the transaction posted"
         },
         {
           "name": "deleted_at",
