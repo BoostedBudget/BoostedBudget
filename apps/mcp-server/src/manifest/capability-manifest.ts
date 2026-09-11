@@ -338,6 +338,10 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // costs the agent nothing an agent could act on: the surface exists so a human operator can
   // choose a remedy that does not exist yet.
   excluded('listAdminRetentionWithheld', REASON_ADMIN),
+  // #1630 B7: the budget-hierarchy audit's operator surface. A READ, excluded under the same
+  // blanket admin policy as its neighbours — the findings it lists are for a human operator to
+  // act on, not for an MCP client to consume.
+  excluded('listAdminBudgetHierarchyAudits', REASON_ADMIN),
   excludedWrite('recordAdminPlaidOrphanedItemOperatorResolution', REASON_ADMIN),
   excluded('getSystemHealth', REASON_ADMIN),
   excluded('listAdminUsers', REASON_ADMIN),
