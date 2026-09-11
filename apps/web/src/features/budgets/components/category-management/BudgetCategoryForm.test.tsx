@@ -1436,6 +1436,57 @@ describe('BudgetCategoryForm', () => {
       expect(screen.queryAllByTestId('category-preview-breakdown')).toHaveLength(0)
     })
 
+    // Issue #1630 Task B5: a real partition of total_amount includes a THIRD bucket — an
+    // unrelated tag match pulled in by match_logic or/tag_only, which the pre-B5 breakdown
+    // never disclosed at all.
+    it('should disclose the tag-only-outside-category bucket', async () => {
+      const user = userEvent.setup({ delay: null })
+      mockUsePreviewCategories.mockReturnValue({
+        preview: {
+          transaction_count: 3,
+          total_amount: 75.00,
+          direct_transaction_count: 1,
+          direct_amount: 40.00,
+          tag_only_transaction_count: 1,
+          tag_only_amount: 15.00,
+          children: [
+            { category_id: 'cc-coffee', category_name: 'Coffee Club', transaction_count: 1, total_amount: 20.00 },
+          ],
+        },
+        loading: false,
+        error: null,
+        // The mock's inferred return type is fixed from its first `mock(() => ({preview:
+        // null, ...}))` call (bun:test's `mock` has no separate type-param overload), so
+        // every override with a non-null preview is a pre-existing TS2322 mismatch (see the
+        // sibling test above and others in this file) — cast to sidestep it without widening
+        // the shared mock's declared type.
+      } as any) // eslint-disable-line @typescript-eslint/no-explicit-any
+
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          budgetStartDate="2024-01-01"
+          budgetEndDate="2024-01-31"
+        />
+      )
+
+      await switchToCustom()
+
+      const categorySelect = screen.getByRole('combobox', { name: /^category$/i })
+      await user.selectOptions(categorySelect, ['Restaurants'])
+
+      await waitFor(() => {
+        const breakdown = screen.getByTestId('category-preview-tag-only')
+        expect(breakdown).toHaveTextContent(/\$15\.00/)
+        expect(breakdown).toHaveTextContent(/tag/i)
+      })
+    })
+
     it('should mask money and the child category name in the breakdown for PII (data-ph-mask)', async () => {
       const user = userEvent.setup({ delay: null })
       mockUsePreviewCategories.mockReturnValue({

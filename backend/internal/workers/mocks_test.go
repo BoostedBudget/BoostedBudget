@@ -335,13 +335,13 @@ func (m *MockTransactionRepository) GetMatchingTransactionStats(ctx context.Cont
 }
 
 // Issue #1630 Task 5: Category Preview breakdown method
-func (m *MockTransactionRepository) GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, startDate, endDate time.Time) ([]domain.CategoryPreviewBreakdownItem, int, float64, error) {
-	args := m.Called(ctx, userID, categoryKind, pfcPrimary, pfcDetailed, customCategoryID, startDate, endDate)
+func (m *MockTransactionRepository) GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) ([]domain.CategoryPreviewBreakdownItem, int, float64, int, float64, error) {
+	args := m.Called(ctx, userID, categoryKind, pfcPrimary, pfcDetailed, customCategoryID, tags, matchLogic, startDate, endDate)
 	var children []domain.CategoryPreviewBreakdownItem
 	if v := args.Get(0); v != nil {
 		children = v.([]domain.CategoryPreviewBreakdownItem)
 	}
-	return children, args.Int(1), args.Get(2).(float64), args.Error(3)
+	return children, args.Int(1), args.Get(2).(float64), args.Int(3), args.Get(4).(float64), args.Error(5)
 }
 
 // Issue #499: Transaction-Budget Linking UI
