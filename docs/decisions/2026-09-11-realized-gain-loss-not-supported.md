@@ -13,7 +13,8 @@
 `GainLossSummary.RealizedGainLossSupported` is a hard `false`
 (`backend/internal/repository/investment_analytics_repository.go`, in
 `investmentAnalyticsRepository.UnrealizedGainLoss`). It is not a feature flag, not a
-capability probe, and not a TODO: it is a constant, and the reason is published to clients in the
+capability probe, and not a TODO: it is written as a literal in the returned struct, and the reason
+is published to clients in the
 operation description registered for `getInvestmentGainLossSummary`
 (`backend/internal/huma/operations/investments.go`), which reads:
 
@@ -33,8 +34,12 @@ computation that looks plausible and is wrong. The first thing anyone asks on se
 `*_supported: false` field is "so when do we implement it?", and until now there was no durable
 answer.
 
-Every claim below was verified against the tree on this branch while writing it; anything that could
-not be verified is labelled **unverified** in place rather than asserted.
+Every claim below was re-derived against the tree on this branch, and anything that could not be
+verified is labelled **unverified** in place rather than asserted. That is a description of the
+process, not a guarantee of the result: the first revision of this document asserted that
+`TestEveryCitedTestNameResolves` guarded its cited names, which was false — that guard covers Go
+source only. The claim survived one writing pass and was caught in review. Re-derive before
+relying on anything here; see Decision 4 for what is and is not mechanically checked.
 
 ---
 
@@ -62,8 +67,9 @@ window has real shares whose acquisition rows we never received and now never ca
 This is not speculative; #1631 measured it. `PositionReconciliation`
 (`backend/internal/repository/investment_analytics_repository.go`) compares the ledger-implied
 position against Plaid's snapshot, and had to introduce `SuppressedPreWindowCount` specifically to
-keep window-edge shortfalls out of its drift list. Its header records something stronger and worse
-for us, in the section titled *"PRE-WINDOW BASE PLUS IN-WINDOW CONTRIBUTIONS — NOT ADDRESSED, AND
+keep window-edge shortfalls out of its drift list. The measurement that matters, though, is in
+`backend/internal/domain/investment_reconciliation.go:56-75` — not in the repository file — where
+the header records something stronger and worse for us, in the section titled *"PRE-WINDOW BASE PLUS IN-WINDOW CONTRIBUTIONS — NOT ADDRESSED, AND
 LIKELY THE DOMINANT POPULATION OF Drifts, NOT A RESIDUAL"*: the suppression proxy is "does this
 (account, security) pair have at least one buy in the window", so a position opened years ago and
 topped up ever since — dollar-cost averaging, auto-invest, payroll deferral — **passes** the proxy
@@ -98,9 +104,12 @@ the difference between "no such trade" and "a trade we declined to write".
 that failed to store rows Plaid delivered leaves the cursor where it is, so the next run re-fetches
 the same window. This is what keeps a drop *temporary* rather than permanent, and it is the only
 reason the previous paragraph is survivable. It does not make the ledger complete at any given
-instant — it makes it eventually complete, for drops whose cause eventually resolves. A permanently
-undroppable row pins the cursor indefinitely, which the code documents as a repeated cost rather
-than a loss.
+instant — it makes it eventually complete, for drops whose cause eventually resolves. A row that can never be
+**stored** — Plaid sending a permanently malformed date, or a security that never resolves — pins
+the cursor indefinitely, and every subsequent run re-fetches the whole window. The code documents
+that as a repeated cost rather than a loss, since the upserts are idempotent
+(`investment_sync_service.go:713-717`; note the source comment calls this an "undroppable" row,
+which reads backwards — the row is one we always drop and never store).
 
 **`exclude_investment_sync` now suppresses ingestion, not just reads.** The #1631 amendment to the
 retention ADR authorises never writing an `investment_transactions` row for an account whose owner
@@ -215,8 +224,9 @@ A manual per-position basis entry would unblock the calculation without the prov
 
 ## The Decision
 
-1. **`RealizedGainLossSupported` stays a hard-coded `false`**, at
-   `investmentAnalyticsRepository.UnrealizedGainLoss`. It is not made configurable, not made
+1. **`RealizedGainLossSupported` stays a hard-coded `false`** — a literal field in the
+   `domain.GainLossSummary` value that `investmentAnalyticsRepository.UnrealizedGainLoss` returns
+   (`investment_analytics_repository.go:690`). It is not made configurable, not made
    conditional on data availability, and not removed from the response — a consumer must be able to
    distinguish "we do not support this" from "the field is absent because something broke".
 2. **The reason stays published** in the `getInvestmentGainLossSummary` operation description, which
@@ -229,8 +239,19 @@ A manual per-position basis entry would unblock the calculation without the prov
    the `FILTER (WHERE h.cost_basis IS NOT NULL ...)` clauses in `UnrealizedGainLoss` and the same
    rule as the mixed-currency refusal in `backend/internal/domain/investment_currency.go`: **a
    figure that cannot be computed is withheld, never defaulted.**
-4. **The three pinning tests stay.** They are the enforcement. `TestEveryCitedTestNameResolves`
-   keeps the names in this document honest if they are ever renamed.
+4. **The three pinning tests stay.** They are the enforcement.
+
+⚠ **What checks this document, and what it does not.** The guard that scans *this file* is
+`TestMarkdownCitedTestNamesResolve` (`backend/internal/testsupport/citations/markdown_citations_guard_test.go`,
+Rule 1), scoped to tracked `*.md` at the repository root or under `docs/`. Its Go-source sibling,
+`TestEveryCitedTestNameResolves`, does **not** cover Markdown — its own header says so explicitly
+("SCOPE: tracked Go source only"), and an earlier revision of this ADR named it here and was wrong.
+More importantly, neither guard checks whether a claim is **true**. Both check that a cited test
+*name resolves to a function that exists*; the Markdown guard's header states outright that two of
+the three documentation defects motivating it were false factual claims, "which no guard catches",
+and it is a ratchet over a baseline rather than a ban. Every non-name assertion in this document —
+every line number, every quoted comment, every statement about what the code does — is defended by
+the reader re-deriving it, and by nothing else.
 
 ---
 
@@ -298,5 +319,8 @@ Until then, `false` is not a placeholder. It is the answer.
 - `backend/migrations/000051_create_investment_tables.up.sql` — `holdings.cost_basis`
 - `docs/decisions/2026-08-24-financial-history-retained-by-default.md` § `AMENDMENT (#1631,
   2026-09-10)` — non-ingestion, and the two-year backfill bound
+- `backend/internal/testsupport/citations/markdown_citations_guard_test.go` —
+  `TestMarkdownCitedTestNamesResolve`, the guard that checks the test names cited in this file
+  (names only, not truth)
 - `docs/decisions/2026-09-11-money-representation-float64-and-the-rounding-boundary.md` — the
   companion decision on how these figures are represented once computed
