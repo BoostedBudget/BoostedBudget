@@ -304,6 +304,11 @@ func (r *budgetRepository) AuditBudgetHierarchy(ctx context.Context, budget *dom
 	flaggedEscapingIDs := budgetHierarchyAuditSortedKeys(flaggedEscaping)
 	reason := budgetHierarchyAuditReason(outcome, flaggedDuplicateIDs, flaggedEscapingIDs, categoriesRepaired)
 
+	// flagged_category_ids is the DEPRECATED untyped union column (migration 000197) — still
+	// populated for anything querying this table directly, but no longer read back by Go code:
+	// the two typed columns below are what ListBudgetHierarchyAuditFindings and the admin API
+	// actually expose, so a combined finding (both shapes present on the same budget) stays
+	// distinguishable instead of flattening into one indistinguishable array.
 	allFlagged := map[string]bool{}
 	for _, id := range flaggedDuplicateIDs {
 		allFlagged[id] = true
@@ -320,10 +325,11 @@ func (r *budgetRepository) AuditBudgetHierarchy(ctx context.Context, budget *dom
 	_, err = tx.Exec(ctx, `
 		INSERT INTO budget_hierarchy_audits (
 			budget_id, user_id, outcome, reason, categories_examined, categories_repaired,
-			flagged_category_ids
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)
+			flagged_category_ids, flagged_duplicate_identity_category_ids, flagged_escaping_pair_category_ids
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (budget_id) DO NOTHING
-	`, budget.ID, budget.UserID, outcome, reason, len(categories), categoriesRepaired, flaggedIDs)
+	`, budget.ID, budget.UserID, outcome, reason, len(categories), categoriesRepaired,
+		flaggedIDs, flaggedDuplicateIDs, flaggedEscapingIDs)
 	if err != nil {
 		return verdict, fmt.Errorf("audit budget hierarchy %s: insert ledger row: %w", budget.ID, err)
 	}
@@ -333,14 +339,15 @@ func (r *budgetRepository) AuditBudgetHierarchy(ctx context.Context, budget *dom
 	}
 
 	verdict = domain.BudgetHierarchyAuditVerdict{
-		BudgetID:           budget.ID,
-		UserID:             budget.UserID,
-		Outcome:            outcome,
-		Reason:             reason,
-		CategoriesExamined: len(categories),
-		CategoriesRepaired: categoriesRepaired,
-		FlaggedCategoryIDs: flaggedIDs,
-		ExaminedAt:         time.Now().UTC(),
+		BudgetID:                            budget.ID,
+		UserID:                              budget.UserID,
+		Outcome:                             outcome,
+		Reason:                              reason,
+		CategoriesExamined:                  len(categories),
+		CategoriesRepaired:                  categoriesRepaired,
+		FlaggedDuplicateIdentityCategoryIDs: flaggedDuplicateIDs,
+		FlaggedEscapingPairCategoryIDs:      flaggedEscapingIDs,
+		ExaminedAt:                          time.Now().UTC(),
 	}
 	return verdict, nil
 }
@@ -402,14 +409,17 @@ func (r *budgetRepository) BudgetIDsWithUnexaminedHierarchy(ctx context.Context,
 // internal/huma/operations/admin_budget_hierarchy_audits.go). It reads the SAME ledger table
 // AuditBudgetHierarchy writes, so there is no second source of truth to drift.
 
-// listBudgetHierarchyAuditFindingsSQL selects ledger rows, most-recently-examined first.
-// flagged_category_ids is cast to text[] because pgx's default type registry has no built-in
-// codec for scanning a uuid[] column into a Go []string — every category id here is already a
-// UUID stored as text everywhere else this codebase surfaces one (domain.BudgetCategory.ID is a
-// string), so the cast loses nothing.
+// listBudgetHierarchyAuditFindingsSQL selects ledger rows, most-recently-examined first. The two
+// flagged_*_category_ids columns are cast to text[] because pgx's default type registry has no
+// built-in codec for scanning a uuid[] column into a Go []string — every category id here is
+// already a UUID stored as text everywhere else this codebase surfaces one
+// (domain.BudgetCategory.ID is a string), so the cast loses nothing. The deprecated untyped
+// flagged_category_ids column (migration 000197) is deliberately NOT selected here — see its own
+// column comment.
 const listBudgetHierarchyAuditFindingsSQL = `
 	SELECT budget_id::text, user_id::text, outcome, reason, categories_examined, categories_repaired,
-	       flagged_category_ids::text[], examined_at
+	       flagged_duplicate_identity_category_ids::text[], flagged_escaping_pair_category_ids::text[],
+	       examined_at
 	FROM budget_hierarchy_audits
 	WHERE ($1::varchar = '' OR outcome = $1)
 	ORDER BY examined_at DESC
@@ -434,12 +444,13 @@ func (r *budgetRepository) ListBudgetHierarchyAuditFindings(ctx context.Context,
 	out := []domain.BudgetHierarchyAuditVerdict{}
 	for rows.Next() {
 		var v domain.BudgetHierarchyAuditVerdict
-		var flagged []string
+		var flaggedDuplicate, flaggedEscaping []string
 		if err := rows.Scan(&v.BudgetID, &v.UserID, &v.Outcome, &v.Reason, &v.CategoriesExamined,
-			&v.CategoriesRepaired, &flagged, &v.ExaminedAt); err != nil {
+			&v.CategoriesRepaired, &flaggedDuplicate, &flaggedEscaping, &v.ExaminedAt); err != nil {
 			return nil, fmt.Errorf("list budget hierarchy audit findings: scan: %w", err)
 		}
-		v.FlaggedCategoryIDs = flagged
+		v.FlaggedDuplicateIdentityCategoryIDs = flaggedDuplicate
+		v.FlaggedEscapingPairCategoryIDs = flaggedEscaping
 		out = append(out, v)
 	}
 	if rows.Err() != nil {

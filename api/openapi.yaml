@@ -468,7 +468,13 @@ components:
           type: integer
         examined_at:
           type: string
-        flagged_category_ids:
+        flagged_duplicate_identity_category_ids:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        flagged_escaping_pair_category_ids:
           items:
             type: string
           type:
@@ -487,7 +493,8 @@ components:
         - reason
         - categories_examined
         - categories_repaired
-        - flagged_category_ids
+        - flagged_duplicate_identity_category_ids
+        - flagged_escaping_pair_category_ids
         - examined_at
       type: object
     AdminCreateOverrideInputBody:

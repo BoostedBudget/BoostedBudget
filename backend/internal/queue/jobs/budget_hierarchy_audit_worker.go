@@ -178,7 +178,8 @@ func (w *BudgetHierarchyAuditWorker) Work(ctx context.Context, job *river.Job[Bu
 				"budget_id", budgetID,
 				"user_id", verdict.UserID,
 				"outcome", verdict.Outcome,
-				"flagged_category_ids", verdict.FlaggedCategoryIDs,
+				"flagged_duplicate_identity_category_ids", verdict.FlaggedDuplicateIdentityCategoryIDs,
+				"flagged_escaping_pair_category_ids", verdict.FlaggedEscapingPairCategoryIDs,
 				"reason", verdict.Reason,
 			)
 		}

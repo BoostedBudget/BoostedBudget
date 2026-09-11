@@ -44,14 +44,20 @@ type ListAdminBudgetHierarchyAuditsInput struct {
 
 // AdminBudgetHierarchyAuditFinding is one examined budget as this surface reports it.
 type AdminBudgetHierarchyAuditFinding struct {
-	BudgetID           string   `json:"budget_id"`
-	UserID             string   `json:"user_id"`
-	Outcome            string   `json:"outcome"`
-	Reason             string   `json:"reason"`
-	CategoriesExamined int      `json:"categories_examined"`
-	CategoriesRepaired int      `json:"categories_repaired"`
-	FlaggedCategoryIDs []string `json:"flagged_category_ids"`
-	ExaminedAt         string   `json:"examined_at"`
+	BudgetID           string `json:"budget_id"`
+	UserID             string `json:"user_id"`
+	Outcome            string `json:"outcome"`
+	Reason             string `json:"reason"`
+	CategoriesExamined int    `json:"categories_examined"`
+	CategoriesRepaired int    `json:"categories_repaired"`
+	// FlaggedDuplicateIdentityCategoryIDs / FlaggedEscapingPairCategoryIDs are kept separate
+	// (Issue #1630 review fix, MED) so a budget carrying BOTH shapes at once — a duplicate-parent-
+	// identity pair AND an escaping nested pair — doesn't flatten into one array an operator can no
+	// longer attribute to either check. Each is empty unless that specific shape was found; both
+	// can be non-empty on the same finding regardless of which one `outcome` names.
+	FlaggedDuplicateIdentityCategoryIDs []string `json:"flagged_duplicate_identity_category_ids"`
+	FlaggedEscapingPairCategoryIDs      []string `json:"flagged_escaping_pair_category_ids"`
+	ExaminedAt                          string   `json:"examined_at"`
 }
 
 // ListAdminBudgetHierarchyAuditsOutput is the response body.
@@ -143,19 +149,24 @@ func (h *AdminHandler) ListAdminBudgetHierarchyAudits(ctx context.Context, input
 func renderBudgetHierarchyAuditFindings(verdicts []domain.BudgetHierarchyAuditVerdict) []AdminBudgetHierarchyAuditFinding {
 	out := make([]AdminBudgetHierarchyAuditFinding, 0, len(verdicts))
 	for _, v := range verdicts {
-		flagged := v.FlaggedCategoryIDs
-		if flagged == nil {
-			flagged = []string{}
+		flaggedDuplicate := v.FlaggedDuplicateIdentityCategoryIDs
+		if flaggedDuplicate == nil {
+			flaggedDuplicate = []string{}
+		}
+		flaggedEscaping := v.FlaggedEscapingPairCategoryIDs
+		if flaggedEscaping == nil {
+			flaggedEscaping = []string{}
 		}
 		out = append(out, AdminBudgetHierarchyAuditFinding{
-			BudgetID:           v.BudgetID,
-			UserID:             v.UserID,
-			Outcome:            v.Outcome,
-			Reason:             v.Reason,
-			CategoriesExamined: v.CategoriesExamined,
-			CategoriesRepaired: v.CategoriesRepaired,
-			FlaggedCategoryIDs: flagged,
-			ExaminedAt:         v.ExaminedAt.UTC().Format(time.RFC3339),
+			BudgetID:                            v.BudgetID,
+			UserID:                              v.UserID,
+			Outcome:                             v.Outcome,
+			Reason:                              v.Reason,
+			CategoriesExamined:                  v.CategoriesExamined,
+			CategoriesRepaired:                  v.CategoriesRepaired,
+			FlaggedDuplicateIdentityCategoryIDs: flaggedDuplicate,
+			FlaggedEscapingPairCategoryIDs:      flaggedEscaping,
+			ExaminedAt:                          v.ExaminedAt.UTC().Format(time.RFC3339),
 		})
 	}
 	return out
