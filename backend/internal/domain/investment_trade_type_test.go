@@ -190,6 +190,14 @@ func TestNormalizeTradeType_ExactLabelMatrix(t *testing.T) {
 			wantBySecurityState{TradeTypeInterest, TradeTypeInterest, TradeTypeInterest}},
 		{"cash/contribution (literal transfer)", "cash", strPtr("contribution"), 0, nil,
 			wantBySecurityState{TradeTypeTransfer, TradeTypeTransfer, TradeTypeTransfer}},
+		// #1631 gap D2. "return of principal" was in NO set, so it reached "cash" by fallthrough —
+		// an accident of set membership rather than a decision. Pinned here as a DECISION: a
+		// return of capital is a distribution against a security, economically identical to the
+		// "distribution" beside it in transferSubtypes, so it takes the same bucket. Its exclusion
+		// from IncomeSubtypes is unchanged and is asserted separately — transferSubtypes feeds no
+		// income set.
+		{"cash/return of principal (literal transfer, return of capital)", "cash", strPtr("return of principal"), -100, f64(0),
+			wantBySecurityState{TradeTypeTransfer, TradeTypeTransfer, TradeTypeTransfer}},
 		// 11-12: the STRUCTURAL fallback. No subtype literal of its own, so the security state is
 		// the only thing that decides the label — the two rows this whole rule exists for.
 		{"cash/deposit (structural dividend candidate)", "cash", strPtr("deposit"), -100, f64(0),
