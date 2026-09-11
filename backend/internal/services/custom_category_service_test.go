@@ -662,3 +662,173 @@ func TestEffectiveCategoryRefreshJobArgs_Kind(t *testing.T) {
 	args := effectiveCategoryRefreshJobArgs{}
 	assert.Equal(t, "effective_category_refresh", args.Kind(), "Kind() must return the expected job type identifier")
 }
+
+func TestBudgetHierarchyResyncJobArgs_Kind(t *testing.T) {
+	args := budgetHierarchyResyncJobArgs{}
+	assert.Equal(t, "budget_hierarchy_resync", args.Kind(), "Kind() must return the expected job type identifier")
+}
+
+// MockBudgetCategoryRepository is a mock implementation of services.BudgetCategoryRepository
+// (Issue #1630 Task B1).
+type MockBudgetCategoryRepository struct {
+	mock.Mock
+}
+
+func (m *MockBudgetCategoryRepository) GetActiveByUserID(ctx context.Context, userID string) ([]*domain.Budget, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*domain.Budget), args.Error(1)
+}
+
+func (m *MockBudgetCategoryRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
+	args := m.Called(ctx, budgetID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
+}
+
+// TestCustomCategoryService_UpdateCategory_ReparentFailsClosedWithoutBudgetCategoryRepo asserts
+// that a reparent is REFUSED — not silently allowed — when SetBudgetCategoryRepository was never
+// called. This is money-integrity enforcement (Issue #1630 Task B1), not observability: contrast
+// SetAuditLogRepository, whose absence is a safe no-op (fail-open by design).
+func TestCustomCategoryService_UpdateCategory_ReparentFailsClosedWithoutBudgetCategoryRepo(t *testing.T) {
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	svc := NewCustomCategoryService(mockCategoryRepo)
+	// Deliberately no SetBudgetCategoryRepository call.
+
+	ctx := context.Background()
+	userID := "user-123"
+	categoryID := "cat-456"
+	parentID := "11111111-1111-1111-1111-111111111111"
+
+	existingCategory := &domain.CustomCategory{ID: categoryID, UserID: userID, Name: "Fast Food"}
+	parent := &domain.CustomCategory{ID: parentID, UserID: userID, Name: "Food"}
+
+	mockCategoryRepo.On("GetByID", ctx, categoryID).Return(existingCategory, nil)
+	mockCategoryRepo.On("GetByID", ctx, parentID).Return(parent, nil)
+	mockCategoryRepo.On("HasChildren", ctx, categoryID).Return(false, nil)
+
+	req := &domain.UpdateCustomCategoryRequest{ParentID: &parentID}
+	category, err := svc.UpdateCategory(ctx, userID, categoryID, req)
+
+	assert.Error(t, err)
+	assert.Nil(t, category)
+	assert.Contains(t, err.Error(), "budget category repository not configured")
+	mockCategoryRepo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
+}
+
+// TestCustomCategoryService_UpdateCategory_ReparentRefusesEscapingBudgetedPair asserts that a
+// reparent is refused when it would place a BUDGETED row into a not-cleanly-contained nested
+// pair — checking the PROPOSED hierarchy (the parent this request is setting), not the stale one
+// GetCategoriesByBudgetID's join still reflects.
+func TestCustomCategoryService_UpdateCategory_ReparentRefusesEscapingBudgetedPair(t *testing.T) {
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockBudgetCategoryRepo := new(MockBudgetCategoryRepository)
+	svc := NewCustomCategoryService(mockCategoryRepo)
+	svc.SetBudgetCategoryRepository(mockBudgetCategoryRepo)
+
+	ctx := context.Background()
+	userID := "user-123"
+	categoryID := "cat-child"
+	parentID := "cat-parent"
+	budgetID := "budget-1"
+
+	existingCategory := &domain.CustomCategory{ID: categoryID, UserID: userID, Name: "Fast Food"}
+	parent := &domain.CustomCategory{ID: parentID, UserID: userID, Name: "Food"}
+
+	mockCategoryRepo.On("GetByID", ctx, categoryID).Return(existingCategory, nil)
+	mockCategoryRepo.On("GetByID", ctx, parentID).Return(parent, nil)
+	mockCategoryRepo.On("HasChildren", ctx, categoryID).Return(false, nil)
+	mockCategoryRepo.On("GetChildren", ctx, categoryID).Return([]*domain.CustomCategory{}, nil)
+
+	mockBudgetCategoryRepo.On("GetActiveByUserID", ctx, userID).
+		Return([]*domain.Budget{{ID: budgetID, UserID: userID}}, nil)
+	// Parent's match_logic is 'and' — NOT a containing shape (isContainingMatchLogic requires
+	// category_only/or) — so nesting the child under it escapes clean containment.
+	mockBudgetCategoryRepo.On("GetCategoriesByBudgetID", ctx, budgetID).Return([]domain.BudgetCategory{
+		{
+			ID: "bc-parent", BudgetID: budgetID, CategoryKind: "custom",
+			CustomCategoryID: &parentID, MatchLogic: domain.MatchLogicAnd, Tags: []string{"tag"},
+		},
+		{
+			ID: "bc-child", BudgetID: budgetID, CategoryKind: "custom",
+			CustomCategoryID: &categoryID, MatchLogic: domain.MatchLogicCategoryOnly,
+		},
+	}, nil)
+
+	req := &domain.UpdateCustomCategoryRequest{ParentID: &parentID}
+	category, err := svc.UpdateCategory(ctx, userID, categoryID, req)
+
+	assert.ErrorIs(t, err, domain.ErrEscapedNestedChild)
+	assert.Nil(t, category)
+	mockCategoryRepo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
+	mockBudgetCategoryRepo.AssertExpectations(t)
+}
+
+// TestCustomCategoryService_UpdateCategory_ReparentEnqueuesResyncJob asserts that a LEGITIMATE
+// reparent (both sides cleanly contained) persists, enqueues the NEW budget_hierarchy_resync job
+// carrying the PRE-reparent parent identity, and does NOT enqueue effective_category_refresh
+// (name unchanged).
+func TestCustomCategoryService_UpdateCategory_ReparentEnqueuesResyncJob(t *testing.T) {
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockBudgetCategoryRepo := new(MockBudgetCategoryRepository)
+	mockQueue := &MockJobQueue{}
+	svc := NewCustomCategoryService(mockCategoryRepo)
+	svc.SetBudgetCategoryRepository(mockBudgetCategoryRepo)
+	svc.SetJobQueue(mockQueue)
+
+	ctx := context.Background()
+	userID := "user-123"
+	categoryID := "cat-child"
+	parentID := "cat-parent"
+	oldParentPFC := "FOOD_AND_DRINK"
+
+	existingCategory := &domain.CustomCategory{
+		ID: categoryID, UserID: userID, Name: "Fast Food",
+		ParentPFCPrimary: &oldParentPFC, // pre-reparent: nested under a PFC primary
+	}
+	parent := &domain.CustomCategory{ID: parentID, UserID: userID, Name: "Food"}
+
+	mockCategoryRepo.On("GetByID", ctx, categoryID).Return(existingCategory, nil)
+	mockCategoryRepo.On("GetByID", ctx, parentID).Return(parent, nil)
+	mockCategoryRepo.On("HasChildren", ctx, categoryID).Return(false, nil)
+	mockCategoryRepo.On("GetChildren", ctx, categoryID).Return([]*domain.CustomCategory{}, nil)
+	mockCategoryRepo.On("Update", ctx, mock.AnythingOfType("*domain.CustomCategory")).Return(nil)
+
+	// No budgets reference this category at all — nothing for the guard to refuse.
+	mockBudgetCategoryRepo.On("GetActiveByUserID", ctx, userID).Return([]*domain.Budget{}, nil)
+
+	mockQueue.On("Enqueue", ctx,
+		mock.MatchedBy(func(job queue.Job) bool {
+			args, ok := job.(budgetHierarchyResyncJobArgs)
+			return ok &&
+				args.UserID == userID &&
+				args.CustomCategoryID == categoryID &&
+				args.OldParentCustomCategoryID == nil &&
+				args.OldParentPFCPrimary != nil && *args.OldParentPFCPrimary == oldParentPFC
+		}),
+		mock.Anything,
+	).Return(&queue.JobResult{ID: 1, Kind: "budget_hierarchy_resync"}, nil)
+
+	req := &domain.UpdateCustomCategoryRequest{ParentID: &parentID}
+	category, err := svc.UpdateCategory(ctx, userID, categoryID, req)
+
+	require.NoError(t, err)
+	require.NotNil(t, category)
+	require.NotNil(t, category.ParentID)
+	assert.Equal(t, parentID, *category.ParentID)
+	mockCategoryRepo.AssertExpectations(t)
+	mockBudgetCategoryRepo.AssertExpectations(t)
+	mockQueue.AssertExpectations(t)
+	// effective_category_refresh must NOT be enqueued — the name didn't change.
+	mockQueue.AssertNotCalled(t, "Enqueue", ctx,
+		mock.MatchedBy(func(job queue.Job) bool {
+			_, ok := job.(effectiveCategoryRefreshJobArgs)
+			return ok
+		}),
+		mock.Anything,
+	)
+}

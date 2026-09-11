@@ -166,6 +166,15 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"accepted ScopeUser-only simplification (their doc comments state the same trade-off " +
 		"explicitly) rather than a new gap introduced here; flagged, not fixed, to keep this slice " +
 		"bounded — see issue #1562, which tracks it."},
+	"budget_hierarchy_resync.go": {dispositionBumps, "Issue #1630 Task B1: writes " +
+		"budget_categories.spent_amount via BudgetRepository.UpdateCategorySpentAmount (the " +
+		"repository guard's own dispositionExplicitBump entry for that method now names this file " +
+		"as its third caller) and bumps ScopeUser(userID) via " +
+		"BudgetHierarchyResyncWorker.bumpCacheForUser after a successful resync, wired via " +
+		"SetCacheInvalidation in cmd/server/main.go — same ScopeUser-only shape as " +
+		"effective_category_refresh.go above, for the same reason: this worker runs " +
+		"asynchronously, off the request that enqueued it, so no HTTP-middleware bump or " +
+		"transaction-sync bump can reach it."},
 	"household_over_capacity_check.go": {dispositionBumps, "autoOffboard's call to " +
 		"OffboardExcessMembers removes household members via HouseholdService.removeMemberTx — for " +
 		"this job's call site specifically, there is no HTTP middleware coverage at all " +

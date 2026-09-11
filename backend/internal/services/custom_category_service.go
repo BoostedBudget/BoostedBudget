@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -16,6 +17,25 @@ type effectiveCategoryRefreshJobArgs struct {
 }
 
 func (effectiveCategoryRefreshJobArgs) Kind() string { return "effective_category_refresh" }
+
+// budgetHierarchyResyncJobArgs mirrors jobs.BudgetHierarchyResyncArgs to avoid an import cycle
+// (jobs imports services). Enqueued when a custom category's ParentID/ParentPFCPrimary changes
+// (Issue #1630 Task B1) — see UpdateCategory below. Distinct from effectiveCategoryRefreshJobArgs
+// deliberately: that worker only rewrites transactions.effective_category_name and never touches
+// budget_categories.spent_amount (effective_category_refresh.go:157), so reusing it would leave
+// the stale-total half of this gap unfixed while looking fixed.
+type budgetHierarchyResyncJobArgs struct {
+	UserID           string `json:"user_id"`
+	CustomCategoryID string `json:"custom_category_id"`
+	// OldParentCustomCategoryID/OldParentPFCPrimary carry the PRE-reparent parent identity,
+	// captured before the write below — by the time the worker runs, custom_categories already
+	// reflects the NEW parent, so the OLD one (whose own budgeted row, if any, needs its
+	// hierarchical rollup recomputed just as much as the new one's does) would otherwise be lost.
+	OldParentCustomCategoryID *string `json:"old_parent_custom_category_id,omitempty"`
+	OldParentPFCPrimary       *string `json:"old_parent_pfc_primary,omitempty"`
+}
+
+func (budgetHierarchyResyncJobArgs) Kind() string { return "budget_hierarchy_resync" }
 
 type CustomCategoryService interface {
 	CreateCategory(ctx context.Context, userID string, req *domain.CreateCustomCategoryRequest) (*domain.CustomCategory, error)
@@ -44,6 +64,34 @@ type CustomCategoryService interface {
 	// entry and the tombstone commit or roll back together (Issue #1569 Task 9, following #1507).
 	// Optional: unset, the delete still works and writes no entry.
 	SetAuditLogRepository(ar repository.AuditLogRepository)
+
+	// SetBudgetCategoryRepository wires the budget-side lookup UpdateCategory needs to refuse a
+	// reparent that would create an escaping (not-cleanly-contained) nested budget pair, and to
+	// find the budgets a resync job must touch (Issue #1630 Task B1). Mirrors SetJobQueue /
+	// SetAuditLogRepository's setter-injection pattern above, so CustomCategoryService's own
+	// interface stays unaware of the budget domain.
+	//
+	// Injection is optional; PROCEEDING WITHOUT IT IS NOT. This is money-integrity enforcement,
+	// not observability (contrast SetAuditLogRepository, which fails open by design) — a reparent
+	// is refused, not silently allowed, when this is unset. See UpdateCategory's
+	// checkReparentDoesNotEscape, which mirrors budget_service.go:607's goalOwnershipChecker
+	// fail-closed precedent for a required (if optionally-wired) collaborator.
+	SetBudgetCategoryRepository(r BudgetCategoryRepository)
+}
+
+// BudgetCategoryRepository is the minimal budget-side interface CustomCategoryService needs to
+// enforce the containment guard on a reparent and to scope the resync job it enqueues (Issue
+// #1630 Task B1). Kept narrow, mirroring BudgetSyncRepository in budget_sync_service.go, so this
+// package's own CustomCategoryService interface never has to import the wider budget domain.
+type BudgetCategoryRepository interface {
+	// GetActiveByUserID returns the user's active budgets, the only ones whose totals a stale
+	// reparent can visibly affect (mirrors BudgetSyncRepository.GetActiveByUserID).
+	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.Budget, error)
+	// GetCategoriesByBudgetID returns a budget's LIVE categories, with CustomParentID /
+	// CustomParentPFCPrimary populated from the CURRENT (pre-write) custom_categories row —
+	// see checkReparentDoesNotEscape for why that must be overlaid with the PROPOSED parent
+	// before domain.EscapedNestedChild runs.
+	GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
 }
 
 type customCategoryService struct {
@@ -52,7 +100,11 @@ type customCategoryService struct {
 	// auditLogRepo records the custom_category.deleted entry inside DeleteWithReassignment's own
 	// transaction. nil until SetAuditLogRepository; when unset the delete writes no entry.
 	auditLogRepo repository.AuditLogRepository
-	logger       *slog.Logger
+	// budgetCategoryRepo backs the reparent containment guard and resync scoping (Issue #1630
+	// Task B1). nil until SetBudgetCategoryRepository — and, unlike auditLogRepo, that is a
+	// refusal, not a silent no-op: see checkReparentDoesNotEscape.
+	budgetCategoryRepo BudgetCategoryRepository
+	logger             *slog.Logger
 }
 
 func NewCustomCategoryService(
@@ -72,6 +124,11 @@ func (s *customCategoryService) SetJobQueue(jq queue.JobQueue) {
 // SetAuditLogRepository injects the audit-log repository. See the interface method.
 func (s *customCategoryService) SetAuditLogRepository(ar repository.AuditLogRepository) {
 	s.auditLogRepo = ar
+}
+
+// SetBudgetCategoryRepository injects the budget-side repository. See the interface method.
+func (s *customCategoryService) SetBudgetCategoryRepository(r BudgetCategoryRepository) {
+	s.budgetCategoryRepo = r
 }
 
 func (s *customCategoryService) CreateCategory(ctx context.Context, userID string, req *domain.CreateCustomCategoryRequest) (*domain.CustomCategory, error) {
@@ -173,6 +230,14 @@ func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, cate
 		return nil, domain.ErrCategoryNotFound
 	}
 
+	// Issue #1630 Task B1: capture the PRE-reparent parent identity before any mutation. Once
+	// this method persists below, custom_categories only remembers the NEW parent — the resync
+	// job enqueued at the end needs the OLD one too, to find the old parent's own budgeted row
+	// (if any), whose hierarchical rollup total needs recomputing just as much as the new
+	// parent's does.
+	originalParentID := category.ParentID
+	originalParentPFCPrimary := category.ParentPFCPrimary
+
 	nameChanged := req.Name != nil && *req.Name != category.Name
 	if req.Name != nil {
 		category.Name = *req.Name
@@ -216,22 +281,58 @@ func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, cate
 		}
 	}
 
+	// Issue #1630 Task B1: this is the one write path that changes a custom category's parent
+	// linkage with ZERO query against budget_categories. Refuse the escaping shape BEFORE
+	// persisting anything — resync of the (legitimate) shapes happens AFTER, once the write has
+	// committed, via the enqueued job below.
+	parentChanged := !stringPtrEqual(category.ParentID, originalParentID) ||
+		!stringPtrEqual(category.ParentPFCPrimary, originalParentPFCPrimary)
+
+	if parentChanged {
+		if err := s.checkReparentDoesNotEscape(ctx, userID, category); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := s.categoryRepo.Update(ctx, category); err != nil {
 		return nil, err
 	}
 
-	// Enqueue async refresh of effective_category_name when name changed
-	if nameChanged && s.jobQueue != nil {
-		if _, enqErr := s.jobQueue.Enqueue(ctx, effectiveCategoryRefreshJobArgs{
-			UserID:           userID,
-			CustomCategoryID: categoryID,
-		}); enqErr != nil {
-			// Log but don't fail — rename is already persisted
-			s.logger.Error("failed to enqueue effective category refresh job",
-				"user_id", userID,
-				"custom_category_id", categoryID,
-				"error", enqErr,
-			)
+	// Issue #1123: enqueue async refresh of effective_category_name when the name changed.
+	// Issue #1630 Task B1: enqueue async budget resync when the parent linkage changed —
+	// reparenting flips a budgeted row's excluded/top-level status with no query against
+	// budget_categories at all, so without this the affected budget's stored spent_amount goes
+	// stale (spend visibly vanishes or doubles) until an unrelated sync happens to touch it. A
+	// reparent that ALSO renames enqueues BOTH jobs.
+	if (nameChanged || parentChanged) && s.jobQueue != nil {
+		if nameChanged {
+			if _, enqErr := s.jobQueue.Enqueue(ctx, effectiveCategoryRefreshJobArgs{
+				UserID:           userID,
+				CustomCategoryID: categoryID,
+			}); enqErr != nil {
+				// Log but don't fail — rename is already persisted
+				s.logger.Error("failed to enqueue effective category refresh job",
+					"user_id", userID,
+					"custom_category_id", categoryID,
+					"error", enqErr,
+				)
+			}
+		}
+		if parentChanged {
+			if _, enqErr := s.jobQueue.Enqueue(ctx, budgetHierarchyResyncJobArgs{
+				UserID:                    userID,
+				CustomCategoryID:          categoryID,
+				OldParentCustomCategoryID: originalParentID,
+				OldParentPFCPrimary:       originalParentPFCPrimary,
+			}); enqErr != nil {
+				// Log but don't fail — the reparent is already persisted; the interim window
+				// with a stale total simply doesn't shrink to one job cycle this time.
+				s.logger.Error("failed to enqueue budget hierarchy resync job",
+					"user_id", userID,
+					"custom_category_id", categoryID,
+					"error", enqErr,
+				)
+			}
 		}
 	}
 
@@ -240,6 +341,106 @@ func (s *customCategoryService) UpdateCategory(ctx context.Context, userID, cate
 		category.ParentName = &parent.Name
 	}
 	return category, nil
+}
+
+// stringPtrEqual reports whether two *string values name the same optional string — both nil, or
+// both non-nil with equal contents.
+func stringPtrEqual(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// checkReparentDoesNotEscape refuses a custom-category reparent that would place a BUDGETED row
+// into an escaping (not-cleanly-contained) nested pair — the exact shape domain.EscapedNestedChild
+// already refuses on every OTHER write path (CreateBudget, AddCategory, and UpdateCategory in
+// budget_service.go). UpdateCategory here is the one remaining door: it can flip a category's
+// parent with zero query against budget_categories, so a budget's own escaping guard never sees
+// the change (Issue #1630 Task B1).
+//
+// Fails CLOSED: this is money-integrity enforcement, not observability. An unwired
+// budgetCategoryRepo refuses the reparent rather than silently allowing it — mirrors
+// budget_service.go:607's goalOwnershipChecker precedent for a required (if optionally-injected)
+// collaborator.
+//
+// Evaluates the PROPOSED hierarchy, not the current one: GetCategoriesByBudgetID populates a
+// budget row's CustomParentID/CustomParentPFCPrimary from the CURRENT (pre-write) custom_categories
+// row (budget_repository.go's GetCategoriesByBudgetID join). A check run before this write
+// therefore describes the OLD parentage unless the candidate's overlay is set to category's NEW
+// ParentID/ParentPFCPrimary before domain.EscapedNestedChild runs — which is exactly what this
+// does for the reparented category's own budgeted row, below.
+//
+// Walks the affected subtree: also considers category's direct children (the only descendant
+// depth a custom-custom nest can have — custom_category.go's Validate/validateParent caps
+// custom-custom nesting at two levels, so there are no grandchildren to walk on that axis). A
+// child's own custom_categories.parent_id is untouched by this edit, so its containment status
+// relative to category never changes as a direct RESULT of this specific edit; it is included
+// here as defence-in-depth so a future change to what this method mutates does not silently stop
+// covering it, not because today's narrower edit can flip it.
+//
+// Scoped NARROWLY: only refuses when the SPECIFIC budgeted row this category (or a budgeted
+// child of it) would form an escaping pair with, in EITHER direction — domain.EscapedNestedChild
+// checks both (candidate as the non-cleanly-contained CHILD of a parent, or candidate as the
+// PARENT of a not-cleanly-contained child). Two category_only categories reparenting past each
+// other never trips this; only the escaping shape is blocked.
+func (s *customCategoryService) checkReparentDoesNotEscape(ctx context.Context, userID string, category *domain.CustomCategory) error {
+	if s.budgetCategoryRepo == nil {
+		return fmt.Errorf("budget category repository not configured: cannot validate reparent of %s against existing budgets", category.ID)
+	}
+
+	children, err := s.categoryRepo.GetChildren(ctx, category.ID)
+	if err != nil {
+		return err
+	}
+	subtree := make(map[string]bool, len(children)+1)
+	subtree[category.ID] = true
+	for _, c := range children {
+		subtree[c.ID] = true
+	}
+
+	budgets, err := s.budgetCategoryRepo.GetActiveByUserID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	for _, budget := range budgets {
+		cats, err := s.budgetCategoryRepo.GetCategoriesByBudgetID(ctx, budget.ID)
+		if err != nil {
+			return err
+		}
+
+		for i := range cats {
+			if cats[i].CategoryKind != "custom" || cats[i].CustomCategoryID == nil || !subtree[*cats[i].CustomCategoryID] {
+				continue
+			}
+
+			candidate := cats[i]
+			if *cats[i].CustomCategoryID == category.ID {
+				// The reparented row itself: overlay the PROPOSED hierarchy (see doc comment
+				// above) — GetCategoriesByBudgetID's join still reflects the pre-write parent.
+				candidate.CustomParentID = category.ParentID
+				candidate.CustomParentPFCPrimary = category.ParentPFCPrimary
+			}
+			// A budgeted CHILD of the reparented category (candidate's CustomCategoryID != this
+			// category's ID, but is in `subtree`) keeps pointing at the same parent — its own
+			// custom_categories.parent_id is untouched by this edit — so no overlay is needed
+			// for it; it is still checked, per the doc comment above.
+
+			existing := make([]domain.BudgetCategory, 0, len(cats)-1)
+			for j := range cats {
+				if j != i {
+					existing = append(existing, cats[j])
+				}
+			}
+
+			if domain.EscapedNestedChild(existing, &candidate) {
+				return fmt.Errorf("%w: reparenting %q would create a nested pair in budget %q whose match_logic escapes clean containment", domain.ErrEscapedNestedChild, category.Name, budget.ID)
+			}
+		}
+	}
+
+	return nil
 }
 
 func (s *customCategoryService) DeleteCategory(ctx context.Context, userID, categoryID string) error {

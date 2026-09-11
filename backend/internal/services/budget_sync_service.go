@@ -234,6 +234,43 @@ func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domai
 	return nil
 }
 
+// NarrowBudgetPeriodDates derives period boundaries from the budget's OWN STORED anchor fields
+// (StartDate, optional EndDate) rather than rolling forward from time.Now() the way
+// calculateBudgetPeriodDates does. RecalculateBudget's time.Now()-derived periods for non-custom
+// budgets are one of the hazards a narrow, write-time consistency fixup must NOT reproduce (see
+// RecalculateBudget's doc comment: it also recalculates income, fires budget_updated automation
+// that can trigger boosts, and swallows per-category failures) — this is the safe alternative.
+// Used by the custom-category-reparent resync job (Issue #1630 Task B1,
+// queue/jobs/budget_hierarchy_resync.go) and intended for reuse by the pre-existing-row audit
+// repair (Task B7), which independently arrived at the same "narrow spend-sum recomputation,
+// scoped to the budget's own stored period" requirement.
+func NarrowBudgetPeriodDates(budget *domain.Budget) (start, end time.Time) {
+	start = budget.StartDate
+	if budget.EndDate != nil {
+		return start, *budget.EndDate
+	}
+
+	endOfDay := func(t time.Time) time.Time {
+		return time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, t.Location())
+	}
+
+	switch budget.Period {
+	case domain.BudgetPeriodWeekly:
+		end = endOfDay(start.AddDate(0, 0, 6))
+	case domain.BudgetPeriodQuarterly:
+		end = endOfDay(start.AddDate(0, 3, -1))
+	case domain.BudgetPeriodYearly:
+		end = endOfDay(start.AddDate(1, 0, -1))
+	case domain.BudgetPeriodCustom:
+		// No explicit end: open-ended, anchored at the budget's own StartDate (never time.Now()).
+		end = start.AddDate(100, 0, 0)
+	default:
+		// Monthly and any unknown period type: matches calculateBudgetPeriodDates's own default.
+		end = endOfDay(start.AddDate(0, 1, -1))
+	}
+	return start, end
+}
+
 // calculateBudgetPeriodDates calculates the start and end dates for the current budget period.
 // This is a helper function that determines the date range for income and spent calculations
 // based on the budget's period type.
