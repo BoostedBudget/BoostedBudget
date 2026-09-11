@@ -433,7 +433,7 @@ func TestSQLTrimCutsetLiteralCoversExactlyTheGoCutset(t *testing.T) {
 
 	var want strings.Builder
 	for _, r := range subtypeTrimCutset {
-		want.WriteString(fmt.Sprintf(`\u%04x`, r))
+		fmt.Fprintf(&want, `\u%04x`, r)
 	}
 	assert.Equal(t, "E'"+want.String()+"'", literal)
 

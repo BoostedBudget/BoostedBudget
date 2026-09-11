@@ -486,3 +486,68 @@ func TestPlaidCurrencyCode_DropsAValueThatOverflowsTheColumn(t *testing.T) {
 		})
 	})
 }
+
+// TestInvestmentService_GetPortfolioSummary_RefusesADayChangeFromAMixedTODAY is the CX1(b)
+// regression. The M8a I-1 guard added prior.IsMixedCurrency and its comment claimed to cover the
+// case "when today is mixed too (the composition of the mix can change between the two days)" --
+// but the condition never tested TODAY'S mix at all. A currency-blind live total was therefore
+// subtracted from a perfectly well-labelled prior total and presented as a day change, which is
+// the same overloaded-NULL defect I-1 fixed, one operand over.
+//
+// CurrenciesConflict cannot catch it: a MIXED total presents a nil CurrencyCode, and an unknown
+// currency deliberately reads as "no conflict".
+func TestInvestmentService_GetPortfolioSummary_RefusesADayChangeFromAMixedTODAY(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-abc"
+	priorGated := 90.0
+
+	summaryWith := func(t *testing.T, priorCurrency *string, live []domain.Holding) *domain.PortfolioSummary {
+		t.Helper()
+		holdingRepo := new(MockHoldingRepository)
+		snapshotRepo := new(MockPortfolioSnapshotRepository)
+		svc := NewInvestmentService(holdingRepo, snapshotRepo, new(MockInvestmentTransactionRepository))
+		holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).Return(live, nil)
+		snapshotRepo.On("GetLatestBefore", ctx, userID, time.Now().UTC().Truncate(24*time.Hour)).
+			Return(&domain.PortfolioSnapshot{
+				UserID:                   userID,
+				SnapshotDate:             time.Now().UTC().AddDate(0, 0, -1),
+				TotalValue:               90,
+				TotalValueInvestmentOnly: &priorGated,
+				CurrencyCode:             priorCurrency,
+			}, nil)
+		summary, err := svc.GetPortfolioSummary(ctx, userID)
+		require.NoError(t, err)
+		return summary
+	}
+
+	usd := "USD"
+	mixedToday := []domain.Holding{holdingIn("h1", "USD", 100), holdingIn("h2", "EUR", 50)}
+
+	t.Run("mixed today against a labelled prior is refused", func(t *testing.T) {
+		s := summaryWith(t, &usd, mixedToday)
+		require.True(t, s.IsMixedCurrency)
+		assert.Nil(t, s.DayChange,
+			"a currency-blind live total cannot be subtracted FROM either, whatever the prior says")
+		assert.Nil(t, s.DayChangePct)
+		require.NotNil(t, s.DayChangeUnavailableReason,
+			"a refused figure must say why, or a client reports it as missing provider data")
+		assert.Equal(t, domain.DayChangeUnavailableCurrencyMismatch, *s.DayChangeUnavailableReason)
+	})
+
+	t.Run("mixed today against a legacy unlabelled prior is refused", func(t *testing.T) {
+		// (NULL, false) is every snapshot written before migration 000197. Unknown is not a
+		// currency, so it cannot be established to match -- and the live side is not a quantity
+		// of money regardless.
+		s := summaryWith(t, nil, mixedToday)
+		assert.Nil(t, s.DayChange)
+		require.NotNil(t, s.DayChangeUnavailableReason)
+	})
+
+	t.Run("single-currency today still computes", func(t *testing.T) {
+		s := summaryWith(t, &usd, []domain.Holding{holdingIn("h1", "USD", 100)})
+		require.NotNil(t, s.DayChange)
+		assert.InDelta(t, 10.0, *s.DayChange, 1e-9)
+		assert.Nil(t, s.DayChangeUnavailableReason,
+			"a present figure must not carry an unavailability reason")
+	})
+}

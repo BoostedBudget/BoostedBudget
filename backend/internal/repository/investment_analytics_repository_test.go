@@ -282,13 +282,16 @@ func TestInvestmentAnalytics_TopMovers_ReturnsSplit(t *testing.T) {
 	dayChangePct2 := -1.2
 	totalGL1 := 500.0
 	totalGL2 := -200.0
+	rankingCcy := "USD"
 
 	rows := pgxmock.NewRows([]string{
 		"holding_id", "account_id", "ticker_symbol", "security_name",
 		"day_change", "day_change_pct", "total_gain_loss", "currency_code", "mover_type",
+		// #1631 CX1: the ranking SCOPE, constant across every row.
+		"ranking_currency_code", "excluded_by_currency_count",
 	}).
-		AddRow(holdingID1, accountID1, &ticker1, &secName1, &dayChange1, &dayChangePct1, &totalGL1, (*string)(nil), "gainer").
-		AddRow(holdingID2, accountID2, &ticker2, &secName2, &dayChange2, &dayChangePct2, &totalGL2, (*string)(nil), "loser")
+		AddRow(holdingID1, accountID1, &ticker1, &secName1, &dayChange1, &dayChangePct1, &totalGL1, (*string)(nil), "gainer", &rankingCcy, 2).
+		AddRow(holdingID2, accountID2, &ticker2, &secName2, &dayChange2, &dayChangePct2, &totalGL2, (*string)(nil), "loser", &rankingCcy, 2)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`WITH movers AS`)).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
@@ -300,6 +303,11 @@ func TestInvestmentAnalytics_TopMovers_ReturnsSplit(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Len(t, result.Gainers, 1)
 	assert.Len(t, result.Losers, 1)
+	// The ranking scope must survive the scan, or a client presents a currency-scoped ranking as
+	// a whole-portfolio one (#1631 CX1).
+	require.NotNil(t, result.RankingCurrencyCode)
+	assert.Equal(t, "USD", *result.RankingCurrencyCode)
+	assert.Equal(t, 2, result.ExcludedByCurrencyCount)
 
 	gainer := result.Gainers[0]
 	assert.Equal(t, holdingID1, gainer.HoldingID)

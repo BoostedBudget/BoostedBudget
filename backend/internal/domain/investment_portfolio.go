@@ -100,6 +100,14 @@ type PortfolioSummary struct {
 	// row written before migration 000197, so counting unknown as a currency would flag the whole
 	// existing user base on deploy day with no change to their data.
 	IsMixedCurrency bool `json:"is_mixed_currency"`
+
+	// DayChangeUnavailableReason says WHY day_change is absent, on the same contract as
+	// HoldingView's field of the same name (#1631 CX1): "no day change" has causes with opposite
+	// meanings, and a client that cannot tell them apart reports one as the other. A missing prior
+	// snapshot is missing DATA and fixes itself on the next sync; a currency mismatch is a figure
+	// this service is REFUSING to compute and never will while the two sides disagree. nil means
+	// the figure is present, or its absence is the ordinary missing-inputs case.
+	DayChangeUnavailableReason *string `json:"day_change_unavailable_reason,omitempty" enum:"currency_mismatch"`
 }
 
 // PortfolioHistoryPoint is one data point in a portfolio value chart.
@@ -377,6 +385,27 @@ type TopMoverItem struct {
 type TopMovers struct {
 	Gainers []TopMoverItem `json:"gainers"`
 	Losers  []TopMoverItem `json:"losers"`
+
+	// RankingCurrencyCode is the single currency this list is ranked WITHIN (#1631 CX1).
+	//
+	// Ranking is by nominal day change, and a nominal comparison across currencies is not a
+	// comparison: a JPY position outranks a USD one on the exchange rate alone. There is no FX
+	// rate source in this system, so the honest options were to rank within one currency or to
+	// refuse the widget for any multi-currency portfolio. The first was chosen -- the second
+	// blanks a working widget for a legitimately multi-currency user, and the whole list is
+	// comparable once it is scoped.
+	//
+	// The currency chosen is the one carried by the most eligible movers. A holding that states NO
+	// currency is ranked alongside it regardless, on the same unknown-is-not-a-conflict rule the
+	// rest of this surface uses. nil means no mover stated a currency at all -- the state of every
+	// row written before migration 000197 -- or that there were no movers to rank.
+	RankingCurrencyCode *string `json:"ranking_currency_code,omitempty"`
+
+	// ExcludedByCurrencyCount is how many otherwise-rankable holdings were left out because they
+	// state a DIFFERENT known currency from RankingCurrencyCode. Served so a client can say the
+	// list is partial rather than presenting a scoped ranking as a whole-portfolio one; a silent
+	// exclusion is the same class of defect as a silently currency-blind total.
+	ExcludedByCurrencyCount int `json:"excluded_by_currency_count"`
 }
 
 // GainLossSummary is the response for GET /portfolio/gain-loss.
