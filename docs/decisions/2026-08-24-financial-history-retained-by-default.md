@@ -408,8 +408,11 @@ owner's per-chain opt-out.
 
 It was originally, and deliberately, a **read filter and nothing else** — the argument being that
 the rows are legitimate provider-reported history, so suppressing them at ingestion would be
-destruction as a side effect of a preference. That argument was written down in six places in the
-tree, and #1631 falsifies all six on purpose.
+destruction as a side effect of a preference. That argument was written down in **seven** places in
+the tree, and #1631 falsifies all seven on purpose. (The first fix round rewrote six and missed a
+seventh — `UpdateUserAccountRequest.ExcludeInvestmentSync`'s doc comment in
+`backend/internal/domain/user_account.go`, the mutation DTO the PATCH handler binds — corrected in
+the same round that re-derived this count.)
 
 The read-filter-only design has a defect the ADR's categories made hard to see: **we were still
 storing a row we had already concluded was a duplicate of one we also store.** The user's
