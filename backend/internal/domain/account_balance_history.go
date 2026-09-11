@@ -52,6 +52,6 @@ type AccountBalanceHistory struct {
 	// Points is empty. Pre-computed for the same reason the analytics layer pre-computes
 	// everything: an LLM tool-caller should not spend tokens doing arithmetic over the rows.
 	FirstDate *string                      `json:"first_date,omitempty" format:"date"`
-	LastDate  *string                      `json:"last_date,omitempty"`
+	LastDate  *string                      `json:"last_date,omitempty" format:"date"`
 	Points    []AccountBalanceHistoryPoint `json:"points" nullable:"false"`
 }

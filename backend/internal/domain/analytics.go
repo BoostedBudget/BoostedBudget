@@ -191,7 +191,7 @@ type SpendingByCategory struct {
 
 // SpendingByCategoryResponse is the response for GET /analytics/spending-by-category
 type SpendingByCategoryResponse struct {
-	StartDate  string               `json:"start_date"`
+	StartDate  string               `json:"start_date" format:"date"`
 	EndDate    string               `json:"end_date" format:"date"`
 	TotalSpent float64              `json:"total_spent"`
 	Categories []SpendingByCategory `json:"categories"`
@@ -223,7 +223,7 @@ type CategorySpending struct {
 
 // SpendingTrendPeriod represents one month's spending breakdown in a trends response
 type SpendingTrendPeriod struct {
-	PeriodStart string             `json:"period_start"`
+	PeriodStart string             `json:"period_start" format:"date"`
 	PeriodEnd   string             `json:"period_end" format:"date"`
 	Categories  []CategorySpending `json:"categories"`
 	Total       float64            `json:"total"`
@@ -288,7 +288,7 @@ type TopExpenseResponse struct {
 	PFCPrimaryDisplay string  `json:"pfc_primary_display"`
 	Date              string  `json:"date" format:"date"`
 	StartDate         string  `json:"start_date" format:"date"`
-	EndDate           string  `json:"end_date"`
+	EndDate           string  `json:"end_date" format:"date"`
 }
 
 // ─── Issue #1215 analytics helpers ──────────────────────────────────────────
