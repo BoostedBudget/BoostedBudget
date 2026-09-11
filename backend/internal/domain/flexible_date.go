@@ -78,6 +78,30 @@ func (d *FlexibleDate) UnmarshalJSON(data []byte) error {
 	return fmt.Errorf("invalid date %q: must be YYYY-MM-DD (e.g. 2026-09-01) or RFC3339 (e.g. 2026-09-01T00:00:00Z)", s)
 }
 
+// EndOfDay returns the instant to use as an INCLUSIVE end-of-range boundary for this value.
+//
+// Issue #1630 review round 2: a date-only value ("2026-09-30") unmarshals to midnight
+// (00:00:00, via UnmarshalJSON's time.DateOnly branch) — used bare as a range's end
+// boundary, it would exclude the entire calendar day it names. A full RFC3339 timestamp,
+// in contrast, already names an exact instant the caller chose deliberately (e.g.
+// "2026-09-30T15:00:00Z") and must be respected exactly, not pushed forward to nearly a
+// full day later.
+//
+// FlexibleDate carries no separate "was this date-only" flag — it is a plain time.Time
+// alias — so this distinguishes the two cases by wall-clock time: a value that lands
+// exactly on midnight (00:00:00.000000000, in whatever location it carries) is treated as
+// a date-only marker and extended to the last representable instant of that calendar day
+// (23:59:59.999999999, same location); anything else is returned completely unchanged.
+// Every caller that uses a FlexibleDate as a range's END boundary (never its start) should
+// call this instead of Time().
+func (d FlexibleDate) EndOfDay() time.Time {
+	t := time.Time(d)
+	if t.Hour() == 0 && t.Minute() == 0 && t.Second() == 0 && t.Nanosecond() == 0 {
+		return time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, t.Location())
+	}
+	return t
+}
+
 // Schema implements huma.SchemaProvider, publishing anyOf[date, date-time] so the field
 // stays discoverable (documents YYYY-MM-DD like every read endpoint) while continuing
 // to accept the RFC3339 timestamps existing callers already send. Huma validates the

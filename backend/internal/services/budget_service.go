@@ -140,9 +140,15 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 
 	// Create budget from request. #1630 Task 9: StartDate/EndDate are domain.FlexibleDate
 	// (accepts YYYY-MM-DD or RFC3339) on the request; Budget itself stays plain time.Time.
+	//
+	// ⚠ Review round 2: EndDate uses EndOfDay(), not Time() — a date-only end_date
+	// ("2026-09-30") must cover the WHOLE day it names (its custom-period budget would
+	// otherwise silently exclude every same-day transaction after midnight), while a full
+	// RFC3339 timestamp is respected exactly as given. See FlexibleDate.EndOfDay's doc
+	// comment.
 	var endDate *time.Time
 	if req.EndDate != nil {
-		t := req.EndDate.Time()
+		t := req.EndDate.EndOfDay()
 		endDate = &t
 	}
 	budget := &domain.Budget{
@@ -501,7 +507,8 @@ func (s *budgetService) UpdateBudget(ctx context.Context, userID, budgetID strin
 		budget.StartDate = req.StartDate.Time()
 	}
 	if req.EndDate != nil {
-		t := req.EndDate.Time()
+		// ⚠ Review round 2: EndOfDay(), not Time() — see createBudget's comment above.
+		t := req.EndDate.EndOfDay()
 		budget.EndDate = &t
 	}
 	// Reconcile expected_income and amount (Issue #1048): expected_income wins when set.

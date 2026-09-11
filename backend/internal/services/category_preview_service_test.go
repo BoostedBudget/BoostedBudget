@@ -448,6 +448,96 @@ func TestCategoryPreviewService_PreviewCategoryMatches_ZeroResults(t *testing.T)
 	mockCalc.AssertExpectations(t)
 }
 
+// ===========================================================================
+// Issue #1630 review round 2: an RFC3339 end_date must be respected exactly, not extended
+// almost a full day forward the way a date-only end_date correctly is.
+// ===========================================================================
+
+// TestCategoryPreviewService_PreviewCategoryMatches_DateOnlyEndCoversWholeDay is the
+// GREEN-already regression guard for the date-only half: "2026-09-30" must still cover
+// ALL of Sep 30 (through 23:59:59.999999999), the pre-existing, correct behavior.
+func TestCategoryPreviewService_PreviewCategoryMatches_DateOnlyEndCoversWholeDay(t *testing.T) {
+	mockCalc := new(MockTransactionStatsCalculator)
+	service := NewCategoryPreviewService(mockCalc)
+
+	ctx := context.Background()
+	userID := "user-123"
+	req := &domain.CategoryPreviewRequest{
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{},
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+		StartDate:    domain.FlexibleDate(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)),
+		EndDate:      domain.FlexibleDate(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)),
+	}
+
+	var gotEnd time.Time
+	mockCalc.On("GetMatchingTransactionStats",
+		ctx, userID, "pfc", ptrStr("FOOD_AND_DRINK"), (*string)(nil), (*string)(nil), []string{}, domain.MatchLogicCategoryOnly,
+		mock.Anything, mock.Anything,
+	).Run(func(args mock.Arguments) {
+		gotEnd = args.Get(9).(time.Time)
+	}).Return(0, 0.0, nil)
+	mockCalc.On("GetCategoryMatchBreakdown",
+		ctx, userID, "pfc", ptrStr("FOOD_AND_DRINK"), (*string)(nil), (*string)(nil),
+		[]string{}, domain.MatchLogicCategoryOnly,
+		mock.Anything, mock.Anything,
+	).Return(nil, 0, 0.0, 0, 0.0, nil)
+
+	_, err := service.PreviewCategoryMatches(ctx, userID, req)
+	require.NoError(t, err)
+
+	want := time.Date(2026, 9, 30, 23, 59, 59, 999999999, time.UTC)
+	assert.True(t, gotEnd.Equal(want),
+		"a date-only end_date must cover the ENTIRE day it names: got %v, want %v", gotEnd, want)
+	assert.Equal(t, 30, gotEnd.Day(), "must not have rolled over into October")
+}
+
+// TestCategoryPreviewService_PreviewCategoryMatches_RFC3339EndRespectedExactly is the
+// RED/GREEN test for the review finding: a full RFC3339 end_date
+// ("2026-09-30T15:00:00Z") must end the query EXACTLY there, not almost a full day later
+// at "2026-10-01T14:59:59Z".
+//
+// RED (pre-fix): the old code unconditionally added 23h59m59s to EVERY end_date,
+// including one that already carried a real, non-midnight time-of-day.
+func TestCategoryPreviewService_PreviewCategoryMatches_RFC3339EndRespectedExactly(t *testing.T) {
+	mockCalc := new(MockTransactionStatsCalculator)
+	service := NewCategoryPreviewService(mockCalc)
+
+	ctx := context.Background()
+	userID := "user-123"
+	req := &domain.CategoryPreviewRequest{
+		CategoryKind: "pfc",
+		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
+		Tags:         []string{},
+		MatchLogic:   domain.MatchLogicCategoryOnly,
+		StartDate:    domain.FlexibleDate(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)),
+		EndDate:      domain.FlexibleDate(time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC)),
+	}
+
+	var gotEnd time.Time
+	mockCalc.On("GetMatchingTransactionStats",
+		ctx, userID, "pfc", ptrStr("FOOD_AND_DRINK"), (*string)(nil), (*string)(nil), []string{}, domain.MatchLogicCategoryOnly,
+		mock.Anything, mock.Anything,
+	).Run(func(args mock.Arguments) {
+		gotEnd = args.Get(9).(time.Time)
+	}).Return(0, 0.0, nil)
+	mockCalc.On("GetCategoryMatchBreakdown",
+		ctx, userID, "pfc", ptrStr("FOOD_AND_DRINK"), (*string)(nil), (*string)(nil),
+		[]string{}, domain.MatchLogicCategoryOnly,
+		mock.Anything, mock.Anything,
+	).Return(nil, 0, 0.0, 0, 0.0, nil)
+
+	_, err := service.PreviewCategoryMatches(ctx, userID, req)
+	require.NoError(t, err)
+
+	want := time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC)
+	assert.True(t, gotEnd.Equal(want),
+		"a full RFC3339 end_date must be respected EXACTLY: got %v, want %v", gotEnd, want)
+	assert.Equal(t, 30, gotEnd.Day(),
+		"must not have rolled over into October — the pre-fix bug ended at 2026-10-01T14:59:59Z")
+}
+
 // sumChildren totals a CategoryPreviewResponse's nested-descendant bucket, for asserting
 // the category-direct + nested-descendant + tag-only-outside-category partition invariant
 // (Issue #1630 Task B5).

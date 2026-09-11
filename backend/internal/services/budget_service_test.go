@@ -2593,3 +2593,134 @@ func TestBudgetService_CreateBudget_RejectsEscapedNestedChildWithinBatch_CustomP
 	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "CreateWithCategories")
 	mockCategoryRepo.AssertExpectations(t)
 }
+
+// ===========================================================================
+// Issue #1630 review round 2: a custom-period budget's end_date must cover the whole
+// calendar day it names when date-only, and be respected exactly when a full RFC3339
+// timestamp — matching FlexibleDate.EndOfDay's contract.
+// ===========================================================================
+
+// TestBudgetService_CreateBudget_CustomPeriod_DateOnlyEndCoversWholeDay is the
+// GREEN-already regression guard: a date-only end_date ("2026-09-30") must produce a
+// stored Budget.EndDate covering the ENTIRE day (through 23:59:59.999999999), not just
+// midnight — otherwise every same-day transaction after midnight is silently excluded
+// from the budget's own period.
+func TestBudgetService_CreateBudget_CustomPeriod_DateOnlyEndCoversWholeDay(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	req := &domain.CreateBudgetRequest{
+		Name:         "Custom Period Budget",
+		Period:       domain.BudgetPeriodCustom,
+		StartDate:    domain.FlexibleDate(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)),
+		EndDate:      ptrFlexibleDate(domain.FlexibleDate(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC))),
+		Amount:       1000.00,
+		CurrencyCode: "USD",
+	}
+
+	var captured *domain.Budget
+	mockBudgetRepo.On("CreateWithCategories", ctx, mock.AnythingOfType("*domain.Budget"), mock.Anything).
+		Run(func(args mock.Arguments) {
+			captured = args.Get(1).(*domain.Budget)
+		}).Return(nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+	require.NoError(t, err)
+	require.NotNil(t, budget)
+	require.NotNil(t, captured)
+	require.NotNil(t, captured.EndDate)
+
+	want := time.Date(2026, 9, 30, 23, 59, 59, 999999999, time.UTC)
+	assert.True(t, captured.EndDate.Equal(want),
+		"a date-only end_date must cover the whole day: got %v, want %v", captured.EndDate, want)
+}
+
+// TestBudgetService_CreateBudget_CustomPeriod_RFC3339EndRespectedExactly is the RED/GREEN
+// test for the review finding: a full RFC3339 end_date ("2026-09-30T15:00:00Z") must be
+// stored EXACTLY as given, not pushed to nearly a full day later.
+//
+// RED (pre-fix): the old code called req.EndDate.Time() directly and any downstream
+// end-of-day extension (category_preview_service.go) applied unconditionally elsewhere —
+// but budget_service.go itself stored the raw timestamp with NO extension at all, so a
+// DATE-ONLY end_date here was the bug (never extended, silently truncating the budget's
+// last day). This test pins the RFC3339 side of the fix: it must remain untouched.
+func TestBudgetService_CreateBudget_CustomPeriod_RFC3339EndRespectedExactly(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	req := &domain.CreateBudgetRequest{
+		Name:         "Custom Period Budget RFC3339",
+		Period:       domain.BudgetPeriodCustom,
+		StartDate:    domain.FlexibleDate(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)),
+		EndDate:      ptrFlexibleDate(domain.FlexibleDate(time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC))),
+		Amount:       1000.00,
+		CurrencyCode: "USD",
+	}
+
+	var captured *domain.Budget
+	mockBudgetRepo.On("CreateWithCategories", ctx, mock.AnythingOfType("*domain.Budget"), mock.Anything).
+		Run(func(args mock.Arguments) {
+			captured = args.Get(1).(*domain.Budget)
+		}).Return(nil)
+
+	budget, err := service.CreateBudget(ctx, userID, req)
+	require.NoError(t, err)
+	require.NotNil(t, budget)
+	require.NotNil(t, captured)
+	require.NotNil(t, captured.EndDate)
+
+	want := time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC)
+	assert.True(t, captured.EndDate.Equal(want),
+		"a full RFC3339 end_date must be stored EXACTLY: got %v, want %v", captured.EndDate, want)
+}
+
+// TestBudgetService_UpdateBudget_CustomPeriod_RFC3339EndRespectedExactly mirrors the
+// create-path test above for UpdateBudget's own EndDate handling.
+func TestBudgetService_UpdateBudget_CustomPeriod_RFC3339EndRespectedExactly(t *testing.T) {
+	mockBudgetRepo := new(MockBudgetRepository)
+	mockCategoryRepo := new(MockCustomCategoryRepository)
+	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
+
+	service := NewBudgetService(mockBudgetRepo, mockCategoryRepo, mockTransactionRepo, testLogger())
+
+	ctx := context.Background()
+	userID := "user-123"
+	budgetID := "budget-123"
+
+	existingBudget := createTestBudgetForService(userID)
+	existingBudget.Period = domain.BudgetPeriodCustom
+	existingBudget.StartDate = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	existingBudget.ExpectedIncome = 1000.00
+	existingEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	existingBudget.EndDate = &existingEnd
+
+	newEnd := ptrFlexibleDate(domain.FlexibleDate(time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC)))
+	req := &domain.UpdateBudgetRequest{
+		EndDate: newEnd,
+	}
+
+	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
+	mockBudgetRepo.On("Update", ctx, mock.AnythingOfType("*domain.Budget")).Return(nil)
+
+	budget, err := service.UpdateBudget(ctx, userID, budgetID, req)
+	require.NoError(t, err)
+	require.NotNil(t, budget)
+	require.NotNil(t, budget.EndDate)
+
+	want := time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC)
+	assert.True(t, budget.EndDate.Equal(want),
+		"a full RFC3339 end_date must be stored EXACTLY on update: got %v, want %v", budget.EndDate, want)
+}
+
+// ptrFlexibleDate returns a pointer to a domain.FlexibleDate literal.
+func ptrFlexibleDate(d domain.FlexibleDate) *domain.FlexibleDate { return &d }
