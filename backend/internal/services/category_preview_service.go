@@ -57,15 +57,21 @@ func (s *categoryPreviewService) PreviewCategoryMatches(ctx context.Context, use
 
 	// Issue #1630 Task B5 (gap #21): StartDate/EndDate are domain.FlexibleDate — the JSON
 	// unmarshal boundary already rejected anything but YYYY-MM-DD/RFC3339, so only ordering
-	// remains to check here.
+	// remains to check here. Ordering is checked against the RAW values (before the
+	// end-of-day adjustment below) so "same calendar day" ordering reads naturally.
 	startDate := req.StartDate.Time()
 	endDate := req.EndDate.Time()
 	if err := dateutil.ValidateDateRange(startDate, endDate); err != nil {
 		return nil, errors.New(err.Error())
 	}
 
-	// Set end date to end of day for inclusive range
-	endDate = endDate.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
+	// ⚠ Review round 2: this used to unconditionally Add(23h59m59s) regardless of whether
+	// EndDate already carried a real time-of-day. For a date-only value ("2026-09-30") that
+	// correctly covers the whole day, but for a full RFC3339 timestamp
+	// ("2026-09-30T15:00:00Z") it pushed the boundary to within an hour of the NEXT calendar
+	// day (2026-10-01T14:59:59Z) — almost a full extra day of transactions counted. EndOfDay
+	// only extends a date-only (midnight) value and respects any other timestamp exactly.
+	endDate = req.EndDate.EndOfDay()
 
 	// Validate that we have a category or tags depending on match logic
 	hasCategoryKind := req.CategoryKind != ""
