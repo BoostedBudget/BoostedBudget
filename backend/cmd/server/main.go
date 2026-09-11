@@ -568,6 +568,9 @@ func main() {
 	// Issue #1123: Declare effective category refresh worker
 	var effectiveCategoryRefreshWorker *jobs.EffectiveCategoryRefreshWorker
 
+	// Issue #1630 Task B1: Declare budget hierarchy resync worker (custom-category reparent).
+	var budgetHierarchyResyncWorker *jobs.BudgetHierarchyResyncWorker
+
 	// Issue #138: Declare investment read services at outer scope (initialized inside Plaid block;
 	// nil-checked in route registration since repos are available regardless of Plaid config).
 	var investmentService services.InvestmentService
@@ -798,6 +801,10 @@ func main() {
 		// Issue #1569 Task 9: the category delete is a tombstone now, and writes a
 		// custom_category.deleted audit entry inside its own transaction.
 		customCategoryService.SetAuditLogRepository(repository.NewAuditLogRepository(db))
+		// Issue #1630 Task B1: budgetRepo satisfies services.BudgetCategoryRepository
+		// structurally (GetActiveByUserID + GetCategoriesByBudgetID). Required, not optional —
+		// UpdateCategory refuses a reparent rather than proceeding unchecked when this is unset.
+		customCategoryService.SetBudgetCategoryRepository(budgetRepo)
 		// Issue #346: Categorization rules services
 		categorizationRuleService := services.NewCategorizationRuleService(categorizationRuleRepo, customCategoryRepo)
 		// #1625: backs POST /auto-categorization/preview. Setter injection so every other
@@ -1375,6 +1382,22 @@ func main() {
 		effectiveCategoryRefreshWorker.SetCacheInvalidation(cacheInstance.Generations(), householdRepo)
 		appLogger.Info("Effective category refresh worker created (River)")
 
+		// Issue #1630 Task B1: Create budget hierarchy resync worker — recomputes spent_amount
+		// for every active budget a custom-category reparent affects. customCategoryRepo,
+		// budgetRepo and budgetCategoryMatchingService are all constructed above this point.
+		budgetHierarchyResyncWorker = jobs.NewBudgetHierarchyResyncWorker(jobs.BudgetHierarchyResyncWorkerDeps{
+			CustomCategoryRepo: customCategoryRepo,
+			BudgetRepo:         budgetRepo,
+			SpentCalc:          budgetCategoryMatchingService,
+			Logger:             appLogger,
+		})
+		// spent_amount is summed by the cached GetBudgetVsActual analytics query (ScopeUser) —
+		// see repository/cache_completeness_repo_test.go's
+		// "BudgetRepository.UpdateCategorySpentAmount" entry. cacheInstance is never nil (see
+		// cachePurgeRetryWorker below); Generations() is nil-safe when the cache is disabled.
+		budgetHierarchyResyncWorker.SetCacheInvalidation(cacheInstance.Generations())
+		appLogger.Info("Budget hierarchy resync worker created (River)")
+
 		// Create Plaid service and account linking (if configured)
 		// plaidHandler migrated to Huma (see humaPlaidHandler) - Issue #559
 		// var plaidHandler *handlers.PlaidHandler
@@ -1939,6 +1962,10 @@ func main() {
 			if effectiveCategoryRefreshWorker != nil {
 				river.AddWorker(riverWorkers, effectiveCategoryRefreshWorker)
 				appLogger.Info("Effective category refresh worker registered with River")
+			}
+			if budgetHierarchyResyncWorker != nil {
+				river.AddWorker(riverWorkers, budgetHierarchyResyncWorker)
+				appLogger.Info("Budget hierarchy resync worker registered with River")
 			}
 
 			// Plaid-specific workers (nil when Plaid not configured)

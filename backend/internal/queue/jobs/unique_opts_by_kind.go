@@ -149,7 +149,12 @@ var uniqueOptsByKind = map[string]func() *queue.UniqueOpts{
 	// had: River computes the unique key from the options passed at insert, so an invented key can
 	// only collide with another invented one.
 	"effective_category_refresh": noUniqueness,
-	"email_change_propagation":   noUniqueness,
+	// budget_hierarchy_resync (Issue #1630 Task B1): custom_category_service.go's UpdateCategory,
+	// bare Enqueue(ctx, args) alongside effective_category_refresh's own bare enqueue at the same
+	// call site. Every reparent must resync, and two reparents in quick succession are two
+	// different pieces of work, exactly like the rename case above.
+	"budget_hierarchy_resync":  noUniqueness,
+	"email_change_propagation": noUniqueness,
 	"boost_evaluation":           noUniqueness,
 	"subscription_webhook":       noUniqueness,
 	"notification_email":         noUniqueness,
