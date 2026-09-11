@@ -944,7 +944,12 @@ func buildPositionReconciliationDetailQuery(tradePredicate string, userIdx int) 
 // that could drift out of sync with it. The two comparisons this renders (delta beyond
 // tolerance, split on has_buy) are the same two branches that function's `if` and inner `if`
 // express. TestPositionReconciliationSummary_AgreesWithPerUserReportAcrossUsers_Integration
-// proves empirically that the SQL and Go paths agree on the same seeded data.
+// proves empirically that the SQL and Go paths agree on the same seeded data, including at the
+// exact tolerance boundary (its User E) — though that row alone only pins the SQL side's `>`
+// strictness there (exact NUMERIC arithmetic; see its own comment for why), and Go's strictness
+// at that same boundary is pinned separately by
+// domain.TestClassifyPositionReconciliationMember_ExactlyAtToleranceIsNotADrift, which needs no
+// database and passes the tolerance constant directly as delta.
 //
 // No securities JOIN on holdings here (unlike the detail query): the aggregate needs no
 // ticker/name/plaid_security_id, so that join — and the four columns it would add to every row
