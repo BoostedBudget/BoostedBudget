@@ -45,7 +45,17 @@ import { test, expect } from '@playwright/test'
 import { acceptCookieConsent } from './helpers/auth'
 
 test.describe('Portfolio tab renders and investment activity is labelled correctly (#1631)', () => {
-  test.describe.configure({ retries: 0 })
+  // ⚠ NO `retries: 0` here, deliberately, and it was here until CI ran this spec for the first
+  // time. This suite has a pre-existing auth/navigation race: in the same run, five OTHER specs
+  // (savings, spending-reports-table, transaction-filtering ×2, url-sort) failed and then PASSED
+  // on retry, one of them visibly bouncing to /sign-in. Every one of them recovered because they
+  // use the project's retry policy. This spec had opted out, so it was the only genuine failure
+  // in the run — not because it is more broken, but because it was the only one unprotected
+  // against a flake the whole suite shares.
+  //
+  // Determinism was the reason to set retries: 0, and it is the wrong trade here: an infra flake
+  // failing the build teaches nobody anything, while the assertions below are exact and will fail
+  // deterministically if the LABELLING regresses, retries or not.
 
   test('the Portfolio tab renders real seeded holdings, and the transactions feed derives Reinvest/Dividend/Cash from the real reinvestment pair', async ({
     page,
@@ -57,6 +67,12 @@ test.describe('Portfolio tab renders and investment activity is labelled correct
     // =========================================================================
     await page.goto('/insights?tab=portfolio')
     await page.waitForLoadState('domcontentloaded')
+    // ⚠ Assert the navigation LANDED before asserting anything about content. When this spec first
+    // ran in CI it was bounced to the dashboard, and because the dashboard also carries a
+    // portfolio widget with a "Total Value" tile, the tile assertions below PASSED against the
+    // wrong page — the failure only surfaced 20 lines later as a missing table row, which says
+    // nothing about the real cause. A URL assertion turns that into one obvious line.
+    await expect(page).toHaveURL(/\/insights/, { timeout: 15000 })
 
     // ⚠ ORDER MATTERS HERE. Wait for the tiles FIRST, then assert the error copy is absent.
     // Checked in the other order the absence assertion is VACUOUS: straight after
@@ -82,6 +98,7 @@ test.describe('Portfolio tab renders and investment activity is labelled correct
     // =========================================================================
     await page.goto('/transactions')
     await page.waitForLoadState('domcontentloaded')
+    await expect(page).toHaveURL(/\/transactions/, { timeout: 15000 })
 
     // The reinvest leg (cash/withdrawal, amount=24.68, quantity>0): the activity-type chip reads
     // Reinvest and the Sub-category cell reads the DERIVED label "Dividend Reinvestment" — never
