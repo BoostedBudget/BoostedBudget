@@ -873,24 +873,19 @@ func positionReconciliationLedgerFilterSQL(tradePredicate string) string {
 	return "(" + tradePredicate + " OR it.type = 'transfer')"
 }
 
-// buildPositionReconciliationQuery renders the shared SQL body behind both PositionReconciliation
-// (per user, full Drifts detail) and PositionReconciliationSummary (global, counts only) — one
-// query text, one JOIN structure, so the two can never quietly diverge about which rows are
-// "the same position". userIdx is the bind position for the user_id filter; scopeToUser controls
-// whether that filter is applied at all (false for the global admin gauge, which aggregates
-// every user's active holdings by design — see domain.PositionReconciliationSummary's doc
-// comment).
-func buildPositionReconciliationQuery(tradePredicate string, userIdx int, scopeToUser bool) string {
-	ledgerUserFilter := ""
-	holdingsUserFilter := ""
-	if scopeToUser {
-		ledgerUserFilter = fmt.Sprintf("AND it.user_id = $%d", userIdx)
-		holdingsUserFilter = fmt.Sprintf("AND h.user_id = $%d", userIdx)
-	}
+// positionReconciliationLedgerCTE renders the "WITH ledger AS (...)" body shared by
+// PositionReconciliation and PositionReconciliationSummary: the per (account, security)
+// net ledger quantity and whether an opening buy was observed. ONE definition, so the two
+// read paths can never quietly diverge about which investment_transactions rows count toward
+// a position's ledger-implied delta — see positionReconciliationLedgerFilterSQL for what the
+// filter itself covers (buy/sell/reinvest plus any type='transfer' row).
+//
+// userFilterSQL is an extra WHERE fragment (e.g. "AND it.user_id = $1", or "" for no filter);
+// callers own placeholder numbering.
+func positionReconciliationLedgerCTE(tradePredicate, userFilterSQL string) string {
 	ledgerFilter := positionReconciliationLedgerFilterSQL(tradePredicate)
-
 	return fmt.Sprintf(`
-		WITH ledger AS (
+		ledger AS (
 			SELECT
 				it.account_id,
 				it.security_id,
@@ -903,6 +898,19 @@ func buildPositionReconciliationQuery(tradePredicate string, userIdx int, scopeT
 			  %[2]s
 			GROUP BY it.account_id, it.security_id
 		)
+	`, ledgerFilter, userFilterSQL)
+}
+
+// buildPositionReconciliationDetailQuery renders the per-user, per-row query behind
+// PositionReconciliation — one row per (account, security) pair, carrying the security detail
+// (ticker/name/plaid_security_id) a Drifts entry needs to be actionable. userIdx is the bind
+// position for both the ledger and holdings user_id filters.
+func buildPositionReconciliationDetailQuery(tradePredicate string, userIdx int) string {
+	userFilter := fmt.Sprintf("AND it.user_id = $%d", userIdx)
+	holdingsUserFilter := fmt.Sprintf("AND h.user_id = $%d", userIdx)
+
+	return fmt.Sprintf(`
+		WITH %[1]s
 		SELECT
 			h.account_id::text,
 			h.security_id::text,
@@ -919,8 +927,50 @@ func buildPositionReconciliationQuery(tradePredicate string, userIdx int, scopeT
 		JOIN securities sec ON sec.id = h.security_id
 		LEFT JOIN ledger ON ledger.account_id = h.account_id AND ledger.security_id = h.security_id
 		WHERE h.quantity <> 0
-		%[3]s
-	`, ledgerFilter, ledgerUserFilter, holdingsUserFilter)
+		%[2]s
+	`, positionReconciliationLedgerCTE(tradePredicate, userFilter), holdingsUserFilter)
+}
+
+// buildPositionReconciliationSummaryQuery renders the GLOBAL, aggregate-only query behind
+// PositionReconciliationSummary (#1631 M8b N2). Unlike the detail query above, this pushes
+// domain.ClassifyPositionReconciliationMember's classification into SQL via COUNT(*) FILTER,
+// so /admin/health's 30-second poll gets back ONE row instead of streaming every (account,
+// security) pair in the system into Go just to throw all but three integers away.
+//
+// ⚠ THE CLASSIFICATION MUST NOT DIVERGE FROM domain.ClassifyPositionReconciliationMember, and
+// it does not, by construction rather than by care: %[2]g below is
+// domain.PositionReconciliationQuantityTolerance formatted directly into the query text — the
+// SAME Go constant the per-row Go classifier compares against, not a second hand-typed literal
+// that could drift out of sync with it. The two comparisons this renders (delta beyond
+// tolerance, split on has_buy) are the same two branches that function's `if` and inner `if`
+// express. TestPositionReconciliationSummary_AgreesWithPerUserReportAcrossUsers_Integration
+// proves empirically that the SQL and Go paths agree on the same seeded data.
+//
+// No securities JOIN on holdings here (unlike the detail query): the aggregate needs no
+// ticker/name/plaid_security_id, so that join — and the four columns it would add to every row
+// of a full-table scan — is dropped along with everything else the detail query selects that a
+// count does not need.
+func buildPositionReconciliationSummaryQuery(tradePredicate string) string {
+	tol := domain.PositionReconciliationQuantityTolerance
+	return fmt.Sprintf(`
+		WITH %[1]s
+		SELECT
+			COUNT(*) FILTER (
+				WHERE ABS(h.quantity - COALESCE(ledger.ledger_quantity, 0)) > %[2]g
+				  AND COALESCE(ledger.has_buy, false)
+			) AS drift_count,
+			COUNT(*) FILTER (
+				WHERE ABS(h.quantity - COALESCE(ledger.ledger_quantity, 0)) > %[2]g
+				  AND NOT COALESCE(ledger.has_buy, false)
+			) AS suppressed_count,
+			COUNT(*) AS total_checked
+		FROM holdings h
+		-- CURRENT-STATE universe (#1569 T12) and the a.type='investment' gate (#1616 T2c), matching
+		-- every other holdings-based analytics surface in this file.
+		JOIN accounts a ON a.id = h.account_id AND `+currentStateAccountLeg("a")+` AND a.type = 'investment'
+		LEFT JOIN ledger ON ledger.account_id = h.account_id AND ledger.security_id = h.security_id
+		WHERE h.quantity <> 0
+	`, positionReconciliationLedgerCTE(tradePredicate, ""), tol)
 }
 
 // PositionReconciliation compares each active holding's quantity against the net share delta
@@ -943,7 +993,7 @@ func (r *investmentAnalyticsRepository) PositionReconciliation(ctx context.Conte
 	userIdx := len(predArgs) + 1
 	args := append(append([]any{}, predArgs...), userID)
 
-	query := buildPositionReconciliationQuery(predicate, userIdx, true)
+	query := buildPositionReconciliationDetailQuery(predicate, userIdx)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -982,50 +1032,28 @@ func (r *investmentAnalyticsRepository) PositionReconciliation(ctx context.Conte
 }
 
 // PositionReconciliationSummary is the GLOBAL admin gauge behind
-// SystemHealthResponse's position-reconciliation section (#1631 M8b I1): the SAME
-// classification as PositionReconciliation, aggregated as counts across every user's active
-// holdings rather than materializing one user's Drifts list. Shares
-// buildPositionReconciliationQuery and domain.ClassifyPositionReconciliationMember with
-// PositionReconciliation so the two can never classify the same row differently.
+// SystemHealthResponse's position-reconciliation section (#1631 M8b I1). ONE aggregate query —
+// see buildPositionReconciliationSummaryQuery for why this pushes classification into SQL
+// rather than reusing PositionReconciliation's per-row scan: /admin/health polls this every 30
+// seconds (HealthDashboardPage.tsx's default refetchInterval) for as long as any admin has the
+// tab open, and streaming every (account, security) pair in the system into Go on that cadence
+// just to discard all but three integers is the exact hazard migration 000199's own comment
+// warns against for the sibling forked-identity gauge (#1631 M8b N2).
 func (r *investmentAnalyticsRepository) PositionReconciliationSummary(ctx context.Context) (*domain.PositionReconciliationSummary, error) {
 	predicate, predArgs := domain.TradeTypeToSQLPredicate(
 		[]string{domain.TradeTypeBuy, domain.TradeTypeSell, domain.TradeTypeReinvest}, "it", "sec")
 
-	query := buildPositionReconciliationQuery(predicate, 0, false)
+	query := buildPositionReconciliationSummaryQuery(predicate)
 
-	rows, err := r.db.Query(ctx, query, predArgs...)
+	summary := &domain.PositionReconciliationSummary{}
+	err := r.db.QueryRow(ctx, query, predArgs...).Scan(
+		&summary.DriftCount, &summary.SuppressedPreWindowCount, &summary.TotalPositionsChecked,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("PositionReconciliationSummary: %w", err)
 	}
-	defer rows.Close()
 
-	summary := &domain.PositionReconciliationSummary{}
-	for rows.Next() {
-		var accountID, securityID, plaidSecurityID, securityName string
-		var tickerSymbol *string
-		var holdingQuantity, ledgerQuantity float64
-		var hasBuy bool
-		if err := rows.Scan(
-			&accountID, &securityID, &plaidSecurityID, &tickerSymbol, &securityName,
-			&holdingQuantity, &ledgerQuantity, &hasBuy,
-		); err != nil {
-			return nil, fmt.Errorf("PositionReconciliationSummary scan: %w", err)
-		}
-		summary.TotalPositionsChecked++
-
-		isDrift, isSuppressed := domain.ClassifyPositionReconciliationMember(holdingQuantity-ledgerQuantity, hasBuy)
-		switch {
-		case isDrift:
-			summary.DriftCount++
-		case isSuppressed:
-			summary.SuppressedPreWindowCount++
-		}
-	}
-	if rows.Err() != nil {
-		return nil, fmt.Errorf("PositionReconciliationSummary rows: %w", rows.Err())
-	}
-
-	// The scan completed with no error — this is a VERIFIED aggregate, possibly a real zero.
+	// The query completed with no error — this is a VERIFIED aggregate, possibly a real zero.
 	summary.Available = true
 	return summary, nil
 }

@@ -112,6 +112,16 @@ const mockHealthData = {
   // not an unknown — the failed-read and absent-section cases are exercised separately below.
   forked_security_identities: {
     group_count: 0,
+    groups: [],
+    available: true,
+  },
+  // #1631 M8b N1: the position-reconciliation drift gauge. `available: true` with all-zero
+  // counts is a VERIFIED "nothing to check yet" reading, not an unknown — the failed-read and
+  // absent-section cases are exercised separately below.
+  position_reconciliation: {
+    drift_count: 0,
+    suppressed_pre_window_count: 0,
+    total_positions_checked: 0,
     available: true,
   },
 }
@@ -937,9 +947,9 @@ describe('HealthDashboardPage', () => {
     })
   })
 
-  // #1631 M8b: forked-security-identity detection. Per-group member detail is not yet in the
-  // generated API client (backend-only as of this change), so only the group count is asserted
-  // here — see the component's own comment on `forkedSecurityIdentitiesAvailable`.
+  // #1631 M8b: forked-security-identity detection. The component does not yet render per-group
+  // member detail (`.groups`) even though the generated client has it — only the group count is
+  // asserted here, matching what the component actually renders today.
   describe('Forked Security Identities section', () => {
     const FORK_CARD = 'Fork Groups Detected'
 
@@ -1037,6 +1047,146 @@ describe('HealthDashboardPage', () => {
       })
 
       expect(forkCardValue(FORK_CARD)).toBe('Unavailable')
+    })
+  })
+
+  // #1631 M8b N1: the position-reconciliation drift gauge. Before this fix, `position_reconciliation`
+  // was served by the API and present in the generated client but rendered nowhere — an operator
+  // opening /admin/health saw the fork gauge and nothing about the trade-vs-position diagnostic.
+  describe('Position Reconciliation section', () => {
+    const DRIFT_CARD = 'Drift Positions'
+    const SUPPRESSED_CARD = 'Suppressed (Pre-Window)'
+    const CHECKED_CARD = 'Total Positions Checked'
+
+    const reconCardValue = (title: string) => {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${title}"`)
+      return card.querySelector('[data-slot="stat-value"]')?.textContent ?? ''
+    }
+
+    // THE RED TEST: a seeded drift count reaches an operator, where before this fix
+    // position_reconciliation was served and generated but rendered nowhere.
+    it('surfaces seeded drift, suppressed, and total-checked counts', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          position_reconciliation: {
+            drift_count: 3,
+            suppressed_pre_window_count: 40,
+            total_positions_checked: 120,
+            available: true,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Position Reconciliation/i)).toBeInTheDocument()
+      })
+
+      expect(reconCardValue(DRIFT_CARD)).toBe('3')
+      expect(reconCardValue(SUPPRESSED_CARD)).toBe('40')
+      expect(reconCardValue(CHECKED_CARD)).toBe('120')
+    })
+
+    // THE MANDATORY SIBLING: without it, the seeded test above could pass against hardcoded
+    // constants. Nothing checked yet (or nothing drifting) must read as a verified zero.
+    it('reports verified zeros when there is nothing to check', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: mockHealthData, // position_reconciliation: all zero counts, available true
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(DRIFT_CARD)).toBeInTheDocument()
+      })
+
+      expect(reconCardValue(DRIFT_CARD)).toBe('0')
+      expect(reconCardValue(SUPPRESSED_CARD)).toBe('0')
+      expect(reconCardValue(CHECKED_CARD)).toBe('0')
+    })
+
+    // ⚠ Unknown is not zero — a failed query must never render as a confident "0 drifts".
+    it('renders "Unavailable", not a green zero, when the query failed', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          position_reconciliation: {
+            drift_count: 0,
+            suppressed_pre_window_count: 0,
+            total_positions_checked: 0,
+            available: false,
+          },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(DRIFT_CARD)).toBeInTheDocument()
+      })
+
+      expect(reconCardValue(DRIFT_CARD)).toBe('Unavailable')
+      expect(reconCardValue(SUPPRESSED_CARD)).toBe('Unavailable')
+      expect(reconCardValue(CHECKED_CARD)).toBe('Unavailable')
+      const card = screen.getByText(DRIFT_CARD).closest('[data-slot="card"]')
+      expect(card?.className ?? '').not.toMatch(/success/i)
+    })
+
+    // A rolling deploy or an older cached response can omit `position_reconciliation` entirely;
+    // an unguarded read must not throw and blank the whole dashboard.
+    it('degrades to "Unavailable" (not a crash) when `position_reconciliation` is entirely absent', async () => {
+      const withoutRecon: Record<string, unknown> = { ...mockHealthData }
+      delete withoutRecon.position_reconciliation
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: withoutRecon,
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/System Health/i)).toBeInTheDocument()
+      })
+      await waitFor(() => {
+        expect(screen.getByText(DRIFT_CARD)).toBeInTheDocument()
+      })
+
+      expect(reconCardValue(DRIFT_CARD)).toBe('Unavailable')
+    })
+
+    // Pins the C2 caveat: the helper text under the cards must say plainly that Drift Positions
+    // is not a confirmed-problem count, so the number is never read in isolation.
+    it('carries the "not a confirmed-problem count" caveat in its helper text', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: mockHealthData,
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(DRIFT_CARD)).toBeInTheDocument()
+      })
+
+      expect(screen.getByText(/NOT a confirmed-problem count/i)).toBeInTheDocument()
     })
   })
 

@@ -437,3 +437,58 @@ func TestInvestmentAnalytics_IncomeSummary_EmptyRange(t *testing.T) {
 	assert.Equal(t, end, result.EndDate)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// ============================================================================
+// PositionReconciliationSummary (#1631 M8b N2)
+// ============================================================================
+
+// TestInvestmentAnalytics_PositionReconciliationSummary_ScansAggregateRow proves the summary
+// issues ONE aggregate query (QueryRow, not Query+loop) and scans exactly the three counters
+// domain.PositionReconciliationSummary needs — the whole point of pushing classification into
+// SQL rather than streaming every (account, security) pair into Go on /admin/health's 30-second
+// poll (see buildPositionReconciliationSummaryQuery's doc comment).
+func TestInvestmentAnalytics_PositionReconciliationSummary_ScansAggregateRow(t *testing.T) {
+	mock, repo := setupInvestmentAnalyticsMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	rows := pgxmock.NewRows([]string{"drift_count", "suppressed_count", "total_checked"}).
+		AddRow(int64(3), int64(40), int64(120))
+
+	// The reinvest bucket's structural/subtype-literal predicate carries 4 placeholder args
+	// (reinvestSubtypes) — see domain.TradeTypeToSQLPredicate. No user_id arg: this is the
+	// GLOBAL summary, unscoped by design.
+	mock.ExpectQuery(regexp.QuoteMeta("WITH")).
+		WithArgs(anyArgs(4)...).
+		WillReturnRows(rows)
+
+	summary, err := repo.PositionReconciliationSummary(ctx)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), summary.DriftCount)
+	assert.Equal(t, int64(40), summary.SuppressedPreWindowCount)
+	assert.Equal(t, int64(120), summary.TotalPositionsChecked)
+	assert.True(t, summary.Available)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestInvestmentAnalytics_PositionReconciliationSummary_QueryError_IsUnavailable proves a failed
+// query surfaces as an error (SystemHealthService turns this into Available=false — see
+// system_health_service_position_reconciliation_test.go) rather than a silently-zeroed summary.
+func TestInvestmentAnalytics_PositionReconciliationSummary_QueryError_IsUnavailable(t *testing.T) {
+	mock, repo := setupInvestmentAnalyticsMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	mock.ExpectQuery(regexp.QuoteMeta("WITH")).
+		WithArgs(anyArgs(4)...).
+		WillReturnError(assert.AnError)
+
+	summary, err := repo.PositionReconciliationSummary(ctx)
+
+	assert.Nil(t, summary)
+	assert.Error(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
