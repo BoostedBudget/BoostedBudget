@@ -102,6 +102,24 @@ func (m *MockBudgetRepository) GetCategoriesByBudgetIDLocked(ctx context.Context
 	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
 }
 
+// BeginTx is a mock implementation (Issue #1630 B3b).
+func (m *MockBudgetRepository) BeginTx(ctx context.Context) (repository.Transaction, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(repository.Transaction), args.Error(1)
+}
+
+// GetCategoriesByBudgetIDLockedInTx is a mock implementation (Issue #1630 B3b).
+func (m *MockBudgetRepository) GetCategoriesByBudgetIDLockedInTx(ctx context.Context, tx repository.Transaction, budgetID string) ([]domain.BudgetCategory, error) {
+	args := m.Called(ctx, tx, budgetID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
+}
+
 // AddCategoryChecked is a mock implementation (Issue #1630 B3). Unlike the real repository, the
 // mock does NOT run domain.DuplicateParentIdentity / domain.EscapedNestedChild itself — tests
 // stub the return value directly, since AddCategory's own in-memory pre-check already exercises
