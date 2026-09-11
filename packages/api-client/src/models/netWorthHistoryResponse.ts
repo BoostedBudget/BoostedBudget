@@ -35,9 +35,11 @@ import type { NetWorthHistorySnapshot } from './netWorthHistorySnapshot';
 export interface NetWorthHistoryResponse {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  /** UTC calendar day (YYYY-MM-DD) this history response ends on */
   end_date: string;
   granularity: string;
   /** @nullable */
   snapshots: NetWorthHistorySnapshot[] | null;
+  /** UTC calendar day (YYYY-MM-DD) this history response starts on */
   start_date: string;
 }

@@ -298,13 +298,14 @@ func (s *analyticsService) GetCashFlowHistory(ctx context.Context, userID string
 
 	respEndDate := responseEndDate(filters.StartDate, effectiveEnd, periods)
 	return &domain.CashFlowHistoryResponse{
-		StartDate:        filters.StartDate,
-		StartDateDisplay: filters.StartDate.Format(time.DateOnly),
-		EndDate:          respEndDate,
-		EndDateDisplay:   respEndDate.Format(time.DateOnly),
-		RequestedEndDate: requestedEnd,
-		Grouping:         filters.Grouping,
-		Periods:          periods,
+		StartDate:               filters.StartDate,
+		StartDateDisplay:        filters.StartDate.Format(time.DateOnly),
+		EndDate:                 respEndDate,
+		EndDateDisplay:          respEndDate.Format(time.DateOnly),
+		RequestedEndDate:        requestedEnd,
+		RequestedEndDateDisplay: requestedEnd.Format(time.DateOnly),
+		Grouping:                filters.Grouping,
+		Periods:                 periods,
 	}, nil
 }
 

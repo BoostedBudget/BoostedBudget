@@ -38,8 +38,10 @@ export interface IncomeSummary {
   /** @nullable */
   by_type: IncomeByType[] | null;
   currency_code?: string;
+  /** UTC calendar day (YYYY-MM-DD) this income summary's window ends on */
   end_date: string;
   is_mixed_currency: boolean;
+  /** UTC calendar day (YYYY-MM-DD) this income summary's window starts on */
   start_date: string;
   total_income: number;
 }

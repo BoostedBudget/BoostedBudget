@@ -287,11 +287,13 @@ func TestInvestmentAnalytics_TopMovers_ReturnsSplit(t *testing.T) {
 	rows := pgxmock.NewRows([]string{
 		"holding_id", "account_id", "ticker_symbol", "security_name",
 		"day_change", "day_change_pct", "total_gain_loss", "currency_code", "mover_type",
-		// #1631 CX1: the ranking SCOPE, constant across every row.
-		"ranking_currency_code", "excluded_by_currency_count",
+		// #1631 CX1: the ranking SCOPE, constant across every row. unknown_currency_count was
+		// added in the second Codex pass — the rows here state no currency, so they are exactly
+		// the riders it counts.
+		"ranking_currency_code", "excluded_by_currency_count", "unknown_currency_count",
 	}).
-		AddRow(holdingID1, accountID1, &ticker1, &secName1, &dayChange1, &dayChangePct1, &totalGL1, (*string)(nil), "gainer", &rankingCcy, 2).
-		AddRow(holdingID2, accountID2, &ticker2, &secName2, &dayChange2, &dayChangePct2, &totalGL2, (*string)(nil), "loser", &rankingCcy, 2)
+		AddRow(holdingID1, accountID1, &ticker1, &secName1, &dayChange1, &dayChangePct1, &totalGL1, (*string)(nil), "gainer", &rankingCcy, 2, 2).
+		AddRow(holdingID2, accountID2, &ticker2, &secName2, &dayChange2, &dayChangePct2, &totalGL2, (*string)(nil), "loser", &rankingCcy, 2, 2)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`WITH movers AS`)).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
@@ -308,6 +310,9 @@ func TestInvestmentAnalytics_TopMovers_ReturnsSplit(t *testing.T) {
 	require.NotNil(t, result.RankingCurrencyCode)
 	assert.Equal(t, "USD", *result.RankingCurrencyCode)
 	assert.Equal(t, 2, result.ExcludedByCurrencyCount)
+	// Both mover rows state no currency, so both are unknown-currency riders. Asserted here so
+	// the two counts cannot be confused: one counts rows left OUT, the other rows left IN.
+	assert.Equal(t, 2, result.UnknownCurrencyCount)
 
 	gainer := result.Gainers[0]
 	assert.Equal(t, holdingID1, gainer.HoldingID)

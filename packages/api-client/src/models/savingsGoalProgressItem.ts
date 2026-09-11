@@ -40,6 +40,7 @@ export interface SavingsGoalProgressItem {
   computed_from: string;
   confirmed_contributions_total: number;
   current_amount: number;
+  /** UTC calendar day (YYYY-MM-DD) this goal's deadline; omitted when no deadline is set */
   deadline?: string;
   freshness: SavingsGoalProgressItemFreshness;
   goal_id: string;
