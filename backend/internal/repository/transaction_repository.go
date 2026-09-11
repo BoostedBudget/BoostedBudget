@@ -3083,11 +3083,21 @@ func accountWithNoActiveIntervalLeg(alias string) string {
 // deleting and tombstoning as equally forbidden. That is no longer the tree's position: the sync
 // now DOES decline to persist new investment_transactions for an excluded chain, which is why this
 // read filter matters only for rows written before the flag was set. The ADR was amended to
-// authorise it — never ingesting a row is not destroying a retained one, and the row is a duplicate
-// of one /transactions/sync stores anyway — under three narrow scope tests set out in that
-// document's § "AMENDMENT (#1631, 2026-09-10): a fourth category — never ingesting a row". Deleting and
-// tombstoning remain forbidden, and this predicate is NOT redundant: it is the only thing that
-// keeps the already-stored duplicates out of the feed.
+// authorise it — never ingesting a row is not destroying a retained one — under three narrow scope
+// tests set out in that document's § "AMENDMENT (#1631, 2026-09-10): a fourth category — never
+// ingesting a row". Deleting and tombstoning remain forbidden, and this predicate is NOT redundant:
+// it is the only thing that keeps the already-stored duplicates out of the feed.
+//
+// ⚠ CORRECTED (#1631, third site — after an independent review). This comment used to add "and the
+// row in question is a DUPLICATE of one /transactions/sync stores anyway". That clause is FALSE
+// and the ADR was corrected to say so (commit 567e2f55), as was domain/user_account.go (commit
+// 4145307e): the banking arm of this very file's unified feed hard-codes NULL for security_id,
+// ticker_symbol, security_name, type, subtype, quantity, price and fees (see the SELECT below), so
+// it cannot represent the dropped fact on exactly the fields that make an investment transaction
+// one. The duplication is PARTIAL, not total, and it is user-asserted, not system-verified: setting
+// the flag is the user's claim that these rows double up, and nothing checks it. That is still a
+// decision the user is entitled to make; it is not a proof that nothing is lost. Do not reintroduce
+// that framing anywhere in this codebase.
 //
 // ⚠ NOT EXISTS, NOT A JOIN. One user_account has MANY accounts rows — that is what a re-link chain
 // IS (000033) — so joining user_accounts through accounts would multiply every feed row by the
