@@ -47,8 +47,8 @@ func TestCategoryPreviewService_PreviewCategoryMatches_Success(t *testing.T) {
 		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
 		Tags:         []string{},
 		MatchLogic:   domain.MatchLogicCategoryOnly,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	mockCalc.On("GetMatchingTransactionStats",
@@ -84,8 +84,8 @@ func TestCategoryPreviewService_PreviewCategoryMatches_WithChildBreakdown(t *tes
 		PFCPrimary:   ptrStr("RENT_AND_UTILITIES"),
 		Tags:         []string{},
 		MatchLogic:   domain.MatchLogicCategoryOnly,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	mockCalc.On("GetMatchingTransactionStats",
@@ -125,8 +125,8 @@ func TestCategoryPreviewService_PreviewCategoryMatches_TagOnly(t *testing.T) {
 		CategoryKind: "",
 		Tags:         []string{"Essential", "groceries"},
 		MatchLogic:   domain.MatchLogicTagOnly,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	mockCalc.On("GetMatchingTransactionStats",
@@ -165,8 +165,8 @@ func TestCategoryPreviewService_PreviewCategoryMatches_AndLogic(t *testing.T) {
 		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
 		Tags:         []string{"Essential"},
 		MatchLogic:   domain.MatchLogicAnd,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	mockCalc.On("GetMatchingTransactionStats",
@@ -209,8 +209,8 @@ func TestCategoryPreviewService_PreviewCategoryMatches_OrLogic(t *testing.T) {
 		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
 		Tags:         []string{"Essential"},
 		MatchLogic:   domain.MatchLogicOr,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	mockCalc.On("GetMatchingTransactionStats",
@@ -268,8 +268,8 @@ func TestCategoryPreviewService_PreviewCategoryMatches_InvalidMatchLogic(t *test
 		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
 		Tags:         []string{},
 		MatchLogic:   "invalid_logic",
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
@@ -278,8 +278,13 @@ func TestCategoryPreviewService_PreviewCategoryMatches_InvalidMatchLogic(t *test
 	assert.Contains(t, err.Error(), "invalid match_logic")
 }
 
-// TestCategoryPreviewService_PreviewCategoryMatches_InvalidStartDate tests invalid start date
-func TestCategoryPreviewService_PreviewCategoryMatches_InvalidStartDate(t *testing.T) {
+// TestCategoryPreviewService_PreviewCategoryMatches_EndBeforeStart tests date ordering.
+// Issue #1630 Task B5 (gap #21): StartDate/EndDate are now domain.FlexibleDate, so an
+// unrecognized format is rejected at the JSON unmarshal boundary (see
+// TestPreviewCategoryMatches_StartDate_RejectsUnrecognizedFormat in the huma/operations
+// package) rather than here — this service-level test now covers what remains for the
+// service to validate: ordering.
+func TestCategoryPreviewService_PreviewCategoryMatches_EndBeforeStart(t *testing.T) {
 	mockCalc := new(MockTransactionStatsCalculator)
 	service := NewCategoryPreviewService(mockCalc)
 
@@ -290,30 +295,8 @@ func TestCategoryPreviewService_PreviewCategoryMatches_InvalidStartDate(t *testi
 		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
 		Tags:         []string{},
 		MatchLogic:   domain.MatchLogicCategoryOnly,
-		StartDate:    "invalid-date",
-		EndDate:      "2024-01-31",
-	}
-
-	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
-	assert.Error(t, err)
-	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "start_date")
-}
-
-// TestCategoryPreviewService_PreviewCategoryMatches_InvalidEndDate tests invalid end date
-func TestCategoryPreviewService_PreviewCategoryMatches_InvalidEndDate(t *testing.T) {
-	mockCalc := new(MockTransactionStatsCalculator)
-	service := NewCategoryPreviewService(mockCalc)
-
-	ctx := context.Background()
-	userID := "user-123"
-	req := &domain.CategoryPreviewRequest{
-		CategoryKind: "pfc",
-		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
-		Tags:         []string{},
-		MatchLogic:   domain.MatchLogicCategoryOnly,
-		StartDate:    "2024-01-01",
-		EndDate:      "invalid-date",
+		StartDate:    domain.FlexibleDate(time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)),
+		EndDate:      domain.FlexibleDate(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)),
 	}
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
@@ -333,8 +316,8 @@ func TestCategoryPreviewService_PreviewCategoryMatches_NoCategoryKindForCategory
 		CategoryKind: "",
 		Tags:         []string{},
 		MatchLogic:   domain.MatchLogicCategoryOnly,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
@@ -354,8 +337,8 @@ func TestCategoryPreviewService_PreviewCategoryMatches_NoTagsForTagOnly(t *testi
 		CategoryKind: "",
 		Tags:         []string{},
 		MatchLogic:   domain.MatchLogicTagOnly,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req)
@@ -377,8 +360,8 @@ func TestCategoryPreviewService_PreviewCategoryMatches_AndLogicValidation(t *tes
 		CategoryKind: "",
 		Tags:         []string{"Essential"},
 		MatchLogic:   domain.MatchLogicAnd,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	resp, err := service.PreviewCategoryMatches(ctx, userID, req1)
@@ -392,8 +375,8 @@ func TestCategoryPreviewService_PreviewCategoryMatches_AndLogicValidation(t *tes
 		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
 		Tags:         []string{},
 		MatchLogic:   domain.MatchLogicAnd,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	resp, err = service.PreviewCategoryMatches(ctx, userID, req2)
@@ -414,8 +397,8 @@ func TestCategoryPreviewService_PreviewCategoryMatches_RepositoryError(t *testin
 		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
 		Tags:         []string{},
 		MatchLogic:   domain.MatchLogicCategoryOnly,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	mockCalc.On("GetMatchingTransactionStats",
@@ -443,8 +426,8 @@ func TestCategoryPreviewService_PreviewCategoryMatches_ZeroResults(t *testing.T)
 		PFCPrimary:   ptrStr("TRANSFER_IN"),
 		Tags:         []string{},
 		MatchLogic:   domain.MatchLogicCategoryOnly,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	mockCalc.On("GetMatchingTransactionStats",

@@ -717,15 +717,19 @@ type UpdateBudgetCategoryRequest struct {
 
 // CategoryPreviewRequest represents the request to preview matching transactions for a category config.
 // Issue #497: Transaction preview feature
+//
+// StartDate/EndDate are domain.FlexibleDate (Issue #1630 Task B5, gap #21) — accepting both
+// YYYY-MM-DD and RFC3339, matching createBudget/updateBudget (Issue #1630 Task 9). This was the
+// last write-shaped operation still carrying P3's original YYYY-MM-DD-only inconsistency.
 type CategoryPreviewRequest struct {
-	CategoryKind     string     `json:"category_kind"`
-	PFCPrimary       *string    `json:"pfc_primary,omitempty"`
-	PFCDetailed      *string    `json:"pfc_detailed,omitempty"`
-	CustomCategoryID *string    `json:"custom_category_id,omitempty"`
-	Tags             []string   `json:"tags,omitempty"`
-	MatchLogic       MatchLogic `json:"match_logic" validate:"required,oneof=category_only tag_only and or" enum:"category_only,tag_only,and,or" doc:"How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array."`
-	StartDate        string     `json:"start_date" validate:"required"`
-	EndDate          string     `json:"end_date" validate:"required"`
+	CategoryKind     string       `json:"category_kind"`
+	PFCPrimary       *string      `json:"pfc_primary,omitempty"`
+	PFCDetailed      *string      `json:"pfc_detailed,omitempty"`
+	CustomCategoryID *string      `json:"custom_category_id,omitempty"`
+	Tags             []string     `json:"tags,omitempty"`
+	MatchLogic       MatchLogic   `json:"match_logic" validate:"required,oneof=category_only tag_only and or" enum:"category_only,tag_only,and,or" doc:"How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array."`
+	StartDate        FlexibleDate `json:"start_date" validate:"required" doc:"Start of the date range to preview. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp."`
+	EndDate          FlexibleDate `json:"end_date" validate:"required" doc:"End of the date range to preview (inclusive; the service extends it to end-of-day). Must not be before start_date. Accepts YYYY-MM-DD or a full RFC3339 timestamp."`
 }
 
 // CategoryPreviewResponse represents the response with matching transaction stats.

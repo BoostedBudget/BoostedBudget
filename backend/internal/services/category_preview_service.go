@@ -55,9 +55,12 @@ func (s *categoryPreviewService) PreviewCategoryMatches(ctx context.Context, use
 		return nil, errors.New("invalid match_logic")
 	}
 
-	// Parse dates
-	startDate, endDate, err := dateutil.ParseDateRange(req.StartDate, req.EndDate)
-	if err != nil {
+	// Issue #1630 Task B5 (gap #21): StartDate/EndDate are domain.FlexibleDate — the JSON
+	// unmarshal boundary already rejected anything but YYYY-MM-DD/RFC3339, so only ordering
+	// remains to check here.
+	startDate := req.StartDate.Time()
+	endDate := req.EndDate.Time()
+	if err := dateutil.ValidateDateRange(startDate, endDate); err != nil {
 		return nil, errors.New(err.Error())
 	}
 

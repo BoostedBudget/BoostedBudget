@@ -4502,7 +4502,9 @@
         {
           "name": "end_date",
           "type": "string",
-          "required": true
+          "format": "date|date-time",
+          "required": true,
+          "description": "End of the date range to preview (inclusive; the service extends it to end-of-day). Must not be before start_date. Accepts YYYY-MM-DD or a full RFC3339 timestamp."
         },
         {
           "name": "match_logic",
@@ -4527,7 +4529,9 @@
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "format": "date|date-time",
+          "required": true,
+          "description": "Start of the date range to preview. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp."
         },
         {
           "name": "tags",
