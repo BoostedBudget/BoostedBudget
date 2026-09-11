@@ -188,6 +188,17 @@ export interface InvestmentActivity {
   investment_quantity?: number | null
   investment_price?: number | null
   investment_fees?: number | null
+  /**
+   * Currency of `amount`, `investment_price` and `investment_fees` on this row
+   * (investment_transactions.currency_code, migration 000202).
+   *
+   * ⚠ Absent/null is a REAL state, not a missing USD. It means the row was ingested before the
+   * currency was recorded, and `formatPortfolioAmount` renders that third ("unknown") state as
+   * dollars for the legacy base. Never coalesce it to 'USD' — see
+   * `@/features/investments/utils/portfolioCurrency`'s header for why the three states are not
+   * two.
+   */
+  currency_code?: string | null
   // Investment-specific optional fields
   investment_subtype?: string | null
   security_id?: string | null

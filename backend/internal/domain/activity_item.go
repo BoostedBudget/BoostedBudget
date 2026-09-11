@@ -120,6 +120,19 @@ type ActivityItem struct {
 	InvestmentQuantity *float64 `json:"investment_quantity,omitempty"`
 	InvestmentPrice    *float64 `json:"investment_price,omitempty"`
 	InvestmentFees     *float64 `json:"investment_fees,omitempty"`
+
+	// CurrencyCode is the currency of Amount, InvestmentPrice and InvestmentFees on an INVESTMENT
+	// row — investment_transactions.currency_code, added by migration 000202 (#1631).
+	//
+	// ⚠ ABSENT IS A REAL STATE AND MUST STAY ONE. It means one of two things, and neither is
+	// "USD": the row is a BANKING row (the unified feed's banking arm has no currency to offer —
+	// `transactions` never recorded one), or it is an investment row written before 000202, whose
+	// currency is genuinely unknown because the mapper that ingested it never read Plaid's
+	// currency fields. The frontend models exactly that as its third state (named / mixed /
+	// unknown, see apps/web/src/features/investments/utils/portfolioCurrency.ts) and renders the
+	// unknown case as dollars for the legacy base. Stamping a code on either kind of row here
+	// would turn an absence into a confident wrong answer — the defect #1631 exists to remove.
+	CurrencyCode *string `json:"currency_code,omitempty" doc:"Currency of amount, investment_price and investment_fees on an investment row (ISO-4217, or a Plaid unofficial code for crypto). Omitted for banking rows and for investment rows ingested before the currency was recorded — absence means 'not stated', never 'USD'."`
 }
 
 // NewBankingActivityItem wraps a Transaction as an ActivityItem with source="banking".

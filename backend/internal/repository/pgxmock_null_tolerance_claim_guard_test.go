@@ -449,4 +449,11 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 // its only nil assertion is that a NULL authorized_date leaves AuthorizedDateDisplay nil, which is
 // a claim about the Go mapping of a scanned nil, not about the driver tolerating NULL — so it is
 // clean under TestNoUndisclosedPgxmockNullToleranceClaim above. No file was removed.
-const pgxmockSweepFileCount = 68
+//
+// 68 -> 69 (#1631 Gap A1): added transaction_unified_currency_test.go, which asserts that the
+// unified feed's investment arm carries investment_transactions.currency_code and that the banking
+// arm fabricates none. Its nil assertion is that a banking row's ActivityItem.CurrencyCode stays
+// nil — a claim about the Go mapping of a column the banking arm selects as NULL, not about the
+// driver tolerating a NULL the query never asked for — so it is clean under
+// TestNoUndisclosedPgxmockNullToleranceClaim above. No file was removed.
+const pgxmockSweepFileCount = 69

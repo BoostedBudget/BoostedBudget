@@ -3803,7 +3803,13 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			NULL::float8,
 			NULL::float8,
 			NULL::bool,          -- inv_security_attached (#1631)
-			NULL::bool           -- inv_security_is_cash_equivalent (#1631)
+			NULL::bool,          -- inv_security_is_cash_equivalent (#1631)
+			-- #1631: currency_code. NULL on this arm because the transactions table has no
+			-- currency column at all — not because banking money is dollars. The two arms must stay
+			-- column-aligned with the rows.Scan below, so this placeholder is mandatory, and it
+			-- must stay a NULL: a 'USD' literal here would make every banking row assert a unit
+			-- nothing in this system established.
+			NULL::text           -- currency_code (#1631)
 		FROM transactions t
 		%s
 		WHERE t.user_id = $1::uuid
@@ -3882,7 +3888,12 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			-- The flag is passed through RAW, not COALESCEd: an absent flag must not be read as
 			-- "not cash-equivalent", which would reclassify a row on a fact we do not have.
 			(sec.id IS NOT NULL)                        AS inv_security_attached,
-			sec.is_cash_equivalent                      AS inv_security_is_cash_equivalent
+			sec.is_cash_equivalent                      AS inv_security_is_cash_equivalent,
+			-- #1631: the currency of it.amount, it.price and it.fees (migration 000202). Passed
+			-- through RAW — a NULL here is a pre-000202 row whose currency is genuinely unknown,
+			-- and COALESCEing it to 'USD' would invent the fact the migration deliberately
+			-- refused to default.
+			it.currency_code                            AS currency_code
 		FROM investment_transactions it
 		LEFT JOIN securities sec ON sec.id = it.security_id
 		WHERE it.user_id = $1::uuid
@@ -4006,6 +4017,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			invType, invSubtype                       *string
 			invQuantity, invPrice, invFees            *float64
 			invSecAttached, invSecIsCashEquivalent    *bool
+			currencyCode                              *string
 		)
 
 		if err := rows.Scan(
@@ -4027,6 +4039,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			&invType, &invSubtype,
 			&invQuantity, &invPrice, &invFees,
 			&invSecAttached, &invSecIsCashEquivalent,
+			&currencyCode,
 		); err != nil {
 			return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified scan: %w", err)
 		}
@@ -4069,6 +4082,9 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			InvestmentQuantity:       invQuantity,
 			InvestmentPrice:          invPrice,
 			InvestmentFees:           invFees,
+			// #1631: nil on every banking row and on every pre-000202 investment row, and that
+			// absence is the wire contract — see ActivityItem.CurrencyCode.
+			CurrencyCode: currencyCode,
 		}
 
 		// #1569: a row with deleted_at set reached this feed only because the caller opted in via
