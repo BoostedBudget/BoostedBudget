@@ -52,6 +52,16 @@ export interface BudgetCategory {
   // Used to detect sub-allocations so budget totals aren't double-counted.
   custom_parent_id?: string | null;
   custom_parent_pfc_primary?: string | null;
+  // custom_grandparent_pfc_primary is the PFC primary this category's PARENT
+  // (custom_parent_id) is itself nested under via parent_pfc_primary — i.e. this row is a
+  // GRANDCHILD of a PFC root two hops down: pfc root -> custom parent (whose OWN
+  // custom_parent_pfc_primary points at the root) -> this custom category (custom_parent_id).
+  // Mirrors backend BudgetCategory.CustomGrandparentPFCPrimary (Issue #1630 Task B2) — only
+  // ever set when custom_parent_id is also set. Needed because the backend's widened roll-up
+  // now reaches this row's transactions from that root two hops away regardless of whether the
+  // intermediate parent is itself budgeted; isSubAllocationWithin/isSubAllocationOfParent must
+  // recognize the same transitive pair or the frontend total disagrees with the backend's.
+  custom_grandparent_pfc_primary?: string | null;
   // Issue #1300: savings bucket linkage
   savings_goal_id?: string | null;
   savings_goal_name?: string | null; // Server-supplied display name for the linked goal
@@ -113,6 +123,17 @@ export function isSubAllocationWithin(
   if (cat.category_kind === 'custom') {
     if (cat.custom_parent_id && budgetedCustomIds.has(cat.custom_parent_id)) return true;
     if (cat.custom_parent_pfc_primary && budgetedPfcPrimaries.has(cat.custom_parent_pfc_primary))
+      return true;
+    // Transitive case (Issue #1630 Task B2): cat is a GRANDCHILD of a PFC root — its own
+    // parent (custom_parent_id) is itself nested under custom_grandparent_pfc_primary via
+    // parent_pfc_primary. The backend's widened roll-up reaches cat from that root two hops
+    // away regardless of whether the intermediate parent is itself budgeted, so this must
+    // agree even when the intermediate parent has no budget row at all. Mirrors backend
+    // IsSubAllocationWithin's CustomGrandparentPFCPrimary branch.
+    if (
+      cat.custom_grandparent_pfc_primary &&
+      budgetedPfcPrimaries.has(cat.custom_grandparent_pfc_primary)
+    )
       return true;
   }
   return false;
@@ -176,7 +197,22 @@ export function isSubAllocationOfParent(child: BudgetCategory, parent: BudgetCat
   }
   if (child.category_kind === 'custom') {
     if (child.custom_parent_id) {
-      return parent.category_kind === 'custom' && parent.custom_category_id === child.custom_parent_id;
+      if (parent.category_kind === 'custom' && parent.custom_category_id === child.custom_parent_id) {
+        return true;
+      }
+      // Transitive case (Issue #1630 Task B2): child's direct parent (custom_parent_id) is
+      // itself nested under `parent` via parent_pfc_primary — child is a GRANDCHILD of `parent`
+      // two hops away. Mirrors backend hierarchyHasNestedChild's CustomGrandparentPFCPrimary
+      // branch, so a grandchild is attributed to the right parent here just like there.
+      if (
+        child.custom_grandparent_pfc_primary &&
+        parent.category_kind === 'pfc' &&
+        !parent.pfc_detailed &&
+        parent.pfc_primary === child.custom_grandparent_pfc_primary
+      ) {
+        return true;
+      }
+      return false;
     }
     if (child.custom_parent_pfc_primary) {
       return (
