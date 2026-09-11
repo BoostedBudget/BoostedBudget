@@ -31,6 +31,7 @@ export const ADMIN_DLQ_COLUMN_IDS = ['kind', 'queue', 'last_error', 'user_id', '
 const inputClass = 'px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:border-primary'
 const selectInputClass = `${inputClass} cursor-pointer transition-colors`
 const buttonClass = 'inline-flex items-center px-3.5 py-2 border border-border rounded-md bg-background text-foreground text-sm font-medium cursor-pointer transition-colors hover:bg-muted disabled:opacity-45 disabled:cursor-not-allowed'
+const rowActionButtonClass = 'inline-flex items-center px-2.5 py-1.5 border rounded-md bg-background text-[0.8125rem] font-medium cursor-pointer transition-colors disabled:opacity-45 disabled:cursor-not-allowed'
 
 export function DeadLetterPage() {
   const [autoRefresh, setAutoRefresh] = useState(true)
@@ -479,7 +480,7 @@ export function DeadLetterPage() {
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
-                  className="inline-flex items-center px-2.5 py-1.5 border border-border rounded-md bg-background text-foreground text-[0.8125rem] font-medium cursor-pointer transition-colors hover:bg-primary hover:border-primary hover:text-primary-foreground disabled:opacity-45 disabled:cursor-not-allowed"
+                  className={cn(rowActionButtonClass, 'border-border text-foreground hover:bg-primary hover:border-primary hover:text-primary-foreground')}
                   onClick={() => handleRetry(job.id)}
                   disabled={!!job.retried_at || retryMutation.isPending}
                   aria-label={`Retry job ${job.id}`}
@@ -488,7 +489,7 @@ export function DeadLetterPage() {
                 </button>
                 <button
                   type="button"
-                  className="inline-flex items-center px-2.5 py-1.5 border border-destructive/30 rounded-md bg-background text-destructive text-[0.8125rem] font-medium cursor-pointer transition-colors hover:bg-destructive/10 disabled:opacity-45 disabled:cursor-not-allowed"
+                  className={cn(rowActionButtonClass, 'border-destructive/30 text-destructive hover:bg-destructive/10')}
                   onClick={() => setConfirmDeleteJobId(job.id)}
                   disabled={deleteMutation.isPending}
                   aria-label={`Delete job ${job.id}`}

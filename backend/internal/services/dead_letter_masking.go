@@ -73,7 +73,7 @@ func MaskJobErrors(errors json.RawMessage) json.RawMessage {
 	}
 
 	modified := false
-	for i, entry := range data {
+	for _, entry := range data {
 		if maskStringField(entry, "message") {
 			modified = true
 		}
@@ -93,7 +93,6 @@ func MaskJobErrors(errors json.RawMessage) json.RawMessage {
 				}
 			}
 		}
-		data[i] = entry
 	}
 
 	if !modified {
