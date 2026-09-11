@@ -772,7 +772,6 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 	// The structural condition is domain.SecurityIsStructuralSQL, shared verbatim with
 	// TradeTypeToSQLPredicate so the income total and the feed's labels cannot drift apart — the
 	// exact failure #1631 was filed for.
-	structural := domain.SecurityIsStructuralSQL("sec")
 	normSub := domain.NormalizedSubtypeSQL("it.subtype")
 	// #1631 I1: BOTH legs are gated on it.type = 'cash' — NormalizeTradeType and
 	// TradeTypeToSQLPredicate only ever apply the subtype-literal and structural income rules
@@ -784,7 +783,14 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 	// reads as that much dividend income. Production's transfer rows all carry subtype='transfer'
 	// today, so this does not yet fire, but it is exactly the "two surfaces disagree" failure the
 	// shared helpers exist to prevent.
-	structuralIncome := fmt.Sprintf("(it.type = 'cash' AND %s = 'deposit' AND %s)", normSub, structural)
+	//
+	// #1631 CX3: the structural condition is domain.StructuralDividendSQL, not a hand-rolled
+	// subtype-plus-security test. It carries the amount sign and share count the rule now requires,
+	// so a bank sweep deposit stops being counted as dividend income here at the same moment it
+	// stops being LABELLED one in the feed. Rendering the condition inline is how income and labels
+	// came to need reconciling in the first place.
+	structuralIncome := fmt.Sprintf("(it.type = 'cash' AND %s)",
+		domain.StructuralDividendSQL(normSub, "it.amount", "it.quantity", "sec"))
 
 	query := fmt.Sprintf(`
 		SELECT

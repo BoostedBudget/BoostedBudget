@@ -964,9 +964,15 @@ func TestInvestment_TradeTypePartition_RoundTrip_Integration(t *testing.T) {
 		sqlType  string
 		sqlSub   *string   // nil → no subtype column
 		security uuid.UUID // which of the three securities this row references
-		expected string    // display value = NormalizeTradeType result = filter bucket
+		// amount and quantity are the row-local facts the structural rule corroborates on
+		// (#1631 CX3). amount defaults to a +100.00 debit when left zero; quantity is NULL
+		// unless set, which is the shape every non-structural row here carries.
+		amount   float64
+		quantity *float64
+		expected string // display value = NormalizeTradeType result = filter bucket
 	}
 	subPtr := func(s string) *string { return &s }
+	qty := func(v float64) *float64 { return &v }
 	cases := []bucketCase{
 		{plaidID: "r43-buy", sqlType: "buy", sqlSub: nil, security: secID, expected: "buy"},
 		{plaidID: "r43-sell", sqlType: "sell", sqlSub: nil, security: secID, expected: "sell"},
@@ -981,10 +987,32 @@ func TestInvestment_TradeTypePartition_RoundTrip_Integration(t *testing.T) {
 		{plaidID: "r43-contrib", sqlType: "cash", sqlSub: subPtr("contribution"), security: cashEquivSecID, expected: "transfer"},
 		{plaidID: "r43-stockdist", sqlType: "cash", sqlSub: subPtr("stock distribution"), security: secID, expected: "transfer"},
 
-		// The structural pair — the #1631 production shape. Same subtypes, opposite classification,
-		// decided solely by the joined security.
-		{plaidID: "r43-struct-div", sqlType: "cash", sqlSub: subPtr("deposit"), security: secID, expected: "dividend"},
-		{plaidID: "r43-struct-reinv", sqlType: "cash", sqlSub: subPtr("withdrawal"), security: secID, expected: "reinvest"},
+		// The structural pair — the #1631 production shape. Same subtypes, opposite
+		// classification, decided by the joined security AND by the corroboration on the row:
+		// the deposit leg CREDITS cash and delivers no shares, the withdrawal leg DEBITS cash
+		// and delivers shares.
+		{plaidID: "r43-struct-div", sqlType: "cash", sqlSub: subPtr("deposit"), security: secID,
+			amount: -100.00, quantity: qty(0), expected: "dividend"},
+		{plaidID: "r43-struct-reinv", sqlType: "cash", sqlSub: subPtr("withdrawal"), security: secID,
+			amount: 100.00, quantity: qty(2.5), expected: "reinvest"},
+
+		// #1631 CX3. The security facts alone cannot tell a bank sweep from an ETF: MSPBNA is
+		// is_cash_equivalent=false and type='equity', exactly like secID here. A sweep deposit
+		// DELIVERS SHARES of the sweep vehicle, so it fails the share-count corroboration and
+		// must fall to Cash on BOTH sides rather than being invented into a dividend.
+		{plaidID: "r43-sweep-dep", sqlType: "cash", sqlSub: subPtr("deposit"), security: secID,
+			amount: -100.00, quantity: qty(1500), expected: "cash"},
+		// A deposit whose amount DEBITS cash is not money arriving, whatever the security is.
+		{plaidID: "r43-struct-div-wrongsign", sqlType: "cash", sqlSub: subPtr("deposit"), security: secID,
+			amount: 100.00, quantity: qty(0), expected: "cash"},
+		// A withdrawal that acquires nothing is a cash movement out, not a reinvestment.
+		{plaidID: "r43-struct-reinv-noshares", sqlType: "cash", sqlSub: subPtr("withdrawal"), security: secID,
+			amount: 100.00, quantity: qty(0), expected: "cash"},
+		// A NULL quantity is the other three-valued trap: COALESCE in the SQL structural
+		// expressions is what keeps this row in the cash bucket instead of dropping it out of
+		// the dividend bucket AND its complement.
+		{plaidID: "r43-struct-div-nullqty", sqlType: "cash", sqlSub: subPtr("deposit"), security: secID,
+			amount: -100.00, expected: "cash"},
 		{plaidID: "r43-cash-dep", sqlType: "cash", sqlSub: subPtr("deposit"), security: cashEquivSecID, expected: "cash"},
 		{plaidID: "r43-cash-wdl", sqlType: "cash", sqlSub: subPtr("withdrawal"), security: cashEquivSecID, expected: "cash"},
 
@@ -1021,10 +1049,21 @@ func TestInvestment_TradeTypePartition_RoundTrip_Integration(t *testing.T) {
 			v := false
 			isCashEq = &v
 		}
-		got := domain.NormalizeTradeType(c.sqlType, c.sqlSub, attached, isCashEq)
+		seedAmount := c.amount
+		if seedAmount == 0 {
+			seedAmount = 100.00
+		}
+		got := domain.NormalizeTradeType(domain.TradeTypeRow{
+			Type:                     c.sqlType,
+			Subtype:                  c.sqlSub,
+			Amount:                   seedAmount,
+			Quantity:                 c.quantity,
+			SecurityAttached:         attached,
+			SecurityIsCashEquivalent: isCashEq,
+		})
 		require.Equal(t, c.expected, got,
-			"NormalizeTradeType(%q, %v, attached=%v, cashEquiv=%v) must return %q (display side of partition)",
-			c.sqlType, c.sqlSub, attached, isCashEq, c.expected)
+			"NormalizeTradeType(%q, %v, amount=%v, qty=%v, attached=%v, cashEquiv=%v) must return %q (display side of partition)",
+			c.sqlType, c.sqlSub, seedAmount, c.quantity, attached, isCashEq, c.expected)
 
 		txnID := uuid.New()
 		fullPlaidID := c.plaidID + "-" + txnID.String()
@@ -1039,18 +1078,18 @@ func TestInvestment_TradeTypePartition_RoundTrip_Integration(t *testing.T) {
 			_, seedErr = tx.Exec(ctx, `
 				INSERT INTO investment_transactions
 					(id, user_id, account_id, security_id, plaid_investment_transaction_id,
-					 type, subtype, name, amount, date)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 100.00, '2024-08-01')
+					 type, subtype, name, amount, quantity, date)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, '2024-08-01')
 			`, txnID, userID, accountID, c.security, fullPlaidID,
-				c.sqlType, *c.sqlSub, "R43 "+c.plaidID)
+				c.sqlType, *c.sqlSub, "R43 "+c.plaidID, seedAmount, c.quantity)
 		} else {
 			_, seedErr = tx.Exec(ctx, `
 				INSERT INTO investment_transactions
 					(id, user_id, account_id, security_id, plaid_investment_transaction_id,
-					 type, name, amount, date)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, 100.00, '2024-08-01')
+					 type, name, amount, quantity, date)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '2024-08-01')
 			`, txnID, userID, accountID, c.security, fullPlaidID,
-				c.sqlType, "R43 "+c.plaidID)
+				c.sqlType, "R43 "+c.plaidID, seedAmount, c.quantity)
 		}
 		require.NoError(t, seedErr, "seed %s transaction", c.plaidID)
 	}

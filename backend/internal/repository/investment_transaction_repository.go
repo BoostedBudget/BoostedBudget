@@ -420,7 +420,14 @@ func (r *investmentTransactionRepository) GetByUserIDKeyset(
 		txn.SecurityName = securityName
 		// Normalize here rather than in the client, so this endpoint and the unified feed cannot
 		// disagree about the same row (#1631).
-		at := domain.NormalizeTradeType(txn.Type, txn.Subtype, secAttached, secIsCashEquivalent)
+		at := domain.NormalizeTradeType(domain.TradeTypeRow{
+			Type:                     txn.Type,
+			Subtype:                  txn.Subtype,
+			Amount:                   txn.Amount,
+			Quantity:                 txn.Quantity,
+			SecurityAttached:         secAttached,
+			SecurityIsCashEquivalent: secIsCashEquivalent,
+		})
 		txn.ActivityType = &at
 		txn.DateDisplay = txn.Date.Format("2006-01-02")
 		txns = append(txns, txn)
