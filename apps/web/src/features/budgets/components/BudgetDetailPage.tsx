@@ -13,6 +13,7 @@ import { ANALYTICS_EVENTS } from '../../../shared/analytics'
 import { ArrowLeftIcon, BellAlertIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { formatDate } from '@/shared/transactions/dates';
 import { useBudgetDetail } from '../hooks/useBudgetDetail';
 import { useAvailableCategories } from '../hooks/useAvailableCategories';
 import { useTags } from '../../tags/hooks/useTags';
@@ -30,14 +31,6 @@ import { filterTopLevel } from '../types';
 import { BudgetCategoryManager } from './category-management/BudgetCategoryManager';
 import { BudgetIncomeSection } from './budget-detail/BudgetIncomeSection';
 import { UnallocatedFundsCard } from './budget-detail/UnallocatedFundsCard';
-
-function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-}
 
 function formatCurrency(amount: number, currencyCode = 'USD'): string {
   return new Intl.NumberFormat('en-US', {

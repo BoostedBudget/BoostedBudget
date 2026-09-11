@@ -35,10 +35,13 @@ import type { CashFlowPeriodData } from './cashFlowPeriodData';
 export interface CashFlowHistoryResponse {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  /** UTC calendar day (YYYY-MM-DD) this history response ends on */
   end_date: string;
   grouping: string;
   /** @nullable */
   periods: CashFlowPeriodData[] | null;
+  /** UTC calendar day (YYYY-MM-DD) the caller asked this history response to end on */
   requested_end_date: string;
+  /** UTC calendar day (YYYY-MM-DD) this history response starts on */
   start_date: string;
 }

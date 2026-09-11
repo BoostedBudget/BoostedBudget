@@ -83,12 +83,16 @@ const captureHoldingSnapshotsSQL = `
 	INSERT INTO holding_snapshots (
 		user_id, account_id, user_account_id, security_id,
 		as_of_date, captured_at, present,
-		quantity, cost_basis, institution_value, institution_price
+		quantity, cost_basis, institution_value, institution_price, currency_code
 	)
 	SELECT
 		h.user_id, h.account_id, h.user_account_id, h.security_id,
 		$3::date, now(), TRUE,
-		h.quantity, h.cost_basis, h.institution_value, h.institution_price
+		-- #1631 M8a: the currency is copied FROM THE HOLDING at capture time, so a historical
+		-- position stays denominated in the currency it was actually reported in rather than in
+		-- whatever the live row says months later. Same reasoning as every other value column
+		-- here: the history must not drift with current state.
+		h.quantity, h.cost_basis, h.institution_value, h.institution_price, h.currency_code
 	FROM holdings h
 	WHERE h.account_id = $1 AND h.user_id = $2
 	ON CONFLICT (account_id, security_id, as_of_date) DO UPDATE SET
@@ -99,7 +103,8 @@ const captureHoldingSnapshotsSQL = `
 		quantity          = EXCLUDED.quantity,
 		cost_basis        = EXCLUDED.cost_basis,
 		institution_value = EXCLUDED.institution_value,
-		institution_price = EXCLUDED.institution_price
+		institution_price = EXCLUDED.institution_price,
+		currency_code     = EXCLUDED.currency_code
 `
 
 // recordHoldingObservationSQL is half three of a capture, and the only half that runs when there
@@ -215,12 +220,16 @@ var captureHoldingSnapshotsForUserSQL = `
 	INSERT INTO holding_snapshots (
 		user_id, account_id, user_account_id, security_id,
 		as_of_date, captured_at, present,
-		quantity, cost_basis, institution_value, institution_price
+		quantity, cost_basis, institution_value, institution_price, currency_code
 	)
 	SELECT
 		h.user_id, h.account_id, h.user_account_id, h.security_id,
 		$2::date, now(), TRUE,
-		h.quantity, h.cost_basis, h.institution_value, h.institution_price
+		-- #1631 M8a: the currency is copied FROM THE HOLDING at capture time, so a historical
+		-- position stays denominated in the currency it was actually reported in rather than in
+		-- whatever the live row says months later. Same reasoning as every other value column
+		-- here: the history must not drift with current state.
+		h.quantity, h.cost_basis, h.institution_value, h.institution_price, h.currency_code
 	FROM holdings h
 	WHERE h.user_id = $1::uuid
 	  AND ` + accountLiveOnDateSQL("h.account_id", "$2") + `
@@ -232,7 +241,8 @@ var captureHoldingSnapshotsForUserSQL = `
 		quantity          = EXCLUDED.quantity,
 		cost_basis        = EXCLUDED.cost_basis,
 		institution_value = EXCLUDED.institution_value,
-		institution_price = EXCLUDED.institution_price
+		institution_price = EXCLUDED.institution_price,
+		currency_code     = EXCLUDED.currency_code
 `
 
 // The liveness predicate above is rendered from accountLiveOnDateSQL (account_liveness_sql.go) —
@@ -334,7 +344,7 @@ const holdingSnapshotColumns = `
 	hs.id, hs.user_id, hs.account_id, hs.user_account_id, hs.security_id,
 	hs.as_of_date, hs.captured_at, hs.present,
 	hs.quantity, hs.cost_basis, hs.institution_value, hs.institution_price,
-	hs.created_at, hs.updated_at`
+	hs.currency_code, hs.created_at, hs.updated_at`
 
 func (r *holdingSnapshotRepository) GetForUserOnDate(ctx context.Context, userID string, asOf time.Time) ([]domain.HoldingSnapshot, error) {
 	// No MAX(captured_at) selection any more, and that is a simplification the presence marker
@@ -378,7 +388,7 @@ func (r *holdingSnapshotRepository) queryHoldingSnapshots(ctx context.Context, q
 			&s.ID, &s.UserID, &s.AccountID, &s.UserAccountID, &s.SecurityID,
 			&s.AsOfDate, &s.CapturedAt, &s.Present,
 			&s.Quantity, &s.CostBasis, &s.InstitutionValue, &s.InstitutionPrice,
-			&s.CreatedAt, &s.UpdatedAt,
+			&s.CurrencyCode, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -464,6 +474,7 @@ const getHistoryForAccountOnDateSQL = `
 	SELECT
 		hs.security_id, hs.as_of_date,
 		hs.quantity, hs.cost_basis, hs.institution_value, hs.institution_price,
+		hs.currency_code,
 		sec.ticker_symbol, sec.name, sec.type
 	FROM holding_snapshots hs
 	LEFT JOIN securities sec ON sec.id = hs.security_id
@@ -488,6 +499,7 @@ func (r *holdingSnapshotRepository) GetHistoryForAccountOnDate(ctx context.Conte
 		if err := rows.Scan(
 			&v.SecurityID, &day,
 			&v.Quantity, &v.CostBasis, &v.InstitutionValue, &v.InstitutionPrice,
+			&v.CurrencyCode,
 			&v.TickerSymbol, &v.SecurityName, &v.SecurityType,
 		); err != nil {
 			return nil, err

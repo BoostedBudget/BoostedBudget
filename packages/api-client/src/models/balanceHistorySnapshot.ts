@@ -35,5 +35,6 @@ import type { BalanceHistorySnapshotByType } from './balanceHistorySnapshotByTyp
 export interface BalanceHistorySnapshot {
   balance: number;
   by_type?: BalanceHistorySnapshotByType;
+  /** UTC calendar day (YYYY-MM-DD) of this snapshot */
   date: string;
 }

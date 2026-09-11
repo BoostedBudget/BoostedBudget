@@ -51,7 +51,7 @@ account_id?: string;
  */
 security_id?: string;
 /**
- * Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other)
+ * Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,interest,fee,transfer,cash,other)
  */
 activity_types?: string;
 /**

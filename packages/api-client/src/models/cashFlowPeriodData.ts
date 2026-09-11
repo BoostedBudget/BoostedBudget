@@ -35,7 +35,9 @@ export interface CashFlowPeriodData {
   expenses: number;
   income: number;
   net_cash_flow: number;
+  /** UTC calendar day (YYYY-MM-DD) this period ends on */
   period_end: string;
+  /** UTC calendar day (YYYY-MM-DD) this period starts on */
   period_start: string;
   transaction_count: number;
 }

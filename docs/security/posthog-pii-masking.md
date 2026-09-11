@@ -67,6 +67,20 @@ The denylist itself (`PII_PROPERTY_DENYLIST` in `piiScrubbing.ts`) currently inc
   vocabulary ONLY — never a condition value, which is user-typed financial detail. None of those
   property names is an `isPiiKey` match (verified, not assumed), so scrubbing is not what keeps
   them safe; the choice of what to send is.
+- **Postgres error context in the DLQ** — `JobErrorList` (#1631) renders what a `*pgconn.PgError`
+  actually carried, and Postgres's `DETAIL` embeds the OFFENDING ROW VALUES. For the motivating
+  holdings-sync 23505 those are UUIDs, but the identical mechanism on a unique-email constraint
+  prints `Key (email)=(someone@example.com) already exists.` The same is true of `HINT`, of the
+  Postgres `message` (a 22P02 quotes the value it could not parse), of every layer of the wrapped
+  error chain, and of the flattened raw message that was always there. All of those are masked at
+  the element, individually — never at the block, and never via `maskedColumnIds`.
+  ⚠ The SQLSTATE, constraint name, table, schema, column, severity and routine are schema
+  identifiers rather than row data and are deliberately left LEGIBLE; `DeadLetterPage`'s
+  `last_error` column shows only those two of them (code + constraint) and is deliberately absent
+  from that table's `maskedColumnIds`, because masking it would delete the only signal it carries.
+  Round 22 in `pii-coverage.test.tsx` enforces both directions.
+  ⚠ Nothing here may reach an `aria-label`/`title`/`alt`/`placeholder`. The scanner checks
+  attributes irrespective of masking precisely so this cannot regress quietly.
 - **Verbatim vendor payloads** — the Paddle webhook `payload` block (`WebhookDetailModal`) is shown precisely because nobody knows in advance what is in it; it routinely carries customer email and billed totals. Masked on the `<pre>`, matching `DeadLetterDetailModal`'s raw-args and error blocks.
 - **Security / holding names** — ticker symbols (e.g. `AAPL`), full security names (e.g. "Apple Inc."), and fund names reveal portfolio composition. The hand-built holdings table in `PortfolioHoldingsWidget` masks these per-cell via `data-ph-mask`; the `PortfolioHoldingsWidget` PII regression (Round 14 in `pii-coverage.test.tsx`) enforces this with a named sentinel (`SENTINEL_SECURITY_NAME`).
 

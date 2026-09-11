@@ -270,7 +270,7 @@ export function useGetAccountHoldingsHistory<TData = Awaited<ReturnType<typeof g
 
 
 /**
- * Returns investment transactions for the authenticated user using keyset (cursor) pagination. Supports filtering by account, security, activity type (buy/sell/dividend/reinvest/fee/cash/other), and date range.
+ * Returns investment transactions for the authenticated user using keyset (cursor) pagination. Supports filtering by account, security, activity type (buy/sell/dividend/reinvest/interest/fee/transfer/cash/other), and date range.
  * @summary List investment transactions
  */
 export const getInvestmentTransactions = (

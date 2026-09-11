@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
@@ -45,6 +46,23 @@ type HoldingRepository interface {
 
 type holdingRepository struct {
 	db DB
+
+	// replaceForAccountTxOpenedHook is a test-only synchronization seam, always nil in production
+	// (same technique and rationale as householdService.acceptInviteAfterOwnerCheckHook). It fires
+	// inside ReplaceForAccount immediately after BEGIN and BEFORE the advisory lock is taken.
+	//
+	// It exists because the regression test for that lock cannot otherwise prove anything: six
+	// goroutines hammering ReplaceForAccount overlap only by luck, so the test passed just as
+	// happily with the lock deleted (#1639). Parking every transaction at this exact point until
+	// all of them have arrived makes the overlap a fact — after release they contend for the lock
+	// and queue, and with the lock removed they race their DELETEs and collide on
+	// unique_account_security. See
+	// TestHoldingReplace_ConcurrentReplacesOfOneAccountAllSucceed_Integration.
+	//
+	// Deliberately BEFORE the lock, not after: "all six inside the critical section at once" is
+	// precisely what the lock exists to prevent, so a barrier there would deadlock against the
+	// behaviour under test.
+	replaceForAccountTxOpenedHook func()
 }
 
 // NewHoldingRepository creates a new HoldingRepository instance.
@@ -118,6 +136,45 @@ func assertRowsTargetAccount(caller, accountID string, rowAccounts []string) err
 	return nil
 }
 
+// annotateAccountSecurityCollision turns a bare unique_account_security violation into an error
+// that names the collision. Any other error is returned untouched.
+//
+// The production DLQ entry this exists for (2026-09-11) burned all five attempts carrying nothing
+// but the constraint name, which cannot distinguish the two causes that produce it:
+//
+//	a duplicated payload — Plaid returned the same security twice for the account, or two
+//	plaid_security_ids collapsed onto one securities row — in which case the batch handed to this
+//	method contains the security twice and the answer is visible WITHOUT database access; or
+//
+//	a concurrent replace of the same account, in which case the batch is clean and the duplicate
+//	came from a row this transaction's DELETE could not see.
+//
+// So the message states which, along with the account, the security and the batch size. Whether
+// the batch is self-consistent is computed in memory from the batch itself: the transaction is
+// aborted by the time this runs, so no diagnostic query is possible here.
+func annotateAccountSecurityCollision(err error, accountID, securityID string, index int, holdings []domain.Holding) error {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" || pgErr.ConstraintName != "unique_account_security" {
+		return err
+	}
+
+	occurrences := 0
+	for i := range holdings {
+		if holdings[i].SecurityID == securityID {
+			occurrences++
+		}
+	}
+
+	provenance := "the batch is self-consistent, so the duplicate row was invisible to this transaction's DELETE — i.e. a concurrent replace of this account"
+	if occurrences > 1 {
+		provenance = fmt.Sprintf("the batch itself carries that security twice (%d occurrences), so the duplicate came from the payload, not from a concurrent replace", occurrences)
+	}
+
+	return fmt.Errorf(
+		"holdingRepository.ReplaceForAccount: account %s security %s collided on unique_account_security at element %d of %d holdings: %s: %w",
+		accountID, securityID, index, len(holdings), provenance, err)
+}
+
 // ReplaceForAccount atomically replaces all holdings for an account.
 // Wraps DELETE + INSERT in a single transaction.
 func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, userID string, holdings []domain.Holding) (time.Time, error) {
@@ -151,6 +208,40 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	// Test-only synchronization seam (always nil in production) — see the field's doc comment.
+	// Placed after BEGIN and before the lock so a test can hold several replaces of one account
+	// open here simultaneously, which is the only way to make the race this lock prevents
+	// deterministic rather than incidental.
+	if r.replaceForAccountTxOpenedHook != nil {
+		r.replaceForAccountTxOpenedHook()
+	}
+
+	// Serialize every replace of THIS account against every other one, for the whole
+	// DELETE+INSERT critical section (the lock auto-releases at transaction end).
+	//
+	// Production DLQ entry 2026-09-11 (dead_letter_jobs.id 9 = river_job.id 350,
+	// webhook_processing): five identical
+	// `unique_account_security` violations. unique_account_security is UNIQUE (account_id,
+	// security_id), and under READ COMMITTED two concurrent replaces of one account do NOT
+	// serialize on their own — each transaction's DELETE cannot see the other's uncommitted
+	// rows, so the second INSERT of a given security blocks on the first's index tuple and then
+	// raises 23505 as soon as the first commits. The rows it was supposed to have removed were
+	// never visible to its DELETE.
+	//
+	// Nothing upstream closes that window, contrary to the claim in
+	// queue/jobs/investment_holdings_sync.go ("worker-vs-worker serialization already comes from
+	// River job uniqueness"): webhook_processing's uniqueness is ByArgs and its args carry
+	// webhook_id, so two HOLDINGS webhooks for one item are two distinct jobs that may run at
+	// once, and the webhook path takes no linked-item lock at all. The lock therefore belongs
+	// HERE, with the statements it protects, not in one of the several callers.
+	//
+	// hashtextextended matches pg_advisory_xact_lock(bigint) — same construction as
+	// custom_category_repository.go's lockHierarchySQL.
+	const lockAccountSQL = `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`
+	if _, err := tx.Exec(ctx, lockAccountSQL, accountID); err != nil {
+		return time.Time{}, fmt.Errorf("holdingRepository.ReplaceForAccount: failed to lock account %s: %w", accountID, err)
+	}
+
 	// Delete all existing holdings for this account
 	deleteQuery := `DELETE FROM holdings WHERE account_id = $1 AND user_id = $2`
 	if _, err := tx.Exec(ctx, deleteQuery, accountID, userID); err != nil {
@@ -172,8 +263,8 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 			INSERT INTO holdings (
 				id, user_id, account_id, user_account_id, security_id,
 				quantity, cost_basis, institution_value, institution_price,
-				created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+				currency_code, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		`
 		if _, err := tx.Exec(ctx, insertQuery,
 			h.ID,
@@ -185,10 +276,11 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 			h.CostBasis,
 			h.InstitutionValue,
 			h.InstitutionPrice,
+			h.CurrencyCode,
 			h.CreatedAt,
 			h.UpdatedAt,
 		); err != nil {
-			return time.Time{}, err
+			return time.Time{}, annotateAccountSecurityCollision(err, accountID, h.SecurityID, i, holdings)
 		}
 	}
 
@@ -221,7 +313,7 @@ func (r *holdingRepository) GetByUserID(ctx context.Context, userID string) ([]d
 	query := `
 		SELECT holdings.id, holdings.user_id, holdings.account_id, holdings.user_account_id, holdings.security_id,
 			holdings.quantity, holdings.cost_basis, holdings.institution_value, holdings.institution_price,
-			holdings.created_at, holdings.updated_at
+			holdings.currency_code, holdings.created_at, holdings.updated_at
 		FROM holdings
 		JOIN accounts a ON a.id = holdings.account_id
 		WHERE holdings.user_id = $1
@@ -249,6 +341,7 @@ func (r *holdingRepository) GetByUserID(ctx context.Context, userID string) ([]d
 			&h.CostBasis,
 			&h.InstitutionValue,
 			&h.InstitutionPrice,
+			&h.CurrencyCode,
 			&h.CreatedAt,
 			&h.UpdatedAt,
 		); err != nil {
@@ -265,7 +358,7 @@ func (r *holdingRepository) GetByUserID(ctx context.Context, userID string) ([]d
 func (r *holdingRepository) GetByAccountID(ctx context.Context, accountID string) ([]domain.Holding, error) {
 	query := `
 		SELECT id, user_id, account_id, security_id,
-			quantity, cost_basis, institution_value, institution_price,
+			quantity, cost_basis, institution_value, institution_price, currency_code,
 			created_at, updated_at
 		FROM holdings
 		WHERE (account_id = $1 AND user_account_id IS NULL)
@@ -291,6 +384,7 @@ func (r *holdingRepository) GetByAccountID(ctx context.Context, accountID string
 			&h.CostBasis,
 			&h.InstitutionValue,
 			&h.InstitutionPrice,
+			&h.CurrencyCode,
 			&h.CreatedAt,
 			&h.UpdatedAt,
 		); err != nil {
@@ -313,7 +407,7 @@ func (r *holdingRepository) GetByUserAccountID(ctx context.Context, userAccountI
 	// This covers all physical account_ids in a re-link chain.
 	query := `
 		SELECT id, user_id, account_id, user_account_id, security_id,
-			quantity, cost_basis, institution_value, institution_price,
+			quantity, cost_basis, institution_value, institution_price, currency_code,
 			created_at, updated_at
 		FROM holdings
 		WHERE user_account_id = $1
@@ -339,6 +433,7 @@ func (r *holdingRepository) GetByUserAccountID(ctx context.Context, userAccountI
 			&h.CostBasis,
 			&h.InstitutionValue,
 			&h.InstitutionPrice,
+			&h.CurrencyCode,
 			&h.CreatedAt,
 			&h.UpdatedAt,
 		); err != nil {
@@ -385,11 +480,15 @@ func (r *holdingRepository) GetByUserIDWithSecurities(ctx context.Context, userI
 		SELECT
 			h.id, h.user_id, h.account_id, h.user_account_id, h.security_id,
 			h.quantity, h.cost_basis, h.institution_value, h.institution_price,
-			h.created_at, h.updated_at,
+			h.currency_code, h.created_at, h.updated_at,
 			-- security metadata
 			sec.id, sec.plaid_security_id, sec.ticker_symbol, sec.name, sec.type,
 			sec.institution_price, sec.institution_price_as_of,
-			sec.close_price, sec.close_price_as_of
+			sec.close_price, sec.close_price_as_of,
+			-- #1631 M8a: BOTH currencies are read, and they are not the same fact. sec.currency_code
+			-- is the unit of close_price; h.currency_code is the unit of the position. When they
+			-- disagree the day change is refused rather than converted (Holding.DayChange).
+			sec.currency_code
 		FROM holdings h
 		-- CURRENT-STATE universe (#1569 T12): see currentStateAccountLeg, account_liveness_sql.go
 		-- a.type = 'investment' (#1569 T8 / Issue #1616): matches the gate already applied to
@@ -414,14 +513,16 @@ func (r *holdingRepository) GetByUserIDWithSecurities(ctx context.Context, userI
 	for rows.Next() {
 		h := domain.Holding{}
 		sec := domain.Security{}
-		var secClosePriceAsOf *string
+		// *time.Time, not *string: close_price_as_of is a DATE column and pgx has no binary-format
+		// plan for date → string (#1631).
+		var secClosePriceAsOf *time.Time
 		if err := rows.Scan(
 			&h.ID, &h.UserID, &h.AccountID, &h.UserAccountID, &h.SecurityID,
 			&h.Quantity, &h.CostBasis, &h.InstitutionValue, &h.InstitutionPrice,
-			&h.CreatedAt, &h.UpdatedAt,
+			&h.CurrencyCode, &h.CreatedAt, &h.UpdatedAt,
 			&sec.ID, &sec.PlaidSecurityID, &sec.TickerSymbol, &sec.Name, &sec.Type,
 			&sec.InstitutionPrice, &sec.InstitutionPriceAsOf,
-			&sec.ClosePrice, &secClosePriceAsOf,
+			&sec.ClosePrice, &secClosePriceAsOf, &sec.CurrencyCode,
 		); err != nil {
 			return nil, err
 		}

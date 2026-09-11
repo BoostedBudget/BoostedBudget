@@ -28,12 +28,20 @@ type HoldingSnapshotView struct {
 	// AsOfDate is a UTC calendar day, YYYY-MM-DD. Deliberately a plain date string rather than a
 	// timestamp: a date-only value rendered through a timestamp shifts back a day for every user
 	// west of UTC, and this figure's whole meaning is which day it was true on.
-	AsOfDate string `json:"as_of_date" doc:"UTC calendar day (YYYY-MM-DD) these figures were true"`
+	// #1631: format:"date" extends the request-input convention (dead_letter_job.go,
+	// savings_goal.go) to an OUTPUT field, deliberately — this is a produced, not parsed, value,
+	// but the published schema should say what shape it actually is rather than a bare string.
+	AsOfDate string `json:"as_of_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) these figures were true"`
 
 	Quantity         float64  `json:"quantity"`
 	CostBasis        *float64 `json:"cost_basis,omitempty"`
 	InstitutionValue *float64 `json:"institution_value,omitempty"`
 	InstitutionPrice *float64 `json:"institution_price,omitempty"`
+	// CurrencyCode is the currency the figures above were reported in, as at AsOfDate (#1631
+	// M8a), or nil when the provider never told us. As-of like everything else on this type: a
+	// past position is stated in the currency it was reported in at the time, not in whatever
+	// currency the live holding reports now.
+	CurrencyCode *string `json:"currency_code,omitempty"`
 
 	// Security metadata (LEFT JOIN securities — a security row can be absent).
 	TickerSymbol *string `json:"ticker_symbol,omitempty"`
@@ -62,13 +70,22 @@ type HoldingSnapshotHistory struct {
 	// unambiguously (it is never nil, so `available_dates: []` IS "no retained history"). A key
 	// that is present-and-null and a key that is absent are the same `undefined` to the one
 	// consumer that reads it.
-	AsOfDate *string `json:"as_of_date,omitempty" doc:"UTC calendar day (YYYY-MM-DD) the positions describe; omitted when no history is retained for this account"`
+	// #1631: format:"date", same deliberate output-field extension as HoldingSnapshotView.AsOfDate above.
+	AsOfDate *string `json:"as_of_date,omitempty" format:"date" doc:"UTC calendar day (YYYY-MM-DD) the positions describe; omitted when no history is retained for this account"`
 	// AvailableDates lists every UTC day with at least one retained position, newest first.
 	AvailableDates []string              `json:"available_dates" doc:"Every UTC day (YYYY-MM-DD) with retained positions, newest first"`
 	Positions      []HoldingSnapshotView `json:"positions"`
 	// TotalValue is the sum of the day's institution_value, pre-computed so no consumer has to do
 	// the arithmetic. Nil when no position on the day carries a value.
 	TotalValue *float64 `json:"total_value,omitempty"`
+
+	// CurrencyCode is the single currency TotalValue is expressed in, or nil when one cannot be
+	// stated; IsMixedCurrency says which of the two reasons applies — true means the day's
+	// positions were reported in two or more DIFFERENT currencies, so TotalValue is a
+	// currency-blind sum (there is no FX rate source in this system), false means no position
+	// stated a currency at all. #1631 M8a.
+	CurrencyCode    *string `json:"currency_code,omitempty"`
+	IsMixedCurrency bool    `json:"is_mixed_currency"`
 }
 
 // ComputeGainLoss fills GainLoss / GainLossPct from the row's own historical figures, using the

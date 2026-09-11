@@ -20,6 +20,7 @@ import {
   getGetAdminDeadLetterJobDetailQueryKey,
 } from '@boostedbudget/api-client/endpoints/admin/admin'
 import { mutationFailureMessage } from '../lib/mutationFailureMessage'
+import { JobErrorList } from './JobErrorList'
 
 interface DeadLetterDetailModalProps {
   jobId: number | null
@@ -218,9 +219,14 @@ export function DeadLetterDetailModal({ jobId, onClose }: DeadLetterDetailModalP
 
               <div className="flex flex-col gap-2 mt-2">
                 <span className={fieldClass}>Errors:</span>
-                <pre className={cn(preClass, 'text-destructive')} data-ph-mask>
-                  {formatJson(job.errors) || '(none)'}
-                </pre>
+                {/*
+                  #1631: this was a single JSON dump of the whole column, which flattened the
+                  wrapped error chain into one line and never surfaced the Postgres DETAIL —
+                  the field that answered the motivating holdings-sync investigation. JobErrorList
+                  renders old {attempt, message, timestamp} rows unchanged and masks every SQL
+                  free-text field it shows; see its header comment.
+                */}
+                <JobErrorList errors={job.errors} />
               </div>
 
               <div className="flex flex-col gap-2 mt-2">

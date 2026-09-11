@@ -21,6 +21,7 @@ import { mockUseUser, createMockClerkUser, mockClerkUser } from '@/test/mocks/cl
 import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
 import type { HoldingSnapshotView } from '@boostedbudget/api-client/models/holdingSnapshotView'
 import type { Account } from '@boostedbudget/api-client/models'
+import { HoldingViewDayChangeUnavailableReason } from '@boostedbudget/api-client/models/holdingViewDayChangeUnavailableReason'
 
 function makeHolding(overrides: Partial<HoldingView> & { id: string }): HoldingView {
   return {
@@ -109,6 +110,137 @@ describe('HoldingsTable', () => {
     })
     render(<HoldingsTable />)
     expect(screen.getByText('AAPL')).toBeDefined()
+  })
+
+  // #1631: the Type column had no `render` at all and printed the raw lowercase Plaid value.
+  describe('Type column humanization (#1631)', () => {
+    it('humanizes acronym security types to canonical uppercase form', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [makeHolding({ id: 'h-etf', security_type: 'etf' })], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText('ETF')).toBeDefined()
+      expect(screen.queryByText('etf')).toBeNull()
+    })
+
+    it('title-cases a multi-word security type', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [makeHolding({ id: 'h-mf', security_type: 'mutual fund' })], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText('Mutual Fund')).toBeDefined()
+    })
+
+    it('renders "Unknown" (never blank) when security_type is null', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [makeHolding({ id: 'h-null', security_type: undefined })], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText('Unknown')).toBeDefined()
+    })
+
+    it('renders "Unknown" when security_type is an empty string', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: { holdings: [makeHolding({ id: 'h-empty', security_type: '' })], count: 1 },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText('Unknown')).toBeDefined()
+    })
+  })
+
+  // #1631 I1 — day_change_is_stale / day_change_as_of / day_change_unavailable_reason were served
+  // by the backend and never read by the frontend, so a week-old close presented as today's move.
+  describe('Day change staleness (#1631 I1)', () => {
+    it('shows a Stale marker (legible as text, not colour alone) and still shows the value', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: {
+          holdings: [
+            makeHolding({
+              id: 'h-stale',
+              day_change: 42,
+              day_change_is_stale: true,
+              day_change_as_of: '2026-08-20',
+            }),
+          ],
+          count: 1,
+        },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      // The value is still shown -- stale is marked, not suppressed.
+      expect(screen.getByText('$42')).toBeDefined()
+      // The word "Stale" is text content, so it is legible to a screen reader with no dependence
+      // on colour.
+      expect(screen.getByText('Stale')).toBeDefined()
+    })
+
+    it('shows no marker for a fresh day change', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: {
+          holdings: [
+            makeHolding({
+              id: 'h-fresh',
+              day_change: 42,
+              day_change_is_stale: false,
+              day_change_as_of: '2026-09-11',
+            }),
+          ],
+          count: 1,
+        },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText('$42')).toBeDefined()
+      expect(screen.queryByText('Stale')).toBeNull()
+    })
+
+    it('shows the refusal reason for a day change the backend refused to compute', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: {
+          holdings: [
+            makeHolding({
+              id: 'h-refused',
+              day_change: undefined,
+              day_change_pct: undefined,
+              day_change_is_stale: undefined,
+              day_change_unavailable_reason: 'currency_mismatch',
+            }),
+          ],
+          count: 1,
+        },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText(/different currency/i)).toBeDefined()
+      expect(screen.queryByText('Stale')).toBeNull()
+    })
+  })
+
+  // #1631: `??` alone does not catch '' — production has securities with security_name = ''.
+  describe('Security name blank-string fallback (#1631)', () => {
+    it('falls back to security_id when security_name is an empty string', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: {
+          holdings: [makeHolding({ id: 'h-blank-name', security_id: 'sec-blank', security_name: '' })],
+          count: 1,
+        },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText('sec-blank')).toBeDefined()
+    })
   })
 
   it('shows loading state', () => {
@@ -530,6 +662,8 @@ describe('HoldingsTable', () => {
       available_dates: string[]
       positions: HoldingSnapshotView[]
       total_value: number
+      currency_code: string
+      is_mixed_currency: boolean
     }> = {}) {
       mockUseGetAccountHoldingsHistory.mockReturnValue({
         data: {
@@ -538,6 +672,11 @@ describe('HoldingsTable', () => {
           available_dates: ['2026-03-04'],
           positions: [position()],
           total_value: 5000,
+          // #1631 M8a: total_value is a currency-blind sum, so the response states the currency
+          // it is in and whether the day's positions disagreed. Required on the response type,
+          // so omitting them describes a response the server cannot produce.
+          currency_code: 'USD',
+          is_mixed_currency: false,
           ...overrides,
         },
         isLoading: false,
@@ -558,7 +697,12 @@ describe('HoldingsTable', () => {
         isError: false,
       })
       mockUseGetAccountHoldingsHistory.mockReturnValue({
-        data: { account_id: 'acct-closed', available_dates: [], positions: [] },
+        data: {
+          account_id: 'acct-closed',
+          available_dates: [],
+          positions: [],
+          is_mixed_currency: false,
+        },
         isLoading: false,
         isError: false,
       })
@@ -610,12 +754,14 @@ describe('HoldingsTable', () => {
       withHistory()
       render(<HoldingsTable accountId="acct-closed" />)
 
-      expect(screen.queryByText(/Day Change \(\$\)/)).toBeNull()
+      // #1631 CX1 renamed these headers: a "($)" suffix asserted a currency the cells beneath it
+      // may not be in, now that each row is formatted in the currency it states.
+      expect(screen.queryByText(/^Day Change$/)).toBeNull()
       expect(screen.queryByText(/Day Change \(%\)/)).toBeNull()
       // The shared value columns ARE there — the historical table is the same table, minus what
       // cannot mean anything on a past day.
       expect(screen.getByText(/Market Value/)).toBeDefined()
-      expect(screen.getByText(/Gain\/Loss \(\$\)/)).toBeDefined()
+      expect(screen.getByText(/^Gain\/Loss$/)).toBeDefined()
     })
 
     // PII: DataTable masks a <td> ONLY when the column id is in maskedColumnIds. Holdings are
@@ -658,6 +804,8 @@ describe('HoldingsTable', () => {
           as_of_date: '2026-03-04',
           available_dates: ['2026-03-04'],
           positions: [position({ institution_value: undefined, cost_basis: undefined })],
+          // No position carries a value, so there is no total AND no currency to state one in.
+          is_mixed_currency: false,
         },
         isLoading: false,
         isError: false,
@@ -964,5 +1112,78 @@ describe('HoldingsTable', () => {
         expect(screen.getByRole('alert')).toBeDefined()
       })
     })
+  })
+})
+
+// #1631 CX1: every money column hard-coded the dollar, so a GBP position rendered as dollars. The
+// currency lives on the ROW, not on the table: one investment account can hold positions in
+// several currencies, so there is no table-level verdict that could be right for every cell.
+describe('HoldingsTable currency (#1631 CX1)', () => {
+  it('formats a position in the currency that position states', () => {
+    mockUseGetHoldings.mockReturnValue({
+      data: {
+        holdings: [makeHolding({ id: 'h-gbp', institution_value: 2500, currency_code: 'GBP' })],
+        count: 1,
+      },
+      isLoading: false,
+      isError: false,
+    })
+
+    render(<HoldingsTable />)
+
+    expect(screen.getByText(/£2,500/)).toBeDefined()
+    expect(screen.queryByText(/\$2,500/)).toBeNull()
+  })
+
+  // The sibling: a position stating no currency keeps today's dollar rendering. Unknown is not a
+  // conflict, and every row written before migration 000202 is in that state.
+  it('keeps the dollar rendering for a position that states no currency', () => {
+    mockUseGetHoldings.mockReturnValue({
+      data: { holdings: [makeHolding({ id: 'h-plain', institution_value: 2500 })], count: 1 },
+      isLoading: false,
+      isError: false,
+    })
+
+    render(<HoldingsTable />)
+
+    expect(screen.getByText(/\$2,500/)).toBeDefined()
+  })
+
+  // The header must not assert a currency either: a "($)" suffix over per-row cells is the same
+  // wrong claim one step up.
+  it('does not label the amount columns with a currency symbol', () => {
+    mockUseGetHoldings.mockReturnValue({
+      data: { holdings: [makeHolding({ id: 'h1', currency_code: 'GBP' })], count: 1 },
+      isLoading: false,
+      isError: false,
+    })
+
+    render(<HoldingsTable />)
+
+    expect(screen.queryByText(/Gain\/Loss \(\$\)/)).toBeNull()
+    expect(screen.getByText(/^Gain\/Loss$/)).toBeDefined()
+  })
+})
+
+// #1631 I1 follow-up. `renderDayChange` handles exactly one value of
+// `day_change_unavailable_reason`, which is correct TODAY because the backend's enum has exactly
+// one (`enum:"currency_mismatch"` on domain.HoldingView). The risk is a future one: a backend
+// adding a second reason would fall through to the ordinary value branch and silently present a
+// REFUSED day change as a real number — the precise class of defect #1631 exists to fix.
+//
+// This is asserted in a TEST rather than with a runtime exhaustiveness map on purpose. The
+// `investments` chunk sits at 7.44 kB against a 7.5 kB budget (.size-limit.json), so a map would
+// spend most of the remaining headroom to buy a compile-time guarantee a test buys for free. It
+// also matches how this repo already pins ACTIVITY_TYPES against its config keys.
+describe('day-change unavailable reasons are handled exhaustively (#1631)', () => {
+  it('handles every value the generated enum can carry', () => {
+    // The generated const object is the single source of truth — it is regenerated from the Go
+    // enum tag, so adding a reason backend-side changes this without anyone editing the frontend.
+    const backendReasons = Object.values(HoldingViewDayChangeUnavailableReason)
+    // Typed to the enum rather than to string[], which makes this strictly stronger: a value
+    // removed or renamed backend-side is a COMPILE error here, and a value ADDED is the runtime
+    // failure below. Both directions covered.
+    const handledByRenderDayChange: HoldingViewDayChangeUnavailableReason[] = ['currency_mismatch']
+    expect([...backendReasons].sort()).toEqual([...handledByRenderDayChange].sort())
   })
 })

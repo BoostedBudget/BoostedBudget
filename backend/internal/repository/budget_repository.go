@@ -298,6 +298,7 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 		return nil, err
 	}
 	budget.IncomeSources = sources
+	budget.PopulateDateDisplay() // #1631 Batch F2
 
 	// Load categories
 	categories, err := r.GetCategoriesByBudgetID(ctx, budget.ID)
@@ -358,6 +359,7 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 			return nil, err
 		}
 		budget.IncomeSources = sources
+		budget.PopulateDateDisplay() // #1631 Batch F2
 
 		budgets = append(budgets, budget)
 	}
@@ -418,6 +420,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 			return nil, err
 		}
 		budget.IncomeSources = sources
+		budget.PopulateDateDisplay() // #1631 Batch F2
 
 		budgets = append(budgets, budget)
 	}
@@ -473,6 +476,7 @@ func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (
 		return nil, err
 	}
 	budget.IncomeSources = sources
+	budget.PopulateDateDisplay() // #1631 Batch F2
 
 	return budget, nil
 }
@@ -1176,6 +1180,7 @@ func (r *budgetRepository) GetAllActivePaginated(ctx context.Context, limit int,
 			return nil, err
 		}
 		budget.IncomeSources = sources
+		budget.PopulateDateDisplay() // #1631 Batch F2
 
 		budgets = append(budgets, budget)
 	}

@@ -196,14 +196,16 @@ func (s *analyticsService) GetCashFlowSummary(ctx context.Context, userID string
 
 	// Build response
 	response := &domain.CashFlowSummaryResponse{
-		StartDate: filters.StartDate,
+		StartDate:        filters.StartDate,
+		StartDateDisplay: domain.FormatCalendarDayUTC(filters.StartDate),
 		// The requested end, which is the end this aggregate measured — see the block above.
-		EndDate:      filters.EndDate,
-		Income:       currentAgg.Income,
-		Expenses:     currentAgg.Expenses,
-		NetCashFlow:  currentAgg.NetCashFlow(),
-		IncomeCount:  currentAgg.IncomeCount,
-		ExpenseCount: currentAgg.ExpenseCount,
+		EndDate:        filters.EndDate,
+		EndDateDisplay: domain.FormatCalendarDayUTC(filters.EndDate),
+		Income:         currentAgg.Income,
+		Expenses:       currentAgg.Expenses,
+		NetCashFlow:    currentAgg.NetCashFlow(),
+		IncomeCount:    currentAgg.IncomeCount,
+		ExpenseCount:   currentAgg.ExpenseCount,
 	}
 
 	// Add period comparison if we have previous period data
@@ -281,22 +283,29 @@ func (s *analyticsService) GetCashFlowHistory(ctx context.Context, userID string
 	// Convert to response format
 	periods := make([]domain.CashFlowPeriodData, len(groupedData))
 	for i, data := range groupedData {
+		periodEnd := clampPeriodEnd(data.PeriodStart, calculatePeriodEnd(data.PeriodStart, filters.Grouping), effectiveEnd)
 		periods[i] = domain.CashFlowPeriodData{
-			PeriodStart:      data.PeriodStart,
-			PeriodEnd:        clampPeriodEnd(data.PeriodStart, calculatePeriodEnd(data.PeriodStart, filters.Grouping), effectiveEnd),
-			Income:           data.Income,
-			Expenses:         data.Expenses,
-			NetCashFlow:      data.Income - data.Expenses,
-			TransactionCount: data.TransactionCount,
+			PeriodStart:        data.PeriodStart,
+			PeriodStartDisplay: domain.FormatCalendarDayUTC(data.PeriodStart),
+			PeriodEnd:          periodEnd,
+			PeriodEndDisplay:   domain.FormatCalendarDayUTC(periodEnd),
+			Income:             data.Income,
+			Expenses:           data.Expenses,
+			NetCashFlow:        data.Income - data.Expenses,
+			TransactionCount:   data.TransactionCount,
 		}
 	}
 
+	respEndDate := responseEndDate(filters.StartDate, effectiveEnd, periods)
 	return &domain.CashFlowHistoryResponse{
-		StartDate:        filters.StartDate,
-		EndDate:          responseEndDate(filters.StartDate, effectiveEnd, periods),
-		RequestedEndDate: requestedEnd,
-		Grouping:         filters.Grouping,
-		Periods:          periods,
+		StartDate:               filters.StartDate,
+		StartDateDisplay:        domain.FormatCalendarDayUTC(filters.StartDate),
+		EndDate:                 respEndDate,
+		EndDateDisplay:          domain.FormatCalendarDayUTC(respEndDate),
+		RequestedEndDate:        requestedEnd,
+		RequestedEndDateDisplay: domain.FormatCalendarDayUTC(requestedEnd),
+		Grouping:                filters.Grouping,
+		Periods:                 periods,
 	}, nil
 }
 

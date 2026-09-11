@@ -202,9 +202,11 @@ func TestInvestmentAnalytics_AllocationBreakdown_ReturnsGroupedBuckets(t *testin
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	rows := pgxmock.NewRows([]string{"security_type", "holding_count", "total_value"}).
-		AddRow("stock", 3, 10000.0).
-		AddRow("etf", 2, 5000.0)
+	// currency_codes (#1631 M8a) is the set of DISTINCT currencies backing each bucket; both
+	// buckets here are USD, so the breakdown names USD and is not mixed.
+	rows := pgxmock.NewRows([]string{"security_type", "holding_count", "total_value", "currency_codes"}).
+		AddRow("stock", 3, 10000.0, []string{"USD"}).
+		AddRow("etf", 2, 5000.0, []string{"USD"})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`COALESCE(sec.type, 'unknown')`)).
 		WithArgs(pgxmock.AnyArg()).
@@ -232,6 +234,104 @@ func TestInvestmentAnalytics_AllocationBreakdown_ReturnsGroupedBuckets(t *testin
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestInvestmentAnalytics_AllocationBreakdown_SQLKeyRoutesCashEquivalentToCash is H1 (#1631, fix
+// round 1 / ruling): the SQL bucket KEY itself routes a cash-equivalent security to "cash" — this
+// repository never sees a "mutual fund" row for one, because the query's GROUP BY/SELECT
+// expression already collapsed it before the row reached Go. This mock therefore simulates what
+// Postgres would actually return: ONE "cash" row (the cash-equivalent fund merged with a
+// literally-cash-typed security) and a SEPARATE "mutual fund" row for the non-cash-equivalent one.
+// The Go-side behaviour under test is that no post-processing re-splits or re-merges these — the
+// scan is a straight pass-through, and no two buckets in the response share a security_type.
+func TestInvestmentAnalytics_AllocationBreakdown_SQLKeyRoutesCashEquivalentToCash(t *testing.T) {
+	mock, repo := setupInvestmentAnalyticsMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	rows := pgxmock.NewRows([]string{"security_type", "holding_count", "total_value", "currency_codes"}).
+		AddRow("cash", 2, 1500.0, []string{"USD"}).
+		AddRow("mutual fund", 1, 2000.0, []string{"USD"})
+
+	mock.ExpectQuery(regexp.QuoteMeta(`CASE WHEN sec.is_cash_equivalent IS TRUE THEN 'cash'`)).
+		WithArgs(pgxmock.AnyArg()).
+		WillReturnRows(rows)
+
+	result, err := repo.AllocationBreakdown(ctx, userID, domain.AllocationOptions{})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Buckets, 2)
+
+	byType := map[string]domain.AllocationItem{}
+	for _, b := range result.Buckets {
+		byType[b.SecurityType] = b
+	}
+	require.Contains(t, byType, "cash")
+	assert.InDelta(t, 1500.0, byType["cash"].TotalValue, 0.01)
+	assert.Equal(t, "cash", byType["cash"].AssetClass)
+	require.Contains(t, byType, "mutual fund")
+	assert.InDelta(t, 2000.0, byType["mutual fund"].TotalValue, 0.01)
+	assert.Equal(t, "investments", byType["mutual fund"].AssetClass)
+
+	// The assertion that would have caught the original defect: no two buckets in a
+	// group_by=security_type response may share a security_type value. Two identically-labelled
+	// buckets is what a Go-side merge-after-scan (rather than routing the SQL key) produced.
+	seen := map[string]bool{}
+	for _, b := range result.Buckets {
+		require.False(t, seen[b.SecurityType], "duplicate security_type bucket: %q", b.SecurityType)
+		seen[b.SecurityType] = true
+	}
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSecurityTypeToAssetClass pins securityTypeToAssetClass's per-case behaviour directly. #1631
+// H1 fix round 1: this is single-argument again — is_cash_equivalent routing happens in the SQL
+// bucket KEY (cashEquivalentRoutedSecurityType) before a row ever reaches this function, so by the
+// time a security_type value gets here, "cash" already means "cash or cash-equivalent".
+func TestSecurityTypeToAssetClass(t *testing.T) {
+	tests := []struct {
+		name    string
+		secType string
+		want    string
+	}{
+		{"cash (literal or cash-equivalent-routed) → cash", "cash", "cash"},
+		{"liabilities → liabilities", "liabilities", "liabilities"},
+		{"mutual fund (non-cash-equivalent) → investments", "mutual fund", "investments"},
+		{"equity → investments", "equity", "investments"},
+		{"unknown (NULL type) → investments", "unknown", "investments"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, securityTypeToAssetClass(tt.secType))
+		})
+	}
+}
+
+// TestCollapseToAssetClasses_CashBucketAlreadyMerged proves collapseToAssetClasses (the
+// group_by=asset_class path) needs no is_cash_equivalent awareness of its own: by the time buckets
+// reach it, a cash-equivalent security and a literally-cash-typed one are already the SAME
+// "cash"-labelled bucket (folded by the SQL key), so collapsing by security_type alone is correct.
+func TestCollapseToAssetClasses_CashBucketAlreadyMerged(t *testing.T) {
+	buckets := []domain.AllocationItem{
+		// Already merged by the SQL key: the cash-equivalent fund and the literal-cash security
+		// are indistinguishable by the time they reach Go, and that is by design.
+		{SecurityType: "cash", TotalValue: 1500, HoldingCount: 2},
+		{SecurityType: "mutual fund", TotalValue: 2000, HoldingCount: 1},
+	}
+	result := collapseToAssetClasses(buckets)
+
+	byClass := map[string]domain.AllocationItem{}
+	for _, b := range result {
+		byClass[b.AssetClass] = b
+	}
+	require.Contains(t, byClass, "cash")
+	assert.InDelta(t, 1500.0, byClass["cash"].TotalValue, 0.01)
+	require.Contains(t, byClass, "investments")
+	assert.InDelta(t, 2000.0, byClass["investments"].TotalValue, 0.01)
+}
+
 // TestInvestmentAnalytics_AllocationBreakdown_EmptyPortfolio tests that an empty result
 // returns an empty Buckets slice and zero TotalValue.
 func TestInvestmentAnalytics_AllocationBreakdown_EmptyPortfolio(t *testing.T) {
@@ -241,7 +341,7 @@ func TestInvestmentAnalytics_AllocationBreakdown_EmptyPortfolio(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	rows := pgxmock.NewRows([]string{"security_type", "holding_count", "total_value"})
+	rows := pgxmock.NewRows([]string{"security_type", "is_cash_equivalent", "holding_count", "total_value", "currency_codes"})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`COALESCE(sec.type, 'unknown')`)).
 		WithArgs(pgxmock.AnyArg()).
@@ -280,13 +380,18 @@ func TestInvestmentAnalytics_TopMovers_ReturnsSplit(t *testing.T) {
 	dayChangePct2 := -1.2
 	totalGL1 := 500.0
 	totalGL2 := -200.0
+	rankingCcy := "USD"
 
 	rows := pgxmock.NewRows([]string{
 		"holding_id", "account_id", "ticker_symbol", "security_name",
-		"day_change", "day_change_pct", "total_gain_loss", "mover_type",
+		"day_change", "day_change_pct", "total_gain_loss", "currency_code", "mover_type",
+		// #1631 CX1: the ranking SCOPE, constant across every row. unknown_currency_count was
+		// added in the second Codex pass — the rows here state no currency, so they are exactly
+		// the riders it counts.
+		"ranking_currency_code", "excluded_by_currency_count", "unknown_currency_count",
 	}).
-		AddRow(holdingID1, accountID1, &ticker1, &secName1, &dayChange1, &dayChangePct1, &totalGL1, "gainer").
-		AddRow(holdingID2, accountID2, &ticker2, &secName2, &dayChange2, &dayChangePct2, &totalGL2, "loser")
+		AddRow(holdingID1, accountID1, &ticker1, &secName1, &dayChange1, &dayChangePct1, &totalGL1, (*string)(nil), "gainer", &rankingCcy, 2, 2).
+		AddRow(holdingID2, accountID2, &ticker2, &secName2, &dayChange2, &dayChangePct2, &totalGL2, (*string)(nil), "loser", &rankingCcy, 2, 2)
 
 	mock.ExpectQuery(regexp.QuoteMeta(`WITH movers AS`)).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
@@ -298,6 +403,14 @@ func TestInvestmentAnalytics_TopMovers_ReturnsSplit(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Len(t, result.Gainers, 1)
 	assert.Len(t, result.Losers, 1)
+	// The ranking scope must survive the scan, or a client presents a currency-scoped ranking as
+	// a whole-portfolio one (#1631 CX1).
+	require.NotNil(t, result.RankingCurrencyCode)
+	assert.Equal(t, "USD", *result.RankingCurrencyCode)
+	assert.Equal(t, 2, result.ExcludedByCurrencyCount)
+	// Both mover rows state no currency, so both are unknown-currency riders. Asserted here so
+	// the two counts cannot be confused: one counts rows left OUT, the other rows left IN.
+	assert.Equal(t, 2, result.UnknownCurrencyCount)
 
 	gainer := result.Gainers[0]
 	assert.Equal(t, holdingID1, gainer.HoldingID)
@@ -335,9 +448,10 @@ func TestInvestmentAnalytics_UnrealizedGainLoss_AggregatesAccounts(t *testing.T)
 	// In this test all holdings have both values set, so known_pair == cost_basis_all.
 	rows := pgxmock.NewRows([]string{
 		"account_id", "value", "unrealized_gl", "unrealized_gl_pct", "cost_basis_known_pair", "cost_basis_all",
+		"currency_codes",
 	}).
-		AddRow(accountID1, 8000.0, 2000.0, &pct1, 6000.0, 6000.0).
-		AddRow(accountID2, 4000.0, -1000.0, &pct2, 5000.0, 5000.0)
+		AddRow(accountID1, 8000.0, 2000.0, &pct1, 6000.0, 6000.0, []string{"USD"}).
+		AddRow(accountID2, 4000.0, -1000.0, &pct2, 5000.0, 5000.0, []string{"USD"})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`h.account_id::text`)).
 		WithArgs(pgxmock.AnyArg()).
@@ -379,9 +493,9 @@ func TestInvestmentAnalytics_IncomeSummary_GroupsByType(t *testing.T) {
 	end := time.Date(2024, 3, 31, 23, 59, 59, 0, time.UTC)
 
 	// Positive values — represent post-negation DB output (COALESCE(-SUM(amount), 0) = +200/+50).
-	rows := pgxmock.NewRows([]string{"income_type", "count", "total_amount"}).
-		AddRow("dividend", 5, 200.0).
-		AddRow("interest", 3, 50.0)
+	rows := pgxmock.NewRows([]string{"income_type", "count", "total_amount", "currency_codes"}).
+		AddRow("dividend", 5, 200.0, []string{"USD"}).
+		AddRow("interest", 3, 50.0, []string{"USD"})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`income_type`)).
 		WithArgs(incomeSubtypeAnyArgs()...).
@@ -403,7 +517,9 @@ func TestInvestmentAnalytics_IncomeSummary_GroupsByType(t *testing.T) {
 	assert.InDelta(t, 50.0, result.ByType[1].TotalAmount, 0.01)
 
 	assert.Equal(t, start, result.StartDate)
+	assert.Equal(t, "2024-01-01", result.StartDateDisplay)
 	assert.Equal(t, end, result.EndDate)
+	assert.Equal(t, "2024-03-31", result.EndDateDisplay)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -418,7 +534,7 @@ func TestInvestmentAnalytics_IncomeSummary_EmptyRange(t *testing.T) {
 	start := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2020, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	rows := pgxmock.NewRows([]string{"income_type", "count", "total_amount"})
+	rows := pgxmock.NewRows([]string{"income_type", "count", "total_amount", "currency_codes"})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`income_type`)).
 		WithArgs(incomeSubtypeAnyArgs()...).
@@ -431,6 +547,63 @@ func TestInvestmentAnalytics_IncomeSummary_EmptyRange(t *testing.T) {
 	assert.InDelta(t, 0.0, result.TotalIncome, 0.01)
 	assert.Empty(t, result.ByType)
 	assert.Equal(t, start, result.StartDate)
+	assert.Equal(t, "2020-01-01", result.StartDateDisplay)
 	assert.Equal(t, end, result.EndDate)
+	assert.Equal(t, "2020-01-31", result.EndDateDisplay)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ============================================================================
+// PositionReconciliationSummary (#1631 M8b N2)
+// ============================================================================
+
+// TestInvestmentAnalytics_PositionReconciliationSummary_ScansAggregateRow proves the summary
+// issues ONE aggregate query (QueryRow, not Query+loop) and scans exactly the three counters
+// domain.PositionReconciliationSummary needs — the whole point of pushing classification into
+// SQL rather than streaming every (account, security) pair into Go on /admin/health's 30-second
+// poll (see buildPositionReconciliationSummaryQuery's doc comment).
+func TestInvestmentAnalytics_PositionReconciliationSummary_ScansAggregateRow(t *testing.T) {
+	mock, repo := setupInvestmentAnalyticsMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	rows := pgxmock.NewRows([]string{"drift_count", "suppressed_count", "total_checked"}).
+		AddRow(int64(3), int64(40), int64(120))
+
+	// The reinvest bucket's structural/subtype-literal predicate carries 4 placeholder args
+	// (reinvestSubtypes) — see domain.TradeTypeToSQLPredicate. No user_id arg: this is the
+	// GLOBAL summary, unscoped by design.
+	mock.ExpectQuery(regexp.QuoteMeta("WITH")).
+		WithArgs(anyArgs(4)...).
+		WillReturnRows(rows)
+
+	summary, err := repo.PositionReconciliationSummary(ctx)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), summary.DriftCount)
+	assert.Equal(t, int64(40), summary.SuppressedPreWindowCount)
+	assert.Equal(t, int64(120), summary.TotalPositionsChecked)
+	assert.True(t, summary.Available)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestInvestmentAnalytics_PositionReconciliationSummary_QueryError_IsUnavailable proves a failed
+// query surfaces as an error (SystemHealthService turns this into Available=false — see
+// system_health_service_position_reconciliation_test.go) rather than a silently-zeroed summary.
+func TestInvestmentAnalytics_PositionReconciliationSummary_QueryError_IsUnavailable(t *testing.T) {
+	mock, repo := setupInvestmentAnalyticsMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+
+	mock.ExpectQuery(regexp.QuoteMeta("WITH")).
+		WithArgs(anyArgs(4)...).
+		WillReturnError(assert.AnError)
+
+	summary, err := repo.PositionReconciliationSummary(ctx)
+
+	assert.Nil(t, summary)
+	assert.Error(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

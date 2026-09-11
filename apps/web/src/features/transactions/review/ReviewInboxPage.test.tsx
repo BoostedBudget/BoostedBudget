@@ -166,6 +166,29 @@ describe('ReviewInboxPage', () => {
     })
   })
 
+  // #1631: the date column printed tx.date raw, so users saw whatever the wire said -- a bare
+  // "2026-05-01T00:00:00Z" before the backend fix. Routed through the shared formatDate, which
+  // splits on the T and parses component-wise, so it is correct for both wire shapes. Asserting
+  // the formatted string and the absence of the raw one: asserting only the raw value's presence
+  // is what let this render ship unformatted.
+  it('formats the date column rather than printing the wire value raw', async () => {
+    configureBase([mockTx])
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    await waitFor(() => {
+      expect(screen.getByText('May 1, 2026')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('2026-05-01')).not.toBeInTheDocument()
+  })
+
+  it('formats a legacy timestamp-shaped date without shifting the day', async () => {
+    configureBase([{ ...mockTx, date: '2026-05-01T00:00:00Z' }])
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    await waitFor(() => {
+      expect(screen.getByText('May 1, 2026')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('2026-05-01T00:00:00Z')).not.toBeInTheDocument()
+  })
+
   it('renders transaction rows in the desktop table', async () => {
     configureBase([mockTx, mockTx2])
     render(<ReviewInboxPage />, { wrapper: createWrapper() })

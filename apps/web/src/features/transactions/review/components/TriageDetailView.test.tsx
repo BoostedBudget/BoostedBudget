@@ -44,7 +44,21 @@ describe('TriageDetailView', () => {
     renderTriage()
     expect(screen.getByText('Blue Bottle Coffee')).toBeInTheDocument()
     expect(screen.getByText('$42.50')).toBeInTheDocument()
-    expect(screen.getByText('2026-05-01')).toBeInTheDocument()
+    // #1631: formatted through the shared formatDate rather than printed raw. Asserting the
+    // formatted form AND the absence of the raw one, because getByText('2026-05-01') passed
+    // against the unformatted render and so proved nothing about formatting.
+    expect(screen.getByText('May 1, 2026')).toBeInTheDocument()
+    expect(screen.queryByText('2026-05-01')).not.toBeInTheDocument()
+  })
+
+  // The wire value used to be a full timestamp on this field, printed raw, so users saw
+  // "2026-05-01T00:00:00Z". formatDate splits on the T and parses component-wise, so it is correct
+  // for both the old and the new wire shape -- which is what makes this site safe to fix
+  // independently of the backend deploy.
+  it('formats a legacy timestamp-shaped date without shifting the day', () => {
+    renderTriage({ transaction: { ...mockTx, date: '2026-05-01T00:00:00Z' } })
+    expect(screen.getByText('May 1, 2026')).toBeInTheDocument()
+    expect(screen.queryByText('2026-05-01T00:00:00Z')).not.toBeInTheDocument()
   })
 
   it('uses transaction name when merchant_name is null', () => {

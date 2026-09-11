@@ -105,18 +105,27 @@ func (ml MatchLogic) IsValid() bool {
 // Budget represents a user-defined budget for expense tracking.
 // Budgets are FREE for all subscription tiers (Issue #27).
 type Budget struct {
-	ID           string       `json:"id" db:"id"`
-	UserID       string       `json:"user_id" db:"user_id"`
-	Name         string       `json:"name" db:"name"`
-	Description  *string      `json:"description,omitempty" db:"description"`
-	Period       BudgetPeriod `json:"period" db:"period"`
-	StartDate    time.Time    `json:"start_date" db:"start_date"`
-	EndDate      *time.Time   `json:"end_date,omitempty" db:"end_date"`
-	Amount       float64      `json:"amount" db:"amount"`
-	CurrencyCode string       `json:"currency_code" db:"currency_code"`
-	IsActive     bool         `json:"is_active" db:"is_active"`
-	CreatedAt    time.Time    `json:"created_at" db:"created_at"`
-	UpdatedAt    time.Time    `json:"updated_at" db:"updated_at"`
+	ID          string       `json:"id" db:"id"`
+	UserID      string       `json:"user_id" db:"user_id"`
+	Name        string       `json:"name" db:"name"`
+	Description *string      `json:"description,omitempty" db:"description"`
+	Period      BudgetPeriod `json:"period" db:"period"`
+	// StartDate/EndDate stay time.Time — NOT serialized — since start_date/end_date are Postgres
+	// DATE columns (migration 000004) and both fields are still SQL bind params/scan targets;
+	// StartDateDisplay/EndDateDisplay are what actually reach clients (#1631 Batch F2, same
+	// sibling-display pattern as domain/activity_item.go and the analytics/dashboard fix in
+	// 49f08d5a). EndDateDisplay is a *string, not string: an empty string is a PRESENT key, and
+	// here it is worse than that — an empty end_date renders as a literal " - Invalid Date" range
+	// suffix at BudgetCard.tsx:102.
+	StartDate        time.Time  `json:"-" db:"start_date"`
+	StartDateDisplay string     `json:"start_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this budget period starts on"`
+	EndDate          *time.Time `json:"-" db:"end_date"`
+	EndDateDisplay   *string    `json:"end_date,omitempty" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this budget period ends on; omitted for open-ended budgets"`
+	Amount           float64    `json:"amount" db:"amount"`
+	CurrencyCode     string     `json:"currency_code" db:"currency_code"`
+	IsActive         bool       `json:"is_active" db:"is_active"`
+	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
 
 	// Envelope budgeting fields (Issue #491)
 	IncomeAmount  float64        `json:"income_amount" db:"income_amount"`
@@ -135,6 +144,15 @@ type Budget struct {
 
 	// Associated data (populated on demand, not stored in DB)
 	Categories []BudgetCategory `json:"categories,omitempty" db:"-"`
+}
+
+// PopulateDateDisplay fills StartDateDisplay/EndDateDisplay from StartDate/EndDate (#1631 Batch
+// F2). Idempotent, so calling it again after mutating StartDate/EndDate (e.g. in UpdateBudget) is
+// the correct way to keep the two in sync — there is no dependency tracking; the display fields
+// are only ever as fresh as the last populate call.
+func (b *Budget) PopulateDateDisplay() {
+	b.StartDateDisplay = formatDateOnly(b.StartDate)
+	b.EndDateDisplay = formatNullableDateOnly(b.EndDate)
 }
 
 // Validate checks that the Budget has all required fields and valid values.

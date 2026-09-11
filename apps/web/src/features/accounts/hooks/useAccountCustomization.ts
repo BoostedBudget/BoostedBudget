@@ -26,11 +26,17 @@ interface PartialUpdateAccountRequest {
   custom_emoji?: string | null
   display_order?: number | null
   is_hidden?: boolean | null
-  // #1609 Item 5 — the per-chain opt-out that hides an account's investment_transactions from
-  // both the activity feed and the investments page, for a brokerage account Plaid reports on
-  // BOTH /transactions/sync and /investments/transactions/get. Read-layer only and fully
-  // reversible. #1618b added the toggle in AccountCustomizationModal, so this now reaches the
+  // #1609 Item 5 — the per-chain opt-out for a brokerage account Plaid reports on BOTH
+  // /transactions/sync and /investments/transactions/get, which otherwise shows every real
+  // movement twice. #1618b added the toggle in AccountCustomizationModal, so this now reaches the
   // server from ordinary user action — it is no longer only set by explicit callers.
+  // ⚠ NOT "read-layer only and fully reversible", which is what this comment said until #1631 M4.
+  // The backend now also stops INGESTING investment transactions for the chain while the flag is
+  // set. Rows stored beforehand are retained and reappear when it is cleared, and clearing it
+  // triggers a backfill — but that backfill reaches only 2 years (Plaid's limit on
+  // /investments/transactions/get), so a chain excluded for longer permanently loses its earliest
+  // excluded period. That is why the toggle's copy in AccountCustomizationModal warns about it;
+  // do not simplify that copy back to a plain de-duplication promise.
   // ⚠ It is carried ONLY on the user-accounts branch below; the legacy accounts branch strips it,
   // because the column lives on `user_accounts` and UpdateAccountRequest does not declare it.
   exclude_investment_sync?: boolean | null

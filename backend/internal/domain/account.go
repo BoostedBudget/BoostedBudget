@@ -163,7 +163,13 @@ type Account struct {
 	// domain.UserAccount.ExcludeInvestmentSync for the full semantics (hides this chain's
 	// investment_transactions from all three read surfaces — feed, investment-transactions, and
 	// portfolio income (#1614); enforced by investmentSyncExclusionCondition at each of those
-	// reads, NOT by this field).
+	// reads.
+	//
+	// #1631 M4: this field is ALSO read directly to gate ingestion — investmentSyncService's
+	// account loop (investment_sync_service.go) checks `a.ExcludeInvestmentSync` on this exact
+	// struct and skips storing new investment_transactions for the chain entirely. This is THE
+	// struct that loop loads, so it is the first comment a reader tracing the ingestion skip
+	// finds; the three-read-surfaces claim above stays true and is unrelated to this one.
 	//
 	// ⚠ NOT one of the six accountCustomizationColumns (account_liveness_sql.go) — it has no
 	// `accounts`-side column to fall back to, so it is projected directly as

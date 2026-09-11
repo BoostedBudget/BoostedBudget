@@ -330,6 +330,10 @@ func TestUserAccountRepository_Update_Success(t *testing.T) {
 		SET nickname = $1, custom_color = $2, custom_icon = $3,
 		    custom_emoji = $4, display_order = $5, is_hidden = $6, hidden_source = $7,
 		    exclude_investment_sync = $8,
+		    investment_backfill_requested_at = CASE
+		        WHEN exclude_investment_sync AND NOT $8 THEN $9
+		        ELSE investment_backfill_requested_at
+		    END,
 		    updated_at = $9
 		WHERE id = $10 AND user_id = $11
 	`)).WithArgs(
@@ -374,6 +378,10 @@ func TestUserAccountRepository_Update_NotFound(t *testing.T) {
 		SET nickname = $1, custom_color = $2, custom_icon = $3,
 		    custom_emoji = $4, display_order = $5, is_hidden = $6, hidden_source = $7,
 		    exclude_investment_sync = $8,
+		    investment_backfill_requested_at = CASE
+		        WHEN exclude_investment_sync AND NOT $8 THEN $9
+		        ELSE investment_backfill_requested_at
+		    END,
 		    updated_at = $9
 		WHERE id = $10 AND user_id = $11
 	`)).WithArgs(

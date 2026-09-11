@@ -131,7 +131,7 @@ sort_dir?: GetTransactionsSortDir;
  */
 include_investment_activity?: string;
 /**
- * Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other). Only used when include_investment_activity=true.
+ * Filter investment activity by type (comma-separated: buy,sell,dividend,reinvest,interest,fee,transfer,cash,other). Only used when include_investment_activity=true.
  */
 activity_types?: string;
 /**

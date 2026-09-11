@@ -626,3 +626,145 @@ func TestAllocationBreakdown_OverdrawnDepository_CashBucketIsZero_Integration(t 
 		assert.GreaterOrEqual(t, result.TotalValue, 0.0, "TotalValue must be non-negative")
 	})
 }
+
+// TestAllocationBreakdown_CashEquivalentSecurity_RoutesIntoTheCashBucket_Integration is H1 (#1631,
+// fix round 1 / ruling). The bucket KEY itself must route a cash-equivalent security into "cash" —
+// NOT a second GROUP BY dimension that keeps it in its own "mutual fund"-labelled bucket. Both
+// group_by=security_type (the DEFAULT mode, and the one the frontend donut chart labels each slice
+// from) and group_by=asset_class must show exactly ONE "cash" bucket, merging:
+//   - a money-market fund typed "mutual fund" with is_cash_equivalent=true, and
+//   - a security literally typed "cash" (is_cash_equivalent NULL, as Plaid's own cash-type
+//     securities typically report it) —
+//
+// because they are economically indistinguishable for allocation purposes, which is the entire
+// premise of #1631 H1. Meanwhile a "mutual fund" with is_cash_equivalent=false and one with
+// is_cash_equivalent=NULL (the pre-migration state of the whole securities table) must BOTH keep
+// their type-derived "mutual fund" bucket — neither is swept into cash — and, because they agree
+// on the routing verdict, they may legitimately share that ONE bucket with each other. The
+// assertion that would have caught the original defect (two "mutual fund"-labelled buckets with no
+// way to tell them apart) is the final one: no two buckets in a single response may share a
+// security_type value.
+func TestAllocationBreakdown_CashEquivalentSecurity_RoutesIntoTheCashBucket_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, investAcctID, _, _, _ := seedAllocationFixture(ctx, t, tx, "alloc-cashequiv")
+
+	// A money-market fund, typed "mutual fund" like any other fund, but flagged cash-equivalent.
+	cashEquivFundSecID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO securities (id, plaid_security_id, name, type, is_cash_equivalent)
+		VALUES ($1, $2, 'Prime Money Market Fund', 'mutual fund', true)
+	`, cashEquivFundSecID, "cashequivfund-sec-"+cashEquivFundSecID.String())
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_value)
+		VALUES ($1, $2, $3, $4, 1000, 1000)
+	`, uuid.New(), userID, investAcctID, cashEquivFundSecID)
+	require.NoError(t, err)
+
+	// A security literally typed "cash" — must land in the SAME bucket as the fund above.
+	literalCashSecID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO securities (id, plaid_security_id, name, ticker_symbol, type)
+		VALUES ($1, $2, 'US Dollar', 'CUR:USD', 'cash')
+	`, literalCashSecID, "literalcash-sec-"+literalCashSecID.String())
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_value)
+		VALUES ($1, $2, $3, $4, 500, 500)
+	`, uuid.New(), userID, investAcctID, literalCashSecID)
+	require.NoError(t, err)
+
+	// An ordinary "mutual fund", is_cash_equivalent explicitly false — must NOT be routed to cash.
+	nonCashEquivFundSecID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO securities (id, plaid_security_id, name, type, is_cash_equivalent)
+		VALUES ($1, $2, 'Growth Mutual Fund', 'mutual fund', false)
+	`, nonCashEquivFundSecID, "noncashequivfund-sec-"+nonCashEquivFundSecID.String())
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_value)
+		VALUES ($1, $2, $3, $4, 10, 2000)
+	`, uuid.New(), userID, investAcctID, nonCashEquivFundSecID)
+	require.NoError(t, err)
+
+	// An otherwise-identical "mutual fund" whose is_cash_equivalent is NULL — the pre-#1631 state
+	// of the whole table. It must NOT be swept into cash by this fix either.
+	nullFlagFundSecID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO securities (id, plaid_security_id, name, type)
+		VALUES ($1, $2, 'Income Mutual Fund', 'mutual fund')
+	`, nullFlagFundSecID, "nullflagfund-sec-"+nullFlagFundSecID.String())
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_value)
+		VALUES ($1, $2, $3, $4, 20, 3000)
+	`, uuid.New(), userID, investAcctID, nullFlagFundSecID)
+	require.NoError(t, err)
+
+	repo := NewInvestmentAnalyticsRepository(tx)
+
+	// assertNoDuplicateSecurityTypes is the assertion that would have caught the original defect:
+	// a Go-side merge-after-scan left TWO buckets both labelled "mutual fund" (one per
+	// is_cash_equivalent state) — indistinguishable to the frontend donut chart, which labels each
+	// slice by security_type alone.
+	assertNoDuplicateSecurityTypes := func(t *testing.T, buckets []domain.AllocationItem) {
+		t.Helper()
+		seen := map[string]bool{}
+		for _, b := range buckets {
+			require.False(t, seen[b.SecurityType], "duplicate security_type bucket: %q", b.SecurityType)
+			seen[b.SecurityType] = true
+		}
+	}
+
+	t.Run("group_by=security_type (default): cash-equivalent fund + literal cash security merge into ONE cash bucket", func(t *testing.T) {
+		result, err := repo.AllocationBreakdown(ctx, userID.String(), domain.AllocationOptions{})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assertNoDuplicateSecurityTypes(t, result.Buckets)
+
+		byType := map[string]domain.AllocationItem{}
+		for _, b := range result.Buckets {
+			byType[b.SecurityType] = b
+		}
+
+		require.Contains(t, byType, "cash",
+			"the cash-equivalent fund and the literal cash security must merge into one cash bucket")
+		assert.InDelta(t, 1500.0, byType["cash"].TotalValue, 0.01, "1000 (fund) + 500 (literal cash)")
+		assert.Equal(t, "cash", byType["cash"].AssetClass)
+
+		require.Contains(t, byType, "mutual fund",
+			"the flag=false and flag=NULL funds both keep their type-derived bucket")
+		assert.InDelta(t, 5000.0, byType["mutual fund"].TotalValue, 0.01, "2000 (flag=false) + 3000 (flag=NULL)")
+		assert.Equal(t, "investments", byType["mutual fund"].AssetClass)
+
+		// The seeded fixture stock (5000) is untouched by any of this.
+		require.Contains(t, byType, "stock")
+		assert.InDelta(t, 5000.0, byType["stock"].TotalValue, 0.01)
+	})
+
+	t.Run("group_by=asset_class: the same routing collapses into investments/cash", func(t *testing.T) {
+		opts := domain.AllocationOptions{GroupBy: domain.AllocationGroupByAssetClass}
+		result, err := repo.AllocationBreakdown(ctx, userID.String(), opts)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assertNoDuplicateSecurityTypes(t, result.Buckets) // AssetClass buckets are also SecurityType-labelled ("cash"/"investments")
+
+		byClass := map[string]domain.AllocationItem{}
+		for _, b := range result.Buckets {
+			byClass[b.AssetClass] = b
+		}
+		require.Contains(t, byClass, "cash")
+		assert.InDelta(t, 1500.0, byClass["cash"].TotalValue, 0.01)
+
+		require.Contains(t, byClass, "investments")
+		// stock (5000) + flag=false fund (2000) + flag=NULL fund (3000) = 10000.
+		assert.InDelta(t, 10000.0, byClass["investments"].TotalValue, 0.01,
+			"neither the flag=false nor the flag=NULL fund may be reclassified into cash")
+	})
+}

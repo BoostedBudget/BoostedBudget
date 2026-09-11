@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { ReadOnlyGuard } from '@/auth'
 import type { Transaction, FeedRow } from '../types'
 import { isInvestmentRow, isSettledPending } from '../types'
+import { investmentSubcategoryLabel } from '../investmentSubcategory'
 import { ActivityTypeChip } from '@/shared/components/ActivityTypeChip'
 import type { Account } from '../../accounts/types'
 import { getCategoryColor, DEFAULT_CATEGORY_COLOR } from '@/lib/category-colors'
@@ -176,9 +177,21 @@ export function TransactionTable({
       minSize: 160,
       render: (row) => {
         if (isInvestmentRow(row)) {
+          // `??` alone misses production rows where ticker_symbol/security_name are '' rather
+          // than null/undefined (#1631) — a blank cell used to render as the literal " · ".
+          // row.name (the transaction's own name) is the fallback for exactly those rows: it is
+          // the only field with content when the security metadata is blank.
+          const ticker = row.ticker_symbol && row.ticker_symbol.length > 0 ? row.ticker_symbol : null
+          const securityName =
+            row.security_name && row.security_name.length > 0 ? row.security_name : null
+          if (!ticker && !securityName) {
+            return (
+              <div className="font-medium text-foreground">{row.name || '—'}</div>
+            )
+          }
           return (
             <div className="font-medium text-foreground">
-              {row.ticker_symbol ?? '—'} · {row.security_name ?? '—'}
+              {ticker ?? '—'} · {securityName ?? '—'}
             </div>
           )
         }
@@ -307,6 +320,15 @@ export function TransactionTable({
       minSize: 100,
       maxSize: 260,
       render: (row) => {
+        // Investment branch FIRST, so the `as unknown as Transaction` cast below stops applying to
+        // investment rows at all (#1631). Before this, the cast reached for PFC fields the feed's
+        // UNION hard-codes NULL, so every investment row rendered "—" while `investment_subtype`
+        // sat unused on the wire.
+        if (isInvestmentRow(row)) {
+          const label = investmentSubcategoryLabel(row.activity_type, row.investment_subtype)
+          if (!label) return <span className="text-sm text-muted-foreground/40">—</span>
+          return <span className="text-sm text-muted-foreground">{label}</span>
+        }
         const txn = row as unknown as Transaction
         const detailed = getEffectiveDetailedCategory(txn)
         if (!detailed) return <span className="text-sm text-muted-foreground/40">—</span>

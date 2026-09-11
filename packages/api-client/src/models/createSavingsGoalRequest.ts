@@ -39,6 +39,7 @@ export interface CreateSavingsGoalRequest {
   account_percentage?: number;
   currency_code?: string;
   current_amount?: number;
+  /** Goal deadline. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp. */
   deadline?: string;
   description?: string;
   /**

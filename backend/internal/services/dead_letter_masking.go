@@ -73,12 +73,24 @@ func MaskJobErrors(errors json.RawMessage) json.RawMessage {
 	}
 
 	modified := false
-	for i, entry := range data {
-		if msg, ok := entry["message"].(string); ok {
-			sanitized := sanitizeErrorMessage(msg)
-			if sanitized != msg {
-				data[i]["message"] = sanitized
-				modified = true
+	for _, entry := range data {
+		if maskStringField(entry, "message") {
+			modified = true
+		}
+		// #1631 added two optional keys carrying the SAME free text this function already
+		// scrubs, in a richer shape: `chain` (the wrapping layers) and `pg_error` (what
+		// Postgres sent). An old-shape row has neither and falls through untouched.
+		if maskStringSlice(entry, "chain") {
+			modified = true
+		}
+		if pg, ok := entry["pg_error"].(map[string]interface{}); ok {
+			// Only the three free-text fields. code/constraint_name/table_name/schema_name/
+			// column_name/severity/routine are schema identifiers, never credentials, and
+			// scrubbing them would destroy the signal this feature exists to surface.
+			for _, key := range []string{"message", "detail", "hint"} {
+				if maskStringField(pg, key) {
+					modified = true
+				}
 			}
 		}
 	}
@@ -95,6 +107,43 @@ func MaskJobErrors(errors json.RawMessage) json.RawMessage {
 }
 
 // sanitizeErrorMessage replaces known sensitive patterns in error message strings.
+// maskStringField sanitizes obj[key] in place when it holds a string, reporting whether it
+// changed. A missing key or a non-string value is a no-op, which is what keeps old-shape rows
+// byte-identical.
+func maskStringField(obj map[string]interface{}, key string) bool {
+	msg, ok := obj[key].(string)
+	if !ok {
+		return false
+	}
+	sanitized := sanitizeErrorMessage(msg)
+	if sanitized == msg {
+		return false
+	}
+	obj[key] = sanitized
+	return true
+}
+
+// maskStringSlice sanitizes every string element of obj[key] in place.
+func maskStringSlice(obj map[string]interface{}, key string) bool {
+	items, ok := obj[key].([]interface{})
+	if !ok {
+		return false
+	}
+	modified := false
+	for i, item := range items {
+		msg, isStr := item.(string)
+		if !isStr {
+			continue
+		}
+		sanitized := sanitizeErrorMessage(msg)
+		if sanitized != msg {
+			items[i] = sanitized
+			modified = true
+		}
+	}
+	return modified
+}
+
 func sanitizeErrorMessage(msg string) string {
 	for _, pattern := range sensitivePatterns {
 		msg = pattern.ReplaceAllString(msg, "[REDACTED]")

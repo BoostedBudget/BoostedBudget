@@ -312,7 +312,7 @@ func (zeroSpentCalculator) CalculateCategorySpent(ctx context.Context, userID st
 // for the review's MED finding: a budget can carry BOTH a duplicate-parent-identity pair AND an
 // escaping nested pair at once. decideBudgetHierarchyAuditOutcome still picks only ONE preferred
 // `outcome` for the ledger row (duplicate-identity, being the more fundamental ambiguity) — but
-// before migration 000197 split flagged_category_ids into two typed columns, the escaping pair's
+// before migration 000202 split flagged_category_ids into two typed columns, the escaping pair's
 // category ids were stored in the SAME untyped array as the duplicate pair's, with no way for an
 // operator to tell which ids belonged to which finding. This seeds both shapes on one budget and
 // asserts BOTH typed arrays are independently populated, regardless of which outcome won.

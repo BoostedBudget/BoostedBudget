@@ -26,6 +26,7 @@ import { CategoryEditor } from '../../../categories/components/CategoryEditor'
 import { useTriageKeyboard } from '../hooks/useTriageKeyboard'
 import { KeyboardShortcutsHelp } from './KeyboardShortcutsHelp'
 import { getMerchantDisplayName } from '@/shared/transactions/merchant'
+import { formatDate } from '@/shared/transactions/dates'
 import type { Transaction } from '../../types'
 import type { CustomCategory } from '../../../categories/types'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
@@ -205,7 +206,7 @@ export function TriageDetailView({
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">{transaction.date}</span>
+            <span className="text-sm text-muted-foreground">{formatDate(transaction.date)}</span>
             <ReviewBadge variant={reviewBadgeVariantFromTransaction(transaction)} />
             {isSelected && (
               <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
