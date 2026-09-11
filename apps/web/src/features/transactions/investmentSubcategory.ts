@@ -1,19 +1,5 @@
 import type { ActivityType } from './types'
-
-/**
- * titleCaseWords humanises a space- or underscore-separated lower-case token, e.g. Plaid's
- * "qualified dividend" → "Qualified Dividend".
- *
- * Exported because three sites needed one and each had grown its own private copy: formatPfc.ts,
- * AllocationDonutChart.tsx, and (before #1631) nothing at all for investment subtypes.
- */
-export function titleCaseWords(value: string): string {
-  return value
-    .split(/[_\s]+/)
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join(' ')
-}
+import { titleCaseWords } from '@/shared/text/titleCase'
 
 /**
  * SECURITY_TYPE_ACRONYM_LABELS maps raw `securities.type` tokens that are acronyms to their

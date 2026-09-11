@@ -1,4 +1,4 @@
-import { titleCaseWords } from '@/features/transactions/investmentSubcategory'
+import { titleCaseWords } from '@/shared/text/titleCase'
 
 export const CURATED_PRIMARIES: readonly string[] = [
   'BANK_FEES',
