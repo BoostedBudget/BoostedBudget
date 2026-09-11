@@ -576,6 +576,43 @@ describe('TransactionTable', () => {
       )
       expect(screen.getByText('—')).toBeInTheDocument()
     })
+
+    // #1631 C4: the investment branch of the Sub-category renderer had no coverage at all.
+    it('renders "Dividend Reinvestment" for a reinvestment row whose raw subtype is "withdrawal"', () => {
+      const reinvestRow: InvestmentActivity = {
+        id: 'inv-reinvest',
+        user_id: 'user-1',
+        account_id: 'acc-1',
+        source: 'investment',
+        amount: -50,
+        date: '2025-03-10',
+        name: 'Reinvest AAPL',
+        activity_type: 'reinvest',
+        investment_subtype: 'withdrawal',
+        created_at: '2025-03-10T00:00:00Z',
+        updated_at: '2025-03-10T00:00:00Z',
+      }
+      render(<TransactionTable transactions={[reinvestRow]} accountsMap={mockAccounts} />)
+      expect(screen.getByText('Dividend Reinvestment')).toBeInTheDocument()
+    })
+
+    it('renders the humanised provider subtype for a non-structural investment row', () => {
+      const feeRow: InvestmentActivity = {
+        id: 'inv-fee',
+        user_id: 'user-1',
+        account_id: 'acc-1',
+        source: 'investment',
+        amount: -5,
+        date: '2025-03-10',
+        name: 'Management fee',
+        activity_type: 'fee',
+        investment_subtype: 'management fee',
+        created_at: '2025-03-10T00:00:00Z',
+        updated_at: '2025-03-10T00:00:00Z',
+      }
+      render(<TransactionTable transactions={[feeRow]} accountsMap={mockAccounts} />)
+      expect(screen.getByText('Management Fee')).toBeInTheDocument()
+    })
   })
 
   describe('Hierarchical category filter', () => {

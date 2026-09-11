@@ -9,6 +9,7 @@ import {
   TXN_COLUMN_IDS,
   MASKED_COLUMN_IDS,
   buildInvestmentVirtualization,
+  activityTypeSortValue,
 } from './investmentTransactionsTable.constants'
 
 // #1631 CX1: formatted in the currency the ROW states, not the dollar. An investment account can
@@ -62,16 +63,16 @@ export function InvestmentTransactionsTable({
     {
       id: 'type',
       header: 'Type',
-      // ⚠ key is the SORT accessor, and it must move with the render (#1631). This column passed
-      // the RAW Plaid `type` to a chip the transactions feed feeds a NORMALIZED value, so this
-      // page could never show Dividend or Reinvest and disagreed with the feed about the same row.
-      // Switching only the render would leave a row DISPLAYING "Dividend" while SORTING under
-      // "cash", interleaved with rows displaying "Cash" — a visible sort/display disagreement on
-      // exactly the rows this issue exists to fix.
-      key: 'activity_type',
-      // activity_type is `omitempty`, so it is absent from older fixtures and mocks; fall back to
-      // the raw type rather than rendering the "Other" chip for a row we can still classify.
-      render: (r) => <ActivityTypeChip activityType={r.activity_type ?? r.type} />,
+      // ⚠ the SORT accessor must move with the render (#1631). This column passed the RAW Plaid
+      // `type` to a chip the transactions feed feeds a NORMALIZED value, so this page could never
+      // show Dividend or Reinvest and disagreed with the feed about the same row. A prior fix
+      // moved the fallback into `render` only, which left `key: 'activity_type'` -- with no
+      // fallback -- as the sort accessor: a row missing `activity_type` (omitempty) DISPLAYED its
+      // classified chip while SORTING under `undefined`, interleaved with rows sorting under their
+      // real value. `activityTypeSortValue` is now the only place either fallback is written, so
+      // sort and render read the identical value for every row.
+      sortAccessor: activityTypeSortValue,
+      render: (r) => <ActivityTypeChip activityType={activityTypeSortValue(r)} />,
     },
     {
       id: 'security',
