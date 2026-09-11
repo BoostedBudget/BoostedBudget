@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/money"
 )
 
 // =============================================================================
@@ -212,8 +213,28 @@ func (s *savingsProgressService) RecomputeGoal(ctx context.Context, goal *domain
 		return goal.CurrentAmount, fmt.Errorf("savings_progress: unknown progress_basis %q for goal %s", basis, goal.ID)
 	}
 
-	// Round to cents (2dp) — deterministic to avoid floating-point drift.
-	newAmount = roundToCents(newAmount)
+	// ⚠ THIS FOLD STAYS IN THE SERVICE, and it is NOT a surviving copy of the presentation
+	// rounding that #1636 moved up to the handler. It is a DIFFERENT MECHANISM.
+	//
+	// docs/decisions/2026-09-11-money-representation-float64-and-the-rounding-boundary.md puts
+	// the PRESENTATION boundary at the handler, and #1636 moved this file's former local
+	// `roundToCents` there — see roundSavingsProgressSummary in
+	// huma/operations/money_rounding.go. But `newAmount` here is not a figure on its way to a
+	// client. Two things consume it before anything is serialised:
+	//
+	//   1. goalRepo.UpdateCurrentAmount PERSISTS it to savings_goals.current_amount, from which
+	//      it is read back on every later request. An unfolded value would store a binary tail in
+	//      the database, where no edge can reach it.
+	//   2. `newAmount >= goal.TargetAmount` below decides COMPLETION, which MarkCompleted makes
+	//      STICKY. A sub-cent tail either side of the target changes which goals complete, and
+	//      that decision can never be revisited.
+	//
+	// That makes it an inbound canonicalisation of a stored figure — the same class as
+	// ConfirmMatch's round in huma/operations/transfer_suggestion.go, which the ADR itself
+	// classifies as "an input canonicalisation, not an output boundary" rather than as a
+	// violation of Decision 3. It uses the shared fold so there is still exactly one definition
+	// of "2dp" in the tree; what moved was the presentation rounding, not this.
+	newAmount = money.ToCents(newAmount)
 
 	// ⚠ #1625: every return below reports THE AMOUNT THE ROW NOW HOLDS, not a success flag.
 	// This function writes in two steps, and the second can fail after the first committed —
@@ -416,11 +437,6 @@ func clampNonNegative(v float64) float64 {
 	return v
 }
 
-// roundToCents rounds a float to 2 decimal places.
-func roundToCents(v float64) float64 {
-	return math.Round(v*100) / 100
-}
-
 // GetProgressSummary returns basis-aware progress for all active goals + portfolio totals.
 // All confirmed contributions are always fetched regardless of basis (Codex C11).
 func (s *savingsProgressService) GetProgressSummary(ctx context.Context, userID string) (*domain.SavingsProgressSummary, error) {
@@ -463,12 +479,13 @@ func (s *savingsProgressService) GetProgressSummary(ctx context.Context, userID 
 			GoalID:                      goal.ID,
 			GoalName:                    goal.Name,
 			AccountID:                   goal.AccountID,
-			CurrentAmount:               roundToCents(goal.CurrentAmount),
-			TargetAmount:                roundToCents(goal.TargetAmount),
+			CurrentAmount:               goal.CurrentAmount,
+			TargetAmount:                goal.TargetAmount,
 			ProgressBasis:               goal.ProgressBasis,
-			ConfirmedContributionsTotal: roundToCents(confirmedTotal),
+			ConfirmedContributionsTotal: confirmedTotal,
 			CompletedAt:                 goal.CompletedAt,
 			Deadline:                    goal.Deadline,
+			DeadlineDisplay:             goal.DeadlineDisplay, // #1631 Batch F2 — carried from the already-populated goal
 			AccountPercentage:           goal.AccountPercentage,
 			BalanceAsOf:                 goal.BalanceAsOf,
 		}
@@ -479,7 +496,7 @@ func (s *savingsProgressService) GetProgressSummary(ctx context.Context, userID 
 			if pct > 100 {
 				pct = 100
 			}
-			item.PercentComplete = roundToCents(pct)
+			item.PercentComplete = pct
 		}
 
 		// ComputedFrom + Freshness + LinkedBalance based on basis.
@@ -512,13 +529,13 @@ func (s *savingsProgressService) GetProgressSummary(ctx context.Context, userID 
 
 	var overallPct float64
 	if totalTarget > 0 {
-		overallPct = roundToCents(math.Min((totalSaved/totalTarget)*100, 100))
+		overallPct = math.Min((totalSaved/totalTarget)*100, 100)
 	}
 
 	return &domain.SavingsProgressSummary{
 		Goals:                  items,
-		TotalSaved:             roundToCents(totalSaved),
-		TotalTarget:            roundToCents(totalTarget),
+		TotalSaved:             totalSaved,
+		TotalTarget:            totalTarget,
 		OverallPercentComplete: overallPct,
 		GoalCount:              len(goals),
 		CompletedGoalCount:     completedCount,

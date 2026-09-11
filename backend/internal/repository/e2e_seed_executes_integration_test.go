@@ -103,6 +103,24 @@ func TestE2ESeedScriptSeedsEveryTable_Integration(t *testing.T) {
 		{"custom_categories", `SELECT COUNT(*) FROM custom_categories cc JOIN users u ON cc.user_id = u.id WHERE u.email = $1`, 3},
 		{"budgets", `SELECT COUNT(*) FROM budgets b JOIN users u ON b.user_id = u.id WHERE u.email = $1`, 1},
 		{"budget_categories", `SELECT COUNT(*) FROM budget_categories bc JOIN budgets b ON bc.budget_id = b.id JOIN users u ON b.user_id = u.id WHERE u.email = $1`, 3},
+		// #1631 added investment fixtures so the Portfolio tab and the investment activity feed
+		// have something to render in E2E. This test is named SeedsEveryTable, so they belong in
+		// the table — without them the seeder could stop producing them and only a Playwright
+		// failure would say so.
+		// ⚠ `securities` is NOT user-scoped (it is shared across tenants), so unlike every other
+		// row here it cannot join to users directly. Counting it by an `e2e-sec-%` prefix would
+		// need a query with no `$1`, which pgx rejects outright because this loop binds `email`
+		// to every query. Reaching it through the user's OWN holdings and investment transactions
+		// is both bindable and a stronger assertion: it proves the securities are REFERENCED by
+		// the fixture rows, not merely present in a shared table.
+		{"securities", `SELECT COUNT(DISTINCT sid) FROM (
+			SELECT h.security_id AS sid FROM holdings h JOIN users u ON h.user_id = u.id WHERE u.email = $1
+			UNION
+			SELECT it.security_id FROM investment_transactions it JOIN users u ON it.user_id = u.id
+			 WHERE u.email = $1 AND it.security_id IS NOT NULL
+		) refs`, 2},
+		{"holdings", `SELECT COUNT(*) FROM holdings h JOIN users u ON h.user_id = u.id WHERE u.email = $1`, 1},
+		{"investment_transactions", `SELECT COUNT(*) FROM investment_transactions it JOIN users u ON it.user_id = u.id WHERE u.email = $1`, 3},
 	} {
 		var got int
 		require.NoError(t, tx.QueryRow(ctx, c.query, email).Scan(&got), c.label)
@@ -114,13 +132,25 @@ func TestE2ESeedScriptSeedsEveryTable_Integration(t *testing.T) {
 	// The seeder is re-run against an already-seeded database on every local E2E invocation, so
 	// non-idempotency is a live failure mode, not a hypothetical. Run it a second time inside the
 	// same transaction.
+	var accountsBefore int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM accounts a JOIN users u ON a.user_id = u.id WHERE u.email = $1`, email).Scan(&accountsBefore))
+
 	_, err = tx.Exec(ctx, script)
 	require.NoError(t, err, "the E2E seed script must be re-runnable against an already-seeded database")
 
-	var accounts int
+	var accountsAfter int
 	require.NoError(t, tx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM accounts a JOIN users u ON a.user_id = u.id WHERE u.email = $1`, email).Scan(&accounts))
-	require.Equal(t, 3, accounts, "re-running the seed must not duplicate accounts")
+		`SELECT COUNT(*) FROM accounts a JOIN users u ON a.user_id = u.id WHERE u.email = $1`, email).Scan(&accountsAfter))
+	// ⚠ Compare BEFORE against AFTER rather than against a literal. This assertion used to read
+	// `require.Equal(t, 3, accounts, ...)`, which conflated two different things: whether the
+	// seeder is idempotent (what it is for) and how many accounts the fixture happens to contain
+	// (what it accidentally pinned). #1631 added a fourth account — an investment one, so the
+	// Portfolio tab has something to render — and the test failed while the seeder was perfectly
+	// idempotent. Measuring the delta tests the property and survives the next fixture.
+	require.Equal(t, accountsBefore, accountsAfter,
+		"re-running the seed must not duplicate accounts: %d before the second run, %d after",
+		accountsBefore, accountsAfter)
 
 	require.NoError(t, tx.Rollback(ctx), fmt.Sprintf("roll back the seed probe on the shared %s database", "integration"))
 }

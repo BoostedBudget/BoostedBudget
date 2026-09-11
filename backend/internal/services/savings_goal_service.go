@@ -178,6 +178,30 @@ func (s *savingsGoalService) CreateGoal(ctx context.Context, userID string, req 
 	if progressBasis == "" {
 		progressBasis = domain.ProgressBasisContributions
 	}
+	// req.Deadline is domain.FlexibleDate (#1631 Batch F2) — converted back to *time.Time here,
+	// since SavingsGoal itself keeps the plain *time.Time field (it stays a SQL bind param/scan
+	// target; DeadlineDisplay carries the wire value). Set inline in the literal below (not via a
+	// later PopulateDateDisplay() call) so this goal — returned directly on the no-progress-
+	// service / RecomputeGoal-failure paths below, not re-fetched from the DB — carries a correct
+	// display field immediately; TestEveryDateDisplaySiblingIsPopulatedWhereItsTimeIsSet enforces
+	// exactly this.
+	//
+	// ⚠ #1631 gap D1: the instant is reduced to its UTC CALENDAR DAY, not stored as handed in.
+	// DeadlineDisplay documents its value as the UTC calendar day, and FlexibleDate accepts a full
+	// RFC3339 timestamp — so the caller chooses the offset, and an un-normalised value names
+	// whatever day that offset says. Normalising only the display string would be worse than
+	// leaving it: savings_goals.deadline is a DATE column (migration 000022) and pgx encodes it
+	// from the value's own Year/Month/Day, so the goal returned here would disagree with the row
+	// the next read scans back. Both sides therefore move through the one function, exactly as
+	// budgetCalendarDayUTC does for budgets.start_date/end_date.
+	var deadline *time.Time
+	var deadlineDisplay *string
+	if req.Deadline != nil {
+		t := domain.CalendarDayUTC(time.Time(*req.Deadline))
+		deadline = &t
+		d := domain.FormatCalendarDayUTC(t)
+		deadlineDisplay = &d
+	}
 	goal := &domain.SavingsGoal{
 		ID:                uuid.New().String(),
 		UserID:            userID,
@@ -187,7 +211,8 @@ func (s *savingsGoalService) CreateGoal(ctx context.Context, userID string, req 
 		CurrentAmount:     seedCurrentAmount(progressBasis, req.CurrentAmount),
 		CurrencyCode:      req.CurrencyCode,
 		AccountID:         req.AccountID,
-		Deadline:          req.Deadline,
+		Deadline:          deadline,
+		DeadlineDisplay:   deadlineDisplay,
 		IsCompleted:       false,
 		ProgressBasis:     progressBasis,
 		AccountPercentage: req.AccountPercentage,
@@ -456,8 +481,18 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 		goal.AccountID = *req.AccountID
 	}
 	if req.Deadline != nil {
-		goal.Deadline = req.Deadline
+		// #1631 gap D1: reduced to the UTC calendar day, for the reason CreateGoal states above —
+		// this assignment is both what pgx encodes into the DATE column and what
+		// PopulateDateDisplay renders, and FlexibleDate lets the caller pick the offset that
+		// decides which day either one means.
+		d := domain.CalendarDayUTC(time.Time(*req.Deadline))
+		goal.Deadline = &d
 	}
+	// #1631 Batch F2: re-derive DeadlineDisplay from whatever Deadline now holds — this must run
+	// even when req.Deadline was nil above, since goal was fetched via GetByIDForUser and already
+	// carries its OWN (correct) display field from that scan; this call is only a no-op there,
+	// not a skip.
+	goal.PopulateDateDisplay()
 	// Issue #1300 gap G1: apply progress_basis / account_percentage changes.
 	// If switching away from account_percentage, clear the percentage so the
 	// discriminator check in goal.Validate() does not reject the new basis.
@@ -528,9 +563,9 @@ func (s *savingsGoalService) UpdateGoal(ctx context.Context, userID, goalID stri
 	// Emit analytics event for the basis change (best-effort).
 	if basisChanged && s.analytics != nil {
 		s.analytics.Capture(userID, phclient.EventSavingsGoalProgressBasisChanged, map[string]interface{}{
-			"goal_id":    goalID,
-			"prior":      priorBasis,
-			"new":        goal.ProgressBasis,
+			"goal_id": goalID,
+			"prior":   priorBasis,
+			"new":     goal.ProgressBasis,
 		})
 	}
 

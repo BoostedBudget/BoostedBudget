@@ -20,15 +20,15 @@ import (
 // ============================================================================
 
 type mockInvestmentService struct {
-	holdings         []*domain.HoldingView
-	holdingsErr      error
-	summary          *domain.PortfolioSummary
-	summaryErr       error
-	history          []domain.PortfolioHistoryPoint
-	historyErr       error
-	txns             []domain.InvestmentTransaction
-	txnsNextCursor   *string
-	txnsErr          error
+	holdings       []*domain.HoldingView
+	holdingsErr    error
+	summary        *domain.PortfolioSummary
+	summaryErr     error
+	history        *domain.PortfolioHistory
+	historyErr     error
+	txns           []domain.InvestmentTransaction
+	txnsNextCursor *string
+	txnsErr        error
 }
 
 func (m *mockInvestmentService) ListHoldings(_ context.Context, _ string, _ *string) ([]*domain.HoldingView, error) {
@@ -37,7 +37,7 @@ func (m *mockInvestmentService) ListHoldings(_ context.Context, _ string, _ *str
 func (m *mockInvestmentService) GetPortfolioSummary(_ context.Context, _ string) (*domain.PortfolioSummary, error) {
 	return m.summary, m.summaryErr
 }
-func (m *mockInvestmentService) GetPortfolioHistory(_ context.Context, _ string, _, _ time.Time) ([]domain.PortfolioHistoryPoint, error) {
+func (m *mockInvestmentService) GetPortfolioHistory(_ context.Context, _ string, _, _ time.Time) (*domain.PortfolioHistory, error) {
 	return m.history, m.historyErr
 }
 func (m *mockInvestmentService) ListInvestmentTransactions(_ context.Context, _ string, _ domain.InvestmentTransactionFilters, _ *domain.InvestmentTransactionCursor, _ int) ([]domain.InvestmentTransaction, *string, error) {
@@ -46,14 +46,16 @@ func (m *mockInvestmentService) ListInvestmentTransactions(_ context.Context, _ 
 func (m *mockInvestmentService) SetAnalytics(_ phclient.Analytics) {}
 
 type mockInvestmentAnalyticsService struct {
-	allocation    *domain.AllocationBreakdown
-	allocationErr error
-	topMovers     *domain.TopMovers
-	topMoversErr  error
-	gainLoss      *domain.GainLossSummary
-	gainLossErr   error
-	income        *domain.IncomeSummary
-	incomeErr     error
+	allocation        *domain.AllocationBreakdown
+	allocationErr     error
+	topMovers         *domain.TopMovers
+	topMoversErr      error
+	gainLoss          *domain.GainLossSummary
+	gainLossErr       error
+	income            *domain.IncomeSummary
+	incomeErr         error
+	reconciliation    *domain.PositionReconciliationReport
+	reconciliationErr error
 }
 
 func (m *mockInvestmentAnalyticsService) GetAllocationBreakdown(_ context.Context, _ string, _ domain.AllocationOptions) (*domain.AllocationBreakdown, error) {
@@ -67,6 +69,9 @@ func (m *mockInvestmentAnalyticsService) GetGainLossSummary(_ context.Context, _
 }
 func (m *mockInvestmentAnalyticsService) GetIncomeSummary(_ context.Context, _ string, _, _ time.Time) (*domain.IncomeSummary, error) {
 	return m.income, m.incomeErr
+}
+func (m *mockInvestmentAnalyticsService) GetPositionReconciliation(_ context.Context, _ string) (*domain.PositionReconciliationReport, error) {
+	return m.reconciliation, m.reconciliationErr
 }
 
 // ============================================================================
@@ -137,11 +142,11 @@ func TestInvestmentHandler_GetHoldings_Unauthorized(t *testing.T) {
 func TestInvestmentHandler_GetPortfolioSummary_Success(t *testing.T) {
 	dc := 100.0
 	summary := &domain.PortfolioSummary{
-		TotalValue:    5000.0,
+		TotalValue:     5000.0,
 		TotalCostBasis: 4000.0,
-		TotalGainLoss: 1000.0,
-		DayChange:     &dc,
-		HoldingsCount: 3,
+		TotalGainLoss:  1000.0,
+		DayChange:      &dc,
+		HoldingsCount:  3,
 	}
 	svc := &mockInvestmentService{summary: summary}
 	handler := NewInvestmentHandler(svc, &mockInvestmentAnalyticsService{})
@@ -183,9 +188,13 @@ func TestInvestmentHandler_GetPortfolioSummary_NilDayChange(t *testing.T) {
 // ============================================================================
 
 func TestInvestmentHandler_GetPortfolioHistory_Success(t *testing.T) {
-	pts := []domain.PortfolioHistoryPoint{
-		{Date: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), TotalValue: 1000.0},
-		{Date: time.Date(2025, 1, 31, 0, 0, 0, 0, time.UTC), TotalValue: 1100.0},
+	usd := "USD"
+	pts := &domain.PortfolioHistory{
+		Points: []domain.PortfolioHistoryPoint{
+			{Date: "2025-01-01", TotalValue: 1000.0},
+			{Date: "2025-01-31", TotalValue: 1100.0},
+		},
+		CurrencyCode: &usd,
 	}
 	svc := &mockInvestmentService{history: pts}
 	handler := NewInvestmentHandler(svc, &mockInvestmentAnalyticsService{})
@@ -201,6 +210,15 @@ func TestInvestmentHandler_GetPortfolioHistory_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, out.Body.History, 2)
 	assert.Equal(t, 1000.0, out.Body.History[0].TotalValue)
+	// #1631: date must be the plain calendar-day string, not a timestamp. Asserting equality
+	// (not Contains) so a regression back to "2025-01-01T00:00:00Z" actually fails this test.
+	assert.Equal(t, "2025-01-01", out.Body.History[0].Date)
+	// #1631 M8a fix round 2 (I-2): the series says which currency it is plotted in. The `history`
+	// key itself is unchanged — PortfolioHistory.Points carries that json tag — so the response
+	// shape is purely additive.
+	require.NotNil(t, out.Body.CurrencyCode)
+	assert.Equal(t, "USD", *out.Body.CurrencyCode)
+	assert.False(t, out.Body.IsMixedCurrency)
 }
 
 func TestInvestmentHandler_GetPortfolioHistory_MissingDates(t *testing.T) {
@@ -228,7 +246,7 @@ func TestInvestmentHandler_GetInvestmentTransactions_FirstPage(t *testing.T) {
 	handler := NewInvestmentHandler(svc, &mockInvestmentAnalyticsService{})
 
 	input := &GetInvestmentTransactionsInput{
-		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: "user-1"},
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: "user-1"},
 		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
 	}
 
@@ -245,7 +263,7 @@ func TestInvestmentHandler_GetInvestmentTransactions_LastPage(t *testing.T) {
 	handler := NewInvestmentHandler(svc, &mockInvestmentAnalyticsService{})
 
 	input := &GetInvestmentTransactionsInput{
-		AuthenticatedInput:   inputs.AuthenticatedInput{UserID: "user-1"},
+		AuthenticatedInput:    inputs.AuthenticatedInput{UserID: "user-1"},
 		CursorPaginationInput: inputs.CursorPaginationInput{Limit: 50},
 	}
 

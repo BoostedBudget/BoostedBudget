@@ -77,9 +77,20 @@ type GetPortfolioHistoryInput struct {
 }
 
 // GetPortfolioHistoryOutput is the response for GET /investments/portfolio/history.
+//
+// ⚠ The body stays an ANONYMOUS struct rather than becoming domain.PortfolioHistory directly, and
+// that is deliberate (#1631 M8a fix round 2, I-2). Huma names a schema after the named type it is
+// given, so handing it domain.PortfolioHistory would rename the generated model
+// GetPortfolioHistoryOutputBody -> PortfolioHistory and break every client import of the old name.
+// Restating the three fields here keeps the generated model name stable and makes the change
+// purely ADDITIVE, which is what every other surface in this task achieved. The fields mirror
+// domain.PortfolioHistory exactly; see that type for why the currency is a property of the SERIES
+// rather than of each point.
 type GetPortfolioHistoryOutput struct {
 	Body struct {
-		History []domain.PortfolioHistoryPoint `json:"history"`
+		History         []domain.PortfolioHistoryPoint `json:"history"`
+		CurrencyCode    *string                        `json:"currency_code,omitempty"`
+		IsMixedCurrency bool                           `json:"is_mixed_currency"`
 	}
 }
 
@@ -89,7 +100,7 @@ type GetInvestmentTransactionsInput struct {
 	inputs.CursorPaginationInput
 	AccountID     string `query:"account_id" doc:"Filter by account ID (chain-expanded)"`
 	SecurityID    string `query:"security_id" doc:"Filter by security ID"`
-	ActivityTypes string `query:"activity_types" doc:"Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,fee,cash,other)"`
+	ActivityTypes string `query:"activity_types" doc:"Filter by normalized trade type (comma-separated: buy,sell,dividend,reinvest,interest,fee,transfer,cash,other)"`
 	StartDate     string `query:"start_date" doc:"Filter transactions on or after this date (YYYY-MM-DD)"`
 	EndDate       string `query:"end_date" doc:"Filter transactions on or before this date (YYYY-MM-DD)"`
 }
@@ -192,6 +203,10 @@ func (h *InvestmentHandler) GetHoldings(ctx context.Context, input *GetHoldingsI
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
+	// The rounding boundary (#1636) — see money_rounding.go. Quantity and institution_price are
+	// deliberately left exact.
+	roundHoldingViews(holdings)
+
 	return &GetHoldingsOutput{
 		Body: struct {
 			Holdings []*domain.HoldingView `json:"holdings"`
@@ -206,6 +221,7 @@ func (h *InvestmentHandler) GetPortfolioSummary(ctx context.Context, input *GetP
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+	roundPortfolioSummary(summary) // #1636 rounding boundary — money_rounding.go
 	return &GetPortfolioSummaryOutput{Body: summary}, nil
 }
 
@@ -227,11 +243,13 @@ func (h *InvestmentHandler) GetPortfolioHistory(ctx context.Context, input *GetP
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
-	return &GetPortfolioHistoryOutput{
-		Body: struct {
-			History []domain.PortfolioHistoryPoint `json:"history"`
-		}{History: history},
-	}, nil
+	roundPortfolioHistoryPoints(history.Points) // #1636 rounding boundary — money_rounding.go
+
+	out := &GetPortfolioHistoryOutput{}
+	out.Body.History = history.Points
+	out.Body.CurrencyCode = history.CurrencyCode
+	out.Body.IsMixedCurrency = history.IsMixedCurrency
+	return out, nil
 }
 
 // GetInvestmentTransactions handles GET /api/v1/investments/investment-transactions.
@@ -285,6 +303,10 @@ func (h *InvestmentHandler) GetInvestmentTransactions(ctx context.Context, input
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+
+	// #1636 rounding boundary — money_rounding.go. ⚠ Quantity and Price stay exact: they are
+	// DECIMAL(18,8) and sit directly beside Amount, which is money.
+	roundInvestmentTransactions(txns)
 
 	return &GetInvestmentTransactionsOutput{
 		Body: struct {
@@ -352,6 +374,7 @@ func (h *InvestmentHandler) GetPortfolioAllocationBreakdown(ctx context.Context,
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+	roundAllocationBreakdown(result) // #1636 rounding boundary — money_rounding.go
 	return &GetPortfolioAllocationBreakdownOutput{Body: result}, nil
 }
 
@@ -366,6 +389,7 @@ func (h *InvestmentHandler) GetTopMovers(ctx context.Context, input *GetTopMover
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+	roundTopMovers(result) // #1636 rounding boundary — money_rounding.go
 	return &GetTopMoversOutput{Body: result}, nil
 }
 
@@ -375,6 +399,7 @@ func (h *InvestmentHandler) GetInvestmentGainLossSummary(ctx context.Context, in
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+	roundGainLossSummary(result) // #1636 rounding boundary — money_rounding.go
 	return &GetInvestmentGainLossSummaryOutput{Body: result}, nil
 }
 
@@ -395,6 +420,7 @@ func (h *InvestmentHandler) GetInvestmentIncomeSummary(ctx context.Context, inpu
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+	roundIncomeSummary(result) // #1636 rounding boundary — money_rounding.go
 	return &GetInvestmentIncomeSummaryOutput{Body: result}, nil
 }
 
@@ -447,7 +473,7 @@ func RegisterInvestmentRoutes(api huma.API, handler *InvestmentHandler) {
 		Method:      http.MethodGet,
 		Path:        "/api/v1/investments/investment-transactions",
 		Summary:     "List investment transactions",
-		Description: "Returns investment transactions for the authenticated user using keyset (cursor) pagination. Supports filtering by account, security, activity type (buy/sell/dividend/reinvest/fee/cash/other), and date range.",
+		Description: "Returns investment transactions for the authenticated user using keyset (cursor) pagination. Supports filtering by account, security, activity type (buy/sell/dividend/reinvest/interest/fee/transfer/cash/other), and date range.",
 		Tags:        []string{"Investments"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetInvestmentTransactions)
@@ -467,7 +493,11 @@ Optional query parameters:
   Values: "cash" (depository/checking/savings account balances), "liabilities" (credit card + loan balances as absolute value).
   Example: include=cash,liabilities
 - group_by: bucketing dimension.
-  Values: "security_type" (default — groups by securities.type: stock, etf, bond, crypto, cash, other, unknown), "asset_class" (collapses into investments/cash/liabilities), "account".
+  Values: "security_type" (default — groups by securities.type, which carries Plaid's enum
+          verbatim: cash, cryptocurrency, derivative, equity, etf, fixed income, loan,
+          mutual fund, other; plus "unknown" when Plaid sends none, and the synthetic
+          "liabilities" bucket when include=liabilities), "asset_class" (collapses into
+          investments/cash/liabilities), "account".
 - basis: whether liabilities reduce the grand total.
   Values: "assets" (default — show asset-side allocation only), "net" (net of liabilities).
 
@@ -510,4 +540,3 @@ Single DB round-trip; designed as an AI-tool-callable function.`,
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetInvestmentIncomeSummary)
 }
-

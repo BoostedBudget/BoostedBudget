@@ -42,6 +42,7 @@ export interface Budget {
   created_at: string;
   currency_code: string;
   description?: string;
+  /** UTC calendar day (YYYY-MM-DD) this budget period ends on; omitted for open-ended budgets */
   end_date?: string;
   expected_income: number;
   id: string;
@@ -52,6 +53,7 @@ export interface Budget {
   name: string;
   period: string;
   series_id: string;
+  /** UTC calendar day (YYYY-MM-DD) this budget period starts on */
   start_date: string;
   updated_at: string;
   user_id: string;

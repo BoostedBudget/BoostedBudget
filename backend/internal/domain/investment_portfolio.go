@@ -38,6 +38,34 @@ type PortfolioSnapshot struct {
 	// column whenever it rewrites a row.
 	TotalValueInvestmentOnly *float64 `json:"total_value_investment_only,omitempty" db:"total_value_investment_only"`
 
+	// CurrencyCode is the single currency this row's totals are expressed in, or nil when the
+	// contributing holdings did not agree on one (#1631 M8a).
+	//
+	// ⚠ nil covers BOTH "mixed, so these totals are a currency-blind sum" and "no holding stated
+	// a currency" — including every row written before migration 000202. A reader must therefore
+	// treat nil as "do not assume", never as USD. Its one job is to let GetPortfolioSummary
+	// refuse a day change when the prior snapshot and the live total are in different currencies:
+	// with no FX rate source in this system, that subtraction has no answer.
+	CurrencyCode *string `json:"currency_code,omitempty" db:"currency_code"`
+
+	// IsMixedCurrency is TRUE when the holdings behind this row's totals were denominated in two
+	// or more DIFFERENT currencies, making every total on the row a currency-blind sum (#1631 M8a
+	// fix round 2, migration 000203).
+	//
+	// ⚠ It exists because CurrencyCode's nil was OVERLOADED and one reader could not live with
+	// that. Read the two together:
+	//
+	//	(code, false)  a named single currency
+	//	(nil,  false)  no contributing holding stated one — UNKNOWN
+	//	(nil,  true)   two or more currencies — a currency-blind sum
+	//
+	// So false on a row written before 000203 still reads as unknown rather than as a claim,
+	// because its CurrencyCode is nil. The one reader is GetPortfolioSummary: it subtracts this
+	// row from a live total, and CurrenciesConflict deliberately treats an unknown currency as no
+	// conflict — correct for unknown, and catastrophic for mixed, which is how an unflagged
+	// USD_today − (USD+GBP)_yesterday used to reach the client as a plain number.
+	IsMixedCurrency bool `json:"is_mixed_currency" db:"is_mixed_currency"`
+
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
@@ -53,12 +81,75 @@ type PortfolioSummary struct {
 	DayChange        *float64 `json:"day_change"`                    // nil when no prior snapshot
 	DayChangePct     *float64 `json:"day_change_pct"`                // nil when no prior snapshot or value=0
 	HoldingsCount    int      `json:"holdings_count"`
+
+	// CurrencyCode is the currency every monetary figure above is expressed in, or nil when it
+	// cannot be stated — see IsMixedCurrency (#1631 M8a).
+	CurrencyCode *string `json:"currency_code,omitempty"`
+
+	// IsMixedCurrency is true when the contributing holdings are denominated in two or more
+	// DIFFERENT known currencies, in which case every total above is a currency-blind sum.
+	//
+	// It is a flag rather than an error because the alternative is worse. There is no FX rate
+	// source in this system, so the honest options are "declare the sum" or "return nothing"; the
+	// second blanks the entire investments page for a legitimately multi-currency portfolio. What
+	// mattered was that the number stop being SILENTLY wrong, and a label achieves that. A
+	// per-holding figure gets the stricter treatment — see Holding.DayChange, which refuses
+	// outright — because a single cell has a cheap honest fallback that a portfolio total lacks.
+	//
+	// ⚠ Holdings that state NO currency do not make a portfolio mixed. That is the state of every
+	// row written before migration 000202, so counting unknown as a currency would flag the whole
+	// existing user base on deploy day with no change to their data.
+	IsMixedCurrency bool `json:"is_mixed_currency"`
+
+	// DayChangeUnavailableReason says WHY day_change is absent, on the same contract as
+	// HoldingView's field of the same name (#1631 CX1): "no day change" has causes with opposite
+	// meanings, and a client that cannot tell them apart reports one as the other. A missing prior
+	// snapshot is missing DATA and fixes itself on the next sync; a currency mismatch is a figure
+	// this service is REFUSING to compute and never will while the two sides disagree. nil means
+	// the figure is present, or its absence is the ordinary missing-inputs case.
+	DayChangeUnavailableReason *string `json:"day_change_unavailable_reason,omitempty" enum:"currency_mismatch"`
 }
 
 // PortfolioHistoryPoint is one data point in a portfolio value chart.
+//
+// Date is a UTC calendar day (YYYY-MM-DD), formatted at the DB edge from
+// portfolio_snapshots.snapshot_date (a DATE column) by investmentService.GetPortfolioHistory.
+// Deliberately a plain string rather than time.Time, following HoldingSnapshotView's precedent
+// (#1631): unlike InvestmentTransaction, this type is never bound as a SQL param or compared as a
+// time.Time after construction, so there is no reason to carry the timestamp shift a DATE column
+// serialized through time.Time inflicts on any client west of UTC.
 type PortfolioHistoryPoint struct {
-	Date       time.Time `json:"date" db:"snapshot_date"`
-	TotalValue float64   `json:"total_value" db:"total_value"`
+	// #1631: format:"date" extends the request-input convention (dead_letter_job.go,
+	// savings_goal.go) to this OUTPUT field deliberately, matching HoldingSnapshotView.AsOfDate.
+	Date       string  `json:"date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this snapshot was captured"`
+	TotalValue float64 `json:"total_value"`
+}
+
+// PortfolioHistory is the whole series returned by GET /portfolio/history: the points, plus the
+// currency they are plotted in (#1631 M8a fix round 2, I-2).
+//
+// ⚠ THE CURRENCY IS A PROPERTY OF THE SERIES, NOT OF EACH POINT, and that is a design choice
+// rather than an economy. A line chart has ONE y-axis with ONE unit, so a series whose points are
+// denominated differently is broken AS A WHOLE — there is no meaningful way to plot it, and there
+// is no FX rate source in this system to normalise it with. Hanging a currency off each point
+// would invite a client to render a per-point symbol, which reads as "these are comparable, just
+// labelled differently"; they are not comparable at all. Stating it once, for the range, is the
+// only honest shape, and it matches every other aggregate in this task
+// (AllocationBreakdown / GainLossSummary / IncomeSummary / PortfolioSummary).
+//
+// Before this existed, GetPortfolioHistory read snapshots that HAD a currency and discarded it, so
+// a chart could silently mix currency-blind sums with single-currency totals.
+type PortfolioHistory struct {
+	Points []PortfolioHistoryPoint `json:"history"`
+
+	// CurrencyCode is the single currency every point is expressed in, or nil when one cannot be
+	// stated. IsMixedCurrency separates the two reasons nil happens: true means the series is not
+	// plottable as one unit — either two days disagree, or some single day was itself a
+	// currency-blind sum (portfolio_snapshots.is_mixed_currency) — and false means no day stated a
+	// currency at all, which is unknown rather than a conflict and is the state of every snapshot
+	// written before migration 000202.
+	CurrencyCode    *string `json:"currency_code,omitempty"`
+	IsMixedCurrency bool    `json:"is_mixed_currency"`
 }
 
 // HoldingView is the API view of a holding, joining security metadata and
@@ -78,14 +169,58 @@ type HoldingView struct {
 	// Security metadata (from joined securities row)
 	TickerSymbol *string `json:"ticker_symbol,omitempty"`
 	SecurityName *string `json:"security_name,omitempty"`
-	SecurityType *string `json:"security_type,omitempty"` // stock/etf/mutual fund/crypto/etc.; nil → "unknown"
+	// stock/etf/mutual fund/crypto/etc., or nil when securities.type is NULL. This field carries
+	// the raw provider token — nil is NOT rewritten to the literal string "unknown" here. The
+	// frontend Holdings table renders nil (and a blank/"unknown" value) as "Unknown" via the
+	// shared securityTypeLabel helper (#1631); the allocation aggregates instead COALESCE NULL to
+	// 'unknown' in SQL so untyped holdings are not dropped from the allocation breakdown.
+	SecurityType *string `json:"security_type,omitempty"`
 
 	// Computed values (nil when inputs are missing)
 	GainLoss     *float64 `json:"gain_loss,omitempty"`
 	GainLossPct  *float64 `json:"gain_loss_pct,omitempty"`
 	DayChange    *float64 `json:"day_change,omitempty"`
 	DayChangePct *float64 `json:"day_change_pct,omitempty"`
+
+	// DayChangeAsOf is the prior-session date the day change is measured FROM
+	// (securities.close_price_as_of), and DayChangeIsStale is the server's verdict on whether that
+	// date is too old for the figure to describe a day.
+	//
+	// #1631: close_price_as_of was write-only, so nothing could tell how old the anchor was — and
+	// the price-retention logic deliberately keeps the last known close alive indefinitely when a
+	// payload omits one, which makes unbounded staleness the normal case rather than an edge case.
+	// A week-old close still produced a number labelled "day change".
+	//
+	// ⚠ A date-only STRING, not a timestamp, per the rule stated on HoldingSnapshotView: a
+	// date-only value rendered through a timestamp shifts back a day for every user west of UTC.
+	// The staleness verdict is served rather than left to the client because the threshold is
+	// policy, not presentation.
+	DayChangeAsOf    *string `json:"day_change_as_of,omitempty" format:"date"`
+	DayChangeIsStale *bool   `json:"day_change_is_stale,omitempty"`
+
+	// CurrencyCode is the currency this POSITION is priced in (holdings.currency_code), or nil
+	// when the provider never told us (#1631 M8a). Every monetary field on this view —
+	// cost_basis, institution_value, institution_price, gain_loss, day_change — is denominated in
+	// it. Serving it is not decoration: until #1631 the entire investment domain dropped
+	// currency, so a client had no way to know a figure was not in the currency it was formatting
+	// it as.
+	CurrencyCode *string `json:"currency_code,omitempty"`
+
+	// DayChangeUnavailableReason says WHY day_change is absent, when it is absent for a reason a
+	// client would otherwise misread.
+	//
+	// It exists because "no day change" has causes with opposite meanings: no prior close is
+	// missing PROVIDER data and will fix itself on the next sync, whereas a currency mismatch is
+	// a figure we are refusing to compute and never will while the two currencies disagree. A
+	// client that cannot tell them apart reports one as the other. nil means either the figure is
+	// present, or its absence is the ordinary missing-inputs case that needs no explanation.
+	DayChangeUnavailableReason *string `json:"day_change_unavailable_reason,omitempty" enum:"currency_mismatch"`
 }
+
+// DayChangeUnavailableCurrencyMismatch is the DayChangeUnavailableReason for a holding priced in
+// a different currency from the security whose close price the day change would subtract. The
+// figure is refused rather than converted — there is no FX rate source in this system.
+const DayChangeUnavailableCurrencyMismatch = "currency_mismatch"
 
 // NewHoldingView constructs a HoldingView from a Holding (which must have Security populated).
 func NewHoldingView(h *Holding) *HoldingView {
@@ -104,10 +239,25 @@ func NewHoldingView(h *Holding) *HoldingView {
 		DayChange:        h.DayChange(),
 		DayChangePct:     h.DayChangePct(),
 	}
+	v.CurrencyCode = h.CurrencyCode
+	if h.HasCurrencyMismatch() {
+		reason := DayChangeUnavailableCurrencyMismatch
+		v.DayChangeUnavailableReason = &reason
+	}
 	if h.Security != nil {
 		v.TickerSymbol = h.Security.TickerSymbol
 		v.SecurityName = &h.Security.Name
 		v.SecurityType = h.Security.Type
+		if h.Security.ClosePriceAsOf != nil {
+			asOf := h.Security.ClosePriceAsOf.Format("2006-01-02")
+			v.DayChangeAsOf = &asOf
+		}
+	}
+	// Only meaningful alongside a day change; omitted otherwise so a client cannot read "not
+	// stale" as "the figure is trustworthy" when there is no figure.
+	if v.DayChange != nil {
+		stale := h.ClosePriceIsStale(time.Now().UTC())
+		v.DayChangeIsStale = &stale
 	}
 	return v
 }
@@ -180,8 +330,22 @@ func (o AllocationOptions) IncludesLiabilities() bool {
 
 // AllocationItem represents one bucket in the portfolio allocation breakdown.
 type AllocationItem struct {
-	SecurityType string  `json:"security_type"` // "stock", "etf", "bond", "crypto", "cash", "other", "unknown", "liabilities"
-	AssetClass   string  `json:"asset_class"`   // "investments", "cash", "liabilities" — populated when group_by=asset_class
+	// SecurityType is securities.type verbatim from Plaid, or "unknown" when absent — WITH ONE
+	// EXCEPTION (#1631 H1, fix round 1). A security whose is_cash_equivalent is AFFIRMATIVELY true
+	// (a money-market fund, a sweep vehicle) is reported here as "cash" regardless of its raw Plaid
+	// type: the repository's SQL bucket KEY routes it there before this struct is ever populated, so
+	// that instrument and a security literally typed "cash" land in the SAME bucket, under the SAME
+	// label, in every group_by mode — not two same-labelled buckets the frontend donut chart cannot
+	// tell apart (which is what an earlier version of this fix produced). A NULL is_cash_equivalent
+	// (the pre-migration state of the whole securities table) is NOT affected and keeps reporting
+	// its verbatim Plaid type.
+	//
+	// ⚠ #1631: otherwise, the values are PLAID's enum — cash, cryptocurrency, derivative, equity,
+	// etf, fixed income, loan, mutual fund, other — plus "unknown" and the synthetic "liabilities".
+	// This comment previously advertised "stock", "bond" and "crypto", none of which Plaid ever
+	// sends.
+	SecurityType string  `json:"security_type"`
+	AssetClass   string  `json:"asset_class"` // "investments", "cash", "liabilities" — populated when group_by=asset_class
 	TotalValue   float64 `json:"total_value"`
 	Percentage   float64 `json:"percentage"`
 	HoldingCount int     `json:"holding_count"`
@@ -191,23 +355,86 @@ type AllocationItem struct {
 type AllocationBreakdown struct {
 	Buckets    []AllocationItem `json:"buckets"`
 	TotalValue float64          `json:"total_value"`
+
+	// CurrencyCode is the single currency every monetary figure here is expressed in, or nil when
+	// one cannot be stated. IsMixedCurrency distinguishes the two reasons nil happens: true means
+	// the contributing rows are denominated in two or more DIFFERENT known currencies, so the
+	// totals are a currency-blind sum (there is no FX rate source in this system to convert
+	// with); false means no contributing row stated a currency at all — the state of every row
+	// written before migration 000202 — which is unknown, not a conflict. #1631 M8a.
+	CurrencyCode    *string `json:"currency_code,omitempty"`
+	IsMixedCurrency bool    `json:"is_mixed_currency"`
 }
 
 // TopMoverItem represents one holding in the top movers list.
 type TopMoverItem struct {
-	HoldingID     string   `json:"holding_id"`
-	AccountID     string   `json:"account_id"`
-	TickerSymbol  *string  `json:"ticker_symbol,omitempty"`
-	SecurityName  *string  `json:"security_name,omitempty"`
-	DayChange     *float64 `json:"day_change,omitempty"`     // nil when close_price unavailable
-	DayChangePct  *float64 `json:"day_change_pct,omitempty"` // nil when close_price unavailable
+	HoldingID    string  `json:"holding_id"`
+	AccountID    string  `json:"account_id"`
+	TickerSymbol *string `json:"ticker_symbol,omitempty"`
+	SecurityName *string `json:"security_name,omitempty"`
+	// ⚠ #1631 corrected these comments rather than the code. They claimed "nil when close_price
+	// unavailable", but such a holding is ABSENT from this surface, not present-with-nil: the query
+	// inner-JOINs securities and requires close_price IS NOT NULL. That exclusion is right for a
+	// top-MOVERS list — a holding with no prior close cannot be ranked by how far it moved — and it
+	// is already stated in the endpoint's own description. The comment was the wrong half.
+	//
+	// DayChange is therefore always present here. DayChangePct is nil only when the prior close
+	// VALUE is zero (a zero quantity, or a zero close price), where the percentage is undefined.
+	DayChange     *float64 `json:"day_change,omitempty"`
+	DayChangePct  *float64 `json:"day_change_pct,omitempty"` // nil only when the prior value is zero
 	TotalGainLoss *float64 `json:"total_gain_loss,omitempty"`
+	// CurrencyCode is the currency day_change and total_gain_loss are expressed in, or nil when
+	// the provider never stated one (#1631 M8a). A holding whose position currency and close-price
+	// currency DISAGREE is absent from this surface entirely rather than present with a nil day
+	// change — see the query's own comment — for the same reason a holding with no close price is:
+	// it cannot be ranked by a movement that has no defined value.
+	CurrencyCode *string `json:"currency_code,omitempty"`
 }
 
 // TopMovers is the response for GET /portfolio/top-movers.
 type TopMovers struct {
 	Gainers []TopMoverItem `json:"gainers"`
 	Losers  []TopMoverItem `json:"losers"`
+
+	// RankingCurrencyCode is the single currency this list is ranked WITHIN (#1631 CX1).
+	//
+	// Ranking is by nominal day change, and a nominal comparison across currencies is not a
+	// comparison: a JPY position outranks a USD one on the exchange rate alone. There is no FX
+	// rate source in this system, so the honest options were to rank within one currency or to
+	// refuse the widget for any multi-currency portfolio. The first was chosen -- the second
+	// blanks a working widget for a legitimately multi-currency user.
+	//
+	// ⚠ Scoping does NOT make the whole list comparable, and this comment claimed it did until
+	// the second Codex pass on #1631. Rows that state no currency at all ride along (next
+	// paragraph), so a scoped list can still mix a known currency with unknown units. What
+	// scoping removes is the comparison across two KNOWN and DIFFERENT currencies.
+	// UnknownCurrencyCount reports how much of the list is in that third state.
+	//
+	// The currency chosen is the one carried by the most eligible movers. A holding that states NO
+	// currency is ranked alongside it regardless, on the same unknown-is-not-a-conflict rule the
+	// rest of this surface uses. nil means no mover stated a currency at all -- the state of every
+	// row written before migration 000202 -- or that there were no movers to rank.
+	RankingCurrencyCode *string `json:"ranking_currency_code,omitempty"`
+
+	// ExcludedByCurrencyCount is how many otherwise-rankable holdings were left out because they
+	// state a DIFFERENT known currency from RankingCurrencyCode. Served so a client can say the
+	// list is partial rather than presenting a scoped ranking as a whole-portfolio one; a silent
+	// exclusion is the same class of defect as a silently currency-blind total.
+	ExcludedByCurrencyCount int `json:"excluded_by_currency_count"`
+
+	// UnknownCurrencyCount is how many of the ranked movers state NO currency and are therefore
+	// ranked alongside RankingCurrencyCode without being known to be in it (#1631, Codex round 2).
+	//
+	// Served because the alternative was worse in both directions. Excluding these rows would
+	// empty the widget for every holding written before migration 000202 -- the entire existing
+	// user base -- and saying nothing let the response assert a single ranking currency over a
+	// list that is only partly known to be in it. A client showing "ranked in USD" can now say
+	// "3 holdings of unstated currency included" instead of implying they are dollars.
+	//
+	// Zero has two meanings and both are honest: every mover states a currency, or nothing was
+	// ranked at all. It is NOT a subset of ExcludedByCurrencyCount -- that counts rows left OUT
+	// for stating a different known currency, this counts rows left IN with no currency stated.
+	UnknownCurrencyCount int `json:"unknown_currency_count"`
 }
 
 // GainLossSummary is the response for GET /portfolio/gain-loss.
@@ -221,6 +448,15 @@ type GainLossSummary struct {
 	RealizedGainLossSupported  bool     `json:"realized_gain_loss_supported"` // always false — documented in response
 	// Per-account breakdown
 	ByAccount []AccountGainLoss `json:"by_account"`
+
+	// CurrencyCode is the single currency every monetary figure here is expressed in, or nil when
+	// one cannot be stated. IsMixedCurrency distinguishes the two reasons nil happens: true means
+	// the contributing rows are denominated in two or more DIFFERENT known currencies, so the
+	// totals are a currency-blind sum (there is no FX rate source in this system to convert
+	// with); false means no contributing row stated a currency at all — the state of every row
+	// written before migration 000202 — which is unknown, not a conflict. #1631 M8a.
+	CurrencyCode    *string `json:"currency_code,omitempty"`
+	IsMixedCurrency bool    `json:"is_mixed_currency"`
 }
 
 // AccountGainLoss is the gain/loss breakdown for one account.
@@ -239,13 +475,37 @@ type AccountGainLoss struct {
 type IncomeSummary struct {
 	TotalIncome float64        `json:"total_income"`
 	ByType      []IncomeByType `json:"by_type"`
-	StartDate   time.Time      `json:"start_date"`
-	EndDate     time.Time      `json:"end_date"`
+	// StartDate/EndDate stay time.Time — NOT serialized; StartDateDisplay/EndDateDisplay are what
+	// reach clients. investment_transactions.date is a DATE column, and a date-only value
+	// serialized through a timestamp shifts back a day for any client west of UTC — the same
+	// defect class InvestmentTransaction.DateDisplay already fixes for the transaction rows this
+	// summary aggregates (#1631).
+	StartDate        time.Time `json:"-"`
+	StartDateDisplay string    `json:"start_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this income summary's window starts on"`
+	EndDate          time.Time `json:"-"`
+	EndDateDisplay   string    `json:"end_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this income summary's window ends on"`
+
+	// CurrencyCode is the single currency every monetary figure here is expressed in, or nil when
+	// one cannot be stated. IsMixedCurrency distinguishes the two reasons nil happens: true means
+	// the contributing rows are denominated in two or more DIFFERENT known currencies, so the
+	// totals are a currency-blind sum (there is no FX rate source in this system to convert
+	// with); false means no contributing row stated a currency at all — the state of every row
+	// written before migration 000202 — which is unknown, not a conflict. #1631 M8a.
+	CurrencyCode    *string `json:"currency_code,omitempty"`
+	IsMixedCurrency bool    `json:"is_mixed_currency"`
 }
 
 // IncomeByType is the income breakdown by normalized income subtype.
 type IncomeByType struct {
-	IncomeType  string  `json:"income_type"` // "dividend", "interest", "dividend_reinvestment", "interest_reinvestment", "other_income"
+	// IncomeType is one of "dividend", "interest", "capital_gain", "dividend_reinvestment",
+	// "interest_reinvestment", "capital_gain_reinvestment", "other_income". #1631 CX4 added
+	// "capital_gain_reinvestment": the two capital-gain reinvestment subtypes were in the display
+	// Reinvest bucket but absent from IncomeSubtypes, so they were unreachable from this summary.
+	// #1631 added "capital_gain" (capital-gain
+	// distributions previously matched no set at all and fell through to the generic bucket) and
+	// began counting a structural dividend — a cash credit against a non-cash-equivalent security,
+	// which is how some brokerages report an ETF distribution — under "dividend".
+	IncomeType  string  `json:"income_type"`
 	TotalAmount float64 `json:"total_amount"`
 	Count       int     `json:"count"`
 }

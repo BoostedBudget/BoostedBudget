@@ -32,6 +32,7 @@
  */
 
 export interface PortfolioHistoryPoint {
+  /** UTC calendar day (YYYY-MM-DD) this snapshot was captured */
   date: string;
   total_value: number;
 }

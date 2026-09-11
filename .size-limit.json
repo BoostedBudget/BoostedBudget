@@ -56,7 +56,7 @@
   {
     "name": "admin",
     "path": "apps/web/dist/assets/admin-*.js",
-    "limit": "20 KB",
+    "limit": "24 KB",
     "gzip": true
   },
   {
@@ -176,7 +176,7 @@
   {
     "name": "investments",
     "path": "apps/web/dist/assets/investments-*.js",
-    "limit": "7.3 KB",
+    "limit": "8.5 KB",
     "gzip": true
   }
 ]

@@ -8,9 +8,28 @@ import type { Account } from '@/features/accounts/types'
 export type TransactionSource = 'plaid' | 'manual' | 'teller' | 'finicity' | 'yodlee'
 
 /**
- * Investment activity type — mirrors backend InvestmentActivity domain.
+ * Investment activity type — mirrors backend domain.NormalizeTradeType's output buckets.
+ *
+ * #1631 added 'interest' and 'transfer'. Before that, 179 production transfer rows rendered
+ * "Other" and 47 interest rows rendered "Cash" purely for want of a bucket — and the interest
+ * case made the chip disagree with the backend's IncomeSubtypes, which has always counted
+ * interest as income.
+ *
+ * ⚠ Keep in step with ACTIVITY_TYPE_CONFIG: an activity type absent from that map renders the
+ * "Other" fallback chip, so a bucket added on the backend without adding it here is a silent UI
+ * regression rather than an error. ACTIVITY_TYPES below is the ordered list, and a test asserts
+ * the two agree.
  */
-export type ActivityType = 'buy' | 'sell' | 'dividend' | 'reinvest' | 'fee' | 'cash' | 'other'
+export type ActivityType =
+  | 'buy'
+  | 'sell'
+  | 'dividend'
+  | 'reinvest'
+  | 'interest'
+  | 'fee'
+  | 'transfer'
+  | 'cash'
+  | 'other'
 
 /**
  * Feed row source discriminator — identifies the row kind in the unified activity feed.
@@ -169,6 +188,17 @@ export interface InvestmentActivity {
   investment_quantity?: number | null
   investment_price?: number | null
   investment_fees?: number | null
+  /**
+   * Currency of `amount`, `investment_price` and `investment_fees` on this row
+   * (investment_transactions.currency_code, migration 000202).
+   *
+   * ⚠ Absent/null is a REAL state, not a missing USD. It means the row was ingested before the
+   * currency was recorded, and `formatPortfolioAmount` renders that third ("unknown") state as
+   * dollars for the legacy base. Never coalesce it to 'USD' — see
+   * `@/features/investments/utils/portfolioCurrency`'s header for why the three states are not
+   * two.
+   */
+  currency_code?: string | null
   // Investment-specific optional fields
   investment_subtype?: string | null
   security_id?: string | null

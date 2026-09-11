@@ -1724,6 +1724,13 @@ func (r *transactionRepository) postScanTransactionState(tx *domain.Transaction,
 		tx.DeletedReason = nil
 	}
 
+	// #1631: date and authorized_date are DATE columns, and this is the ONE finalizer every
+	// full-transaction scan runs through (scanTransactions, the user_account_id splice, and the
+	// merchant-sort keyset branch all call it), which is why the populate call lives here rather
+	// than at each of them. A Transaction that skipped this step serializes an empty date rather
+	// than a wrong one.
+	tx.PopulateDateDisplay()
+
 	return nil
 }
 
@@ -3170,6 +3177,10 @@ func (r *transactionRepository) GetRecentInflowsByUserID(ctx context.Context, us
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan inflow transaction: %w", err)
 		}
+		// These rows never reach a client (savings-transfer correlation only) and this read
+		// bypasses postScanTransactionState because it projects a handful of columns rather than
+		// the full list. Populated anyway so the type invariant holds wherever the row travels.
+		tx.PopulateDateDisplay()
 		transactions = append(transactions, &tx)
 	}
 
@@ -3299,11 +3310,31 @@ func accountWithNoActiveIntervalLeg(alias string) string {
 // WHY THIS EXISTS. Plaid reports a brokerage cash-management account through BOTH
 // /transactions/sync and /investments/transactions/get, so one real movement lands once in
 // `transactions` and once in `investment_transactions` and the unified feed shows it twice. The
-// flag is the user's per-chain opt-out, and it is applied HERE, at read time, because the rows
-// themselves are legitimate Plaid-reported history: deleting them, tombstoning them, or dropping
-// them at ingestion would all be destruction as a side effect of a preference
-// (docs/decisions/2026-08-24-financial-history-retained-by-default.md). Clearing the flag brings
-// exactly the same rows back — TestExcludeInvestmentSync_IsReversible pins that.
+// flag is the user's per-chain opt-out, and this predicate is why rows stored BEFORE it was set
+// stop appearing in the feed: deleting or tombstoning them would be destruction as a side effect of
+// a preference (docs/decisions/2026-08-24-financial-history-retained-by-default.md), so they are
+// retained and filtered here. TestExcludeInvestmentSync_IsReversible pins that those rows are
+// untouched and reappear when the flag is cleared.
+//
+// ⚠ CORRECTED (#1631 M4). This comment used to list "dropping them at ingestion" alongside
+// deleting and tombstoning as equally forbidden. That is no longer the tree's position: the sync
+// now DOES decline to persist new investment_transactions for an excluded chain, which is why this
+// read filter matters only for rows written before the flag was set. The ADR was amended to
+// authorise it — never ingesting a row is not destroying a retained one — under three narrow scope
+// tests set out in that document's § "AMENDMENT (#1631, 2026-09-10): a fourth category — never
+// ingesting a row". Deleting and tombstoning remain forbidden, and this predicate is NOT redundant:
+// it is the only thing that keeps the already-stored duplicates out of the feed.
+//
+// ⚠ CORRECTED (#1631, third site — after an independent review). This comment used to add "and the
+// row in question is a DUPLICATE of one /transactions/sync stores anyway". That clause is FALSE
+// and the ADR was corrected to say so (commit 567e2f55), as was domain/user_account.go (commit
+// 4145307e): the banking arm of this very file's unified feed hard-codes NULL for security_id,
+// ticker_symbol, security_name, type, subtype, quantity, price and fees (see the SELECT below), so
+// it cannot represent the dropped fact on exactly the fields that make an investment transaction
+// one. The duplication is PARTIAL, not total, and it is user-asserted, not system-verified: setting
+// the flag is the user's claim that these rows double up, and nothing checks it. That is still a
+// decision the user is entitled to make; it is not a proof that nothing is lost. Do not reintroduce
+// that framing anywhere in this codebase.
 //
 // ⚠ NOT EXISTS, NOT A JOIN. One user_account has MANY accounts rows — that is what a re-link chain
 // IS (000033) — so joining user_accounts through accounts would multiply every feed row by the
@@ -3641,7 +3672,7 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 	// return zero rows — consistent empty result rather than asymmetric (all invest, no banking).
 	var bankingActivityFilter, investActivityFilter string
 	if len(filters.ActivityTypes) > 0 {
-		clause, typeArgs := domain.TradeTypeToSQLPredicate(filters.ActivityTypes, "it")
+		clause, typeArgs := domain.TradeTypeToSQLPredicate(filters.ActivityTypes, "it", "sec")
 		if clause != "" {
 			renumbered := renumberPlaceholders(clause, argIdx)
 			investActivityFilter = " AND (" + renumbered + ")"
@@ -3770,7 +3801,15 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			NULL::text,
 			NULL::float8,
 			NULL::float8,
-			NULL::float8
+			NULL::float8,
+			NULL::bool,          -- inv_security_attached (#1631)
+			NULL::bool,          -- inv_security_is_cash_equivalent (#1631)
+			-- #1631: currency_code. NULL on this arm because the transactions table has no
+			-- currency column at all — not because banking money is dollars. The two arms must stay
+			-- column-aligned with the rows.Scan below, so this placeholder is mandatory, and it
+			-- must stay a NULL: a 'USD' literal here would make every banking row assert a unit
+			-- nothing in this system established.
+			NULL::text           -- currency_code (#1631)
 		FROM transactions t
 		%s
 		WHERE t.user_id = $1::uuid
@@ -3842,7 +3881,19 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			it.subtype,
 			it.quantity,
 			it.price,
-			it.fees
+			it.fees,
+			-- #1631: the two facts NormalizeTradeType needs about the joined security. Two
+			-- columns, not one nullable bool: "no security" and "a security whose
+			-- is_cash_equivalent is NULL" are different facts and must not arrive as one nil.
+			-- The flag is passed through RAW, not COALESCEd: an absent flag must not be read as
+			-- "not cash-equivalent", which would reclassify a row on a fact we do not have.
+			(sec.id IS NOT NULL)                        AS inv_security_attached,
+			sec.is_cash_equivalent                      AS inv_security_is_cash_equivalent,
+			-- #1631: the currency of it.amount, it.price and it.fees (migration 000202). Passed
+			-- through RAW — a NULL here is a pre-000202 row whose currency is genuinely unknown,
+			-- and COALESCEing it to 'USD' would invent the fact the migration deliberately
+			-- refused to default.
+			it.currency_code                            AS currency_code
 		FROM investment_transactions it
 		LEFT JOIN securities sec ON sec.id = it.security_id
 		WHERE it.user_id = $1::uuid
@@ -3965,6 +4016,8 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			securityID, tickerSymbol, securityName    *string
 			invType, invSubtype                       *string
 			invQuantity, invPrice, invFees            *float64
+			invSecAttached, invSecIsCashEquivalent    *bool
+			currencyCode                              *string
 		)
 
 		if err := rows.Scan(
@@ -3985,6 +4038,8 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			&securityID, &tickerSymbol, &securityName,
 			&invType, &invSubtype,
 			&invQuantity, &invPrice, &invFees,
+			&invSecAttached, &invSecIsCashEquivalent,
+			&currencyCode,
 		); err != nil {
 			return nil, nil, nil, fmt.Errorf("GetByUserIDKeysetUnified scan: %w", err)
 		}
@@ -4027,6 +4082,9 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			InvestmentQuantity:       invQuantity,
 			InvestmentPrice:          invPrice,
 			InvestmentFees:           invFees,
+			// #1631: nil on every banking row and on every pre-000202 investment row, and that
+			// absence is the wire contract — see ActivityItem.CurrencyCode.
+			CurrencyCode: currencyCode,
 		}
 
 		// #1569: a row with deleted_at set reached this feed only because the caller opted in via
@@ -4044,9 +4102,22 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			}
 		}
 
-		// Normalize ActivityType from raw Plaid type/subtype for investment rows.
+		// Normalize ActivityType from the raw Plaid type/subtype plus the two joined-security facts
+		// (#1631). The cash-equivalence flag stays a *bool so a NULL reaches the rule as "unknown"
+		// rather than as "false" — the SQL filter's `is_cash_equivalent IS FALSE` treats it the same
+		// way, and that agreement is what keeps display and filter a partition.
 		if invType != nil {
-			at := domain.NormalizeTradeType(*invType, invSubtype)
+			at := domain.NormalizeTradeType(domain.TradeTypeRow{
+				Type:    *invType,
+				Subtype: invSubtype,
+				// amount is it.amount on the investment leg of the UNION, and quantity is
+				// it.quantity -- the two row-local facts the structural rule corroborates on
+				// (#1631 CX3). Both must come from the investment row, never from a banking one.
+				Amount:                   amount,
+				Quantity:                 invQuantity,
+				SecurityAttached:         invSecAttached != nil && *invSecAttached,
+				SecurityIsCashEquivalent: invSecIsCashEquivalent,
+			})
 			item.ActivityType = &at
 		}
 
@@ -4058,6 +4129,11 @@ func (r *transactionRepository) GetByUserIDKeysetUnified(
 			}
 			item.ExternalTransactionID = decrypted
 		}
+
+		// #1631: sort_date, date and authorized_date are all DATE-derived on both legs of the
+		// UNION, so render them as calendar days rather than timestamps. The time.Time fields
+		// stay populated — the cursor built below reads SortDate directly.
+		item.PopulateDateDisplay()
 
 		// Unmarshal tags JSONB (banking rows only; investment rows get NULL::jsonb → nil slice).
 		if len(tagsJSON) > 0 {

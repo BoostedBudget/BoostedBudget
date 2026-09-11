@@ -1,3 +1,5 @@
+import { titleCaseWords } from '@/shared/text/titleCase'
+
 export const CURATED_PRIMARIES: readonly string[] = [
   'BANK_FEES',
   'ENTERTAINMENT',
@@ -19,16 +21,12 @@ export const CURATED_PRIMARIES: readonly string[] = [
   'OTHER',
 ]
 
-function titleCase(tokens: string[]): string {
-  return tokens.map(t => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()).join(' ')
-}
-
 export function isPFCPrimary(value: string): boolean {
   return (CURATED_PRIMARIES as readonly string[]).includes(value)
 }
 
 export function formatPFCPrimary(primary: string): string {
-  return titleCase(primary.split('_'))
+  return titleCaseWords(primary)
 }
 
 export function formatPFCDetailed(detailed: string): string {
@@ -38,11 +36,11 @@ export function formatPFCDetailed(detailed: string): string {
 
   if (matchingPrimary) {
     const suffix = detailed.slice(matchingPrimary.length + 1)
-    return `${formatPFCPrimary(matchingPrimary)} › ${titleCase(suffix.split('_'))}`
+    return `${formatPFCPrimary(matchingPrimary)} › ${titleCaseWords(suffix)}`
   }
 
   const tokens = detailed.split('_')
-  return `${titleCase([tokens[0]])} › ${titleCase(tokens.slice(1))}`
+  return `${titleCaseWords(tokens[0])} › ${titleCaseWords(tokens.slice(1).join('_'))}`
 }
 
 export function formatPFCEnum(enumValue: string): string {

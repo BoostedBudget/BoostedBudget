@@ -4,41 +4,18 @@ import {
   EChartsChart,
   useDarkMode,
   CATEGORY_COLORS,
-  formatCurrencyFull,
   formatPercent,
   escapeHtml,
 } from '@/shared/charts'
+import { formatPortfolioAmount, isCurrencyUnnameable } from '../utils/portfolioCurrency'
+import { MixedCurrencyBadge } from './MixedCurrencyBadge'
 import { useGetPortfolioAllocationBreakdown } from '@boostedbudget/api-client/endpoints/analytics/analytics'
 import type { AllocationConfig, GetPortfolioAllocationBreakdownGroupBy } from '../hooks/usePortfolioAllocationConfig'
 import { ErrorState } from '@/components/ui/error-state'
+import { humanizeBucketLabel } from './allocationBucketLabel'
 
 interface AllocationDonutChartProps {
   config: AllocationConfig
-}
-
-// Map raw API security-type tokens to display-ready labels.
-// Rules (in priority order):
-//   1. Falsy / "unknown" → "Other"
-//   2. group_by=account → verbatim (account names are already human-readable)
-//   3. Known acronyms → uppercase canonical form (etf → "ETF", reit → "REIT")
-//   4. Everything else → title-case by splitting on underscores/spaces
-//      ("mutual_fund" → "Mutual Fund", "stock" → "Stock")
-const ACRONYM_LABELS: Readonly<Record<string, string>> = {
-  etf: 'ETF',
-  reit: 'REIT',
-  mbs: 'MBS',
-  abs: 'ABS',
-}
-
-function humanizeBucketLabel(value: string, groupBy: GetPortfolioAllocationBreakdownGroupBy): string {
-  if (!value || value.toLowerCase() === 'unknown') return 'Other'
-  if (groupBy === 'account') return value
-  const lower = value.toLowerCase()
-  if (ACRONYM_LABELS[lower]) return ACRONYM_LABELS[lower]
-  return value
-    .split(/[_\s]+/)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join(' ')
 }
 
 // Aggregate buckets with the same humanized label, summing values and counts.
@@ -122,6 +99,18 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
 
   const buckets = allocationData?.buckets
 
+  // #1631 CX1: the tooltip and legend formatted every slice as dollars. The breakdown carries its
+  // own currency verdict and it was thrown away. The verdict is breakdown-level, not per-slice: a
+  // donut's slices are compared against one another and against a single total, so a chart whose
+  // slices disagree about the unit is broken as a whole.
+  const currency = useMemo(
+    () => ({
+      currency_code: allocationData?.currency_code,
+      is_mixed_currency: allocationData?.is_mixed_currency,
+    }),
+    [allocationData?.currency_code, allocationData?.is_mixed_currency],
+  )
+
   const option = useMemo((): EChartsOption => {
     if (!buckets || buckets.length === 0) return {}
 
@@ -149,7 +138,7 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
           const p = params as { name: string; value?: number; data?: { pct?: number } }
           if (typeof p.value !== 'number') return escapeHtml(String(p.name ?? ''))
           const pct = (p.data?.pct ?? 0).toFixed(1)
-          return `${escapeHtml(String(p.name))}: ${formatCurrencyFull(p.value)} (${pct}%)`
+          return `${escapeHtml(String(p.name))}: ${formatPortfolioAmount(p.value, currency)} (${pct}%)`
         },
       },
       legend: {
@@ -160,7 +149,7 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
         formatter: (name: string) => {
           const slice = sliceByName.get(name)
           if (!slice) return escapeHtml(name)
-          return `${escapeHtml(name)}  ${formatCurrencyFull(slice.value)}  (${formatPercent(slice.pct)})`
+          return `${escapeHtml(name)}  ${formatPortfolioAmount(slice.value, currency)}  (${formatPercent(slice.pct)})`
         },
       },
       series: [
@@ -181,7 +170,7 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
         },
       ],
     }
-  }, [buckets, config.group_by])
+  }, [buckets, config.group_by, currency])
 
   if (isLoading) {
     return (
@@ -207,6 +196,8 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
 
   return (
     <div className="h-[300px] sm:h-[400px] w-full">
+      {/* Without this the reader is left to guess why the slices lost their currency symbol. */}
+      {isCurrencyUnnameable(currency) && <MixedCurrencyBadge className="mb-2" />}
       <EChartsChart
         style={{ width: '100%', height: '100%' }}
         option={option}

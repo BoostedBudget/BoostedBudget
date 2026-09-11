@@ -37,6 +37,8 @@ export interface GainLossSummary {
   readonly $schema?: string;
   /** @nullable */
   by_account: AccountGainLoss[] | null;
+  currency_code?: string;
+  is_mixed_currency: boolean;
   realized_gain_loss_supported: boolean;
   total_cost_basis: number;
   total_unrealized_gain_loss: number;

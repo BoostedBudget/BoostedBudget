@@ -329,6 +329,11 @@ func (h *SavingsGoalHandler) GetProgressSummary(ctx context.Context, input *GetS
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
+	// #1636 rounding boundary — money_rounding.go. This fold used to live in
+	// savings_progress_service.go's own roundToCents, one layer below where the money-representation
+	// ADR puts the boundary; that inconsistency was the reconciliation the ADR assigned to #1636,
+	// and it is resolved upward to here.
+	roundSavingsProgressSummary(summary)
 	return &GetSavingsProgressSummaryOutput{Body: summary}, nil
 }
 

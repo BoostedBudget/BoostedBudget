@@ -2595,17 +2595,20 @@ func TestBudgetService_CreateBudget_RejectsEscapedNestedChildWithinBatch_CustomP
 }
 
 // ===========================================================================
-// Issue #1630 review round 2: a custom-period budget's end_date must cover the whole
-// calendar day it names when date-only, and be respected exactly when a full RFC3339
-// timestamp — matching FlexibleDate.EndOfDay's contract.
+// Issue #1631 (superseding #1630 review round 2): a custom-period budget's end_date is the
+// value the DATE column will actually hold, for BOTH a date-only and an RFC3339 input. The
+// final day's inclusivity is enforced by GetCurrentBudget's calendar-day comparison, NOT by
+// an end-of-day instant here — budgets.end_date is a DATE and truncates one. See
+// budgetCalendarDayUTC, and the round-trip proof in
+// TestBudgetService_GetCurrentBudget_CustomPeriodEndingToday_IsStillCurrent_1631.
 // ===========================================================================
 
-// TestBudgetService_CreateBudget_CustomPeriod_DateOnlyEndCoversWholeDay is the
-// GREEN-already regression guard: a date-only end_date ("2026-09-30") must produce a
-// stored Budget.EndDate covering the ENTIRE day (through 23:59:59.999999999), not just
-// midnight — otherwise every same-day transaction after midnight is silently excluded
-// from the budget's own period.
-func TestBudgetService_CreateBudget_CustomPeriod_DateOnlyEndCoversWholeDay(t *testing.T) {
+// TestBudgetService_CreateBudget_CustomPeriod_DateOnlyEndIsTheCalendarDay pins that a
+// date-only end_date ("2026-09-30") is stored as that calendar day at midnight UTC — the
+// value Postgres hands back — and NOT as 23:59:59.999999999, which #1630 wrote here and the
+// DATE column silently discarded. The create response and the re-read row must agree; a
+// field whose meaning depends on whether it has been through Postgres yet is a trap.
+func TestBudgetService_CreateBudget_CustomPeriod_DateOnlyEndIsTheCalendarDay(t *testing.T) {
 	mockBudgetRepo := new(MockBudgetRepository)
 	mockCategoryRepo := new(MockCustomCategoryRepository)
 	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
@@ -2635,21 +2638,19 @@ func TestBudgetService_CreateBudget_CustomPeriod_DateOnlyEndCoversWholeDay(t *te
 	require.NotNil(t, captured)
 	require.NotNil(t, captured.EndDate)
 
-	want := time.Date(2026, 9, 30, 23, 59, 59, 999999999, time.UTC)
+	want := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 	assert.True(t, captured.EndDate.Equal(want),
-		"a date-only end_date must cover the whole day: got %v, want %v", captured.EndDate, want)
+		"a date-only end_date must be the calendar day the DATE column holds: got %v, want %v",
+		captured.EndDate, want)
 }
 
-// TestBudgetService_CreateBudget_CustomPeriod_RFC3339EndRespectedExactly is the RED/GREEN
-// test for the review finding: a full RFC3339 end_date ("2026-09-30T15:00:00Z") must be
-// stored EXACTLY as given, not pushed to nearly a full day later.
-//
-// RED (pre-fix): the old code called req.EndDate.Time() directly and any downstream
-// end-of-day extension (category_preview_service.go) applied unconditionally elsewhere —
-// but budget_service.go itself stored the raw timestamp with NO extension at all, so a
-// DATE-ONLY end_date here was the bug (never extended, silently truncating the budget's
-// last day). This test pins the RFC3339 side of the fix: it must remain untouched.
-func TestBudgetService_CreateBudget_CustomPeriod_RFC3339EndRespectedExactly(t *testing.T) {
+// TestBudgetService_CreateBudget_CustomPeriod_RFC3339EndTruncatesToItsCalendarDay pins the
+// RFC3339 side. #1630 asserted such a value was "respected exactly" — but that was only ever
+// true of the in-memory object: budgets.end_date is a DATE, so the 15:00 was thrown away by
+// the very next statement. The service now performs that truncation itself, so the create
+// response tells the caller the truth instead of a time the database refuses to keep. A
+// caller who needs intraday precision needs a timestamptz column, not a different service.
+func TestBudgetService_CreateBudget_CustomPeriod_RFC3339EndTruncatesToItsCalendarDay(t *testing.T) {
 	mockBudgetRepo := new(MockBudgetRepository)
 	mockCategoryRepo := new(MockCustomCategoryRepository)
 	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
@@ -2679,14 +2680,16 @@ func TestBudgetService_CreateBudget_CustomPeriod_RFC3339EndRespectedExactly(t *t
 	require.NotNil(t, captured)
 	require.NotNil(t, captured.EndDate)
 
-	want := time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC)
+	want := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 	assert.True(t, captured.EndDate.Equal(want),
-		"a full RFC3339 end_date must be stored EXACTLY: got %v, want %v", captured.EndDate, want)
+		"a full RFC3339 end_date must be truncated to the calendar day the DATE column holds: "+
+			"got %v, want %v", captured.EndDate, want)
 }
 
-// TestBudgetService_UpdateBudget_CustomPeriod_RFC3339EndRespectedExactly mirrors the
-// create-path test above for UpdateBudget's own EndDate handling.
-func TestBudgetService_UpdateBudget_CustomPeriod_RFC3339EndRespectedExactly(t *testing.T) {
+// TestBudgetService_UpdateBudget_CustomPeriod_RFC3339EndTruncatesToItsCalendarDay mirrors the
+// create-path test above for UpdateBudget's own EndDate handling — the two write sites must
+// not drift apart.
+func TestBudgetService_UpdateBudget_CustomPeriod_RFC3339EndTruncatesToItsCalendarDay(t *testing.T) {
 	mockBudgetRepo := new(MockBudgetRepository)
 	mockCategoryRepo := new(MockCustomCategoryRepository)
 	mockTransactionRepo := new(MockTransactionRepositoryForBudget)
@@ -2717,9 +2720,10 @@ func TestBudgetService_UpdateBudget_CustomPeriod_RFC3339EndRespectedExactly(t *t
 	require.NotNil(t, budget)
 	require.NotNil(t, budget.EndDate)
 
-	want := time.Date(2026, 9, 30, 15, 0, 0, 0, time.UTC)
+	want := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
 	assert.True(t, budget.EndDate.Equal(want),
-		"a full RFC3339 end_date must be stored EXACTLY on update: got %v, want %v", budget.EndDate, want)
+		"a full RFC3339 end_date must be truncated to its calendar day on update too: "+
+			"got %v, want %v", budget.EndDate, want)
 }
 
 // ptrFlexibleDate returns a pointer to a domain.FlexibleDate literal.

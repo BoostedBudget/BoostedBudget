@@ -123,13 +123,38 @@ type Transaction struct {
 	ExternalMetadata *string `json:"external_metadata,omitempty" db:"external_metadata"`
 
 	// Core transaction fields (standardized across all providers)
-	Amount                float64    `json:"amount" db:"amount"` // Positive=outflow, Negative=inflow (Plaid PFCv2)
-	Date                  time.Time  `json:"date" db:"date"`
-	AuthorizedDate        *time.Time `json:"authorized_date,omitempty" db:"authorized_date"`
-	Name                  string     `json:"name" db:"name"`
-	MerchantName          *string    `json:"merchant_name,omitempty" db:"merchant_name"`
-	MerchantID            *string    `json:"merchant_id,omitempty" db:"merchant_id"`
-	EffectiveMerchantName *string    `json:"effective_merchant_name,omitempty" db:"-"`
+	Amount float64 `json:"amount" db:"amount"` // Positive=outflow, Negative=inflow (Plaid PFCv2)
+
+	// Date is the posting day, over a DATE column (transactions.date, migration 000010). Kept as
+	// time.Time — NOT serialized — because it is also a SQL bind param on insert/update, a scan
+	// target, and the source of the V:2 keyset cursor sort value, all of which need a real
+	// time.Time rather than a formatted string. DateDisplay below is what reaches clients.
+	Date time.Time `json:"-" db:"date"`
+	// AuthorizedDate is the authorization day, also a DATE column, and also the preferred half of
+	// the feed sort key (COALESCE(authorized_date, date)). Same split, same reasons.
+	AuthorizedDate *time.Time `json:"-" db:"authorized_date"`
+
+	// DateDisplay / AuthorizedDateDisplay are the UTC calendar days that actually serialize as
+	// "date" and "authorized_date". Populated at the DB edge by
+	// transactionRepository.postScanTransactionState, the single finalizer every full-transaction
+	// scan runs through — the same transient-field pattern as InvestmentTransaction.DateDisplay.
+	//
+	// Added by #1631: Date carried json:"date" directly, so a DATE column serialized as a full
+	// timestamp (2026-01-02T00:00:00Z), which renders a day early for any client west of UTC that
+	// parses it in local time. That is the defect class HoldingSnapshotView.AsOfDate documents,
+	// and the investment leg of this very feed had already been fixed for it.
+	//
+	// AuthorizedDateDisplay stays a *string so a NULL authorized_date is OMITTED rather than
+	// present-and-empty: the two most prominent UI sites render
+	// formatDate(authorized_date || date), and an empty string is truthy enough to win that `||`
+	// and print "Invalid Date".
+	DateDisplay           string  `json:"date" db:"-" format:"date" doc:"UTC calendar day (YYYY-MM-DD) the transaction posted"`
+	AuthorizedDateDisplay *string `json:"authorized_date,omitempty" db:"-" format:"date" doc:"UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted when the provider gave none"`
+
+	Name                  string  `json:"name" db:"name"`
+	MerchantName          *string `json:"merchant_name,omitempty" db:"merchant_name"`
+	MerchantID            *string `json:"merchant_id,omitempty" db:"merchant_id"`
+	EffectiveMerchantName *string `json:"effective_merchant_name,omitempty" db:"-"`
 
 	// PFCv2 source columns (from Plaid)
 	PFCPrimary         *string `json:"pfc_primary,omitempty" db:"pfc_primary"`

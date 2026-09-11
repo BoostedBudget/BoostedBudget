@@ -264,10 +264,15 @@ func TestInvestmentService_GetPortfolioHistory_MapsToDTOs(t *testing.T) {
 	pts, err := svc.GetPortfolioHistory(ctx, userID, start, end)
 
 	require.NoError(t, err)
-	assert.Len(t, pts, 3)
-	assert.Equal(t, 1000.0, pts[0].TotalValue)
-	assert.Equal(t, 1050.0, pts[1].TotalValue)
-	assert.Equal(t, 1100.0, pts[2].TotalValue)
+	// #1631 M8a fix round 2 (I-2): the result is the whole SERIES now — points plus the currency
+	// they are plotted in — so the points live under .Points. These snapshots state no currency,
+	// which is unknown rather than a conflict, so the series names none and is not mixed.
+	assert.Len(t, pts.Points, 3)
+	assert.Equal(t, 1000.0, pts.Points[0].TotalValue)
+	assert.Equal(t, 1050.0, pts.Points[1].TotalValue)
+	assert.Equal(t, 1100.0, pts.Points[2].TotalValue)
+	assert.Nil(t, pts.CurrencyCode)
+	assert.False(t, pts.IsMixedCurrency)
 	snapshotRepo.AssertExpectations(t)
 }
 
@@ -288,7 +293,10 @@ func TestInvestmentService_GetPortfolioHistory_Empty(t *testing.T) {
 	pts, err := svc.GetPortfolioHistory(ctx, userID, start, end)
 
 	require.NoError(t, err)
-	assert.Empty(t, pts)
+	require.NotNil(t, pts, "an empty range is still a series, not a nil one")
+	assert.Empty(t, pts.Points)
+	assert.Nil(t, pts.CurrencyCode)
+	assert.False(t, pts.IsMixedCurrency)
 }
 
 func TestInvestmentService_ListInvestmentTransactions_EncodesNextCursor(t *testing.T) {

@@ -5,11 +5,14 @@ package operations
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -64,6 +67,12 @@ func (m *mockUserAccountService) UpdateCustomization(
 func (m *mockUserAccountService) SetHidden(ctx context.Context, userAccountID, userID string, hidden bool) error {
 	args := m.Called(ctx, userAccountID, userID, hidden)
 	return args.Error(0)
+}
+
+// SetInvestmentBackfillEnqueuer is a no-op in this mock: the #1631 M4 nudge it wires is optional
+// and nil-safe by design, so no test here needs to observe it. The durable half of the backfill
+// obligation is a SQL write, not this setter.
+func (m *mockUserAccountService) SetInvestmentBackfillEnqueuer(jobQueue queue.JobQueue, accountRepo repository.AccountRepository, logger *slog.Logger) {
 }
 
 // ===========================================================================

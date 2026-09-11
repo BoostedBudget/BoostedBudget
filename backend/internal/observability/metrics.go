@@ -783,9 +783,20 @@ var (
 
 	// InvestmentTransactionsSynced counts investment transactions processed by action.
 	// Issue #659: Plaid Investments
+	//
+	// ⚠ #1631 M4 added three DROP actions — dropped_unmapped_account, dropped_unparsable_date and
+	// dropped_unresolved_security — and they are not cosmetic. A dropped row makes the sync refuse
+	// to advance investments_last_synced_date, so the item re-fetches its whole window on every run
+	// until the cause is fixed. Without these labels that state is a permanently GREEN job: the
+	// worker returns nil, logs "completed", and nothing anywhere says the cursor is pinned. Alert on
+	// a sustained non-zero rate for any dropped_* action.
+	//
+	// ⚠ "skipped" means ALREADY PRESENT (a unique-conflict on the 1-day overlap window) and is
+	// healthy on every incremental sync — do not alert on it, and do not fold a drop into it. See
+	// domain.InvestmentTransactionSyncResult, whose fields these labels mirror one-for-one.
 	InvestmentTransactionsSynced = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "investment_transactions_synced_total",
-		Help: "Total number of investment transactions processed by action (inserted/skipped).",
+		Help: "Total number of investment transactions processed by action (inserted/skipped/excluded/dropped_unmapped_account/dropped_unparsable_date/dropped_unresolved_security).",
 	}, []string{"action"})
 
 	// AccountLinkRefusedNoStableIdentity counts bank links refused because no stable

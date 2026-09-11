@@ -124,10 +124,18 @@ func (w *InvestmentHoldingsSyncWorker) Work(ctx context.Context, job *river.Job[
 	// only a `SELECT ... FOR UPDATE` row lock and does no writes, so committing it after
 	// the multi-page Plaid sync left the connection idle-in-transaction until Postgres
 	// terminated it (SQLSTATE 25P03 — a production DLQ entry burned all 5 attempts).
-	// Safe because the webhook path takes no lock at all and worker-vs-worker
-	// serialization already comes from River job uniqueness. See plaid_sync.go for the
+	// Safe because the webhook path takes no lock at all. See plaid_sync.go for the
 	// full rationale; pinned by TestInvestmentHoldingsSyncWorker_LockTxCommitsBeforeSync
 	// in issue1609_lock_tx_lifetime_test.go.
+	//
+	// ⚠ This comment used to add "and worker-vs-worker serialization already comes from River job
+	// uniqueness". That was FALSE for the path that matters and it cost a production DLQ entry
+	// (2026-09-11: five identical `unique_account_security` violations). webhook_processing's
+	// uniqueness is ByArgs and its args carry webhook_id, so two HOLDINGS webhooks for one item
+	// are two distinct jobs River will happily run at once — and that path holds no lock. Nothing
+	// here serializes two concurrent holdings replaces of one account. That is now enforced where
+	// the statements are, by the per-account pg_advisory_xact_lock in
+	// holdingRepository.ReplaceForAccount, which is the only place every caller passes through.
 	if tx != nil {
 		if commitErr := tx.Commit(ctx); commitErr != nil {
 			return fmt.Errorf("failed to commit transaction: %w", commitErr)

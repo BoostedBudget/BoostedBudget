@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import { InvestmentTransactionsTable } from './InvestmentTransactionsTable'
+import { activityTypeSortValue } from './investmentTransactionsTable.constants'
 import {
   mockUseInfiniteInvestmentTransactions,
   mockFetchNextInvestmentPage,
@@ -174,5 +175,57 @@ describe('InvestmentTransactionsTable', () => {
       // mockTxn.type = 'buy' → ActivityTypeChip → 'Buy'
       expect(screen.getByText('Buy')).toBeDefined()
     })
+  })
+})
+
+// #1631 CX1: the amount, price and fee columns hard-coded the dollar, so a GBP-denominated row
+// rendered as dollars. Each row carries its own currency_code -- an investment account can hold
+// positions in several currencies at once, which is exactly why the per-ROW code is the one to
+// format by rather than any portfolio-level verdict.
+describe('InvestmentTransactionsTable currency (#1631 CX1)', () => {
+  beforeEach(() => {
+    mockUseInfiniteInvestmentTransactions.mockClear()
+  })
+
+  it('formats a row in the currency that row states', async () => {
+    mockUseInfiniteInvestmentTransactions.mockReturnValue(
+      loadedResult({ transactions: [{ ...mockTxn, currency_code: 'GBP' }] }),
+    )
+    // disableVirtualization forces DataTable to render real rows; jsdom has no layout.
+    render(<InvestmentTransactionsTable dateRange={defaultDateRange} disableVirtualization />)
+
+    await waitFor(() => {
+      expect(screen.getByText(/£2,500/)).toBeDefined()
+    })
+    expect(screen.queryByText(/\$2,500/)).toBeNull()
+  })
+
+  // The sibling: a row that states no currency keeps today's dollar rendering, because unknown is
+  // not a conflict and every row written before migration 000202 is in that state.
+  it('keeps the dollar rendering for a row that states no currency', async () => {
+    mockUseInfiniteInvestmentTransactions.mockReturnValue(
+      loadedResult({ transactions: [mockTxn] }),
+    )
+    render(<InvestmentTransactionsTable dateRange={defaultDateRange} disableVirtualization />)
+
+    await waitFor(() => {
+      expect(screen.getByText(/\$2,500/)).toBeDefined()
+    })
+  })
+})
+
+// #1631 C1: the sort accessor was `key: 'activity_type'`, which had no fallback, while `render`
+// fell back to `r.type` for a row missing `activity_type` (omitempty). That row DISPLAYED its
+// classified chip but SORTED under `undefined`. Both call sites now read `activityTypeSortValue`,
+// so this pins them to agree for the exact row shape that used to diverge.
+describe('InvestmentTransactionsTable activity_type sort accessor (#1631 C1)', () => {
+  it('falls back to the raw type for a row missing activity_type, matching the chip render', () => {
+    const row: InvestmentTransaction = { ...mockTxn, type: 'buy', activity_type: undefined }
+    expect(activityTypeSortValue(row)).toBe('buy')
+  })
+
+  it('uses the classified activity_type when present, matching the chip render', () => {
+    const row: InvestmentTransaction = { ...mockTxn, type: 'cash', activity_type: 'dividend' }
+    expect(activityTypeSortValue(row)).toBe('dividend')
   })
 })

@@ -890,3 +890,69 @@ describe('DeadLetterPage', () => {
     })
   })
 })
+
+// #1631: an operator scanning the queue could not tell two failing jobs apart without opening
+// each one. The SQLSTATE and constraint name are schema identifiers — no row values — so they
+// are safe to surface inline, and they are what distinguishes "the same job failing five times
+// on one constraint" from "five unrelated failures".
+describe('DeadLetterPage — inline Postgres error summary', () => {
+  const pgJob = {
+    ...mockJobs[0],
+    id: 31,
+    errors: [
+      {
+        attempt: 5,
+        message: 'webhook processing failed: ERROR: duplicate key value (SQLSTATE 23505)',
+        timestamp: '2026-04-01T11:00:00Z',
+        chain: ['webhook processing failed'],
+        pg_error: {
+          code: '23505',
+          constraint_name: 'unique_account_security',
+          detail: 'Key (email)=(leak@example.com) already exists.',
+          message: 'duplicate key value violates unique constraint',
+        },
+      },
+    ],
+  }
+
+  beforeEach(() => {
+    mockUseListAdminDeadLetterJobs.mockReturnValue({
+      data: { jobs: [pgJob], total: 1, page: 1, page_size: 20, total_pages: 1, has_more: false },
+      isLoading: false,
+      error: null,
+    } as never)
+  })
+
+  it('shows the SQLSTATE and constraint name in the table', () => {
+    render(<DeadLetterPage />, { wrapper: createWrapper() })
+    const table = document.body.querySelector('table') as HTMLElement
+    expect(within(table).getByText('23505')).toBeInTheDocument()
+    expect(within(table).getByText('unique_account_security')).toBeInTheDocument()
+  })
+
+  it('never puts a row-value-bearing SQL field in the table, masked or not', () => {
+    render(<DeadLetterPage />, { wrapper: createWrapper() })
+    const table = document.body.querySelector('table') as HTMLElement
+    expect(table.textContent ?? '').not.toContain('leak@example.com')
+    expect(table.textContent ?? '').not.toContain('duplicate key value')
+    for (const el of Array.from(table.querySelectorAll('*'))) {
+      for (const attr of el.getAttributeNames()) {
+        expect(el.getAttribute(attr) ?? '').not.toContain('leak@example.com')
+      }
+    }
+  })
+
+  it('renders an em-dash for a row with no Postgres context (every pre-#1631 production row)', () => {
+    mockUseListAdminDeadLetterJobs.mockReturnValue({
+      data: {
+        jobs: [{ ...mockJobs[0], id: 32, errors: [{ attempt: 1, message: 'timeout', timestamp: '2026-04-01T11:00:00Z' }] }],
+        total: 1, page: 1, page_size: 20, total_pages: 1, has_more: false,
+      },
+      isLoading: false,
+      error: null,
+    } as never)
+    render(<DeadLetterPage />, { wrapper: createWrapper() })
+    const table = document.body.querySelector('table') as HTMLElement
+    expect(within(table).getByTestId('dlq-no-pg-error')).toBeInTheDocument()
+  })
+})

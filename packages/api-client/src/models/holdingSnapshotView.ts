@@ -35,6 +35,7 @@ export interface HoldingSnapshotView {
   /** UTC calendar day (YYYY-MM-DD) these figures were true */
   as_of_date: string;
   cost_basis?: number;
+  currency_code?: string;
   gain_loss?: number;
   gain_loss_pct?: number;
   institution_price?: number;

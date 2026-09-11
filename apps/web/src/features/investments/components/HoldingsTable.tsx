@@ -1,4 +1,5 @@
 import { useId, useState, useMemo, useEffect } from 'react'
+import type { ReactElement } from 'react'
 import {
   useGetHoldings,
   useGetAccountHoldingsHistory,
@@ -8,13 +9,16 @@ import { getAccountClosedDate } from '@/features/accounts/utils'
 import { DataTable, useTablePreferences } from '@/shared/components/DataTable'
 import type { ColumnDef, SortState, FilterState } from '@/shared/components/DataTable'
 import type { FilterOption } from '@/shared/components/ColumnFilterDropdown'
-import { formatCurrency, formatCurrencyFull, formatPercent } from '@/shared/charts/formatters'
+import { formatPercent } from '@/shared/charts/formatters'
+import { formatPortfolioAmount, isCurrencyUnnameable } from '../utils/portfolioCurrency'
+import { MixedCurrencyBadge } from './MixedCurrencyBadge'
 import { formatHistoryLabel } from '@/shared/dates/utils'
 import { Badge } from '@/components/ui/badge'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
 import type { HoldingSnapshotView } from '@boostedbudget/api-client/models/holdingSnapshotView'
+import { securityTypeLabel } from '@/features/transactions/investmentSubcategory'
 
 /**
  * The fields the column definitions below actually read.
@@ -41,10 +45,20 @@ type HoldingRowShape = {
   cost_basis?: number
   gain_loss?: number
   gain_loss_pct?: number
+  // #1631 CX1: the currency this position's money columns are denominated in. Present on BOTH
+  // HoldingView and HoldingSnapshotView, which is what lets the shared shape carry it -- and it
+  // has to be per row, because one account can hold positions in several currencies.
+  currency_code?: string
 }
 
-const formatOrDefault = (value: number | null | undefined): string =>
-  value != null ? formatCurrency(value) : '--'
+// #1631 CX1: formatted in the currency the ROW states, not the dollar. A single investment
+// account can hold positions in several currencies, so there is no portfolio-level verdict that
+// applies to an individual position. fractionDigits 0 preserves exactly what formatCurrency
+// rendered; this change moves the SYMBOL and nothing else.
+const formatOrDefault = (
+  value: number | null | undefined,
+  row: { currency_code?: string },
+): string => (value != null ? formatPortfolioAmount(value, row, 0) : '--')
 
 const formatPercentOrDefault = (value: number | null | undefined): string =>
   value != null ? formatPercent(value) : '--'
@@ -119,7 +133,9 @@ const VALUE_COLUMNS: ColumnDef<HoldingRowShape>[] = [
     id: 'name',
     header: 'Security',
     key: 'security_name',
-    render: (r) => <span>{r.security_name ?? r.security_id}</span>,
+    // `??` alone misses production rows where security_name is '' rather than null/undefined
+    // (#1631) — a blank string is still truthy-checked here, not merely non-nullish.
+    render: (r) => <span>{r.security_name && r.security_name.length > 0 ? r.security_name : r.security_id}</span>,
   },
   {
     id: 'ticker',
@@ -129,7 +145,12 @@ const VALUE_COLUMNS: ColumnDef<HoldingRowShape>[] = [
   {
     id: 'type',
     header: 'Type',
-    key: 'security_type',
+    // Route through the shared title-caser + acronym map (#1631) so this column renders the same
+    // label the allocation donut immediately above it on the same page already shows for the
+    // same securities.type value ("etf" -> "ETF", "mutual fund" -> "Mutual Fund"). A null/blank
+    // type renders "Unknown" rather than a blank cell, matching HoldingView.SecurityType's doc
+    // comment.
+    render: (r) => <span>{securityTypeLabel(r.security_type, 'Unknown')}</span>,
   },
   {
     id: 'quantity',
@@ -142,7 +163,7 @@ const VALUE_COLUMNS: ColumnDef<HoldingRowShape>[] = [
     id: 'price',
     header: 'Price',
     key: 'institution_price',
-    render: (r) => formatOrDefault(r.institution_price),
+    render: (r) => formatOrDefault(r.institution_price, r),
     numeric: true,
     align: 'right',
   },
@@ -151,23 +172,26 @@ const VALUE_COLUMNS: ColumnDef<HoldingRowShape>[] = [
     header: 'Market Value',
     sortable: true,
     sortAccessor: (r) => r.institution_value ?? 0,
-    render: (r) => formatOrDefault(r.institution_value),
+    render: (r) => formatOrDefault(r.institution_value, r),
     numeric: true,
     align: 'right',
   },
   {
     id: 'cost_basis',
     header: 'Cost Basis',
-    render: (r) => formatOrDefault(r.cost_basis),
+    render: (r) => formatOrDefault(r.cost_basis, r),
     numeric: true,
     align: 'right',
   },
   {
     id: 'gain_loss',
-    header: 'Gain/Loss ($)',
+    // #1631 CX1: no dollar sign in the header. The cells beneath it are formatted per row, so a
+    // GBP position would sit under a header asserting dollars. The "(%)" sibling column is what
+    // this one is being distinguished from, and the absence of a suffix does that on its own.
+    header: 'Gain/Loss',
     sortable: true,
     sortAccessor: (r) => r.gain_loss ?? 0,
-    render: (r) => formatOrDefault(r.gain_loss),
+    render: (r) => formatOrDefault(r.gain_loss, r),
     numeric: true,
     align: 'right',
   },
@@ -182,6 +206,27 @@ const VALUE_COLUMNS: ColumnDef<HoldingRowShape>[] = [
   },
 ]
 
+// #1631 I1: the backend distinguishes a REFUSED day change (day_change_unavailable_reason) from a
+// STALE one (day_change_is_stale) -- opposite meanings, so this renders both rather than
+// collapsing either into a blank cell. Stale is MARKED, not hidden: the word "Stale" is text
+// content, so it is legible without depending on colour (WCAG 2.1 AA "never colour alone").
+// Follows the shape MixedCurrencyBadge established rather than inventing a new affordance.
+function renderDayChange(r: HoldingView): ReactElement {
+  if (r.day_change_unavailable_reason === 'currency_mismatch') {
+    return <span className="text-muted-foreground text-sm">Priced in a different currency</span>
+  }
+  const value = formatOrDefault(r.day_change, r)
+  if (!r.day_change_is_stale) return <span>{value}</span>
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {value}
+      <Badge variant="warning" size="sm">
+        Stale
+      </Badge>
+    </span>
+  )
+}
+
 /**
  * Live-table-only. Day change is measured against today's prior close and has no meaning on a
  * past day's position, so it is never concatenated into the historical column set.
@@ -189,10 +234,10 @@ const VALUE_COLUMNS: ColumnDef<HoldingRowShape>[] = [
 const DAY_CHANGE_COLUMNS: ColumnDef<HoldingView>[] = [
   {
     id: 'day_change',
-    header: 'Day Change ($)',
+    header: 'Day Change',
     sortable: true,
     sortAccessor: (r) => r.day_change ?? 0,
-    render: (r) => formatOrDefault(r.day_change),
+    render: renderDayChange,
     numeric: true,
     align: 'right',
   },
@@ -657,8 +702,13 @@ function ClosedAccountHoldingsHistory({
       {data?.total_value != null && (
         <p className="flex items-baseline justify-between border-t border-border pt-2 text-sm m-0">
           <span className="text-muted-foreground">Total recorded value</span>
-          <span className="font-semibold tabular-nums text-foreground" data-ph-mask>
-            {formatCurrencyFull(data.total_value)}
+          <span className="flex items-baseline gap-2">
+            <span className="font-semibold tabular-nums text-foreground" data-ph-mask>
+              {/* #1631 CX1: the snapshot states its own currency verdict, and refuses to name one
+                  when the day's positions spanned several. */}
+              {formatPortfolioAmount(data.total_value, data)}
+            </span>
+            {isCurrencyUnnameable(data) && <MixedCurrencyBadge />}
           </span>
         </p>
       )}

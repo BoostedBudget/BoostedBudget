@@ -595,6 +595,163 @@ BEGIN
 END $$;
 
 -- =============================================================================
+-- Step 5: Investment fixtures — Issue #1631 (Portfolio tab 500 + "Cash" mislabelling)
+--
+-- Before this step, `securities` / `holdings` / `investment_transactions` were never seeded, so
+-- the Portfolio tab (/insights?tab=portfolio) had nothing to render and
+-- portfolio-and-investment-activity.auth.spec.ts could not exist. The shape below is the
+-- PRODUCTION shape, not a softened stand-in:
+--
+--   - `close_price_as_of` is NON-NULL on the real security. This is not decoration: pgx's scan
+--     plan for this DATE column only fails for a REAL value (a NULL is rescued), which is exactly
+--     the 500 this branch fixes and exactly why every pre-existing fixture (always NULL) missed
+--     it. See holding_repository.go's GetByUserIDWithSecurities and
+--     holding_close_price_as_of_integration_test.go.
+--   - The "reinvestment" pair below is a `cash`/`deposit` row and a `cash`/`withdrawal` row against
+--     a REAL (non-cash-equivalent) security — the shape this brokerage actually reports a
+--     distribution as — NOT a `subtype = 'dividend reinvestment'` row. Seeding the literal subtype
+--     would exercise an already-working branch and prove nothing about this branch's fix (see
+--     domain.NormalizeTradeType's structural-inference branch in investment_trade_type.go).
+--     Plaid's sign convention is inverted vs. the Transactions product: inflow is NEGATIVE.
+--   - A third row shares the exact same raw shape (`cash`/`withdrawal`) but is booked against the
+--     CASH-EQUIVALENT security, so it must still display as Cash — proving the fix discriminates
+--     on the joined security rather than relabelling every cash/withdrawal row.
+-- =============================================================================
+DO $$
+DECLARE
+    v_user_id UUID;
+    v_linked_item_id UUID;
+    v_investment_account_id UUID;
+    v_real_security_id UUID;
+    v_cash_security_id UUID;
+BEGIN
+    SELECT id INTO v_user_id FROM users WHERE clerk_user_id = '__E2E_CLERK_USER_ID__';
+    IF v_user_id IS NULL THEN
+        RAISE EXCEPTION 'Test user not found. Ensure clerk_user_id is set correctly.';
+    END IF;
+
+    SELECT id INTO v_linked_item_id FROM linked_items
+        WHERE user_id = v_user_id AND item_id = 'e2e-test-item-001';
+    IF v_linked_item_id IS NULL THEN
+        RAISE EXCEPTION 'E2E linked item not found -- investment fixtures require Step 2 to have run first.';
+    END IF;
+
+    -- Investment (brokerage) account. Gated on a.type = 'investment' by
+    -- holding_repository.go's GetByUserIDWithSecurities.
+    INSERT INTO accounts (
+        id, linked_item_id, user_id, plaid_account_id, name, official_name,
+        type, subtype, mask, current_balance, available_balance, currency_code
+    ) VALUES (
+        gen_random_uuid(), v_linked_item_id, v_user_id, 'e2e-investment-001',
+        'E2E Brokerage', 'E2E Test Brokerage Account', 'investment', 'brokerage', '4321',
+        1005.00, 1005.00, 'USD'
+    )
+    ON CONFLICT (user_id, plaid_account_id) DO UPDATE SET
+        current_balance = EXCLUDED.current_balance,
+        available_balance = EXCLUDED.available_balance
+    RETURNING id INTO v_investment_account_id;
+
+    -- A REAL, non-cash-equivalent security with a non-NULL close_price_as_of (see step header).
+    INSERT INTO securities (
+        id, plaid_security_id, ticker_symbol, name, type, is_cash_equivalent,
+        close_price, close_price_as_of, currency_code
+    ) VALUES (
+        gen_random_uuid(), 'e2e-sec-etf-001', 'E2ETF', 'E2E Test ETF Fund', 'etf', false,
+        100.50, CURRENT_DATE - INTERVAL '1 day', 'USD'
+    )
+    ON CONFLICT (plaid_security_id) DO UPDATE SET
+        ticker_symbol = EXCLUDED.ticker_symbol,
+        name = EXCLUDED.name,
+        type = EXCLUDED.type,
+        is_cash_equivalent = EXCLUDED.is_cash_equivalent,
+        close_price = EXCLUDED.close_price,
+        close_price_as_of = EXCLUDED.close_price_as_of,
+        currency_code = EXCLUDED.currency_code
+    RETURNING id INTO v_real_security_id;
+
+    -- A cash-equivalent security, so the Cash rows (and the bill-payment row below) have
+    -- somewhere real to come from.
+    INSERT INTO securities (
+        id, plaid_security_id, ticker_symbol, name, type, is_cash_equivalent, currency_code
+    ) VALUES (
+        gen_random_uuid(), 'e2e-sec-cash-usd', 'CUR:USD', 'US Dollar', 'cash', true, 'USD'
+    )
+    ON CONFLICT (plaid_security_id) DO UPDATE SET
+        ticker_symbol = EXCLUDED.ticker_symbol,
+        name = EXCLUDED.name,
+        type = EXCLUDED.type,
+        is_cash_equivalent = EXCLUDED.is_cash_equivalent,
+        currency_code = EXCLUDED.currency_code
+    RETURNING id INTO v_cash_security_id;
+
+    -- A holding on the real security, so the Portfolio tab has a value, a gain/loss and a day
+    -- change to render.
+    INSERT INTO holdings (
+        id, user_id, account_id, security_id, quantity, cost_basis,
+        institution_value, institution_price, currency_code
+    ) VALUES (
+        gen_random_uuid(), v_user_id, v_investment_account_id, v_real_security_id,
+        10, 900.00, 1005.00, 100.50, 'USD'
+    )
+    ON CONFLICT (account_id, security_id) DO UPDATE SET
+        quantity = EXCLUDED.quantity,
+        cost_basis = EXCLUDED.cost_basis,
+        institution_value = EXCLUDED.institution_value,
+        institution_price = EXCLUDED.institution_price,
+        currency_code = EXCLUDED.currency_code;
+
+    -- The reinvestment PAIR, against the REAL security. amount < 0, quantity = 0 (structural
+    -- dividend leg) -- displays as Dividend / "Dividend" sub-category.
+    --
+    -- ⚠ All three investment_transactions rows below use a DISTINCT absolute amount
+    -- (18.21 / 24.68 / 31.09). TransactionTable's unified feed renders every row against this
+    -- SAME security as an identical "E2ETF · E2E Test ETF Fund" description cell (ticker ·
+    -- security_name takes priority over the per-row `name`), so the amount is the only text in
+    -- the row that portfolio-and-investment-activity.auth.spec.ts can use to find ONE specific
+    -- row unambiguously.
+    INSERT INTO investment_transactions (
+        id, user_id, account_id, security_id, plaid_investment_transaction_id,
+        type, subtype, name, quantity, amount, price, date, currency_code
+    ) VALUES (
+        gen_random_uuid(), v_user_id, v_investment_account_id, v_real_security_id,
+        'e2e-inv-txn-dividend-001', 'cash', 'deposit', 'E2E Test ETF Fund Dividend',
+        0, -18.21, NULL, CURRENT_DATE - INTERVAL '1 day', 'USD'
+    )
+    ON CONFLICT (plaid_investment_transaction_id) DO UPDATE SET
+        amount = EXCLUDED.amount, quantity = EXCLUDED.quantity, date = EXCLUDED.date;
+
+    -- amount > 0, quantity > 0 (structural reinvest leg) -- displays as Reinvest / "Dividend
+    -- Reinvestment" sub-category (NOT the raw subtype, "Withdrawal").
+    INSERT INTO investment_transactions (
+        id, user_id, account_id, security_id, plaid_investment_transaction_id,
+        type, subtype, name, quantity, amount, price, date, currency_code
+    ) VALUES (
+        gen_random_uuid(), v_user_id, v_investment_account_id, v_real_security_id,
+        'e2e-inv-txn-reinvest-001', 'cash', 'withdrawal', 'E2E Test ETF Fund Reinvestment',
+        0.2455, 24.68, 100.50, CURRENT_DATE - INTERVAL '1 day', 'USD'
+    )
+    ON CONFLICT (plaid_investment_transaction_id) DO UPDATE SET
+        amount = EXCLUDED.amount, quantity = EXCLUDED.quantity, price = EXCLUDED.price,
+        date = EXCLUDED.date;
+
+    -- A bill-payment row against the CASH-EQUIVALENT security. Same raw shape as the reinvestment
+    -- leg above (cash/withdrawal) but must still display as Cash -- the negative control that
+    -- proves the fix discriminates rather than relabelling every cash/withdrawal row.
+    INSERT INTO investment_transactions (
+        id, user_id, account_id, security_id, plaid_investment_transaction_id,
+        type, subtype, name, quantity, amount, price, date, currency_code
+    ) VALUES (
+        gen_random_uuid(), v_user_id, v_investment_account_id, v_cash_security_id,
+        'e2e-inv-txn-billpay-001', 'cash', 'withdrawal', 'E2E Advisory Fee Payment',
+        NULL, 31.09, NULL, CURRENT_DATE - INTERVAL '1 day', 'USD'
+    )
+    ON CONFLICT (plaid_investment_transaction_id) DO UPDATE SET
+        amount = EXCLUDED.amount, date = EXCLUDED.date;
+
+    RAISE NOTICE 'E2E investment fixtures seeded (1 holding, 3 investment transactions) for user %', v_user_id;
+END $$;
+
+-- =============================================================================
 -- Verification: Show seeded data summary
 -- =============================================================================
 SELECT 'Users' as table_name, COUNT(*) as count FROM users WHERE email = 'e2e+clerk_test@boostedbudget.com'
@@ -615,4 +772,8 @@ SELECT 'Custom Categories', COUNT(*) FROM custom_categories cc JOIN users u ON c
 UNION ALL
 SELECT 'Budgets', COUNT(*) FROM budgets b JOIN users u ON b.user_id = u.id WHERE u.email = 'e2e+clerk_test@boostedbudget.com'
 UNION ALL
-SELECT 'Budget Categories', COUNT(*) FROM budget_categories bc JOIN budgets b ON bc.budget_id = b.id JOIN users u ON b.user_id = u.id WHERE u.email = 'e2e+clerk_test@boostedbudget.com';
+SELECT 'Budget Categories', COUNT(*) FROM budget_categories bc JOIN budgets b ON bc.budget_id = b.id JOIN users u ON b.user_id = u.id WHERE u.email = 'e2e+clerk_test@boostedbudget.com'
+UNION ALL
+SELECT 'Holdings', COUNT(*) FROM holdings h JOIN users u ON h.user_id = u.id WHERE u.email = 'e2e+clerk_test@boostedbudget.com'
+UNION ALL
+SELECT 'Investment Transactions', COUNT(*) FROM investment_transactions it JOIN users u ON it.user_id = u.id WHERE u.email = 'e2e+clerk_test@boostedbudget.com';
