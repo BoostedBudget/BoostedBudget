@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -246,7 +248,7 @@ func TestTradeTypeToSQLPredicate_TableAlias(t *testing.T) {
 			activityTypes: []string{"dividend"},
 			tableAlias:    "it",
 			// #1631: compared through the NULL-safe normalised expression, not the raw column.
-			wantContains: "COALESCE(lower(btrim(it.subtype)), '') IN",
+			wantContains: NormalizedSubtypeSQL("it.subtype") + " IN",
 		},
 		{
 			name:          "fee with alias qualifies both type and subtype",
@@ -369,9 +371,59 @@ func TestTradeTypeToSQLPredicate_SubtypeComparisonsAreNullSafe(t *testing.T) {
 				return // buckets that never look at subtype are trivially null-safe
 			}
 			assert.NotRegexp(t, `[^)]it\.subtype\s+(IN|NOT IN|=)`, clause,
-				"raw it.subtype comparison found — must go through COALESCE(lower(btrim(...)), '')")
-			assert.Contains(t, clause, "COALESCE(lower(btrim(it.subtype)), '')",
+				"raw it.subtype comparison found — must go through NormalizedSubtypeSQL")
+			assert.Contains(t, clause, NormalizedSubtypeSQL("it.subtype"),
 				"subtype must be compared through the normalised, NULL-safe expression")
 		})
 	}
+}
+
+// TestSubtypeTrimming_GoAndSQLAgreeOnWhatPaddingIs is the CX5 regression. strings.TrimSpace trims
+// every Unicode space; single-argument btrim trims ASCII spaces only. A tab- or NBSP-padded
+// subtype therefore normalised on the Go side and did not on the SQL side, so the row DISPLAYED as
+// Dividend while the SQL dividend predicate missed it and the cash complement claimed it -- the one
+// failure the display/filter partition exists to prevent.
+//
+// The fix is agreement by construction: one cutset constant, with the SQL literal derived from it,
+// so neither side can define "padding" on its own.
+func TestSubtypeTrimming_GoAndSQLAgreeOnWhatPaddingIs(t *testing.T) {
+	for _, pad := range []string{" ", "\t", "\n", "\r", "\v", "\f", "\u0085", "\u00a0"} {
+		t.Run(strconv.QuoteToASCII(pad), func(t *testing.T) {
+			raw := pad + "Dividend" + pad
+			assert.Equal(t, TradeTypeDividend,
+				NormalizeTradeType("cash", strPtr(raw), true, boolPtr(false)),
+				"Go must treat this rune as padding")
+			assert.Contains(t, sqlSubtypeTrimCutsetLiteral(), fmt.Sprintf(`\u%04x`, []rune(pad)[0]),
+				"the SQL btrim cutset must carry the same rune, or the partition desyncs")
+		})
+	}
+}
+
+// TestSQLTrimCutsetLiteralCoversExactlyTheGoCutset keeps the two halves of the CX5 fix welded
+// together: adding a rune to subtypeTrimCutset must move the rendered SQL literal with it, and the
+// literal must not bless a rune the Go side leaves in place.
+func TestSQLTrimCutsetLiteralCoversExactlyTheGoCutset(t *testing.T) {
+	literal := sqlSubtypeTrimCutsetLiteral()
+	require.True(t, strings.HasPrefix(literal, "E'"), "must be an E-string so the escapes are honoured")
+	require.True(t, strings.HasSuffix(literal, "'"))
+
+	var want strings.Builder
+	for _, r := range subtypeTrimCutset {
+		want.WriteString(fmt.Sprintf(`\u%04x`, r))
+	}
+	assert.Equal(t, "E'"+want.String()+"'", literal)
+
+	// Every rune the SQL blesses is one the Go side actually trims.
+	for _, r := range subtypeTrimCutset {
+		s := string(r) + "dividend"
+		assert.Equal(t, "dividend", normalizeSubtype(&s))
+	}
+}
+
+// TestNormalizedSubtypeSQL_TrimsWithTheSharedCutset pins that the rendered expression passes the
+// cutset to btrim. Single-argument btrim is the CX5 defect itself.
+func TestNormalizedSubtypeSQL_TrimsWithTheSharedCutset(t *testing.T) {
+	got := NormalizedSubtypeSQL("it.subtype")
+	assert.Equal(t,
+		"COALESCE(lower(btrim(it.subtype, "+sqlSubtypeTrimCutsetLiteral()+")), '')", got)
 }

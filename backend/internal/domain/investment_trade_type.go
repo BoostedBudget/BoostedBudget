@@ -143,15 +143,45 @@ var (
 	corporateActionSubtypeSet = subtypeSet(corporateActionSubtypes)
 )
 
+// subtypeTrimCutset is the ONE definition of "padding" for a Plaid subtype, shared by the Go and
+// SQL halves of the display/filter partition.
+//
+// It is an explicit cutset rather than strings.TrimSpace because TrimSpace trims every rune with
+// the Unicode White_Space property, while SQL btrim takes a literal set of characters. Two
+// independent definitions of whitespace is exactly how the partition desynced: a tab- or
+// NBSP-padded subtype normalised on the Go side, did not on the SQL side, and the row displayed as
+// Dividend while the dividend predicate missed it and the cash complement claimed it.
+//
+// The set is ASCII whitespace plus NEL and NBSP. That is deliberately NARROWER than TrimSpace: the
+// remaining Unicode Zs separators (U+2000..U+200A, U+3000, ...) are not padding any real feed
+// emits, and every rune added here has to be mirrored into SQL, so the set stays small enough to
+// mirror honestly. A rune outside it is left in place by BOTH sides, which keeps the row in one
+// bucket on both -- unclassified, but never displayed as one thing and filtered as another.
+const subtypeTrimCutset = " \t\n\v\f\r\u0085\u00a0"
+
+// sqlSubtypeTrimCutsetLiteral renders subtypeTrimCutset as a Postgres E-string of \uXXXX escapes.
+// Deriving it from the Go constant is what makes the mirror mechanical: a rune added to the cutset
+// moves both sides, and neither can drift. Escapes are used uniformly (even for a plain space) so
+// the rendered SQL carries no literal control characters into query logs.
+func sqlSubtypeTrimCutsetLiteral() string {
+	var b strings.Builder
+	b.WriteString("E'")
+	for _, r := range subtypeTrimCutset {
+		fmt.Fprintf(&b, `\u%04x`, r)
+	}
+	b.WriteString("'")
+	return b.String()
+}
+
 // normalizeSubtype lower-cases and trims a possibly-absent Plaid subtype. Every set lookup goes
 // through it: the literals in the sets above are lower-case, and before #1631 nothing normalised
 // the incoming value, so any casing or whitespace variance silently fell through to "cash".
-// The SQL side mirrors this exactly with COALESCE(lower(btrim(subtype)), the empty string).
+// The SQL side mirrors this exactly -- same cutset, same order -- via NormalizedSubtypeSQL.
 func normalizeSubtype(subtype *string) string {
 	if subtype == nil {
 		return ""
 	}
-	return strings.ToLower(strings.TrimSpace(*subtype))
+	return strings.ToLower(strings.Trim(*subtype, subtypeTrimCutset))
 }
 
 // NormalizeTradeType maps raw Plaid type/subtype to a display trade type string.
@@ -242,7 +272,7 @@ func NormalizeTradeType(typ string, subtype *string, securityAttached bool, secu
 // buckets un-renderable, so it panics rather than silently emitting a predicate that disagrees with
 // the display side — a desynced partition is the one failure this function exists to prevent.
 //
-// NULL-safety: every subtype comparison goes through COALESCE(lower(btrim(subtype)), the empty string), which
+// NULL-safety: every subtype comparison goes through NormalizedSubtypeSQL, which
 // mirrors normalizeSubtype on the Go side and removes three-valued logic entirely — a NULL subtype
 // becomes the empty string and falls out of every IN and into every NOT IN, rather than making the whole predicate
 // NULL and dropping the row from BOTH sides of the partition.
@@ -265,9 +295,11 @@ func SecurityIsStructuralSQL(securitiesAlias string) string {
 }
 
 // NormalizedSubtypeSQL renders the NULL-safe, normalised subtype expression that every subtype
-// comparison must go through — the SQL mirror of normalizeSubtype.
+// comparison must go through — the SQL mirror of normalizeSubtype. btrim is given the SHARED
+// cutset: single-argument btrim trims spaces only, which is how a tab-padded subtype came to be
+// displayed as one bucket and filtered into another.
 func NormalizedSubtypeSQL(column string) string {
-	return fmt.Sprintf("COALESCE(lower(btrim(%s)), '')", column)
+	return fmt.Sprintf("COALESCE(lower(btrim(%s, %s)), '')", column, sqlSubtypeTrimCutsetLiteral())
 }
 
 func TradeTypeToSQLPredicate(activityTypes []string, tableAlias, securitiesAlias string) (string, []any) {
