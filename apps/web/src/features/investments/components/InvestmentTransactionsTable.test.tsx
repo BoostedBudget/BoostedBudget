@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { render, screen, waitFor } from '@testing-library/react'
 import { InvestmentTransactionsTable } from './InvestmentTransactionsTable'
+import { activityTypeSortValue } from './investmentTransactionsTable.constants'
 import {
   mockUseInfiniteInvestmentTransactions,
   mockFetchNextInvestmentPage,
@@ -210,5 +211,21 @@ describe('InvestmentTransactionsTable currency (#1631 CX1)', () => {
     await waitFor(() => {
       expect(screen.getByText(/\$2,500/)).toBeDefined()
     })
+  })
+})
+
+// #1631 C1: the sort accessor was `key: 'activity_type'`, which had no fallback, while `render`
+// fell back to `r.type` for a row missing `activity_type` (omitempty). That row DISPLAYED its
+// classified chip but SORTED under `undefined`. Both call sites now read `activityTypeSortValue`,
+// so this pins them to agree for the exact row shape that used to diverge.
+describe('InvestmentTransactionsTable activity_type sort accessor (#1631 C1)', () => {
+  it('falls back to the raw type for a row missing activity_type, matching the chip render', () => {
+    const row: InvestmentTransaction = { ...mockTxn, type: 'buy', activity_type: undefined }
+    expect(activityTypeSortValue(row)).toBe('buy')
+  })
+
+  it('uses the classified activity_type when present, matching the chip render', () => {
+    const row: InvestmentTransaction = { ...mockTxn, type: 'cash', activity_type: 'dividend' }
+    expect(activityTypeSortValue(row)).toBe('dividend')
   })
 })
