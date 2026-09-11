@@ -543,6 +543,15 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 			WHERE m.currency_code IS NOT NULL AND TRIM(m.currency_code) <> ''
 			  AND UPPER(TRIM(m.currency_code)) IS DISTINCT FROM (SELECT code FROM ranking_currency)
 		),
+		-- The rows the eligible CTE lets in WITHOUT knowing their currency. Counted over
+		-- eligible rather than movers so it describes the list actually returned, and so the
+		-- response stops asserting one ranking currency over a list only partly known to be in
+		-- it (#1631, Codex round 2). Excluding them instead would empty the widget for every
+		-- holding written before migration 000197.
+		unknown_currency AS (
+			SELECT COUNT(*) AS n FROM eligible e
+			WHERE e.currency_code IS NULL OR TRIM(e.currency_code) = ''
+		),
 		gainers AS (
 			SELECT holding_id, account_id, ticker_symbol, security_name,
 			       day_change, day_change_pct, total_gain_loss, currency_code, 'gainer' AS mover_type
@@ -571,7 +580,8 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 		SELECT c.holding_id, c.account_id, c.ticker_symbol, c.security_name,
 		       c.day_change, c.day_change_pct, c.total_gain_loss, c.currency_code, c.mover_type,
 		       (SELECT code FROM ranking_currency) AS ranking_currency_code,
-		       (SELECT n FROM excluded)            AS excluded_by_currency_count
+		       (SELECT n FROM excluded)            AS excluded_by_currency_count,
+		       (SELECT n FROM unknown_currency)    AS unknown_currency_count
 		FROM combined c
 		ORDER BY c.mover_type ASC, CASE WHEN c.mover_type = 'gainer' THEN c.day_change ELSE -c.day_change END DESC
 	`
@@ -595,18 +605,20 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 		// which is the truthful answer when nothing was ranked.
 		var rankingCurrency *string
 		var excludedByCurrency int
+		var unknownCurrency int
 		if err := rows.Scan(
 			&item.HoldingID, &item.AccountID,
 			&item.TickerSymbol, &item.SecurityName,
 			&item.DayChange, &item.DayChangePct, &item.TotalGainLoss,
 			&item.CurrencyCode,
 			&moverType,
-			&rankingCurrency, &excludedByCurrency,
+			&rankingCurrency, &excludedByCurrency, &unknownCurrency,
 		); err != nil {
 			return nil, fmt.Errorf("TopMovers scan: %w", err)
 		}
 		result.RankingCurrencyCode = rankingCurrency
 		result.ExcludedByCurrencyCount = excludedByCurrency
+		result.UnknownCurrencyCount = unknownCurrency
 		if moverType == "gainer" {
 			result.Gainers = append(result.Gainers, item)
 		} else {

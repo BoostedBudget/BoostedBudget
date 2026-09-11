@@ -181,3 +181,30 @@ describe('PortfolioSummaryCard', () => {
     })
   })
 })
+
+// #1631 Codex round 2: the headline went through the currency-aware formatter but the
+// ChangeIndicator beneath it did not, so a GBP portfolio labelled the SAME figure as two
+// different currencies -- worse than the single wrong currency CX1 set out to fix.
+describe('PortfolioSummaryCard change indicators (#1631 Codex r2)', () => {
+  it('formats the gain/loss and day-change indicators in the stated currency', () => {
+    render(
+      <PortfolioSummaryCard
+        summary={{ ...mockSummary, currency_code: 'GBP', is_mixed_currency: false }}
+      />
+    )
+    // Two indicators plus two headlines; before the fix the two indicators were dollars.
+    expect(screen.getAllByText(/\u00a3/).length).toBeGreaterThan(2)
+    expect(screen.queryByText(/\$4,340/)).toBeNull()
+    expect(screen.queryByText(/\$230/)).toBeNull()
+  })
+
+  it('drops the symbol from the indicators when the currency is unnameable', () => {
+    render(
+      <PortfolioSummaryCard
+        summary={{ ...mockSummary, currency_code: null, is_mixed_currency: true }}
+      />
+    )
+    expect(screen.queryByText(/\$4,340/)).toBeNull()
+    expect(screen.queryByText(/\$230/)).toBeNull()
+  })
+})
