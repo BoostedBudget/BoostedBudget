@@ -50,10 +50,16 @@ type BudgetHierarchyAuditVerdict struct {
 	CategoriesExamined int `json:"categories_examined"`
 	CategoriesRepaired int `json:"categories_repaired"`
 
-	// FlaggedCategoryIDs are the budget_categories.id values that tripped DuplicateParentIdentity or
-	// EscapedNestedChild against this budget's live category set — non-empty only for a
-	// 'reported_*' outcome.
-	FlaggedCategoryIDs []string `json:"flagged_category_ids,omitempty"`
+	// FlaggedDuplicateIdentityCategoryIDs / FlaggedEscapingPairCategoryIDs are the
+	// budget_categories.id values that tripped, respectively, domain.DuplicateParentIdentity and
+	// domain.EscapedNestedChild against this budget's live category set. A budget can trip BOTH
+	// checks at once (Issue #1630 review fix, MED) — decideBudgetHierarchyAuditOutcome picks only
+	// ONE preferred `outcome` for the ledger row, but these two fields stay independently
+	// populated regardless of which outcome won, so an operator can always tell a duplicate-
+	// identity id from an escaping-pair id instead of finding both flattened into one typeless
+	// union. Each is non-empty only when that specific shape was found.
+	FlaggedDuplicateIdentityCategoryIDs []string `json:"flagged_duplicate_identity_category_ids,omitempty"`
+	FlaggedEscapingPairCategoryIDs      []string `json:"flagged_escaping_pair_category_ids,omitempty"`
 
 	ExaminedAt time.Time `json:"examined_at"`
 }

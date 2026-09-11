@@ -174,8 +174,10 @@ func TestAuditBudgetHierarchy_1630B7(t *testing.T) {
 
 	assert.Equal(t, domain.BudgetHierarchyAuditOutcomeReportedEscapingPair, verdict.Outcome,
 		"an escaping pair must be reported, not silently repaired")
-	assert.ElementsMatch(t, []string{parentCategory.ID, childCategory.ID}, verdict.FlaggedCategoryIDs,
-		"both halves of the escaping pair must be named in the ledger's flagged_category_ids")
+	assert.ElementsMatch(t, []string{parentCategory.ID, childCategory.ID}, verdict.FlaggedEscapingPairCategoryIDs,
+		"both halves of the escaping pair must be named in the ledger's flagged_escaping_pair_category_ids")
+	assert.Empty(t, verdict.FlaggedDuplicateIdentityCategoryIDs,
+		"no duplicate-identity pair was seeded, so that typed column must stay empty")
 	assert.Equal(t, 3, verdict.CategoriesExamined)
 	assert.Equal(t, 1, verdict.CategoriesRepaired, "only the stale, unrelated row should be repaired")
 
@@ -271,17 +273,19 @@ func TestListBudgetHierarchyAuditFindings_1630B7(t *testing.T) {
 	_, err = tx.Exec(ctx, `
 		INSERT INTO budget_hierarchy_audits (
 			budget_id, user_id, outcome, reason, categories_examined, categories_repaired,
-			flagged_category_ids
+			flagged_escaping_pair_category_ids
 		) VALUES ($1, $2, 'reported_escaping_pair', 'test seed', 2, 0, $3)
 	`, budget.ID, userID, []string{catID})
 	require.NoError(t, err, "seed a ledger row directly")
 
-	// Filtered to the exact outcome: the row comes back with its flagged id decoded correctly.
+	// Filtered to the exact outcome: the row comes back with its flagged id decoded correctly,
+	// under the typed column matching the outcome it was seeded with.
 	findings, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, domain.BudgetHierarchyAuditOutcomeReportedEscapingPair, 10)
 	require.NoError(t, err)
 	require.Len(t, findings, 1)
 	assert.Equal(t, budget.ID, findings[0].BudgetID)
-	assert.Equal(t, []string{catID}, findings[0].FlaggedCategoryIDs)
+	assert.Equal(t, []string{catID}, findings[0].FlaggedEscapingPairCategoryIDs)
+	assert.Empty(t, findings[0].FlaggedDuplicateIdentityCategoryIDs)
 
 	// Filtered to a DIFFERENT outcome: nothing comes back.
 	none, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, domain.BudgetHierarchyAuditOutcomeVerified, 10)
@@ -292,4 +296,112 @@ func TestListBudgetHierarchyAuditFindings_1630B7(t *testing.T) {
 	all, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, "", 10)
 	require.NoError(t, err)
 	assert.Len(t, all, 1)
+}
+
+// zeroSpentCalculator is a BudgetHierarchySpentCalculator stub that always recomputes to 0 — used
+// by tests below that only care about the duplicate-identity/escaping-pair DETECTION, not the
+// spend recomputation, and seed no transactions at all.
+type zeroSpentCalculator struct{}
+
+func (zeroSpentCalculator) CalculateCategorySpent(ctx context.Context, userID string, category *domain.BudgetCategory, startDate, endDate time.Time) (float64, error) {
+	return 0, nil
+}
+
+// TestAuditBudgetHierarchy_1630Review_CombinedFindingPreservesBothTypedCategoryIDArrays is the RED
+// for the review's MED finding: a budget can carry BOTH a duplicate-parent-identity pair AND an
+// escaping nested pair at once. decideBudgetHierarchyAuditOutcome still picks only ONE preferred
+// `outcome` for the ledger row (duplicate-identity, being the more fundamental ambiguity) — but
+// before migration 000197 split flagged_category_ids into two typed columns, the escaping pair's
+// category ids were stored in the SAME untyped array as the duplicate pair's, with no way for an
+// operator to tell which ids belonged to which finding. This seeds both shapes on one budget and
+// asserts BOTH typed arrays are independently populated, regardless of which outcome won.
+func TestAuditBudgetHierarchy_1630Review_CombinedFindingPreservesBothTypedCategoryIDArrays(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "test|"+userID, "claim1630-review-combined-"+userID+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	budgetRepo := NewBudgetRepository(tx)
+	budget := &domain.Budget{
+		UserID:    userID,
+		Name:      "Claim 1630 Review Combined Finding Budget",
+		Period:    domain.BudgetPeriodMonthly,
+		StartDate: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
+		Amount:    1000,
+	}
+	require.NoError(t, budgetRepo.Create(ctx, budget))
+
+	// unique_budget_category_discriminated (migration 000083) backstops duplicate identity at the
+	// DB level for every row created going forward — which is exactly why DuplicateParentIdentity
+	// only ever matters for a budget whose duplicate PREDATES that index. To seed one in this
+	// test, the index must come down first; it is restored automatically when this test's outer
+	// tx rolls back (never committed), so no other test ever sees it missing.
+	_, err = tx.Exec(ctx, `DROP INDEX unique_budget_category_discriminated`)
+	require.NoError(t, err, "drop the unique index so a genuine (pre-index-era) duplicate can be seeded")
+
+	// Duplicate-identity pair: two live rows, same primary, both primary-only. CreateCategory
+	// bypasses AddCategoryChecked's guard, exactly like the escaping-pair fixture above.
+	rentPrimary := "RENT_AND_UTILITIES"
+	dupA := &domain.BudgetCategory{
+		BudgetID: budget.ID, CategoryKind: "pfc", PFCPrimary: &rentPrimary,
+		MatchLogic: domain.MatchLogicCategoryOnly, AllocatedAmount: 400,
+	}
+	require.NoError(t, budgetRepo.CreateCategory(ctx, dupA), "seed duplicate-identity row A")
+	dupB := &domain.BudgetCategory{
+		BudgetID: budget.ID, CategoryKind: "pfc", PFCPrimary: &rentPrimary,
+		MatchLogic: domain.MatchLogicCategoryOnly, AllocatedAmount: 100,
+	}
+	require.NoError(t, budgetRepo.CreateCategory(ctx, dupB), "seed duplicate-identity row B")
+
+	// Escaping pair, unrelated to the duplicate above: a non-containing 'and' parent with a
+	// category_only child nested under it.
+	foodPrimary := "FOOD_AND_DRINK"
+	foodDetailed := "FOOD_AND_DRINK_FAST_FOOD"
+	escParent := &domain.BudgetCategory{
+		BudgetID: budget.ID, CategoryKind: "pfc", PFCPrimary: &foodPrimary,
+		MatchLogic: domain.MatchLogicAnd, AllocatedAmount: 300,
+	}
+	require.NoError(t, budgetRepo.CreateCategory(ctx, escParent), "seed escaping-pair parent")
+	escChild := &domain.BudgetCategory{
+		BudgetID: budget.ID, CategoryKind: "pfc", PFCPrimary: &foodPrimary, PFCDetailed: &foodDetailed,
+		MatchLogic: domain.MatchLogicCategoryOnly, AllocatedAmount: 50,
+	}
+	require.NoError(t, budgetRepo.CreateCategory(ctx, escChild), "seed escaping-pair child")
+
+	loaded, err := budgetRepo.GetByID(ctx, budget.ID)
+	require.NoError(t, err)
+	require.Len(t, loaded.Categories, 4)
+
+	periodStart := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	periodEnd := time.Date(2026, time.January, 31, 23, 59, 59, 0, time.UTC)
+	verdict, err := budgetRepo.AuditBudgetHierarchy(ctx, loaded, periodStart, periodEnd, zeroSpentCalculator{})
+	require.NoError(t, err)
+
+	// Duplicate-identity is the PREFERRED single-valued outcome when both shapes are present.
+	assert.Equal(t, domain.BudgetHierarchyAuditOutcomeReportedDuplicateIdentity, verdict.Outcome)
+
+	// Both typed arrays must be independently populated — this is the whole point: the escaping
+	// pair's ids must not be lost, silently merged into the duplicate-identity array, or dropped
+	// just because duplicate-identity won the single-valued `outcome` column.
+	assert.ElementsMatch(t, []string{dupA.ID, dupB.ID}, verdict.FlaggedDuplicateIdentityCategoryIDs,
+		"the duplicate-identity pair's own ids must be in the duplicate-identity column")
+	assert.ElementsMatch(t, []string{escParent.ID, escChild.ID}, verdict.FlaggedEscapingPairCategoryIDs,
+		"the escaping pair's ids must survive in their OWN typed column even though "+
+			"duplicate-identity is the outcome that won")
+
+	// The same two arrays must round-trip through the ledger table, not just the in-memory verdict.
+	findings, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, "", 10)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.ElementsMatch(t, []string{dupA.ID, dupB.ID}, findings[0].FlaggedDuplicateIdentityCategoryIDs)
+	assert.ElementsMatch(t, []string{escParent.ID, escChild.ID}, findings[0].FlaggedEscapingPairCategoryIDs)
 }

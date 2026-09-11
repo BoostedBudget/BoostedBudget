@@ -37,7 +37,9 @@ export interface AdminBudgetHierarchyAuditFinding {
   categories_repaired: number;
   examined_at: string;
   /** @nullable */
-  flagged_category_ids: string[] | null;
+  flagged_duplicate_identity_category_ids: string[] | null;
+  /** @nullable */
+  flagged_escaping_pair_category_ids: string[] | null;
   outcome: string;
   reason: string;
   user_id: string;
