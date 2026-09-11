@@ -755,7 +755,7 @@ func TestExactCitationsAreInRange(t *testing.T) {
 // WHY CONTAINMENT AND NOT PROXIMITY. I first tried "the identifier must appear within +/-8 lines of
 // the cited line" and measured it before adopting it: 10 of 17 pairs would have failed. Every one
 // was a FALSE positive, because these citations deliberately point at a CALL SITE inside the named
-// function rather than at its declaration — `budget_service.go:248` is the
+// function rather than at its declaration — `budget_service.go:251` is the
 // `s.budgetRepo.CreateWithCategories(...)` call inside `CreateBudget`, which begins at :105. That is
 // the more useful citation, and a proximity check punishes it. The citations were better than my
 // checker.
@@ -892,7 +892,7 @@ func methodCitationProblem(resolved, method string, lo, hi int) (string, bool) {
 	// It is NOT, however, an error outright, and the briefing that asked for that was wrong:
 	// measured over all pairs, absence fires on the most common legitimate idiom in this file —
 	// citing a method at its CALL SITE in another file (`budgetService.UpdateCategory`
-	// (`budget_service.go:672`) is `s.budgetRepo.UpdateCategory(...)`, and budget_service.go
+	// (`budget_service.go:716`) is `s.budgetRepo.UpdateCategory(...)`, and budget_service.go
 	// naturally declares no such function). Five of the nine absences were of that kind.
 	//
 	// So absence falls back to the weaker relation that IS available: the identifier must appear
