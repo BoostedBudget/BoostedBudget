@@ -3827,6 +3827,7 @@ components:
           type: string
         as_of_date:
           description: UTC calendar day (YYYY-MM-DD) the positions describe; omitted when no history is retained for this account
+          format: date
           type: string
         available_dates:
           description: Every UTC day (YYYY-MM-DD) with retained positions, newest first
@@ -3859,6 +3860,7 @@ components:
       properties:
         as_of_date:
           description: UTC calendar day (YYYY-MM-DD) these figures were true
+          format: date
           type: string
         cost_basis:
           format: double
@@ -4297,6 +4299,7 @@ components:
           type: string
         date:
           description: UTC calendar day (YYYY-MM-DD) of the transaction
+          format: date
           type: string
         fees:
           format: double
@@ -5330,6 +5333,7 @@ components:
       properties:
         date:
           description: UTC calendar day (YYYY-MM-DD) this snapshot was captured
+          format: date
           type: string
         total_value:
           format: double
