@@ -31,6 +31,31 @@ func seedReconHolding(ctx context.Context, t *testing.T, db DB, userID, accountI
 	require.NoError(t, err)
 }
 
+// reconTxnAmount derives the cash effect a row with this share movement would really carry.
+//
+// ⚠ THE AMOUNT IS NOT DECORATION ON A STRUCTURAL ROW (#1631 CX3). This helper used to hard-code
+// `amount 0` for every fixture, and a zero amount agrees with no direction at all -- so the
+// structural reinvestment test below seeded a row the structural branch declines, and passed only
+// because the pre-CX3 rule asked for nothing beyond the security flag. It was passing for the
+// wrong reason, and went red the moment the rule started demanding the sign.
+//
+// Plaid signs an investment amount by the CASH movement, inverted relative to the Transactions
+// product: positive when cash is DEBITED (shares acquired) and negative when cash is CREDITED
+// (shares released). So the amount carries the same sign as the share movement, and deriving it
+// here makes every fixture in this file realistic rather than leaving 17 hand-chosen numbers to
+// each be wrong. Only the SIGN is ever read -- by isStructuralDividend/isStructuralReinvest and
+// their SQL mirrors -- so the magnitude is one nominal unit per share.
+//
+// type=transfer is the deliberate exception: a corporate action such as a split moves SHARES and
+// no cash, so a derived amount there would assert a cash movement that never happened. The
+// transfer bucket reads no amount, so zero is both harmless and true.
+func reconTxnAmount(txnType string, quantity float64) float64 {
+	if txnType == "transfer" {
+		return 0
+	}
+	return quantity
+}
+
 // seedInvestmentTxn inserts a minimal investment_transactions row.
 func seedReconTxn(ctx context.Context, t *testing.T, db DB, userID, accountID, secID uuid.UUID,
 	txnType string, subtype *string, quantity float64, date string,
@@ -41,8 +66,9 @@ func seedReconTxn(ctx context.Context, t *testing.T, db DB, userID, accountID, s
 		INSERT INTO investment_transactions
 			(id, user_id, account_id, security_id, plaid_investment_transaction_id,
 			 type, subtype, name, amount, quantity, date)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'Test Txn', 0, $8, $9::date)
-	`, id, userID, accountID, secID, "plaid-recon-"+id.String(), txnType, subtype, quantity, date)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'Test Txn', $8, $9, $10::date)
+	`, id, userID, accountID, secID, "plaid-recon-"+id.String(), txnType, subtype,
+		reconTxnAmount(txnType, quantity), quantity, date)
 	require.NoError(t, err)
 }
 
@@ -150,6 +176,11 @@ func TestPositionReconciliation_StructuralWithdrawalReinvestmentCountsTowardTheL
 	// Structural reinvestment: type='cash', subtype='withdrawal' (NOT a literal reinvest subtype),
 	// against a security this fixture leaves is_cash_equivalent=FALSE — the exact shape production
 	// data has for this brokerage.
+	//
+	// The POSITIVE quantity is load-bearing twice over (#1631 CX3): it is the reinvested shares the
+	// ledger has to count, and it is also what makes seedReconTxn derive a positive (cash-DEBITED)
+	// amount, which is the second fact the structural rule requires. A share-acquiring row with a
+	// zero or credited amount is not a purchase, and the rule declines it.
 	seedReconTxn(ctx, t, tx, userID, accountID, secID, "cash", &withdrawal, 2.93, "2025-06-01")
 	seedReconHolding(ctx, t, tx, userID, accountID, secID, 102.93)
 
