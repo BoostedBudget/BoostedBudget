@@ -458,7 +458,7 @@ func RegisterInvestmentRoutes(api huma.API, handler *InvestmentHandler) {
 		Method:      http.MethodGet,
 		Path:        "/api/v1/investments/investment-transactions",
 		Summary:     "List investment transactions",
-		Description: "Returns investment transactions for the authenticated user using keyset (cursor) pagination. Supports filtering by account, security, activity type (buy/sell/dividend/reinvest/fee/cash/other), and date range.",
+		Description: "Returns investment transactions for the authenticated user using keyset (cursor) pagination. Supports filtering by account, security, activity type (buy/sell/dividend/reinvest/interest/fee/transfer/cash/other), and date range.",
 		Tags:        []string{"Investments"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetInvestmentTransactions)

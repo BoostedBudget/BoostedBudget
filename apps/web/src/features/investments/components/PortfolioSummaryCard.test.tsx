@@ -118,51 +118,52 @@ describe('PortfolioSummaryCard', () => {
     valueEls.forEach((p) => expect(p.querySelector('div')).toBeNull())
   })
 
-  // ── #1631 M8a: currency ─────────────────────────────────────────────────────────────────────
+  // ── #1631 M8a/CX1: currency ─────────────────────────────────────────────────────────────────
   //
-  // ⚠ THESE ARE CHARACTERISATION TESTS. They pin what this card does TODAY and record that it is
-  // wrong, in the same spirit as the close_price_as_of NULL companion test on the backend: they
-  // pass both before and after the eventual fix, and that is the point. The server-side work in
-  // #1631 M8a made the currency situation KNOWABLE (currency_code + is_mixed_currency on the
-  // response); surfacing it in the UI is a deliberate follow-up, because the generated API client
-  // did not carry these fields until this change landed.
+  // These REPLACE the characterisation tests that used to live here. Those pinned today's wrong
+  // behaviour on purpose -- including `expect(gbpTotal).toBe(usdTotal)`, a tripwire designed to
+  // fail the moment the formatter learned the currency -- and said in their own comment that a
+  // follow-up should replace them with real assertions rather than work around them. This is that
+  // follow-up.
   //
-  // What is still wrong, stated plainly so the follow-up has a specification:
-  //   1. formatCurrencyFull hard-codes the dollar, so a GBP portfolio renders "$52,340.50" and a
-  //      mixed one renders a dollar figure that is not a quantity of any currency at all.
-  //   2. is_mixed_currency is not surfaced, so the user is not told the total mixes currencies.
-  //
-  // The assertions below are deliberately NARROW — they check only that the total still renders
-  // and that the card does not crash on either shape. A follow-up that adds a badge or switches
-  // the formatter will NOT break them; it should instead REPLACE them with real assertions.
-  describe('currency (#1631 M8a — flag served, not yet surfaced)', () => {
-    it('renders a mixed-currency portfolio without crashing', () => {
-      render(<PortfolioSummaryCard summary={mixedCurrencySummary} />)
-      expect(screen.getByText(/total value/i)).toBeDefined()
-    })
+  // The defect they recorded: formatCurrencyFull defaulted to the dollar, so a GBP portfolio
+  // rendered "$52,340.50" and a MIXED portfolio rendered a dollar figure that is not a quantity of
+  // any currency at all -- the UI asserting a currency the backend had explicitly REFUSED to
+  // assert by serving currency_code: null alongside is_mixed_currency: true.
+  describe('currency (#1631 CX1)', () => {
+    const totalValueText = () =>
+      screen.getByText(/total value/i).closest('[data-slot="card"]')
+        ?.querySelector('[data-ph-mask]')?.textContent ?? ''
 
-    it('renders a portfolio priced in a non-dollar currency without crashing', () => {
+    it('formats a non-dollar portfolio in ITS currency, not the dollar', () => {
       render(<PortfolioSummaryCard summary={foreignCurrencySummary} />)
-      expect(screen.getByText(/total value/i)).toBeDefined()
+      const total = totalValueText()
+      expect(total).toContain('£')
+      expect(total).not.toContain('$')
     })
 
-    it('formats the total identically whatever the currency says — the known gap', () => {
-      const usd = render(<PortfolioSummaryCard summary={mockSummary} />)
-      const usdTotal = usd.container.querySelector('[data-ph-mask]')?.textContent
-      usd.unmount()
+    // The sibling that keeps the assertion above from passing on a card that simply stopped
+    // rendering a symbol: a USD portfolio must still read as dollars.
+    it('still formats a dollar portfolio in dollars', () => {
+      render(<PortfolioSummaryCard summary={mockSummary} />)
+      expect(totalValueText()).toContain('$')
+    })
 
-      const gbp = render(<PortfolioSummaryCard summary={foreignCurrencySummary} />)
-      const gbpTotal = gbp.container.querySelector('[data-ph-mask]')?.textContent
-      gbp.unmount()
+    it('never labels a MIXED total with a currency symbol the backend refused to name', () => {
+      render(<PortfolioSummaryCard summary={mixedCurrencySummary} />)
+      const total = totalValueText()
+      expect(total).not.toContain('$')
+      expect(total).not.toContain('£')
+    })
 
-      const mixed = render(<PortfolioSummaryCard summary={mixedCurrencySummary} />)
-      const mixedTotal = mixed.container.querySelector('[data-ph-mask]')?.textContent
+    it('warns on the face of the card when the total mixes currencies', () => {
+      render(<PortfolioSummaryCard summary={mixedCurrencySummary} />)
+      expect(screen.getByText(/mixed currencies/i)).toBeDefined()
+    })
 
-      // Identical today, and that is the defect: the same string is served for a dollar total, a
-      // pound total, and a total that is in no single currency. Replace this with a real
-      // assertion when the formatter learns the currency.
-      expect(gbpTotal).toBe(usdTotal)
-      expect(mixedTotal).toBe(usdTotal)
+    it('shows no mixed-currency warning on a single-currency portfolio', () => {
+      render(<PortfolioSummaryCard summary={foreignCurrencySummary} />)
+      expect(screen.queryByText(/mixed currencies/i)).toBeNull()
     })
   })
 

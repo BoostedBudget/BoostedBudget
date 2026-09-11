@@ -682,12 +682,14 @@ describe('HoldingsTable', () => {
       withHistory()
       render(<HoldingsTable accountId="acct-closed" />)
 
-      expect(screen.queryByText(/Day Change \(\$\)/)).toBeNull()
+      // #1631 CX1 renamed these headers: a "($)" suffix asserted a currency the cells beneath it
+      // may not be in, now that each row is formatted in the currency it states.
+      expect(screen.queryByText(/^Day Change$/)).toBeNull()
       expect(screen.queryByText(/Day Change \(%\)/)).toBeNull()
       // The shared value columns ARE there — the historical table is the same table, minus what
       // cannot mean anything on a past day.
       expect(screen.getByText(/Market Value/)).toBeDefined()
-      expect(screen.getByText(/Gain\/Loss \(\$\)/)).toBeDefined()
+      expect(screen.getByText(/^Gain\/Loss$/)).toBeDefined()
     })
 
     // PII: DataTable masks a <td> ONLY when the column id is in maskedColumnIds. Holdings are
@@ -1038,5 +1040,55 @@ describe('HoldingsTable', () => {
         expect(screen.getByRole('alert')).toBeDefined()
       })
     })
+  })
+})
+
+// #1631 CX1: every money column hard-coded the dollar, so a GBP position rendered as dollars. The
+// currency lives on the ROW, not on the table: one investment account can hold positions in
+// several currencies, so there is no table-level verdict that could be right for every cell.
+describe('HoldingsTable currency (#1631 CX1)', () => {
+  it('formats a position in the currency that position states', () => {
+    mockUseGetHoldings.mockReturnValue({
+      data: {
+        holdings: [makeHolding({ id: 'h-gbp', institution_value: 2500, currency_code: 'GBP' })],
+        count: 1,
+      },
+      isLoading: false,
+      isError: false,
+    })
+
+    render(<HoldingsTable />)
+
+    expect(screen.getByText(/£2,500/)).toBeDefined()
+    expect(screen.queryByText(/\$2,500/)).toBeNull()
+  })
+
+  // The sibling: a position stating no currency keeps today's dollar rendering. Unknown is not a
+  // conflict, and every row written before migration 000197 is in that state.
+  it('keeps the dollar rendering for a position that states no currency', () => {
+    mockUseGetHoldings.mockReturnValue({
+      data: { holdings: [makeHolding({ id: 'h-plain', institution_value: 2500 })], count: 1 },
+      isLoading: false,
+      isError: false,
+    })
+
+    render(<HoldingsTable />)
+
+    expect(screen.getByText(/\$2,500/)).toBeDefined()
+  })
+
+  // The header must not assert a currency either: a "($)" suffix over per-row cells is the same
+  // wrong claim one step up.
+  it('does not label the amount columns with a currency symbol', () => {
+    mockUseGetHoldings.mockReturnValue({
+      data: { holdings: [makeHolding({ id: 'h1', currency_code: 'GBP' })], count: 1 },
+      isLoading: false,
+      isError: false,
+    })
+
+    render(<HoldingsTable />)
+
+    expect(screen.queryByText(/Gain\/Loss \(\$\)/)).toBeNull()
+    expect(screen.getByText(/^Gain\/Loss$/)).toBeDefined()
   })
 })

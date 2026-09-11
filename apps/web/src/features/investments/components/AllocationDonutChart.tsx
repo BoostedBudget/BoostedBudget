@@ -4,10 +4,11 @@ import {
   EChartsChart,
   useDarkMode,
   CATEGORY_COLORS,
-  formatCurrencyFull,
   formatPercent,
   escapeHtml,
 } from '@/shared/charts'
+import { formatPortfolioAmount, isCurrencyUnnameable } from '../utils/portfolioCurrency'
+import { MixedCurrencyBadge } from './MixedCurrencyBadge'
 import { useGetPortfolioAllocationBreakdown } from '@boostedbudget/api-client/endpoints/analytics/analytics'
 import type { AllocationConfig, GetPortfolioAllocationBreakdownGroupBy } from '../hooks/usePortfolioAllocationConfig'
 import { ErrorState } from '@/components/ui/error-state'
@@ -113,6 +114,18 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
 
   const buckets = allocationData?.buckets
 
+  // #1631 CX1: the tooltip and legend formatted every slice as dollars. The breakdown carries its
+  // own currency verdict and it was thrown away. The verdict is breakdown-level, not per-slice: a
+  // donut's slices are compared against one another and against a single total, so a chart whose
+  // slices disagree about the unit is broken as a whole.
+  const currency = useMemo(
+    () => ({
+      currency_code: allocationData?.currency_code,
+      is_mixed_currency: allocationData?.is_mixed_currency,
+    }),
+    [allocationData?.currency_code, allocationData?.is_mixed_currency],
+  )
+
   const option = useMemo((): EChartsOption => {
     if (!buckets || buckets.length === 0) return {}
 
@@ -140,7 +153,7 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
           const p = params as { name: string; value?: number; data?: { pct?: number } }
           if (typeof p.value !== 'number') return escapeHtml(String(p.name ?? ''))
           const pct = (p.data?.pct ?? 0).toFixed(1)
-          return `${escapeHtml(String(p.name))}: ${formatCurrencyFull(p.value)} (${pct}%)`
+          return `${escapeHtml(String(p.name))}: ${formatPortfolioAmount(p.value, currency)} (${pct}%)`
         },
       },
       legend: {
@@ -151,7 +164,7 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
         formatter: (name: string) => {
           const slice = sliceByName.get(name)
           if (!slice) return escapeHtml(name)
-          return `${escapeHtml(name)}  ${formatCurrencyFull(slice.value)}  (${formatPercent(slice.pct)})`
+          return `${escapeHtml(name)}  ${formatPortfolioAmount(slice.value, currency)}  (${formatPercent(slice.pct)})`
         },
       },
       series: [
@@ -172,7 +185,7 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
         },
       ],
     }
-  }, [buckets, config.group_by])
+  }, [buckets, config.group_by, currency])
 
   if (isLoading) {
     return (
@@ -198,6 +211,8 @@ export function AllocationDonutChart({ config }: AllocationDonutChartProps) {
 
   return (
     <div className="h-[300px] sm:h-[400px] w-full">
+      {/* Without this the reader is left to guess why the slices lost their currency symbol. */}
+      {isCurrencyUnnameable(currency) && <MixedCurrencyBadge className="mb-2" />}
       <EChartsChart
         style={{ width: '100%', height: '100%' }}
         option={option}
