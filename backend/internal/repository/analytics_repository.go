@@ -2221,13 +2221,16 @@ func (r *analyticsRepository) GetBudgetVsActual(ctx context.Context, userID, per
 			COALESCE(SUM(CASE WHEN sub.is_sub_allocation THEN 0 ELSE bc.spent_amount END), 0)     AS spent_amount
 		FROM budgets b
 		LEFT JOIN budget_categories bc ON bc.budget_id = b.id AND bc.deleted_at IS NULL
-		-- tombstone-exempt(custom_categories cc): the cc join resolves the PARENT LINKAGE of a
+		-- tombstone-exempt(custom_categories cc, custom_categories gp): the cc join resolves the PARENT LINKAGE of a
 		-- live budget line (bc.deleted_at IS NULL already filtered above), mirroring
-		-- budget_repository.go's GetCategoriesByBudgetID. DeleteWithReassignment tombstones a
-		-- category's budget lines in the same transaction as the category, so a live bc never
-		-- names a tombstoned cc; adding AND cc.deleted_at IS NULL would buy nothing and would
+		-- budget_repository.go's GetCategoriesByBudgetID. gp resolves cc's OWN parent (the
+		-- GRANDPARENT linkage, Issue #1630 Task B2), same mirror, one hop further. DeleteWithReassignment
+		-- tombstones a category's budget lines in the same transaction as the category, so a live bc never
+		-- names a tombstoned cc, and cc's own parent is subject to the identical invariant; adding
+		-- AND cc.deleted_at IS NULL / AND gp.deleted_at IS NULL would buy nothing and would
 		-- silently blank sub-allocation detection if that invariant ever slipped. #1569 T9.
 		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
+		LEFT JOIN custom_categories gp ON gp.id = cc.parent_id
 		LEFT JOIN LATERAL (
 			SELECT EXISTS (
 				SELECT 1
@@ -2244,6 +2247,8 @@ func (r *analyticsRepository) GetBudgetVsActual(ctx context.Context, userID, per
 					 AND bc2.category_kind = 'custom' AND bc2.custom_category_id = cc.parent_id)
 					OR (bc.category_kind = 'custom' AND cc.parent_pfc_primary IS NOT NULL
 					 AND bc2.category_kind = 'pfc' AND (bc2.pfc_detailed IS NULL OR bc2.pfc_detailed = '') AND bc2.pfc_primary = cc.parent_pfc_primary)
+					OR (bc.category_kind = 'custom' AND cc.parent_id IS NOT NULL AND gp.parent_pfc_primary IS NOT NULL
+					 AND bc2.category_kind = 'pfc' AND (bc2.pfc_detailed IS NULL OR bc2.pfc_detailed = '') AND bc2.pfc_primary = gp.parent_pfc_primary)
 				  )
 			) AS is_sub_allocation
 		) sub ON true

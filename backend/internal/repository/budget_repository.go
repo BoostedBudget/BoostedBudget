@@ -583,20 +583,29 @@ func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID
 	// Issue #1203: join custom_categories for parent linkage (sub-allocation detection).
 	// Issue #1300: join savings_goals for display name so the API returns savings_goal_name
 	// and the frontend never shows a raw UUID as the category label.
+	// Issue #1630 Task B2: a SECOND join hop (gp) resolves cc's own parent's parent_pfc_primary
+	// — i.e. this row's GRANDPARENT PFC root, when cc itself is nested under a PFC primary via
+	// parent_id rather than being a direct child of it. Mirrors customCategoryPathJoins()
+	// (analytics_category_path.go) walked one hop further; needed so
+	// BudgetCategory.CustomGrandparentPFCPrimary can recognize a transitive sub-allocation
+	// pair the same way buildCategoryClause's widened roll-up now sums it.
 	query := `
 		SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed, bc.custom_category_id,
 			bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
 			bc.tags, bc.match_logic,
-			cc.parent_id, cc.parent_pfc_primary,
+			cc.parent_id, cc.parent_pfc_primary, gp.parent_pfc_primary AS grandparent_pfc_primary,
 			bc.savings_goal_id, bc.auto_created, bc.managed_by_goal_id,
 			sg.name AS savings_goal_name
-		-- tombstone-exempt(custom_categories cc): the cc join resolves the PARENT LINKAGE of a budget line that is
-		-- itself already tombstone-filtered (bc.deleted_at IS NULL). DeleteWithReassignment
-		-- tombstones a category's budget lines in the same transaction as the category, so a live
-		-- bc never names a tombstoned cc; adding AND cc.deleted_at IS NULL would buy nothing and
-		-- would silently blank sub-allocation detection if that invariant ever slipped. #1569 T9.
+		-- tombstone-exempt(custom_categories cc, custom_categories gp): the cc and gp joins resolve the PARENT
+		-- and GRANDPARENT LINKAGE of a budget line that is itself already tombstone-filtered
+		-- (bc.deleted_at IS NULL). DeleteWithReassignment tombstones a category's budget lines in
+		-- the same transaction as the category, so a live bc never names a tombstoned cc, and cc's
+		-- own parent (gp) is subject to the identical invariant one hop up; adding
+		-- AND cc.deleted_at IS NULL / AND gp.deleted_at IS NULL would buy nothing and would
+		-- silently blank sub-allocation detection if that invariant ever slipped. #1569 T9.
 		FROM budget_categories bc
 		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
+		LEFT JOIN custom_categories gp ON gp.id = cc.parent_id
 		LEFT JOIN savings_goals sg ON sg.id = bc.savings_goal_id AND sg.deleted_at IS NULL
 		WHERE bc.budget_id = $1 AND bc.deleted_at IS NULL
 		ORDER BY bc.created_at ASC
@@ -628,6 +637,7 @@ func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID
 			&bc.MatchLogic,
 			&bc.CustomParentID,
 			&bc.CustomParentPFCPrimary,
+			&bc.CustomGrandparentPFCPrimary,
 			&bc.SavingsGoalID,
 			&bc.AutoCreated,
 			&bc.ManagedByGoalID,
@@ -661,17 +671,20 @@ func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetI
 	}
 
 	// Issue #1300: join savings_goals for display name (same as GetCategoriesByBudgetID).
+	// Issue #1630 Task B2: second join hop (gp) for CustomGrandparentPFCPrimary — see
+	// GetCategoriesByBudgetID's comment for the full reasoning; identical shape here.
 	query := `
 		SELECT bc.id, bc.budget_id, bc.category_kind, bc.pfc_primary, bc.pfc_detailed, bc.custom_category_id,
 			bc.allocated_amount, bc.spent_amount, bc.created_at, bc.updated_at,
 			bc.tags, bc.match_logic,
-			cc.parent_id, cc.parent_pfc_primary,
+			cc.parent_id, cc.parent_pfc_primary, gp.parent_pfc_primary AS grandparent_pfc_primary,
 			bc.savings_goal_id, bc.auto_created, bc.managed_by_goal_id,
 			sg.name AS savings_goal_name
-		-- tombstone-exempt(custom_categories cc): identical to GetCategoriesByBudgetID above — the cc join is parent
-		-- linkage for an already tombstone-filtered bc row. #1569 T9.
+		-- tombstone-exempt(custom_categories cc, custom_categories gp): identical to GetCategoriesByBudgetID above —
+		-- the cc and gp joins are parent/grandparent linkage for an already tombstone-filtered bc row. #1569 T9.
 		FROM budget_categories bc
 		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
+		LEFT JOIN custom_categories gp ON gp.id = cc.parent_id
 		LEFT JOIN savings_goals sg ON sg.id = bc.savings_goal_id AND sg.deleted_at IS NULL
 		WHERE bc.budget_id = ANY($1) AND bc.deleted_at IS NULL
 		ORDER BY bc.budget_id ASC, bc.created_at ASC
@@ -703,6 +716,7 @@ func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetI
 			&bc.MatchLogic,
 			&bc.CustomParentID,
 			&bc.CustomParentPFCPrimary,
+			&bc.CustomGrandparentPFCPrimary,
 			&bc.SavingsGoalID,
 			&bc.AutoCreated,
 			&bc.ManagedByGoalID,

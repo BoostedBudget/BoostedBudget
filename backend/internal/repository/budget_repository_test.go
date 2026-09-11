@@ -164,7 +164,7 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 	categoryColumns := []string{
 		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed", "custom_category_id",
 		"allocated_amount", "spent_amount", "created_at", "updated_at", "tags", "match_logic",
-		"parent_id", "parent_pfc_primary",
+		"parent_id", "parent_pfc_primary", "grandparent_pfc_primary", // Issue #1630 Task B2
 		"savings_goal_id", "auto_created", "managed_by_goal_id",
 		"savings_goal_name", // JOIN savings_goals — Issue #1300
 	}
@@ -187,6 +187,7 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 			"category_only", // match_logic
 			nil,             // parent_id (custom join)
 			nil,             // parent_pfc_primary (custom join)
+			nil,             // grandparent_pfc_primary (custom join)
 			nil,             // savings_goal_id (#1300)
 			false,           // auto_created
 			nil,             // managed_by_goal_id
@@ -522,7 +523,7 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
 		"custom_category_id", "allocated_amount", "spent_amount",
 		"created_at", "updated_at", "tags", "match_logic",
-		"parent_id", "parent_pfc_primary",
+		"parent_id", "parent_pfc_primary", "grandparent_pfc_primary", // Issue #1630 Task B2
 		"savings_goal_id", "auto_created", "managed_by_goal_id",
 		"savings_goal_name", // JOIN savings_goals — Issue #1300
 	}
@@ -547,6 +548,7 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 				"category_only",
 				nil,   // parent_id
 				nil,   // parent_pfc_primary
+				nil,   // grandparent_pfc_primary
 				nil,   // savings_goal_id
 				false, // auto_created
 				nil,   // managed_by_goal_id
@@ -567,6 +569,7 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 				"category_only",
 				nil,   // parent_id
 				nil,   // parent_pfc_primary
+				nil,   // grandparent_pfc_primary
 				nil,   // savings_goal_id
 				false, // auto_created
 				nil,   // managed_by_goal_id
@@ -841,7 +844,7 @@ func TestBudgetRepository_GetByID_ReturnsExpectedIncome(t *testing.T) {
 	categoryColumns := []string{
 		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed", "custom_category_id",
 		"allocated_amount", "spent_amount", "created_at", "updated_at", "tags", "match_logic",
-		"parent_id", "parent_pfc_primary",
+		"parent_id", "parent_pfc_primary", "grandparent_pfc_primary", // Issue #1630 Task B2
 		"savings_goal_id", "auto_created", "managed_by_goal_id",
 		"savings_goal_name",
 	}
