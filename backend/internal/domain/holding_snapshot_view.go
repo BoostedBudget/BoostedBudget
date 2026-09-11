@@ -28,7 +28,10 @@ type HoldingSnapshotView struct {
 	// AsOfDate is a UTC calendar day, YYYY-MM-DD. Deliberately a plain date string rather than a
 	// timestamp: a date-only value rendered through a timestamp shifts back a day for every user
 	// west of UTC, and this figure's whole meaning is which day it was true on.
-	AsOfDate string `json:"as_of_date" doc:"UTC calendar day (YYYY-MM-DD) these figures were true"`
+	// #1631: format:"date" extends the request-input convention (dead_letter_job.go,
+	// savings_goal.go) to an OUTPUT field, deliberately — this is a produced, not parsed, value,
+	// but the published schema should say what shape it actually is rather than a bare string.
+	AsOfDate string `json:"as_of_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) these figures were true"`
 
 	Quantity         float64  `json:"quantity"`
 	CostBasis        *float64 `json:"cost_basis,omitempty"`
@@ -67,7 +70,8 @@ type HoldingSnapshotHistory struct {
 	// unambiguously (it is never nil, so `available_dates: []` IS "no retained history"). A key
 	// that is present-and-null and a key that is absent are the same `undefined` to the one
 	// consumer that reads it.
-	AsOfDate *string `json:"as_of_date,omitempty" doc:"UTC calendar day (YYYY-MM-DD) the positions describe; omitted when no history is retained for this account"`
+	// #1631: format:"date", same deliberate output-field extension as HoldingSnapshotView.AsOfDate above.
+	AsOfDate *string `json:"as_of_date,omitempty" format:"date" doc:"UTC calendar day (YYYY-MM-DD) the positions describe; omitted when no history is retained for this account"`
 	// AvailableDates lists every UTC day with at least one retained position, newest first.
 	AvailableDates []string              `json:"available_dates" doc:"Every UTC day (YYYY-MM-DD) with retained positions, newest first"`
 	Positions      []HoldingSnapshotView `json:"positions"`
