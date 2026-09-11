@@ -67,7 +67,8 @@ var interestSubtypes = []string{
 // capitalGainSubtypes are capital-gain DISTRIBUTIONS — income in exactly the way a dividend is,
 // and unhandled before #1631, so every one fell through to "cash". Distinct from the
 // *reinvestment* variants above, which are the same income immediately spent on shares.
-// "return of principal" is deliberately absent: it is a return of capital, not income.
+// "return of principal" is deliberately absent: it is a return of capital, not income. For WHICH
+// bucket it does take — a decision, not a fallthrough, since #1631 gap D2 — see transferSubtypes.
 var capitalGainSubtypes = []string{
 	"long-term capital gain",
 	"short-term capital gain",
@@ -87,10 +88,38 @@ var capitalGainSubtypes = []string{
 // dividendSubtypes/capitalGainSubtypes. It rides the same shared slice as "distribution" into
 // NormalizeTradeType's cash case and TradeTypeToSQLPredicate's transfer/cash buckets, so both
 // halves of the display/filter partition move together automatically.
+//
+// ⚠ "return of principal" (#1631 gap D2) is here BY DECISION, and the decision is worth stating
+// because the alternative was the status quo. It belonged to no set at all, so it reached
+// TradeTypeCash by FALLTHROUGH — an accident of set membership that nothing had chosen and nothing
+// pinned. The Plaid-enum test could not catch it either: that test proves each listed literal is a
+// real Plaid value, and says nothing about a real value listed nowhere.
+//
+// It is a TRANSFER, for the same reason "distribution" beside it is:
+//
+//   - A return of capital is a DISTRIBUTION AGAINST A SECURITY. The money arrives because a
+//     specific holding returned part of the investor's own invested capital — it reduces cost
+//     basis. "Cash" is the label for a movement with no security-level meaning, and this has one,
+//     so Cash understates what happened in exactly the way #1631 exists to fix.
+//   - It is NOT income, and must not become income. That is the pre-existing and still-correct
+//     reason it is absent from dividendSubtypes/capitalGainSubtypes, and putting it in this set
+//     preserves it: IncomeSubtypes is built from the dividend, capital-gain, reinvest and interest
+//     sets only, and transferSubtypes feeds none of them. Routing it to Dividend would have made
+//     IncomeSummary report returned capital as money earned.
+//   - Plaid's own taxonomy already pairs it with the rows in this set: it types the whole family
+//     "cash", and "distribution" — economically the same event — is here. Leaving one in Transfer
+//     and its twin in Cash would display two identical events under two different labels.
+//
+// Being in this shared slice is what moves BOTH halves of the partition together: it rides into
+// NormalizeTradeType's cash case and into TradeTypeToSQLPredicate's transfer bucket (and out of
+// its cash complement) from this one literal, so the row cannot display as Transfer while being
+// unreachable when filtering for Transfer. Pinned in TestNormalizeTradeType_ExactLabelMatrix and,
+// against real SQL, in TestInvestment_TradeTypePartition_RoundTrip_Integration.
 var transferSubtypes = []string{
 	"contribution",
 	"distribution",
 	"stock distribution",
+	"return of principal",
 }
 
 // corporateActionSubtypes carve specific rows OUT of the "transfer" bucket. Plaid types a stock

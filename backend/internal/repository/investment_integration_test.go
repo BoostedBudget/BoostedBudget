@@ -986,6 +986,13 @@ func TestInvestment_TradeTypePartition_RoundTrip_Integration(t *testing.T) {
 		{plaidID: "r43-split", sqlType: "transfer", sqlSub: subPtr("split"), security: secID, expected: "other"},
 		{plaidID: "r43-contrib", sqlType: "cash", sqlSub: subPtr("contribution"), security: cashEquivSecID, expected: "transfer"},
 		{plaidID: "r43-stockdist", sqlType: "cash", sqlSub: subPtr("stock distribution"), security: secID, expected: "transfer"},
+		// #1631 gap D2. "return of principal" belonged to no set and reached "cash" by
+		// fallthrough. It is now a transferSubtype by decision — a return of capital is a
+		// distribution against a security, not a generic cash movement — and this case is the
+		// proof that BOTH halves moved: the display side labels it "transfer" and the transfer
+		// predicate returns this exact row, while the cash bucket no longer claims it.
+		{plaidID: "r43-retprincipal", sqlType: "cash", sqlSub: subPtr("return of principal"), security: secID,
+			amount: -100.00, expected: "transfer"},
 
 		// The structural pair — the #1631 production shape. Same subtypes, opposite
 		// classification, decided by the joined security AND by the corroboration on the row:
