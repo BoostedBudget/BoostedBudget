@@ -40,6 +40,8 @@ export interface ActivityItem {
   /** UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted for investment rows and when the provider gave none */
   authorized_date?: string;
   category_override_kind?: string;
+  /** Currency of amount, investment_price and investment_fees on an investment row (ISO-4217, or a Plaid unofficial code for crypto). Omitted for banking rows and for investment rows ingested before the currency was recorded — absence means 'not stated', never 'USD'. */
+  currency_code?: string;
   custom_category_override_display?: string;
   custom_category_override_id?: string;
   data_source?: string;

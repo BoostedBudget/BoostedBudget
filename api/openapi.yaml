@@ -336,6 +336,9 @@ components:
           type: string
         category_override_kind:
           type: string
+        currency_code:
+          description: Currency of amount, investment_price and investment_fees on an investment row (ISO-4217, or a Plaid unofficial code for crypto). Omitted for banking rows and for investment rows ingested before the currency was recorded — absence means 'not stated', never 'USD'.
+          type: string
         custom_category_override_display:
           type: string
         custom_category_override_id:
