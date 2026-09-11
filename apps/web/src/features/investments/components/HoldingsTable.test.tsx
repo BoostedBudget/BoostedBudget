@@ -21,6 +21,7 @@ import { mockUseUser, createMockClerkUser, mockClerkUser } from '@/test/mocks/cl
 import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
 import type { HoldingSnapshotView } from '@boostedbudget/api-client/models/holdingSnapshotView'
 import type { Account } from '@boostedbudget/api-client/models'
+import { HoldingViewDayChangeUnavailableReason } from '@boostedbudget/api-client/models/holdingViewDayChangeUnavailableReason'
 
 function makeHolding(overrides: Partial<HoldingView> & { id: string }): HoldingView {
   return {
@@ -1161,5 +1162,28 @@ describe('HoldingsTable currency (#1631 CX1)', () => {
 
     expect(screen.queryByText(/Gain\/Loss \(\$\)/)).toBeNull()
     expect(screen.getByText(/^Gain\/Loss$/)).toBeDefined()
+  })
+})
+
+// #1631 I1 follow-up. `renderDayChange` handles exactly one value of
+// `day_change_unavailable_reason`, which is correct TODAY because the backend's enum has exactly
+// one (`enum:"currency_mismatch"` on domain.HoldingView). The risk is a future one: a backend
+// adding a second reason would fall through to the ordinary value branch and silently present a
+// REFUSED day change as a real number — the precise class of defect #1631 exists to fix.
+//
+// This is asserted in a TEST rather than with a runtime exhaustiveness map on purpose. The
+// `investments` chunk sits at 7.44 kB against a 7.5 kB budget (.size-limit.json), so a map would
+// spend most of the remaining headroom to buy a compile-time guarantee a test buys for free. It
+// also matches how this repo already pins ACTIVITY_TYPES against its config keys.
+describe('day-change unavailable reasons are handled exhaustively (#1631)', () => {
+  it('handles every value the generated enum can carry', () => {
+    // The generated const object is the single source of truth — it is regenerated from the Go
+    // enum tag, so adding a reason backend-side changes this without anyone editing the frontend.
+    const backendReasons = Object.values(HoldingViewDayChangeUnavailableReason)
+    // Typed to the enum rather than to string[], which makes this strictly stronger: a value
+    // removed or renamed backend-side is a COMPILE error here, and a value ADDED is the runtime
+    // failure below. Both directions covered.
+    const handledByRenderDayChange: HoldingViewDayChangeUnavailableReason[] = ['currency_mismatch']
+    expect([...backendReasons].sort()).toEqual([...handledByRenderDayChange].sort())
   })
 })
