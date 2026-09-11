@@ -401,6 +401,11 @@ func TestInvestmentAnalytics_TopMovers_RanksWithinOneCurrency_Integration(t *tes
 	assert.True(t, tickers["USDB"])
 	assert.True(t, tickers["UNSTATED"],
 		"an unstated currency conflicts with nothing and must not be dropped")
+	// #1631 Codex round 2. Keeping the unstated row is deliberate, but saying nothing about it let
+	// the response assert "ranked in USD" over a list one third of which is not known to be in
+	// USD. The count is what lets a client say "included, currency unstated" instead.
+	assert.Equal(t, 1, movers.UnknownCurrencyCount,
+		"a row ranked without a known currency must be reported, not silently folded into the ranking currency")
 }
 
 // A portfolio in which NOTHING states a currency is the pre-migration-000197 state of the entire
@@ -424,6 +429,9 @@ func TestInvestmentAnalytics_TopMovers_UnlabelledPortfolioIsUnchanged_Integratio
 
 	assert.Nil(t, movers.RankingCurrencyCode)
 	assert.Equal(t, 0, movers.ExcludedByCurrencyCount)
+	// Every mover is unstated here, so all of them are unknown-currency riders. This is the shape
+	// that proves the count is not a subset of ExcludedByCurrencyCount: nothing was excluded.
+	assert.Equal(t, 2, movers.UnknownCurrencyCount)
 
 	// ⚠ Assert the TOTAL, not the gainer count. seedCurrencyHolding passes `value` as BOTH
 	// institution_value and institution_price, so against close_price=90 the LEGA row

@@ -61,9 +61,18 @@ type UserAccount struct {
 	//     user the excluded period comes back in full.
 	//
 	// Why this is permitted at all, given that financial history is retained by default: never
-	// ingesting a row is not destroying a retained row, and the row in question is a DUPLICATE of
-	// one /transactions/sync stores anyway — which is the entire reason the user set the flag. The
-	// argument, its three scope tests and its honest cost are written out in
+	// ingesting a row is not destroying a retained row.
+	//
+	// ⚠ This comment used to add "and the row in question is a DUPLICATE of one
+	// /transactions/sync stores anyway". That second clause is FALSE and the ADR was corrected to
+	// say so — the banking arm of the unified feed hard-codes NULL for security_id,
+	// ticker_symbol, security_name, type, subtype, quantity, price and fees
+	// (transaction_repository.go), so it cannot represent the dropped fact on exactly the fields
+	// that make an investment transaction one. The duplication is PARTIAL, and it is
+	// user-asserted rather than system-verified: setting the flag is the user's claim that these
+	// rows double up, and nothing checks it. That is still a decision the user is entitled to
+	// make; it is not a proof that nothing is lost. The argument, its three scope tests and its
+	// honest cost are written out in
 	// docs/decisions/2026-08-24-financial-history-retained-by-default.md
 	// § "AMENDMENT (#1631, 2026-09-10): a fourth category — never ingesting a row". Read the three tests before
 	// extending non-ingestion to anything else; they are narrow on purpose.

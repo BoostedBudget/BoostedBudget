@@ -392,8 +392,13 @@ type TopMovers struct {
 	// comparison: a JPY position outranks a USD one on the exchange rate alone. There is no FX
 	// rate source in this system, so the honest options were to rank within one currency or to
 	// refuse the widget for any multi-currency portfolio. The first was chosen -- the second
-	// blanks a working widget for a legitimately multi-currency user, and the whole list is
-	// comparable once it is scoped.
+	// blanks a working widget for a legitimately multi-currency user.
+	//
+	// ⚠ Scoping does NOT make the whole list comparable, and this comment claimed it did until
+	// the second Codex pass on #1631. Rows that state no currency at all ride along (next
+	// paragraph), so a scoped list can still mix a known currency with unknown units. What
+	// scoping removes is the comparison across two KNOWN and DIFFERENT currencies.
+	// UnknownCurrencyCount reports how much of the list is in that third state.
 	//
 	// The currency chosen is the one carried by the most eligible movers. A holding that states NO
 	// currency is ranked alongside it regardless, on the same unknown-is-not-a-conflict rule the
@@ -406,6 +411,20 @@ type TopMovers struct {
 	// list is partial rather than presenting a scoped ranking as a whole-portfolio one; a silent
 	// exclusion is the same class of defect as a silently currency-blind total.
 	ExcludedByCurrencyCount int `json:"excluded_by_currency_count"`
+
+	// UnknownCurrencyCount is how many of the ranked movers state NO currency and are therefore
+	// ranked alongside RankingCurrencyCode without being known to be in it (#1631, Codex round 2).
+	//
+	// Served because the alternative was worse in both directions. Excluding these rows would
+	// empty the widget for every holding written before migration 000197 -- the entire existing
+	// user base -- and saying nothing let the response assert a single ranking currency over a
+	// list that is only partly known to be in it. A client showing "ranked in USD" can now say
+	// "3 holdings of unstated currency included" instead of implying they are dollars.
+	//
+	// Zero has two meanings and both are honest: every mover states a currency, or nothing was
+	// ranked at all. It is NOT a subset of ExcludedByCurrencyCount -- that counts rows left OUT
+	// for stating a different known currency, this counts rows left IN with no currency stated.
+	UnknownCurrencyCount int `json:"unknown_currency_count"`
 }
 
 // GainLossSummary is the response for GET /portfolio/gain-loss.

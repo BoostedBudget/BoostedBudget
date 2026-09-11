@@ -290,3 +290,53 @@ describe('PortfolioValueChart currency (#1631 CX1)', () => {
     expect(out).not.toContain('£')
   })
 })
+
+// #1631 Codex round 2: the tooltip was made currency-aware but the Y-AXIS was not. This component
+// spreads getCurrencyOption(isDark) and overrides only `tooltip` and `xAxis`, so the inherited
+// yAxis.axisLabel.formatter (shared/charts/options/currency.ts) kept formatting every tick as
+// dollars. A GBP portfolio therefore rendered pound tooltips against a dollar axis -- two
+// currencies asserted about one series, which is worse than the single wrong currency it replaced.
+describe('PortfolioValueChart y-axis currency (#1631 Codex r2)', () => {
+  beforeEach(() => {
+    mockUseDarkMode.mockReturnValue(false)
+    MockEChartsChart.mockClear()
+  })
+
+  const axisTick = (value: number) => {
+    const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+      yAxis?: { axisLabel?: { formatter?: (v: unknown) => string } }
+    }
+    const formatter = option?.yAxis?.axisLabel?.formatter
+    expect(formatter).toBeDefined()
+    return formatter!(value)
+  }
+
+  const history = [
+    { date: '2024-01-01', total_value: 1000 },
+    { date: '2024-01-08', total_value: 1100 },
+  ]
+
+  it('formats axis ticks in the currency the series states', () => {
+    mockUseGetPortfolioHistory.mockReturnValue({
+      data: { history, currency_code: 'GBP', is_mixed_currency: false },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof mockUseGetPortfolioHistory>)
+    render(<PortfolioValueChart dateRange={DATE_RANGE} />)
+    const tick = axisTick(1100)
+    expect(tick).toContain('\u00a3')
+    expect(tick).not.toContain('$')
+  })
+
+  it('drops the symbol on the axis when the currency is unnameable', () => {
+    mockUseGetPortfolioHistory.mockReturnValue({
+      data: { history, currency_code: null, is_mixed_currency: true },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof mockUseGetPortfolioHistory>)
+    render(<PortfolioValueChart dateRange={DATE_RANGE} />)
+    const tick = axisTick(1100)
+    expect(tick).not.toContain('$')
+    expect(tick).not.toContain('\u00a3')
+  })
+})

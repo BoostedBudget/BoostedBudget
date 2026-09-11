@@ -275,6 +275,17 @@ func (r TradeTypeRow) isStructuralReinvest() bool {
 // PAIR of rows — a cash/deposit credit and a cash/withdrawal debit, both against the ETF — and
 // never emits the reinvestment subtype.
 //
+// ⚠ The pairing is the OBSERVATION that motivated the rule, not something the rule verifies.
+// Classification here is row-local: no counterpart lookup, no same-day or same-security matching,
+// no amount reconciliation between the two legs. A standalone cash/deposit with a real security, a
+// credit amount and zero shares is labelled Dividend whether or not any withdrawal pairs with it.
+// That is deliberate — classification runs at READ time over one row, and a pairing join would
+// make every feed page a self-join over the same table — but it means the rule is a structural
+// INFERENCE with the production distribution behind it (211 deposits at quantity 0, 155
+// withdrawals at quantity > 0, 147 of the 155 pairing same-day same-security), not a recognition
+// of a matched event. A brokerage that emits unpaired zero-quantity credits against real
+// securities for something other than income would be misread, and nothing here would detect it.
+//
 // ⚠ It is NOT enough that the security is not a cash equivalent. That alone admitted any deposit or
 // withdrawal at all, which is how a bank sweep's generic deposit became a Dividend. The rule also
 // demands the corroboration the production rows actually carried — the amount sign agreeing with

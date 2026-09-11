@@ -79,4 +79,45 @@ describe('ChangeIndicator', () => {
     const el = container.firstChild as HTMLElement
     expect(el.getAttribute('aria-label')).toBe('Day change down versus previous period')
   })
+
+  // #1631 Codex round 2: this formatted every amount as USD unconditionally, and the investments
+  // Portfolio card renders it directly beneath a currency-aware headline. A GBP portfolio with a
+  // GBP 1,000 gain therefore printed "GBP 1,000.00" above and "$1,000" below -- the same figure
+  // labelled as two different currencies. The formatter is injected rather than imported so this
+  // component gains no dependency on the investments feature: `shared/`-to-feature and
+  // feature-to-feature import edges are what reopened the #1601 landing-route regression on this
+  // very branch.
+  it('formats the amount with an injected formatter when one is given', () => {
+    render(
+      <ChangeIndicator
+        variant="positive"
+        amount={1000}
+        percent={5}
+        formatAmount={(n) => `\u00a3${n.toFixed(0)}`}
+      />
+    )
+    expect(screen.getByText(/\u00a31000/)).toBeDefined()
+    expect(screen.queryByText(/\$1,000/)).toBeNull()
+  })
+
+  it('is given the ABSOLUTE amount, so a loss is not double-signed by the glyph', () => {
+    const seen: number[] = []
+    render(
+      <ChangeIndicator
+        variant="negative"
+        amount={-500}
+        percent={-2}
+        formatAmount={(n) => {
+          seen.push(n)
+          return `\u00a3${n.toFixed(0)}`
+        }}
+      />
+    )
+    expect(seen).toEqual([500])
+  })
+
+  it('still defaults to dollars when no formatter is injected', () => {
+    render(<ChangeIndicator variant="positive" amount={1234} percent={5.2} />)
+    expect(screen.getByText(/\$1,234/)).toBeDefined()
+  })
 })

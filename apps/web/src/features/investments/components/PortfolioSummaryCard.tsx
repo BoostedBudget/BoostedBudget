@@ -87,6 +87,7 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
                 amount={summary.total_gain_loss}
                 percent={summary.total_gain_loss_pct}
                 label="Portfolio gain/loss"
+                formatAmount={(n) => formatPortfolioAmount(n, summary, 0)}
               />
             )}
           </span>
@@ -108,6 +109,7 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
                   amount={dayChange}
                   percent={summary.day_change_pct}
                   label="Day change"
+                  formatAmount={(n) => formatPortfolioAmount(n, summary, 0)}
                 />
               )}
             </span>

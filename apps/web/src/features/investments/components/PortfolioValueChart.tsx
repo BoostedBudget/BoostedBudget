@@ -39,6 +39,18 @@ export function PortfolioValueChart({ dateRange }: PortfolioValueChartProps) {
     const base = getCurrencyOption(isDark)
     return {
       ...base,
+      // The inherited yAxis formatter from getCurrencyOption is a DOLLAR formatter, and spreading
+      // `base` carries it in silently. Overriding only the tooltip left a pound tooltip against a
+      // dollar axis -- two currencies asserted about one series. The axis uses 0 fraction digits
+      // because a tick label is a scale marker, not a figure.
+      yAxis: {
+        ...(base.yAxis as object),
+        axisLabel: {
+          ...((base.yAxis as Record<string, unknown>).axisLabel as object),
+          formatter: (v: unknown) =>
+            typeof v === 'number' ? formatPortfolioAmount(v, currency, 0) : String(v),
+        },
+      },
       xAxis: { type: 'category', data: history.map((p) => p.date) },
       tooltip: {
         trigger: 'axis',
