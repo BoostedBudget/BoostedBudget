@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -187,6 +188,144 @@ func TestRulePreviewMatch_DateSerializesAsCalendarDay(t *testing.T) {
 // A future field of type time.Time carrying a json name this list does not know about is NOT
 // caught — the guard can only police the names it knows are DATE-backed — so extend
 // dateOnlyWireFields when a DATE column joins these types.
+// ─── Batch J (#1631 gap 6): format:"date" on the remaining date-only response fields ──────────
+//
+// The tag itself is declarative and cannot be asserted from Go — the meaningful check is that
+// the value each of these fields actually carries on the wire is a bare calendar day, never a
+// timestamp, for every field whose date-only-ness required reading a population site rather than
+// being obvious from the type. See batch-j-report.md for the full tag-by-tag list, the declines,
+// and the population site read for each.
+var dateOnlyRegex = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+
+func assertWireValueIsCalendarDayOnly(t *testing.T, payload []byte, key string) {
+	t.Helper()
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(payload, &decoded))
+	raw, ok := decoded[key]
+	require.True(t, ok, "key %q must be present on the wire", key)
+	s, isStr := raw.(string)
+	require.True(t, isStr, "key %q must serialize as a string, got %T", key, raw)
+	assert.Regexp(t, dateOnlyRegex, s, "key %q must be a bare YYYY-MM-DD calendar day, got %q", key, s)
+}
+
+func TestAccountBalanceHistory_DateFieldsAreCalendarDaysOnly(t *testing.T) {
+	first := "2026-01-02"
+	hist := AccountBalanceHistory{
+		AccountID: "acct-1",
+		FirstDate: &first,
+		Points: []AccountBalanceHistoryPoint{
+			{Date: "2026-01-02", CurrencyCode: "USD"},
+		},
+	}
+	payload, err := json.Marshal(hist)
+	require.NoError(t, err)
+
+	assertWireValueIsCalendarDayOnly(t, payload, "first_date")
+
+	pointPayload, err := json.Marshal(hist.Points[0])
+	require.NoError(t, err)
+	assertWireValueIsCalendarDayOnly(t, pointPayload, "date")
+}
+
+func TestSavingsGoalContribution_OccurredOnIsCalendarDayOnly(t *testing.T) {
+	// #1631 batch J: occurred_on is deliberately projected as `occurred_on::text` over a DATE
+	// column (savings_contribution_repository.go), pinned by an existing integration test —
+	// this asserts the wire shape that projection produces.
+	c := SavingsGoalContribution{OccurredOn: "2026-01-02"}
+	payload, err := json.Marshal(c)
+	require.NoError(t, err)
+	assertWireValueIsCalendarDayOnly(t, payload, "occurred_on")
+}
+
+func TestNetWorthBucket_DateIsCalendarDayOnly(t *testing.T) {
+	payload, err := json.Marshal(NetWorthBucket{Date: "2026-01-02", NetWorth: 100})
+	require.NoError(t, err)
+	assertWireValueIsCalendarDayOnly(t, payload, "date")
+}
+
+func TestRecurringSubscriptionItem_And_Response_DatesAreCalendarDayOnly(t *testing.T) {
+	item := RecurringSubscriptionItem{
+		MerchantName:     "Netflix",
+		LastChargeDate:   "2026-01-02",
+		NextExpectedDate: "2026-02-02",
+	}
+	payload, err := json.Marshal(item)
+	require.NoError(t, err)
+	assertWireValueIsCalendarDayOnly(t, payload, "last_charge_date")
+	assertWireValueIsCalendarDayOnly(t, payload, "next_expected_date")
+
+	resp := RecurringSubscriptionsResponse{Subscriptions: []RecurringSubscriptionItem{item}, AsOfDate: "2026-01-02"}
+	respPayload, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assertWireValueIsCalendarDayOnly(t, respPayload, "as_of_date")
+}
+
+func TestLargestTransactionItem_TopExpenseResponse_UnusualSpendItem_DatesAreCalendarDayOnly(t *testing.T) {
+	ltPayload, err := json.Marshal(LargestTransactionItem{Date: "2026-01-02"})
+	require.NoError(t, err)
+	assertWireValueIsCalendarDayOnly(t, ltPayload, "date")
+
+	tePayload, err := json.Marshal(TopExpenseResponse{Date: "2026-01-02", StartDate: "2026-01-01"})
+	require.NoError(t, err)
+	assertWireValueIsCalendarDayOnly(t, tePayload, "date")
+	assertWireValueIsCalendarDayOnly(t, tePayload, "start_date")
+
+	usPayload, err := json.Marshal(UnusualSpendItem{Date: "2026-01-02"})
+	require.NoError(t, err)
+	assertWireValueIsCalendarDayOnly(t, usPayload, "date")
+}
+
+func TestHoldingView_DayChangeAsOfIsCalendarDayOnly(t *testing.T) {
+	asOf := "2026-01-02"
+	v := HoldingView{DayChangeAsOf: &asOf}
+	payload, err := json.Marshal(v)
+	require.NoError(t, err)
+	assertWireValueIsCalendarDayOnly(t, payload, "day_change_as_of")
+}
+
+// TestAnalyticsRangeResponses_StartEndDatesAreCalendarDayOnly covers the *Response structs whose
+// start_date/end_date pair is populated identically via t.Format("2006-01-02") in
+// analytics_service.go / analytics_category_hierarchy.go — verified at those population sites,
+// not merely by type, since a plain `string` field says nothing about its actual contents.
+func TestAnalyticsRangeResponses_StartEndDatesAreCalendarDayOnly(t *testing.T) {
+	const start, end = "2026-01-01", "2026-01-31"
+
+	cases := []struct {
+		name    string
+		payload []byte
+		keys    []string
+	}{
+		{"AverageMonthlySpendResponse", marshalOrPanic(t, AverageMonthlySpendResponse{StartDate: start, EndDate: end}), []string{"start_date", "end_date"}},
+		{"CategoryBreakdownForMerchantResponse", marshalOrPanic(t, CategoryBreakdownForMerchantResponse{StartDate: start, EndDate: end}), []string{"start_date", "end_date"}},
+		{"CategoryHierarchyResponse", marshalOrPanic(t, CategoryHierarchyResponse{StartDate: start, EndDate: end}), []string{"start_date", "end_date"}},
+		{"CategoryTotalResponse", marshalOrPanic(t, CategoryTotalResponse{StartDate: start, EndDate: end}), []string{"start_date", "end_date"}},
+		{"IncomeSourceBreakdownResponse", marshalOrPanic(t, IncomeSourceBreakdownResponse{StartDate: start, EndDate: end}), []string{"start_date", "end_date"}},
+		{"LargestTransactionsResponse", marshalOrPanic(t, LargestTransactionsResponse{StartDate: start, EndDate: end}), []string{"start_date", "end_date"}},
+		{"NetWorthTrendResponse", marshalOrPanic(t, NetWorthTrendResponse{StartDate: start, EndDate: end}), []string{"start_date", "end_date"}},
+		{"SavingsRateResponse", marshalOrPanic(t, SavingsRateResponse{StartDate: start, EndDate: end}), []string{"start_date", "end_date"}},
+		{"SpendingByCategoryResponse.end_date", marshalOrPanic(t, SpendingByCategoryResponse{StartDate: start, EndDate: end}), []string{"end_date"}},
+		{"SpendingByMerchantResponse", marshalOrPanic(t, SpendingByMerchantResponse{StartDate: start, EndDate: end}), []string{"start_date", "end_date"}},
+		{"SpendingTrendPeriod.period_end", marshalOrPanic(t, SpendingTrendPeriod{PeriodStart: start, PeriodEnd: end}), []string{"period_end"}},
+		{"SpendingTrendsResponse", marshalOrPanic(t, SpendingTrendsResponse{StartDate: start, EndDate: end}), []string{"start_date", "end_date"}},
+		{"UnusualSpendResponse", marshalOrPanic(t, UnusualSpendResponse{StartDate: start, EndDate: end}), []string{"start_date", "end_date"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, key := range tc.keys {
+				assertWireValueIsCalendarDayOnly(t, tc.payload, key)
+			}
+		})
+	}
+}
+
+func marshalOrPanic(t *testing.T, v any) []byte {
+	t.Helper()
+	payload, err := json.Marshal(v)
+	require.NoError(t, err)
+	return payload
+}
+
 func TestNoDateOnlyWireFieldIsBackedByATimeValue(t *testing.T) {
 	dateOnly := make(map[string]bool, len(dateOnlyWireFields))
 	for _, f := range dateOnlyWireFields {

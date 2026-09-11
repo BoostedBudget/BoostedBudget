@@ -22,7 +22,7 @@ package domain
 // freshest snapshot_at wins, id breaking a tie — so the series carries one point per day.
 type AccountBalanceHistoryPoint struct {
 	// Date is the UTC calendar day (YYYY-MM-DD) this balance was true on.
-	Date string `json:"date"`
+	Date string `json:"date" format:"date"`
 	// CurrentBalance / AvailableBalance are pointers because the provider may report either as
 	// absent, and a missing balance must stay missing rather than become a confident zero.
 	CurrentBalance   *float64 `json:"current_balance,omitempty"`
@@ -51,7 +51,7 @@ type AccountBalanceHistory struct {
 	// FirstDate / LastDate bound the series without the caller re-deriving them, and are nil when
 	// Points is empty. Pre-computed for the same reason the analytics layer pre-computes
 	// everything: an LLM tool-caller should not spend tokens doing arithmetic over the rows.
-	FirstDate *string                      `json:"first_date,omitempty"`
+	FirstDate *string                      `json:"first_date,omitempty" format:"date"`
 	LastDate  *string                      `json:"last_date,omitempty"`
 	Points    []AccountBalanceHistoryPoint `json:"points" nullable:"false"`
 }
