@@ -138,21 +138,39 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 		seriesID = ancestor.SeriesID
 	}
 
+	// req.StartDate/req.EndDate are domain.FlexibleDate (#1631 Batch F2) — converted back to
+	// time.Time/*time.Time here, since Budget itself keeps the plain time.Time fields (they stay
+	// SQL bind params/scan targets; StartDateDisplay/EndDateDisplay carry the wire value). Set
+	// inline in the literal below (not via a later PopulateDateDisplay() call) so this budget —
+	// returned directly, not re-fetched from the DB — carries correct display fields immediately;
+	// TestEveryDateDisplaySiblingIsPopulatedWhereItsTimeIsSet enforces exactly this.
+	startDate := time.Time(req.StartDate)
+	var endDate *time.Time
+	var endDateDisplay *string
+	if req.EndDate != nil {
+		t := time.Time(*req.EndDate)
+		endDate = &t
+		d := t.Format(time.DateOnly)
+		endDateDisplay = &d
+	}
+
 	// Create budget from request
 	budget := &domain.Budget{
-		ID:             newID,
-		UserID:         userID,
-		Name:           req.Name,
-		Description:    req.Description,
-		Period:         req.Period,
-		StartDate:      req.StartDate,
-		EndDate:        req.EndDate,
-		Amount:         reconcileAmount,
-		ExpectedIncome: reconcileExpectedIncome,
-		CurrencyCode:   req.CurrencyCode,
-		IsActive:       true,
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
+		ID:               newID,
+		UserID:           userID,
+		Name:             req.Name,
+		Description:      req.Description,
+		Period:           req.Period,
+		StartDate:        startDate,
+		StartDateDisplay: startDate.Format(time.DateOnly),
+		EndDate:          endDate,
+		EndDateDisplay:   endDateDisplay,
+		Amount:           reconcileAmount,
+		ExpectedIncome:   reconcileExpectedIncome,
+		CurrencyCode:     req.CurrencyCode,
+		IsActive:         true,
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
 		// Envelope budgeting fields (Issue #491)
 		IncomeAmount:  req.IncomeAmount,
 		IncomeSources: req.IncomeSources,
@@ -463,11 +481,16 @@ func (s *budgetService) UpdateBudget(ctx context.Context, userID, budgetID strin
 		budget.Period = *req.Period
 	}
 	if req.StartDate != nil {
-		budget.StartDate = *req.StartDate
+		budget.StartDate = time.Time(*req.StartDate)
 	}
 	if req.EndDate != nil {
-		budget.EndDate = req.EndDate
+		budget.EndDate = (*time.Time)(req.EndDate)
 	}
+	// #1631 Batch F2: re-derive the display fields from whatever StartDate/EndDate now hold — this
+	// must run even when neither changed above, since budget was fetched via GetByID and already
+	// carries its OWN (correct) display fields from that scan; this call is only a no-op in that
+	// case, not a skip.
+	budget.PopulateDateDisplay()
 	// Reconcile expected_income and amount (Issue #1048): expected_income wins when set.
 	if req.ExpectedIncome != nil && *req.ExpectedIncome > 0 {
 		budget.ExpectedIncome = *req.ExpectedIncome
@@ -896,4 +919,3 @@ func enrichBudgetPFCDisplay(b *domain.Budget) {
 		b.IncomeSources[i].PopulatePFCDisplay()
 	}
 }
-

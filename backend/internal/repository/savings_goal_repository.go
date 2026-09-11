@@ -241,6 +241,7 @@ func (r *savingsGoalRepository) GetByID(ctx context.Context, id string) (*domain
 		return nil, err
 	}
 
+	goal.PopulateDateDisplay() // #1631 Batch F2
 	return goal, nil
 }
 
@@ -275,6 +276,7 @@ func (r *savingsGoalRepository) GetByIDForUser(ctx context.Context, id, userID s
 	if err != nil {
 		return nil, err
 	}
+	goal.PopulateDateDisplay() // #1631 Batch F2
 	return goal, nil
 }
 
@@ -328,6 +330,7 @@ func (r *savingsGoalRepository) GetDeletedByUserID(ctx context.Context, userID s
 		); err != nil {
 			return nil, err
 		}
+		goal.PopulateDateDisplay() // #1631 Batch F2
 		goals = append(goals, goal)
 	}
 	if err := rows.Err(); err != nil {
@@ -374,6 +377,7 @@ func (r *savingsGoalRepository) GetByName(ctx context.Context, userID, name stri
 		return nil, err
 	}
 
+	goal.PopulateDateDisplay() // #1631 Batch F2
 	return goal, nil
 }
 
@@ -725,6 +729,7 @@ func (r *savingsGoalRepository) scanGoals(ctx context.Context, query string, arg
 		); err != nil {
 			return nil, err
 		}
+		goal.PopulateDateDisplay() // #1631 Batch F2
 		goals = append(goals, goal)
 	}
 

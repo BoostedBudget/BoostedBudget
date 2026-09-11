@@ -228,7 +228,7 @@ func createTestCreateBudgetRequest() *domain.CreateBudgetRequest {
 	return &domain.CreateBudgetRequest{
 		Name:         "Monthly Expenses",
 		Period:       domain.BudgetPeriodMonthly,
-		StartDate:    time.Now(),
+		StartDate:    domain.FlexibleDate(time.Now()),
 		Amount:       1000.00,
 		CurrencyCode: "USD",
 	}
@@ -864,7 +864,7 @@ func TestBudgetService_CreateBudget_ExpectedIncomeWins(t *testing.T) {
 	req := &domain.CreateBudgetRequest{
 		Name:           "Monthly Budget",
 		Period:         domain.BudgetPeriodMonthly,
-		StartDate:      time.Now(),
+		StartDate:      domain.FlexibleDate(time.Now()),
 		Amount:         1000.0,
 		CurrencyCode:   "USD",
 		ExpectedIncome: &expectedIncome,
@@ -894,7 +894,7 @@ func TestBudgetService_CreateBudget_AmountFallback(t *testing.T) {
 	req := &domain.CreateBudgetRequest{
 		Name:         "Monthly Budget",
 		Period:       domain.BudgetPeriodMonthly,
-		StartDate:    time.Now(),
+		StartDate:    domain.FlexibleDate(time.Now()),
 		Amount:       1000.0,
 		CurrencyCode: "USD",
 		// ExpectedIncome is nil
@@ -925,7 +925,7 @@ func TestBudgetService_CreateBudget_ExpectedIncomeOnly(t *testing.T) {
 	req := &domain.CreateBudgetRequest{
 		Name:           "Monthly Budget",
 		Period:         domain.BudgetPeriodMonthly,
-		StartDate:      time.Now(),
+		StartDate:      domain.FlexibleDate(time.Now()),
 		Amount:         3000.0, // must be positive to pass validation
 		CurrencyCode:   "USD",
 		ExpectedIncome: &expectedIncome,
@@ -957,7 +957,7 @@ func TestBudgetService_CreateBudget_RejectsZeroAmount(t *testing.T) {
 	req := &domain.CreateBudgetRequest{
 		Name:         "Budget",
 		Period:       domain.BudgetPeriodMonthly,
-		StartDate:    time.Now(),
+		StartDate:    domain.FlexibleDate(time.Now()),
 		Amount:       0, // triggers "amount must be positive"
 		CurrencyCode: "USD",
 	}
@@ -1218,7 +1218,7 @@ func TestBudgetService_CreateBudget_CarriesForwardSavingsCategories(t *testing.T
 			Period:       domain.BudgetPeriodMonthly,
 			Amount:       3000.00,
 			CurrencyCode: "USD",
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 		}
 
 		goalID1 := "goal-1"
@@ -1268,7 +1268,7 @@ func TestBudgetService_CreateBudget_CarriesForwardSavingsCategories(t *testing.T
 			Period:       domain.BudgetPeriodMonthly,
 			Amount:       3000.00,
 			CurrencyCode: "USD",
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 		}
 
 		goalID1 := "goal-1"
@@ -1312,7 +1312,7 @@ func TestBudgetService_CreateBudget_CarriesForwardSavingsCategories(t *testing.T
 			Period:       domain.BudgetPeriodMonthly,
 			Amount:       3000.00,
 			CurrencyCode: "USD",
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 		}
 
 		mockBudgetRepo.On("CreateWithCategories", ctx, mock.AnythingOfType("*domain.Budget"), mock.Anything).Return(nil)
@@ -1599,7 +1599,7 @@ func TestBudgetService_CarryForward_DetachPersistsAcrossSeriesPeriods(t *testing
 			Period:       domain.BudgetPeriodMonthly,
 			Amount:       3000.00,
 			CurrencyCode: "USD",
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 		}
 
 		activeGoals := []*domain.SavingsGoal{
@@ -1846,7 +1846,7 @@ func TestBudgetService_CreateBudget_ValidatesCategories(t *testing.T) {
 		req := &domain.CreateBudgetRequest{
 			Name:         "Budget With Bad Category",
 			Period:       domain.BudgetPeriodMonthly,
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 			Amount:       1500.00,
 			CurrencyCode: "USD",
 			Categories: []domain.CreateBudgetCategoryRequest{
@@ -1874,7 +1874,7 @@ func TestBudgetService_CreateBudget_ValidatesCategories(t *testing.T) {
 		req := &domain.CreateBudgetRequest{
 			Name:         "Budget With Invalid PFC",
 			Period:       domain.BudgetPeriodMonthly,
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 			Amount:       1500.00,
 			CurrencyCode: "USD",
 			Categories: []domain.CreateBudgetCategoryRequest{
@@ -1924,7 +1924,7 @@ func TestBudgetService_CreateBudget_SavingsCategory_IDOR(t *testing.T) {
 		req := &domain.CreateBudgetRequest{
 			Name:         "Budget With Savings",
 			Period:       domain.BudgetPeriodMonthly,
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 			Amount:       2000.00,
 			CurrencyCode: "USD",
 			Categories: []domain.CreateBudgetCategoryRequest{
@@ -1958,7 +1958,7 @@ func TestBudgetService_CreateBudget_SavingsCategory_IDOR(t *testing.T) {
 		req := &domain.CreateBudgetRequest{
 			Name:         "Budget With Own Savings",
 			Period:       domain.BudgetPeriodMonthly,
-			StartDate:    time.Now(),
+			StartDate:    domain.FlexibleDate(time.Now()),
 			Amount:       3000.00,
 			CurrencyCode: "USD",
 			Categories: []domain.CreateBudgetCategoryRequest{
