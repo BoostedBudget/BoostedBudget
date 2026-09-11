@@ -5,10 +5,13 @@ import "time"
 // BalanceSummaryResponse represents the response for GET /api/v1/dashboard/balance-summary
 // Provides current balance overview with breakdown by account type and period comparison.
 type BalanceSummaryResponse struct {
-	AsOfDate        time.Time                         `json:"as_of_date"`
-	TotalBalance    float64                           `json:"total_balance"`
-	ByType          map[string]*AccountTypeBalance    `json:"by_type"`
-	PeriodComparison *PeriodComparisonData            `json:"period_comparison,omitempty"`
+	// AsOfDate stays time.Time — NOT serialized; AsOfDateDisplay is what reaches clients (#1631,
+	// same defect class HoldingSnapshotView.AsOfDate and InvestmentTransaction.DateDisplay fix).
+	AsOfDate         time.Time                      `json:"-"`
+	AsOfDateDisplay  string                         `json:"as_of_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this balance summary is as of"`
+	TotalBalance     float64                        `json:"total_balance"`
+	ByType           map[string]*AccountTypeBalance `json:"by_type"`
+	PeriodComparison *PeriodComparisonData          `json:"period_comparison,omitempty"`
 }
 
 // AccountTypeBalance represents balance information for a specific account type
@@ -35,17 +38,23 @@ type PeriodComparisonData struct {
 // BalanceHistoryResponse represents the response for GET /api/v1/dashboard/balance-history
 // Provides time series balance data for charts with optional account type breakdown.
 type BalanceHistoryResponse struct {
-	StartDate   time.Time               `json:"start_date"`
-	EndDate     time.Time               `json:"end_date"`
-	Granularity string                  `json:"granularity"` // "daily", "weekly", "monthly"
-	Snapshots   []BalanceHistorySnapshot `json:"snapshots"`
+	// StartDate/EndDate stay time.Time — NOT serialized; StartDateDisplay/EndDateDisplay are what
+	// reach clients (#1631).
+	StartDate        time.Time                `json:"-"`
+	StartDateDisplay string                   `json:"start_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this history response starts on"`
+	EndDate          time.Time                `json:"-"`
+	EndDateDisplay   string                   `json:"end_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this history response ends on"`
+	Granularity      string                   `json:"granularity"` // "daily", "weekly", "monthly"
+	Snapshots        []BalanceHistorySnapshot `json:"snapshots"`
 }
 
 // BalanceHistorySnapshot represents a single point in the balance history timeline
 type BalanceHistorySnapshot struct {
-	Date         time.Time          `json:"date"`
-	Balance      float64            `json:"balance"`
-	ByType       map[string]float64 `json:"by_type,omitempty"` // Optional breakdown by type
+	// Date stays time.Time — NOT serialized; DateDisplay is what reaches clients (#1631).
+	Date        time.Time          `json:"-"`
+	DateDisplay string             `json:"date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) of this snapshot"`
+	Balance     float64            `json:"balance"`
+	ByType      map[string]float64 `json:"by_type,omitempty"` // Optional breakdown by type
 }
 
 // AccountTypesResponse represents the response for GET /api/v1/dashboard/account-types
@@ -79,12 +88,14 @@ type DashboardFilters struct {
 // NetWorthResponse represents the response for GET /api/v1/dashboard/net-worth
 // Provides current net worth (assets - liabilities) with breakdown by category.
 type NetWorthResponse struct {
-	AsOfDate         time.Time                          `json:"as_of_date"`
-	NetWorth         float64                            `json:"net_worth"`
-	TotalAssets      float64                            `json:"total_assets"`
-	TotalLiabilities float64                            `json:"total_liabilities"`
+	// AsOfDate stays time.Time — NOT serialized; AsOfDateDisplay is what reaches clients (#1631).
+	AsOfDate         time.Time                           `json:"-"`
+	AsOfDateDisplay  string                              `json:"as_of_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this net worth figure is as of"`
+	NetWorth         float64                             `json:"net_worth"`
+	TotalAssets      float64                             `json:"total_assets"`
+	TotalLiabilities float64                             `json:"total_liabilities"`
 	ByCategory       map[string]*NetWorthCategoryBalance `json:"by_category"`
-	PeriodComparison *NetWorthPeriodComparison          `json:"period_comparison,omitempty"`
+	PeriodComparison *NetWorthPeriodComparison           `json:"period_comparison,omitempty"`
 }
 
 // NetWorthCategoryBalance represents balance information for assets or liabilities
@@ -107,15 +118,21 @@ type NetWorthPeriodComparison struct {
 // NetWorthHistoryResponse represents the response for GET /api/v1/dashboard/net-worth-history
 // Provides time series net worth data for charts.
 type NetWorthHistoryResponse struct {
-	StartDate   time.Time                 `json:"start_date"`
-	EndDate     time.Time                 `json:"end_date"`
-	Granularity string                    `json:"granularity"` // "daily", "weekly", "monthly"
-	Snapshots   []NetWorthHistorySnapshot `json:"snapshots"`
+	// StartDate/EndDate stay time.Time — NOT serialized; StartDateDisplay/EndDateDisplay are what
+	// reach clients (#1631).
+	StartDate        time.Time                 `json:"-"`
+	StartDateDisplay string                    `json:"start_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this history response starts on"`
+	EndDate          time.Time                 `json:"-"`
+	EndDateDisplay   string                    `json:"end_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this history response ends on"`
+	Granularity      string                    `json:"granularity"` // "daily", "weekly", "monthly"
+	Snapshots        []NetWorthHistorySnapshot `json:"snapshots"`
 }
 
 // NetWorthHistorySnapshot represents a single point in the net worth history timeline
 type NetWorthHistorySnapshot struct {
-	Date             time.Time `json:"date"`
+	// Date stays time.Time — NOT serialized; DateDisplay is what reaches clients (#1631).
+	Date             time.Time `json:"-"`
+	DateDisplay      string    `json:"date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) of this snapshot"`
 	NetWorth         float64   `json:"net_worth"`
 	TotalAssets      float64   `json:"total_assets"`
 	TotalLiabilities float64   `json:"total_liabilities"`

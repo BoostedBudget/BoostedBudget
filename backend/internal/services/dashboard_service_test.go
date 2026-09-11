@@ -188,6 +188,11 @@ func TestGetBalanceSummary_Success(t *testing.T) {
 	assert.Equal(t, 200.00, result.PeriodComparison.ChangeAmount)        // 4000 - 3800
 	assert.InDelta(t, 5.26, result.PeriodComparison.ChangePercent, 0.01) // (200/3800)*100
 
+	// #1631 Batch F1: AsOfDate is DATE-shaped, so AsOfDateDisplay (the field that actually
+	// serializes as as_of_date) must be populated at this construction site.
+	assert.Equal(t, result.AsOfDate.Format(time.DateOnly), result.AsOfDateDisplay)
+	assert.NotEmpty(t, result.AsOfDateDisplay)
+
 	mockSnapshotRepo.AssertExpectations(t)
 	mockAccountRepo.AssertExpectations(t)
 }
@@ -335,6 +340,14 @@ func TestGetBalanceHistory_Success(t *testing.T) {
 	assert.Equal(t, 3000.00, result.Snapshots[0].Balance)
 	assert.Equal(t, 3500.00, result.Snapshots[1].Balance)
 	assert.Equal(t, 2000.00, result.Snapshots[0].ByType["depository"])
+
+	// #1631 Batch F1: StartDate/EndDate/Date are DATE-shaped, so the Display siblings that
+	// actually serialize on the wire must be populated at this construction site (response and
+	// per-snapshot loop both).
+	assert.Equal(t, startDate.Format(time.DateOnly), result.StartDateDisplay)
+	assert.Equal(t, endDate.Format(time.DateOnly), result.EndDateDisplay)
+	assert.Equal(t, startDate.Format(time.DateOnly), result.Snapshots[0].DateDisplay)
+	assert.Equal(t, startDate.AddDate(0, 0, 3).Format(time.DateOnly), result.Snapshots[1].DateDisplay)
 
 	mockSnapshotRepo.AssertExpectations(t)
 }
@@ -605,6 +618,11 @@ func TestGetNetWorth_Success_MixedAccountTypes(t *testing.T) {
 	assert.Equal(t, -3300.00, result.PeriodComparison.PreviousNetWorth)
 	assert.Equal(t, 1300.00, result.PeriodComparison.NetWorthChange)
 
+	// #1631 Batch F1: AsOfDate is DATE-shaped, so AsOfDateDisplay (the field that actually
+	// serializes as as_of_date) must be populated at this construction site.
+	assert.Equal(t, result.AsOfDate.Format(time.DateOnly), result.AsOfDateDisplay)
+	assert.NotEmpty(t, result.AsOfDateDisplay)
+
 	mockSnapshotRepo.AssertExpectations(t)
 	mockAccountRepo.AssertExpectations(t)
 }
@@ -857,6 +875,14 @@ func TestGetNetWorthHistory_Success(t *testing.T) {
 	assert.Equal(t, 11000.00, result.Snapshots[1].NetWorth)
 	assert.Equal(t, 14000.00, result.Snapshots[1].TotalAssets)
 	assert.Equal(t, 3000.00, result.Snapshots[1].TotalLiabilities)
+
+	// #1631 Batch F1: StartDate/EndDate/Date are DATE-shaped, so the Display siblings that
+	// actually serialize on the wire must be populated at this construction site (response and
+	// per-snapshot loop both).
+	assert.Equal(t, startDate.Format(time.DateOnly), result.StartDateDisplay)
+	assert.Equal(t, endDate.Format(time.DateOnly), result.EndDateDisplay)
+	assert.Equal(t, startDate.Format(time.DateOnly), result.Snapshots[0].DateDisplay)
+	assert.Equal(t, startDate.AddDate(0, 0, 3).Format(time.DateOnly), result.Snapshots[1].DateDisplay)
 
 	mockSnapshotRepo.AssertExpectations(t)
 }

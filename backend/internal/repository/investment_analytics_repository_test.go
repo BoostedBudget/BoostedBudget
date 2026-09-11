@@ -414,7 +414,9 @@ func TestInvestmentAnalytics_IncomeSummary_GroupsByType(t *testing.T) {
 	assert.InDelta(t, 50.0, result.ByType[1].TotalAmount, 0.01)
 
 	assert.Equal(t, start, result.StartDate)
+	assert.Equal(t, "2024-01-01", result.StartDateDisplay)
 	assert.Equal(t, end, result.EndDate)
+	assert.Equal(t, "2024-03-31", result.EndDateDisplay)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -442,7 +444,9 @@ func TestInvestmentAnalytics_IncomeSummary_EmptyRange(t *testing.T) {
 	assert.InDelta(t, 0.0, result.TotalIncome, 0.01)
 	assert.Empty(t, result.ByType)
 	assert.Equal(t, start, result.StartDate)
+	assert.Equal(t, "2020-01-01", result.StartDateDisplay)
 	assert.Equal(t, end, result.EndDate)
+	assert.Equal(t, "2020-01-31", result.EndDateDisplay)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
