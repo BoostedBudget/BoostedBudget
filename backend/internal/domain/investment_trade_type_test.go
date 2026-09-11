@@ -133,6 +133,92 @@ func TestNormalizeTradeType_StructuralRuleNeedsBothFacts(t *testing.T) {
 	}
 }
 
+// TestNormalizeTradeType_ExactLabelMatrix is H5 (#1631 requirements batch): 13 canonical
+// (type, subtype) combinations — one per production classification path, covering every bucket
+// this branch added or touched — each crossed with the three security states
+// (SecurityIsStructuralSQL-eligible / cash-equivalent / no security), asserting the EXACT expected
+// label, not merely that the result is A KNOWN bucket.
+//
+// TestNormalizeTradeType_EveryOutputIsAKnownBucket below runs a much larger cartesian product but
+// only asserts membership in the known-bucket set (`known[got]`) — that assertion passes even if
+// EVERY case here returned "cash". This test is the one that would catch a predicate that returns
+// the WRONG member of that set.
+//
+// Eleven of these thirteen combinations are classified purely by subtype LITERAL and must be
+// INDIFFERENT to the security state — the security facts never enter the switch for them
+// (investment_trade_type.go's `case "buy"/"sell"/"fee"/"transfer"` arms, and every named-subtype
+// case inside `case "cash"` before the structural fallback). Only #11 and #12 (bare "deposit" and
+// "withdrawal", which carry no subtype literal of their own) are STRUCTURAL: their label changes
+// with the security state, and this is the one place in the matrix where the value written down is
+// explicitly "cash" for the cash-equivalent and no-security columns — not because "cash" is a
+// fallback the test declines to name, but because it is the label domain.NormalizeTradeType
+// actually returns for those two states and this test says so.
+func TestNormalizeTradeType_ExactLabelMatrix(t *testing.T) {
+	type wantBySecurityState struct {
+		structural, cashEquivalent, noSecurity string
+	}
+	tests := []struct {
+		name     string
+		typ      string
+		subtype  *string
+		amount   float64
+		quantity *float64
+		want     wantBySecurityState
+	}{
+		// 1-5: type-literal buckets. Security-indifferent — type alone (plus, for #5, the
+		// corporate-action carve-out) decides the label regardless of the security.
+		{"buy/buy", "buy", strPtr("buy"), 0, nil,
+			wantBySecurityState{TradeTypeBuy, TradeTypeBuy, TradeTypeBuy}},
+		{"sell/sell", "sell", strPtr("sell"), 0, nil,
+			wantBySecurityState{TradeTypeSell, TradeTypeSell, TradeTypeSell}},
+		{"fee/fee", "fee", strPtr("fee"), 0, nil,
+			wantBySecurityState{TradeTypeFee, TradeTypeFee, TradeTypeFee}},
+		{"transfer/transfer", "transfer", strPtr("transfer"), 0, nil,
+			wantBySecurityState{TradeTypeTransfer, TradeTypeTransfer, TradeTypeTransfer}},
+		{"transfer/split (corporate action carve-out)", "transfer", strPtr("split"), 0, nil,
+			wantBySecurityState{TradeTypeOther, TradeTypeOther, TradeTypeOther}},
+		// 6-10: cash-typed, subtype-literal buckets. Also security-indifferent — the subtype sets
+		// (dividendSubtypes, reinvestSubtypes, feeTaxSubtypes, interestSubtypes, transferSubtypes)
+		// are consulted BEFORE the structural fallback and never look at the security at all.
+		{"cash/dividend (literal)", "cash", strPtr("dividend"), 0, nil,
+			wantBySecurityState{TradeTypeDividend, TradeTypeDividend, TradeTypeDividend}},
+		{"cash/dividend reinvestment (literal)", "cash", strPtr("dividend reinvestment"), 0, nil,
+			wantBySecurityState{TradeTypeReinvest, TradeTypeReinvest, TradeTypeReinvest}},
+		{"cash/account fee (literal)", "cash", strPtr("account fee"), 0, nil,
+			wantBySecurityState{TradeTypeFee, TradeTypeFee, TradeTypeFee}},
+		{"cash/interest (literal)", "cash", strPtr("interest"), 0, nil,
+			wantBySecurityState{TradeTypeInterest, TradeTypeInterest, TradeTypeInterest}},
+		{"cash/contribution (literal transfer)", "cash", strPtr("contribution"), 0, nil,
+			wantBySecurityState{TradeTypeTransfer, TradeTypeTransfer, TradeTypeTransfer}},
+		// 11-12: the STRUCTURAL fallback. No subtype literal of its own, so the security state is
+		// the only thing that decides the label — the two rows this whole rule exists for.
+		{"cash/deposit (structural dividend candidate)", "cash", strPtr("deposit"), -100, f64(0),
+			wantBySecurityState{TradeTypeDividend, TradeTypeCash, TradeTypeCash}},
+		{"cash/withdrawal (structural reinvest candidate)", "cash", strPtr("withdrawal"), 100, f64(2.5),
+			wantBySecurityState{TradeTypeReinvest, TradeTypeCash, TradeTypeCash}},
+		// 13: an unrecognized type. Falls to "other" regardless of subtype or security — the
+		// unconditional default arm of the outer switch.
+		{"cancel/whatever (unknown type)", "cancel", strPtr("whatever"), 0, nil,
+			wantBySecurityState{TradeTypeOther, TradeTypeOther, TradeTypeOther}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			row := func(attached bool, isCash *bool) TradeTypeRow {
+				return TradeTypeRow{
+					Type: tt.typ, Subtype: tt.subtype, Amount: tt.amount, Quantity: tt.quantity,
+					SecurityAttached: attached, SecurityIsCashEquivalent: isCash,
+				}
+			}
+			assert.Equal(t, tt.want.structural, NormalizeTradeType(row(true, boolPtr(false))),
+				"attached, affirmatively NOT cash-equivalent (structural-eligible)")
+			assert.Equal(t, tt.want.cashEquivalent, NormalizeTradeType(row(true, boolPtr(true))),
+				"attached, cash-equivalent")
+			assert.Equal(t, tt.want.noSecurity, NormalizeTradeType(row(false, nil)),
+				"no security attached")
+		})
+	}
+}
+
 // TestNormalizeTradeType_EveryOutputIsAKnownBucket guards the display contract the frontend union
 // and ACTIVITY_TYPE_CONFIG depend on: an unknown key renders the "Other" fallback chip, so a new
 // bucket added here without adding it there is a silent UI regression.
