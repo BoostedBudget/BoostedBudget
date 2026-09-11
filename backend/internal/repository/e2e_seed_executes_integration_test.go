@@ -107,7 +107,18 @@ func TestE2ESeedScriptSeedsEveryTable_Integration(t *testing.T) {
 		// have something to render in E2E. This test is named SeedsEveryTable, so they belong in
 		// the table — without them the seeder could stop producing them and only a Playwright
 		// failure would say so.
-		{"securities", `SELECT COUNT(*) FROM securities WHERE plaid_security_id LIKE 'e2e-sec-%'`, 2},
+		// ⚠ `securities` is NOT user-scoped (it is shared across tenants), so unlike every other
+		// row here it cannot join to users directly. Counting it by an `e2e-sec-%` prefix would
+		// need a query with no `$1`, which pgx rejects outright because this loop binds `email`
+		// to every query. Reaching it through the user's OWN holdings and investment transactions
+		// is both bindable and a stronger assertion: it proves the securities are REFERENCED by
+		// the fixture rows, not merely present in a shared table.
+		{"securities", `SELECT COUNT(DISTINCT sid) FROM (
+			SELECT h.security_id AS sid FROM holdings h JOIN users u ON h.user_id = u.id WHERE u.email = $1
+			UNION
+			SELECT it.security_id FROM investment_transactions it JOIN users u ON it.user_id = u.id
+			 WHERE u.email = $1 AND it.security_id IS NOT NULL
+		) refs`, 2},
 		{"holdings", `SELECT COUNT(*) FROM holdings h JOIN users u ON h.user_id = u.id WHERE u.email = $1`, 1},
 		{"investment_transactions", `SELECT COUNT(*) FROM investment_transactions it JOIN users u ON it.user_id = u.id WHERE u.email = $1`, 3},
 	} {
