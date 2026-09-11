@@ -74,7 +74,7 @@ type CustomCategoryService interface {
 	// Injection is optional; PROCEEDING WITHOUT IT IS NOT. This is money-integrity enforcement,
 	// not observability (contrast SetAuditLogRepository, which fails open by design) — a reparent
 	// is refused, not silently allowed, when this is unset. See UpdateCategory's
-	// checkReparentDoesNotEscape, which mirrors budget_service.go:607's goalOwnershipChecker
+	// checkReparentDoesNotEscape, which mirrors budget_service.go:651's goalOwnershipChecker
 	// fail-closed precedent for a required (if optionally-wired) collaborator.
 	SetBudgetCategoryRepository(r BudgetCategoryRepository)
 }
@@ -405,7 +405,7 @@ func stringPtrEqual(a, b *string) bool {
 //
 // Fails CLOSED: this is money-integrity enforcement, not observability. An unwired
 // budgetCategoryRepo refuses the reparent rather than silently allowing it — mirrors
-// budget_service.go:607's goalOwnershipChecker precedent for a required (if optionally-injected)
+// budget_service.go:651's goalOwnershipChecker precedent for a required (if optionally-injected)
 // collaborator.
 //
 // ⚠ Issue #1630 B3b: the guard and the write run in ONE transaction, not two. The earlier version

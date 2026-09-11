@@ -143,24 +143,27 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 	// remain SQL bind params and scan targets, and StartDateDisplay/EndDateDisplay carry the wire
 	// value (#1631 Batch F2).
 	//
-	// ⚠ #1630 review round 2: EndDate uses EndOfDay(), not Time() — a date-only end_date
-	// ("2026-09-30") must cover the WHOLE day it names (its custom-period budget would
-	// otherwise silently exclude every same-day transaction after midnight), while a full
-	// RFC3339 timestamp is respected exactly as given. See FlexibleDate.EndOfDay's doc
-	// comment.
+	// ⚠ #1631: EndDate is NOT EndOfDay() any more — it is budgetCalendarDayUTC(), the same
+	// reduction the read path applies. #1630 review round 2 wrote req.EndDate.EndOfDay()
+	// (23:59:59.999999999) here to make a date-only end_date's final day inclusive, but
+	// budgets.end_date is a PostgreSQL DATE column (migration 000022): it cannot hold a time, so
+	// the write truncated exactly the part that was supposed to fix the bug, and the row came back
+	// as midnight regardless. EndOfDay() was therefore a provable no-op on the DATABASE and a
+	// real LIE in the create RESPONSE — the same budget read back disagreed with the object this
+	// method returned (23:59:59 vs midnight), which is a value whose meaning depends on whether it
+	// has been through Postgres yet. Inclusivity of the final day now lives where the column
+	// cannot erase it: the comparison in GetCurrentBudget. See budgetCalendarDayUTC.
 	//
 	// ⚠ MERGE NOTE (#1631 x #1630): the display siblings are derived from the SAME instants the
-	// columns get, so EndDateDisplay is the calendar day of the END-OF-DAY value rather than of a
-	// midnight one. That is the same date either way, and deriving it from `t` rather than
-	// re-reading req.EndDate is what keeps it that way if EndOfDay's definition ever changes.
-	// They are set inline in the literal below, not via a later PopulateDateDisplay() call,
-	// because this budget is returned directly rather than re-fetched — and
+	// columns get, so a display value can never drift from the column beside it. They are set
+	// inline in the literal below, not via a later PopulateDateDisplay() call, because this budget
+	// is returned directly rather than re-fetched — and
 	// TestEveryDateDisplaySiblingIsPopulatedWhereItsTimeIsSet enforces exactly that.
-	startDate := req.StartDate.Time()
+	startDate := budgetCalendarDayUTC(req.StartDate.Time())
 	var endDate *time.Time
 	var endDateDisplay *string
 	if req.EndDate != nil {
-		t := req.EndDate.EndOfDay()
+		t := budgetCalendarDayUTC(req.EndDate.Time())
 		endDate = &t
 		d := t.Format(time.DateOnly)
 		endDateDisplay = &d
@@ -435,6 +438,39 @@ func (s *budgetService) GetActiveBudgets(ctx context.Context, userID string) ([]
 	return budgets, nil
 }
 
+// budgetCalendarDayUTC reduces an instant to the calendar day it names, as midnight UTC.
+//
+// #1631. budgets.start_date and budgets.end_date are PostgreSQL DATE columns (migration
+// 000022) — naive calendar days, carrying no time and no zone. pgx encodes a bound time.Time
+// into a DATE from its Year/Month/Day and decodes a DATE back as midnight in time.UTC, so
+// anything finer than a day is discarded on the way in and invented on the way out. This one
+// function is used on BOTH sides of that round trip — as the write-side truncation (what the
+// column will actually hold) and as the read-side reduction (what the column actually held) —
+// so the two can never disagree, and a Budget's dates mean the same thing whether or not the
+// object has been through Postgres yet.
+//
+// ⚠ WHICH ZONE DEFINES "TODAY", and why it is UTC rather than the server's local zone:
+//
+//  1. A DATE has no zone, so a comparison against "now" MUST pick one. Picking time.Now()'s
+//     local zone makes a budget's answer to "are you current?" depend on the host the process
+//     happens to run on — a deployment detail, not a product decision. UTC is the same answer
+//     everywhere, and it is the zone the row already speaks: the integration pool pins session
+//     TimeZone=UTC (database.NewPoolFromURL), and pgx hands DATEs back in time.UTC.
+//  2. users.timezone (#972) is the field that would let this be genuinely per-user, and its
+//     default is "UTC". budgetService has no user repository to read it from, and threading one
+//     in is a wider change than this defect; until then UTC is the documented default rather
+//     than an arbitrary pick. If a per-user zone is ever wired in, it belongs HERE — one
+//     function, both sides.
+//  3. The residual skew fails in the SAFE direction. For a user behind UTC (say UTC-5), an
+//     inclusive-day comparison in UTC keeps their final day current until 19:00 local on the
+//     day AFTER end_date — generous, never truncating; they are not cut off early. For a user
+//     ahead of UTC the start day likewise arrives early rather than late. Off-by-generous is a
+//     tolerable budget boundary; off-by-cut-short is the bug this replaced.
+func budgetCalendarDayUTC(t time.Time) time.Time {
+	u := t.UTC()
+	return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
+}
+
 // GetCurrentBudget retrieves the current active budget (where today is within the period).
 func (s *budgetService) GetCurrentBudget(ctx context.Context, userID string) (*domain.Budget, error) {
 	budgets, err := s.budgetRepo.GetActiveByUserID(ctx, userID)
@@ -442,7 +478,11 @@ func (s *budgetService) GetCurrentBudget(ctx context.Context, userID string) (*d
 		return nil, err
 	}
 
-	now := time.Now()
+	// ⚠ #1631: this compares CALENDAR DAYS, never instants. start_date/end_date are DATE
+	// columns, so they name whole days; comparing `time.Now()` against the midnight instant one
+	// of them scans back as made a budget "not current" for all but the first millisecond of its
+	// own final day. See budgetCalendarDayUTC for which zone defines "today" here, and why.
+	today := budgetCalendarDayUTC(time.Now())
 
 	// Find budget where today is within the period
 	for _, budget := range budgets {
@@ -450,27 +490,29 @@ func (s *budgetService) GetCurrentBudget(ctx context.Context, userID string) (*d
 			continue
 		}
 
-		// Check if now is after start date
-		if now.Before(budget.StartDate) {
+		// Not begun: today is strictly before the start DAY (the start day itself counts).
+		if today.Before(budgetCalendarDayUTC(budget.StartDate)) {
 			continue
 		}
 
-		// If end date is set, check if now is before it
-		if budget.EndDate != nil && now.After(*budget.EndDate) {
+		// Over: today is strictly after the end DAY. end_date is an INCLUSIVE calendar day, so a
+		// budget whose end_date is today is still current for the whole of today.
+		if budget.EndDate != nil && today.After(budgetCalendarDayUTC(*budget.EndDate)) {
 			continue
 		}
 
-		// For non-custom periods, calculate the end date based on period
+		// For non-custom periods, currency is decided by the period's own recurrence
 		switch budget.Period {
 		case domain.BudgetPeriodWeekly:
-			endDate := budget.StartDate.AddDate(0, 0, 7)
-			for now.After(endDate) {
-				endDate = endDate.AddDate(0, 0, 7)
-			}
-			if now.After(budget.StartDate) {
-				enrichBudgetPFCDisplay(budget)
-				return budget, nil
-			}
+			// A weekly budget recurs indefinitely from its start day, so the start-day check
+			// above is already the whole test. ⚠ #1631: the code here used to roll a 7-day
+			// endDate forward in a loop, throw that endDate away unused, and then re-test
+			// `now.After(budget.StartDate)` against the start INSTANT — which is the same
+			// instant-vs-day defect: on a weekly budget starting TODAY that midnight-UTC
+			// comparison could be false, dropping a just-started budget out of the switch and
+			// on to the next candidate entirely.
+			enrichBudgetPFCDisplay(budget)
+			return budget, nil
 		case domain.BudgetPeriodMonthly:
 			// For monthly, the budget is current if we're in a valid month period
 			enrichBudgetPFCDisplay(budget)
@@ -520,11 +562,13 @@ func (s *budgetService) UpdateBudget(ctx context.Context, userID, budgetID strin
 		budget.Period = *req.Period
 	}
 	if req.StartDate != nil {
-		budget.StartDate = req.StartDate.Time()
+		budget.StartDate = budgetCalendarDayUTC(req.StartDate.Time())
 	}
 	if req.EndDate != nil {
-		// ⚠ Review round 2: EndOfDay(), not Time() — see createBudget's comment above.
-		t := req.EndDate.EndOfDay()
+		// ⚠ #1631: budgetCalendarDayUTC(), not EndOfDay() — see createBudget's comment above for
+		// why an end-of-day instant could never survive a DATE column, and budgetCalendarDayUTC
+		// for where the final day's inclusivity lives instead.
+		t := budgetCalendarDayUTC(req.EndDate.Time())
 		budget.EndDate = &t
 	}
 	// #1631 Batch F2: re-derive the display fields from whatever StartDate/EndDate now hold — this
