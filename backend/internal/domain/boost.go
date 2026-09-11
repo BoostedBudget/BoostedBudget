@@ -976,4 +976,16 @@ var (
 	// ErrBoostConditionForbidden is returned when a condition's CategoryID does not belong to the
 	// requesting user (IDOR prevention). Maps to HTTP 403.
 	ErrBoostConditionForbidden = errors.New("boost condition access denied")
+
+	// ErrRolloverSourceBecameSubAllocation is returned by executeCategoryRollover (Issue #1630
+	// B6) when a category_rollover boost's source category IS a sub-allocation of another
+	// budgeted category at EXECUTION time. boost_service.go's CreateBoost/UpdateBoost already
+	// refuse this shape up front, but a source that was a valid top-level category when the
+	// boost was created can become a sub-allocation LATER if the hierarchy changes underneath
+	// it (a reparent, or a new parent category budgeted after the fact) — this is the
+	// execution-time half of the same fix, for exactly that case. ExecuteBoost
+	// (boost_execution_service.go) treats this sentinel as a SKIP, not a failure: it must not
+	// increment the boost's execution_count or touch last_successful, the same way "boost
+	// disabled" and "conditions not met" are already skipped rather than failed.
+	ErrRolloverSourceBecameSubAllocation = errors.New("category_rollover source category is a sub-allocation of another budgeted category")
 )
