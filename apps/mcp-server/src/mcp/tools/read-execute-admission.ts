@@ -42,12 +42,28 @@ export interface ReadExecuteAdmissionSpec {
  *
  * Issue #1630 Task B4: admission is anchored to the FULL (operationId, method, path) tuple, not
  * the operationId alone. `spec` is the caller's own CURRENT reading of the generated spec index
- * (ExecuteSpecEntry / SpecEntry), so if the backend's `x-mcp-safe-post` annotation is removed, or
- * the operation moves to a different HTTP method or path, the tuple this function compares
- * against no longer matches what was reviewed — the call is refused rather than staying admitted
- * on a stale id match. The same tuple equality is what `safe-post-extension.ts`'s
- * `findSafePostDrift` uses to fail CI in the mirror-image case (an acknowledged tuple the spec no
- * longer produces at all).
+ * (ExecuteSpecEntry / SpecEntry), so if the operation MOVES to a different HTTP method or path,
+ * the tuple this function compares against no longer matches what was reviewed — the call is
+ * refused rather than staying admitted on a stale id match.
+ *
+ * ⚠ This function does NOT protect against the backend's `x-mcp-safe-post` annotation being
+ * removed while the operationId/method/path stay the same. At runtime it only ever compares
+ * against the hardcoded `ACKNOWLEDGED_SAFE_POST_OPERATIONS` list (`safe-post-operations.ts`) —
+ * it never reads `api/openapi.yaml` or the annotation itself, and by design can't: that module
+ * is kept dependency-free specifically so this Worker-bundled code pulls in no `node:` imports
+ * (see that file's header comment). If the annotation is deleted but the tuple is untouched,
+ * this function still returns true; runtime admission and the backend annotation can silently
+ * disagree.
+ *
+ * The actual protection for that case is BUILD-time, not runtime: CI's
+ * `scripts/check-manifest-completeness.ts` re-derives the currently-tagged operations from
+ * `api/openapi.yaml` (via `safe-post-extension.ts`'s `extractSafePostOperations`, which is where
+ * the `node:fs` read happens) and calls `findSafePostDrift` to diff them against
+ * `ACKNOWLEDGED_SAFE_POST_OPERATIONS` in both directions — an acknowledged tuple the spec no
+ * longer tags `x-mcp-safe-post: true` at fails the build as "stale". So removing the annotation
+ * is caught before the next deploy ships it, not by this function at request time. Until a
+ * human updates `safe-post-operations.ts` to match, the CI gate is what stands between "annotation
+ * removed" and "runtime keeps admitting it" — not this code.
  */
 export function isReadExecuteAdmitted(capability: CapabilityEntry, spec: ReadExecuteAdmissionSpec): boolean {
   if (capability.class !== 'read' || capability.confirmationRequired !== false) return false
