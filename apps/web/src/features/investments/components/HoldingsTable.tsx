@@ -1,4 +1,5 @@
 import { useId, useState, useMemo, useEffect } from 'react'
+import type { ReactElement } from 'react'
 import {
   useGetHoldings,
   useGetAccountHoldingsHistory,
@@ -205,6 +206,27 @@ const VALUE_COLUMNS: ColumnDef<HoldingRowShape>[] = [
   },
 ]
 
+// #1631 I1: the backend distinguishes a REFUSED day change (day_change_unavailable_reason) from a
+// STALE one (day_change_is_stale) -- opposite meanings, so this renders both rather than
+// collapsing either into a blank cell. Stale is MARKED, not hidden: the word "Stale" is text
+// content, so it is legible without depending on colour (WCAG 2.1 AA "never colour alone").
+// Follows the shape MixedCurrencyBadge established rather than inventing a new affordance.
+function renderDayChange(r: HoldingView): ReactElement {
+  if (r.day_change_unavailable_reason === 'currency_mismatch') {
+    return <span className="text-muted-foreground text-sm">Priced in a different currency</span>
+  }
+  const value = formatOrDefault(r.day_change, r)
+  if (!r.day_change_is_stale) return <span>{value}</span>
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {value}
+      <Badge variant="warning" size="sm">
+        Stale
+      </Badge>
+    </span>
+  )
+}
+
 /**
  * Live-table-only. Day change is measured against today's prior close and has no meaning on a
  * past day's position, so it is never concatenated into the historical column set.
@@ -215,7 +237,7 @@ const DAY_CHANGE_COLUMNS: ColumnDef<HoldingView>[] = [
     header: 'Day Change',
     sortable: true,
     sortAccessor: (r) => r.day_change ?? 0,
-    render: (r) => formatOrDefault(r.day_change, r),
+    render: renderDayChange,
     numeric: true,
     align: 'right',
   },

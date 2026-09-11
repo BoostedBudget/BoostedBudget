@@ -155,6 +155,77 @@ describe('HoldingsTable', () => {
     })
   })
 
+  // #1631 I1 — day_change_is_stale / day_change_as_of / day_change_unavailable_reason were served
+  // by the backend and never read by the frontend, so a week-old close presented as today's move.
+  describe('Day change staleness (#1631 I1)', () => {
+    it('shows a Stale marker (legible as text, not colour alone) and still shows the value', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: {
+          holdings: [
+            makeHolding({
+              id: 'h-stale',
+              day_change: 42,
+              day_change_is_stale: true,
+              day_change_as_of: '2026-08-20',
+            }),
+          ],
+          count: 1,
+        },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      // The value is still shown -- stale is marked, not suppressed.
+      expect(screen.getByText('$42')).toBeDefined()
+      // The word "Stale" is text content, so it is legible to a screen reader with no dependence
+      // on colour.
+      expect(screen.getByText('Stale')).toBeDefined()
+    })
+
+    it('shows no marker for a fresh day change', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: {
+          holdings: [
+            makeHolding({
+              id: 'h-fresh',
+              day_change: 42,
+              day_change_is_stale: false,
+              day_change_as_of: '2026-09-11',
+            }),
+          ],
+          count: 1,
+        },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText('$42')).toBeDefined()
+      expect(screen.queryByText('Stale')).toBeNull()
+    })
+
+    it('shows the refusal reason for a day change the backend refused to compute', () => {
+      mockUseGetHoldings.mockReturnValue({
+        data: {
+          holdings: [
+            makeHolding({
+              id: 'h-refused',
+              day_change: undefined,
+              day_change_pct: undefined,
+              day_change_is_stale: undefined,
+              day_change_unavailable_reason: 'currency_mismatch',
+            }),
+          ],
+          count: 1,
+        },
+        isLoading: false,
+        isError: false,
+      })
+      render(<HoldingsTable />)
+      expect(screen.getByText(/different currency/i)).toBeDefined()
+      expect(screen.queryByText('Stale')).toBeNull()
+    })
+  })
+
   // #1631: `??` alone does not catch '' — production has securities with security_name = ''.
   describe('Security name blank-string fallback (#1631)', () => {
     it('falls back to security_id when security_name is an empty string', () => {
