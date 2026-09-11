@@ -46,6 +46,33 @@ describe('formatPortfolioAmount', () => {
   it('falls back rather than throwing on a malformed code', () => {
     expect(() => formatPortfolioAmount(10, { currency_code: 'not-a-code' })).not.toThrow()
   })
+
+  // #1631 I3 — a malformed code is a fourth situation, distinct from "no code stated". Falling
+  // back to USD re-commits the original defect in miniature: it labels a figure with a currency
+  // nobody established. It gets the SAME unlabelled treatment as the mixed-currency case.
+  it.each(['US', 'DOLLARS', ''])(
+    'renders an unusable code (%s) unlabelled, not as dollars, and does not throw',
+    (code) => {
+      let out = ''
+      expect(() => {
+        out = formatPortfolioAmount(52340.5, { currency_code: code })
+      }).not.toThrow()
+      expect(out).not.toContain('$')
+      expect(out).not.toContain('£')
+      expect(out).toContain('52,340.50')
+    },
+  )
+
+  // The undefined/absent-code path is UNCHANGED: it means "legacy row, before migration 000197",
+  // and rendering it as dollars is the documented, deliberate choice for the existing user base.
+  it('still renders as dollars when the code is absent entirely (legacy row)', () => {
+    expect(formatPortfolioAmount(10, { currency_code: undefined })).toContain('$')
+    expect(formatPortfolioAmount(10, {})).toContain('$')
+  })
+
+  it('still renders a named currency (GBP) in pounds', () => {
+    expect(formatPortfolioAmount(52340.5, { currency_code: 'GBP' })).toContain('£')
+  })
 })
 
 describe('isCurrencyUnnameable', () => {

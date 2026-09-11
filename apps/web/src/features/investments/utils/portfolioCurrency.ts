@@ -17,6 +17,14 @@
  * The third is the state of every row written before migration 000197, and treating it as mixed
  * would strip the symbol from the whole existing user base on deploy day with no change to their
  * data. Unknown is not a conflict -- the same rule the backend applies throughout this task.
+ *
+ * ⚠ #1631 I3 -- there is also a FOURTH situation, and it is not "unknown": a `currency_code` that
+ * fails the three-letter test is a provider value we could not parse, not a value that was never
+ * set. Falling back to dollars there would re-commit this file's original defect in miniature, so
+ * it gets the mixed case's treatment (unlabelled), not the unknown case's (dollars) -- even though
+ * it is neither named nor mixed. Do not fold it into `unknown`; do not fold it into `mixed` in the
+ * `is_mixed_currency` sense either, since `isCurrencyUnnameable` stays about the backend's own
+ * refusal and a bad string is a client-side parse failure, not that.
  */
 
 /** The two currency fields every investment aggregate carries. Both optional: an older cached
@@ -53,13 +61,35 @@ export function formatPortfolioAmount(
   }
 
   const code = fields?.currency_code
-  // A malformed code falls back to the dollar rather than throwing: Intl.NumberFormat raises a
-  // RangeError on anything that is not three letters, and a stat tile is not the place to take a
-  // page down over a bad string from a provider.
-  const currency = code && /^[A-Za-z]{3}$/.test(code) ? code.toUpperCase() : 'USD'
+
+  // `undefined`/absent is a DIFFERENT situation from a malformed code: it means a legacy row
+  // written before migration 000197, and rendering it as dollars is the documented, deliberate
+  // choice for the existing user base. Do not touch this path.
+  if (code == null) {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
+    }).format(value)
+  }
+
+  // A code that fails the three-letter test is a FOURTH situation: a provider value we could not
+  // parse, not a value that was never set. Falling back to USD would re-commit the original defect
+  // in miniature -- labelling a figure with a currency nobody established. Intl.NumberFormat raises
+  // a RangeError on anything that is not three letters, so this still has to avoid throwing; it
+  // does that the same way the mixed-currency case does, by rendering the number unlabelled rather
+  // than by guessing a currency.
+  if (!/^[A-Za-z]{3}$/.test(code)) {
+    return new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
+    }).format(value)
+  }
+
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency,
+    currency: code.toUpperCase(),
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits,
   }).format(value)
