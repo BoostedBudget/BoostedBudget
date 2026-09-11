@@ -61,6 +61,11 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
   const { variant: gainVariant, trend: gainTrend } = getVariantAndTrend(summary.total_gain_loss)
   const dayChange = summary.day_change
   const dayVariantAndTrend = dayChange != null ? getVariantAndTrend(dayChange) : null
+  // #1631 Gap B: a REFUSAL (the prior snapshot and today's total disagree on currency, or either
+  // is a currency-blind sum -- see domain.PortfolioSummary.DayChangeUnavailableReason) is a
+  // different claim than missing data, and must not collapse into the same bare "--". Mirrors
+  // HoldingsTable's renderDayChange treatment of the identical reason on HoldingView.
+  const dayChangeRefused = summary.day_change_unavailable_reason === 'currency_mismatch'
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -115,6 +120,10 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
                   formatAmount={moneyWhole}
                 />
               )}
+            </span>
+          ) : dayChangeRefused ? (
+            <span data-ph-mask className="text-sm text-muted-foreground">
+              Currency mismatch — day change not available
             </span>
           ) : (
             <span data-ph-mask className="text-2xl font-bold text-muted-foreground">
