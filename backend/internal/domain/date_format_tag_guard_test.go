@@ -141,9 +141,15 @@ func rfc3339StringFields() map[string]string {
 		// does not merely describe the field: huma validates an incoming body against the generated
 		// schema BEFORE unmarshaling, so the tag would start REJECTING anything that is not a bare
 		// date. That is a stricter contract, not a documentation fix, and tightening request
-		// validation is outside what #1631 set out to do. The same reasoning is why
-		// domain.FlexibleDate deliberately produces a format-less schema for the budget and
-		// savings-goal request bodies — see its header comment.
+		// validation is outside what #1631 set out to do.
+		//
+		// ⚠ This paragraph used to end by claiming domain.FlexibleDate "deliberately produces a
+		// format-less schema" for the budget and savings-goal request bodies. That described THIS
+		// branch's original FlexibleDate, which was discarded in the staging merge in favour of
+		// #1630's — and #1630's does the opposite: it implements huma.SchemaProvider and publishes
+		// `anyOf: [{type: string, format: date}, {type: string, format: date-time}]`, so those
+		// fields ARE format-documented and accept both forms. The fields exempted here are plain
+		// `string`, not FlexibleDate, so the stricter-validation reasoning above is theirs alone.
 		"CategoryPreviewRequest.start_date": "request body; format:\"date\" would add strict huma " +
 			"pre-unmarshal validation rather than documentation. Caller sends YYYY-MM-DD.",
 		"CategoryPreviewRequest.end_date": "request body; same reasoning as start_date above.",

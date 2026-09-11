@@ -142,7 +142,7 @@ func TestInvestmentService_GetPortfolioSummary_RefusesADayChangeAcrossCurrencies
 	})
 
 	t.Run("an unrecorded snapshot currency does not suppress the day change", func(t *testing.T) {
-		// Every snapshot written before migration 000197 has currency_code NULL. Refusing on
+		// Every snapshot written before migration 000202 has currency_code NULL. Refusing on
 		// unknown would blank the day change for the whole existing user base.
 		holdingRepo := new(MockHoldingRepository)
 		snapshotRepo := new(MockPortfolioSnapshotRepository)
@@ -334,7 +334,7 @@ func TestInvestmentService_GetPortfolioSummary_RefusesADayChangeAgainstAMixedPri
 	})
 
 	t.Run("an unlabelled but NOT mixed prior still computes", func(t *testing.T) {
-		// (NULL, false) is every snapshot written before migration 000197. Refusing on these
+		// (NULL, false) is every snapshot written before migration 000202. Refusing on these
 		// would blank the day change for the whole existing user base, which is the same
 		// unknown-is-not-a-currency rule the rest of this task turns on.
 		s := summaryWith(t, newPrior(nil, false), []domain.Holding{holdingIn("h1", "USD", 100)})
@@ -343,7 +343,7 @@ func TestInvestmentService_GetPortfolioSummary_RefusesADayChangeAgainstAMixedPri
 	})
 }
 
-// #1631 M8a fix round 2, I-2. Migration 000197 gave portfolio_snapshots a currency and
+// #1631 M8a fix round 2, I-2. Migration 000202 gave portfolio_snapshots a currency and
 // GetPortfolioHistory then threw it away: PortfolioHistoryPoint was date + total_value, so a chart
 // could plot a series in which some days are currency-blind sums and others are single-currency
 // totals, with no label and no flag anywhere on the response. That is the same defect already
@@ -382,7 +382,7 @@ func TestInvestmentService_GetPortfolioHistory_DeclaresTheSeriesCurrency(t *test
 			wantCcy: ccy("USD"),
 		},
 		{
-			// Every snapshot written before migration 000197. Unknown is not a currency, so this
+			// Every snapshot written before migration 000202. Unknown is not a currency, so this
 			// must not read as mixed or the whole existing user base gets a warning about data
 			// that has not changed.
 			name:  "a series that states no currency is unknown, not mixed",
@@ -394,7 +394,7 @@ func TestInvestmentService_GetPortfolioHistory_DeclaresTheSeriesCurrency(t *test
 			wantMixed: true,
 		},
 		{
-			// The case only migration 000198 can express: the day itself was a currency-blind
+			// The case only migration 000203 can express: the day itself was a currency-blind
 			// sum. One such day poisons the series even though no two days disagree.
 			name:      "a single currency-blind day makes the series mixed",
 			snaps:     []domain.PortfolioSnapshot{snap(1, 100, ccy("USD"), false), snap(2, 110, nil, true)},
@@ -439,7 +439,7 @@ func TestInvestmentService_GetPortfolioHistory_DeclaresTheSeriesCurrency(t *test
 }
 
 // TestPlaidCurrencyCode_DropsAValueThatOverflowsTheColumn pins #1631 I5: currency_code is
-// VARCHAR(16) (migration 000197) and Postgres HARD-ERRORS (22001) on an overlong value rather
+// VARCHAR(16) (migration 000202) and Postgres HARD-ERRORS (22001) on an overlong value rather
 // than truncating it — before this fix, a Plaid unofficial_currency_code over 16 bytes turned
 // "failed to upsert securities on page N", aborting the whole page and wedging that item's
 // investment sync on every subsequent run. plaidCurrencyCode must drop only the FIELD (return
@@ -535,7 +535,7 @@ func TestInvestmentService_GetPortfolioSummary_RefusesADayChangeFromAMixedTODAY(
 	})
 
 	t.Run("mixed today against a legacy unlabelled prior is refused", func(t *testing.T) {
-		// (NULL, false) is every snapshot written before migration 000197. Unknown is not a
+		// (NULL, false) is every snapshot written before migration 000202. Unknown is not a
 		// currency, so it cannot be established to match -- and the live side is not a quantity
 		// of money regardless.
 		s := summaryWith(t, nil, mixedToday)

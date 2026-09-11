@@ -14,7 +14,7 @@
  *   mixed    - is_mixed_currency is true. Render the number with NO symbol, and show the badge.
  *   unknown  - no code and not mixed. Render as dollars, exactly as before.
  *
- * The third is the state of every row written before migration 000197, and treating it as mixed
+ * The third is the state of every row written before migration 000202, and treating it as mixed
  * would strip the symbol from the whole existing user base on deploy day with no change to their
  * data. Unknown is not a conflict -- the same rule the backend applies throughout this task.
  *
@@ -63,7 +63,7 @@ export function formatPortfolioAmount(
   const code = fields?.currency_code
 
   // `undefined`/absent is a DIFFERENT situation from a malformed code: it means a legacy row
-  // written before migration 000197, and rendering it as dollars is the documented, deliberate
+  // written before migration 000202, and rendering it as dollars is the documented, deliberate
   // choice for the existing user base. Do not touch this path.
   if (code == null) {
     return new Intl.NumberFormat('en-US', {

@@ -205,7 +205,7 @@ rebuilt AS (
                THEN MAX(UPPER(TRIM(hs.currency_code)))
                ELSE NULL
            END AS currency_code,
-           -- SEVENTH column (#1631 M8a fix round 2 / migration 000198), and it must be rebuilt
+           -- SEVENTH column (#1631 M8a fix round 2 / migration 000203), and it must be rebuilt
            -- with the rest or a repair leaves a stale mixedness verdict beside a corrected total
            -- -- the same defect the fifth and sixth columns exist to avoid. > 1, not <> 1: zero
            -- distinct currencies is UNKNOWN, not mixed.
@@ -268,14 +268,14 @@ updated AS (
         total_value_investment_only = d.new_total_value_investment_only,
         -- #1631 M8a: in the SET list, and deliberately NOT in the IS DISTINCT FROM tuple below,
         -- for exactly the reasons spelled out for total_value_investment_only. Every row written
-        -- before migration 000197 has a NULL currency, so including it in the change-detection
+        -- before migration 000202 has a NULL currency, so including it in the change-detection
         -- tuple would make every historical day look like it disagreed and relabel a shelf of
         -- already-correct days as "repaired" in the audit ledger. And leaving it out costs
         -- nothing: it comes from the same reconstruction as the other five, so only a repair of
         -- those can make it stale, and such a repair passes the predicate and writes both.
         currency_code = d.new_currency_code,
         -- Same placement rule as the two columns above: in the SET list, NOT in the
-        -- IS DISTINCT FROM tuple below. Every row written before migration 000198 has FALSE by
+        -- IS DISTINCT FROM tuple below. Every row written before migration 000203 has FALSE by
         -- column default, so a genuinely mixed historical day would otherwise flip the tuple and
         -- relabel an already-correct day as "repaired" in the audit ledger. And it cannot go
         -- stale alone: it is rebuilt from the same reconstruction as the other six, so only a

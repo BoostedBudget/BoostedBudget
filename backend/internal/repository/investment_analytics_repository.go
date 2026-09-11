@@ -536,7 +536,7 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 			  -- this surface's rule.)
 			  --
 			  -- Both codes must be KNOWN and DIFFERENT to exclude. An unstated currency on either
-			  -- side is not a conflict — that is every row written before migration 000197, and
+			  -- side is not a conflict — that is every row written before migration 000202, and
 			  -- treating it as one would empty this widget for the entire existing user base.
 			  AND NOT (
 			      h.currency_code IS NOT NULL AND TRIM(h.currency_code) <> ''
@@ -561,7 +561,7 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 		),
 		-- A holding that states NO currency rides along, on the same unknown-is-not-a-conflict
 		-- rule the rest of this surface uses: it conflicts with nothing, and excluding it would
-		-- empty the widget for every row written before migration 000197. When no mover states a
+		-- empty the widget for every row written before migration 000202. When no mover states a
 		-- currency at all, ranking_currency is empty and every row is eligible.
 		eligible AS (
 			SELECT * FROM movers m
@@ -577,7 +577,7 @@ func (r *investmentAnalyticsRepository) TopMovers(ctx context.Context, userID st
 		-- eligible rather than movers so it describes the list actually returned, and so the
 		-- response stops asserting one ranking currency over a list only partly known to be in
 		-- it (#1631, Codex round 2). Excluding them instead would empty the widget for every
-		-- holding written before migration 000197.
+		-- holding written before migration 000202.
 		unknown_currency AS (
 			SELECT COUNT(*) AS n FROM eligible e
 			WHERE e.currency_code IS NULL OR TRIM(e.currency_code) = ''
@@ -1157,7 +1157,7 @@ func (r *investmentAnalyticsRepository) PositionReconciliation(ctx context.Conte
 // rather than reusing PositionReconciliation's per-row scan: /admin/health polls this every 30
 // seconds (HealthDashboardPage.tsx's default refetchInterval) for as long as any admin has the
 // tab open, and streaming every (account, security) pair in the system into Go on that cadence
-// just to discard all but three integers is the exact hazard migration 000199's own comment
+// just to discard all but three integers is the exact hazard migration 000204's own comment
 // warns against for the sibling forked-identity gauge (#1631 M8b N2).
 func (r *investmentAnalyticsRepository) PositionReconciliationSummary(ctx context.Context) (*domain.PositionReconciliationSummary, error) {
 	predicate, predArgs := domain.TradeTypeToSQLPredicate(

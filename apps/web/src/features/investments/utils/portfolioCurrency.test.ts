@@ -19,7 +19,7 @@ describe('formatPortfolioAmount', () => {
   })
 
   // The behaviour that must NOT change for the existing user base. Every row written before
-  // migration 000197 states no currency, and that is UNKNOWN, not a conflict -- the same rule the
+  // migration 000202 states no currency, and that is UNKNOWN, not a conflict -- the same rule the
   // backend applies everywhere in this task. Dropping the symbol for all of them would be a
   // regression dressed up as a fix.
   it('keeps the dollar rendering when no currency is stated and nothing is mixed', () => {
@@ -63,7 +63,7 @@ describe('formatPortfolioAmount', () => {
     },
   )
 
-  // The undefined/absent-code path is UNCHANGED: it means "legacy row, before migration 000197",
+  // The undefined/absent-code path is UNCHANGED: it means "legacy row, before migration 000202",
   // and rendering it as dollars is the documented, deliberate choice for the existing user base.
   it('still renders as dollars when the code is absent entirely (legacy row)', () => {
     expect(formatPortfolioAmount(10, { currency_code: undefined })).toContain('$')

@@ -426,8 +426,10 @@ type CreateSavingsGoalRequest struct {
 	// Deadline accepts EITHER a bare "YYYY-MM-DD" date-only string OR a full RFC3339 timestamp
 	// (#1631 Batch F2) — today's frontend sends the RFC3339 form
 	// (`new Date(dateOnly).toISOString()` in CreateSavingsGoalDialog.tsx), so that form must keep
-	// working. Deliberately no `format:"..."` tag: see domain/flexible_date.go and the identical
-	// note on CreateBudgetRequest.StartDate for why one would defeat this type's whole purpose.
+	// working. The type publishes `anyOf: [{format: date}, {format: date-time}]` itself via
+	// huma.SchemaProvider, so this field IS format-documented without a struct tag — and an
+	// explicit `format:"..."` tag would narrow that back to ONE form and reject the other. See
+	// domain/flexible_date.go.
 	Deadline *FlexibleDate `json:"deadline,omitempty" doc:"Goal deadline. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp."`
 	// ProgressBasis controls how current_amount is derived (Issue #1300).
 	// Defaults to "contributions" for NEW goals when empty (#1625 — the documented #1300 intent,
@@ -455,7 +457,8 @@ type UpdateSavingsGoalRequest struct {
 	CurrentAmount *float64 `json:"current_amount,omitempty" validate:"omitempty,gte=0" doc:"Only settable when progress_basis is 'manual'. Contributions-based goals derive this from their contribution ledger (POST /savings-goals/{goalID}/contributions); balance-based goals track their account. Sending this for any non-manual basis returns 400."`
 	AccountID     *string  `json:"account_id,omitempty" validate:"omitempty,uuid"`
 	// Deadline: same FlexibleDate acceptance (bare date OR RFC3339) as CreateSavingsGoalRequest
-	// above, and the same reason for omitting a `format` tag — see there.
+	// above, and the same reason for omitting a `format` struct tag — the type publishes both
+	// formats itself. See there.
 	Deadline *FlexibleDate `json:"deadline,omitempty" doc:"Goal deadline. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp."`
 	// ProgressBasis changes the derivation mode for current_amount (Issue #1300).
 	// When nil, the existing basis is preserved.

@@ -123,7 +123,7 @@ which reads backwards — the row is one we always drop and never store).
 retention ADR authorises never writing an `investment_transactions` row for an account whose owner
 flagged its chain as a duplicate of the banking feed. That amendment is careful and correct — it is
 scoped to a duplicate the user named, with a durable backfill obligation
-(`user_accounts.investment_backfill_requested_at`, migration `000196`) — and it still means the
+(`user_accounts.investment_backfill_requested_at`, migration `000201`) — and it still means the
 ledger for an excluded account is, by design, not the complete record of that account's activity.
 Worse for us specifically: clearing the flag backfills only `investmentTxnLookbackYears`, so an
 account excluded for longer than two years **permanently loses its earliest excluded period**. The

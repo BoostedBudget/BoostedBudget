@@ -51,7 +51,7 @@ type UserAccount struct {
 	//     linked item are unaffected, and the item's watermark still advances for them.
 	//   - Clearing the flag therefore asks for data we do not have, so it records a durable
 	//     backfill obligation — InvestmentBackfillRequestedAt is NOT projected onto this struct;
-	//     the marker lives on user_accounts.investment_backfill_requested_at (migration 000196) and
+	//     the marker lives on user_accounts.investment_backfill_requested_at (migration 000201) and
 	//     is written in the SAME UPDATE that clears the flag. The sync consumes it by re-fetching
 	//     the full lookback window.
 	//   - ⚠ That backfill reaches only investmentTxnLookbackYears (2 years — the limit of

@@ -63,7 +63,7 @@ func TestInvestmentAnalytics_CurrencyAwareAggregates_Integration(t *testing.T) {
 			codes: []*string{ccyPtr("USD"), ccyPtr("USD")}, wantCcy: ccyPtr("USD"),
 		},
 		{
-			// The pre-migration-000197 state of the whole table. It must not read as mixed.
+			// The pre-migration-000202 state of the whole table. It must not read as mixed.
 			name:  "no stated currency is unknown, not mixed",
 			codes: []*string{nil, nil}, wantCcy: nil,
 		},
@@ -377,7 +377,7 @@ func TestInvestmentAnalytics_TopMovers_RanksWithinOneCurrency_Integration(t *tes
 	// list on the exchange rate alone.
 	seedCurrencyHolding(ctx, t, tx, userID, accountID, "JPYBIG", 100000, ccyPtr("JPY"), ccyPtr("JPY"), &close90)
 	// A holding stating no currency conflicts with nothing and must still be ranked -- the whole
-	// pre-migration-000197 user base is in this state.
+	// pre-migration-000202 user base is in this state.
 	seedCurrencyHolding(ctx, t, tx, userID, accountID, "UNSTATED", 80, nil, nil, &close90)
 
 	movers, err := NewInvestmentAnalyticsRepository(tx).TopMovers(ctx, userID.String(), 10)
@@ -408,7 +408,7 @@ func TestInvestmentAnalytics_TopMovers_RanksWithinOneCurrency_Integration(t *tes
 		"a row ranked without a known currency must be reported, not silently folded into the ranking currency")
 }
 
-// A portfolio in which NOTHING states a currency is the pre-migration-000197 state of the entire
+// A portfolio in which NOTHING states a currency is the pre-migration-000202 state of the entire
 // table. It must rank exactly as it did before CX1(c), with no ranking currency to name and
 // nothing excluded.
 func TestInvestmentAnalytics_TopMovers_UnlabelledPortfolioIsUnchanged_Integration(t *testing.T) {

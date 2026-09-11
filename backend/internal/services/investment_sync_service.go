@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -242,66 +243,76 @@ func (s *investmentSyncService) ProcessWebhook(ctx context.Context, webhook *dom
 	return nil
 }
 
-// mergeHoldingInto folds dup into keep, which already holds the same (account_id, security_id).
+// describeHoldingDuplicateDifferences lists, field by field, how a DISCARDED duplicate holding
+// disagreed with the row kept for its (account_id, security_id) pair. An empty result means the
+// two rows were identical, which is the likely real case — a provider repeating a row — and makes
+// discarding one a lossless no-op that is still visible in the logs.
 //
-// Which figures add and which do not is the whole decision here, and it follows from what each
-// column MEANS in this codebase rather than from convenience:
+// Why this function exists at all, instead of arithmetic (#1639, correcting #1631's first attempt):
+// a merge that summed the two rows produced a number no reader could trace back to anything Plaid
+// sent, and it silently doubled the position. Naming the contradiction leaves it a contradiction.
 //
-//	quantity, institution_value, cost_basis — TOTALS for the position. cost_basis in particular is
-//	the total amount paid, NOT a per-share figure, so two lots of one security add up on all three.
-//	Taking one lot and discarding the other would understate the position; the institution
-//	reported both.
-//
-//	institution_price — a PER-SHARE quote. Summing it would double a share price, so the first
-//	value is kept. A genuine disagreement between two lots of the same security is a provider
-//	inconsistency worth seeing, so it is logged rather than quietly averaged.
-//
-//	currency_code — the unit of the three figures above. Summing across two DIFFERENT currencies
-//	would produce a number that means nothing, so the mismatch is logged; the amounts are still
-//	summed because dropping a lot loses more than it saves, and mixed currency is already
-//	surfaced to the user elsewhere (#1631 M8a).
-//
-// A nil on either side is absent, not zero: nil + x is x and nil + nil stays nil, so a security
-// whose cost basis Plaid does not report keeps reporting nothing instead of claiming 0.
-func mergeHoldingInto(keep *domain.Holding, dup domain.Holding, logger *slog.Logger, accountID, plaidSecurityID string) {
-	keep.Quantity += dup.Quantity
-	keep.InstitutionValue = addOptionalFloats(keep.InstitutionValue, dup.InstitutionValue)
-	keep.CostBasis = addOptionalFloats(keep.CostBasis, dup.CostBasis)
-
-	if keep.InstitutionPrice == nil {
-		keep.InstitutionPrice = dup.InstitutionPrice
-	} else if dup.InstitutionPrice != nil && *dup.InstitutionPrice != *keep.InstitutionPrice && logger != nil {
-		logger.Warn("duplicate holdings of one security disagree on institution_price; keeping the first",
-			"account_id", accountID,
-			"plaid_security_id", plaidSecurityID,
-			"kept_institution_price", *keep.InstitutionPrice,
-			"discarded_institution_price", *dup.InstitutionPrice,
-		)
+// A nil is ABSENT, not zero, and absent-vs-known is reported as a difference rather than treated as
+// a match: "Plaid reported no cost basis here and $600 there" is exactly the disagreement that must
+// not disappear. Values are compared by what they point AT, never by pointer identity.
+func describeHoldingDuplicateDifferences(kept, discarded domain.Holding) []string {
+	diffs := make([]string, 0, 5)
+	if kept.Quantity != discarded.Quantity {
+		diffs = append(diffs, "quantity: kept "+formatFloatForLog(kept.Quantity)+
+			", discarded "+formatFloatForLog(discarded.Quantity))
 	}
-
-	if keep.CurrencyCode == nil {
-		keep.CurrencyCode = dup.CurrencyCode
-	} else if dup.CurrencyCode != nil && *dup.CurrencyCode != *keep.CurrencyCode && logger != nil {
-		logger.Warn("duplicate holdings of one security disagree on currency; summing anyway, keeping the first currency",
-			"account_id", accountID,
-			"plaid_security_id", plaidSecurityID,
-			"kept_currency_code", *keep.CurrencyCode,
-			"discarded_currency_code", *dup.CurrencyCode,
-		)
+	for _, f := range []struct {
+		name            string
+		kept, discarded *float64
+	}{
+		{"institution_value", kept.InstitutionValue, discarded.InstitutionValue},
+		{"institution_price", kept.InstitutionPrice, discarded.InstitutionPrice},
+		{"cost_basis", kept.CostBasis, discarded.CostBasis},
+	} {
+		if !optionalFloatsEqual(f.kept, f.discarded) {
+			diffs = append(diffs, f.name+": kept "+formatOptionalFloatForLog(f.kept)+
+				", discarded "+formatOptionalFloatForLog(f.discarded))
+		}
 	}
+	if !optionalStringsEqual(kept.CurrencyCode, discarded.CurrencyCode) {
+		diffs = append(diffs, "currency_code: kept "+formatOptionalStringForLog(kept.CurrencyCode)+
+			", discarded "+formatOptionalStringForLog(discarded.CurrencyCode))
+	}
+	return diffs
 }
 
-// addOptionalFloats sums two optional amounts treating nil as ABSENT rather than zero: nil+nil is
-// nil, so a figure the provider never reported is not invented as 0.
-func addOptionalFloats(a, b *float64) *float64 {
-	if a == nil {
-		return b
+func optionalFloatsEqual(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
 	}
-	if b == nil {
-		return a
+	return *a == *b
+}
+
+func optionalStringsEqual(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
 	}
-	sum := *a + *b
-	return &sum
+	return *a == *b
+}
+
+// formatFloatForLog renders an amount the way a human reads it back out of a log line: 1650, not
+// 1.65e+03 and not 1650.000000.
+func formatFloatForLog(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+func formatOptionalFloatForLog(v *float64) string {
+	if v == nil {
+		return "absent"
+	}
+	return formatFloatForLog(*v)
+}
+
+func formatOptionalStringForLog(v *string) string {
+	if v == nil {
+		return "absent"
+	}
+	return *v
 }
 
 // SyncHoldings fetches the complete holdings snapshot from Plaid and atomically
@@ -425,16 +436,39 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 		// UNIQUE (account_id, security_id), so a payload carrying one security twice for one
 		// account cannot be written AT ALL — every attempt fails identically until the job dead-
 		// letters, and the account's holdings stop syncing entirely. Two payloads produce that:
-		// Plaid listing the security twice for the account (separate lots at the institution), and
-		// two distinct plaid_security_ids resolving to ONE securities row (the forked-identity
-		// problem #1631's consolidation columns exist for). Both arrive here as two elements with
-		// the same internal SecurityID, so both are merged on that key — and the log names every
+		// Plaid listing the security twice for the account, and two distinct plaid_security_ids
+		// resolving to ONE securities row (the forked-identity problem #1631's consolidation
+		// columns exist for). Both arrive here as two elements with the same internal SecurityID,
+		// so the FIRST is kept and the rest are discarded on that key — and the log names every
 		// plaid_security_id involved, so the two remain distinguishable after the fact instead of
 		// being flattened into "some duplicate".
 		//
-		// Merging is NOT the fix for a concurrent sync racing this one — that one is fixed where it
-		// lives, by the per-account advisory lock in holdingRepository.ReplaceForAccount. This
-		// merge only makes a self-inconsistent PAYLOAD writable, and says so out loud when it does.
+		// ⚠ #1639 corrects this: the duplicates used to be SUMMED, on the theory that two rows were
+		// two lots of one position. Plaid's own SDK says they are not (plaid/model_holding.go):
+		// Quantity is "the total quantity of the asset held" and CostBasis "the total cost basis of
+		// the holding (e.g., the total amount spent to acquire all assets currently in the
+		// holding)". One Holding row IS the complete current position for the pair — which is why
+		// the table is unique on it. Two rows are therefore the same position stated twice, and
+		// summing them doubled the user's holdings, every portfolio total over them and every
+		// allocation percentage derived from them, silently.
+		//
+		// So: pick one row, whole, and do NO arithmetic across duplicates. First-wins rather than
+		// refusing the account outright because refusing returns us to the dead-lettered job this
+		// fix exists to end, and because picking is bounded-wrong (the stored figure is one of the
+		// two the provider actually sent) where summing is unbounded-wrong (the stored figure is
+		// one the provider never sent, and grows with every repetition). It is a deliberate trade,
+		// not laziness: the row we did not keep is named in full in the log below.
+		//
+		// Two consequences fall out of taking one row WHOLE, rather than being handled separately:
+		// a figure and the currency_code it is denominated in always travel together, so no sum of
+		// dollars and euros can be labelled "USD" (which is what defeated is_mixed_currency
+		// detection — it inspects persisted holding currency codes only); and an ABSENT cost basis
+		// stays absent rather than adopting the duplicate's figure as a complete total and
+		// fabricating an unrealized gain from it.
+		//
+		// None of this is the fix for a concurrent sync racing this one — that one is fixed where
+		// it lives, by the per-account advisory lock in holdingRepository.ReplaceForAccount. This
+		// only makes a self-inconsistent PAYLOAD writable, and says so out loud when it does.
 		indexBySecurity := make(map[string]int, len(plaidHoldings))
 		plaidIDsBySecurity := make(map[string][]string, len(plaidHoldings))
 		skippedAny := false
@@ -476,14 +510,23 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 			plaidIDsBySecurity[internalSecurityID] = append(plaidIDsBySecurity[internalSecurityID], ph.SecurityId)
 
 			if existing, seen := indexBySecurity[internalSecurityID]; seen {
-				mergeHoldingInto(&domainHoldings[existing], h, s.logger, internalAccountID, ph.SecurityId)
-				s.logger.Warn("merged duplicate holdings for one security on one account",
+				rowsSeen := len(plaidIDsBySecurity[internalSecurityID])
+				s.logger.Warn("discarded a duplicate holding: each Plaid holding row is the COMPLETE "+
+					"position for its (account, security), so the first is kept whole and the rest are "+
+					"dropped without arithmetic",
 					"account_id", internalAccountID,
 					"plaid_account_id", plaidAccountID,
 					"security_id", internalSecurityID,
 					"plaid_security_id", ph.SecurityId,
 					"plaid_security_ids_for_this_security", plaidIDsBySecurity[internalSecurityID],
+					"rows_seen_for_this_security", rowsSeen,
+					"rows_discarded_for_this_security", rowsSeen-1,
 					"plaid_holdings_in_payload", len(plaidHoldings),
+					// Empty when the discarded row was identical to the kept one — the likely real
+					// case, and then this whole line records a lossless no-op. Non-empty means the
+					// provider contradicted itself, and names both values so it reads as the
+					// contradiction it is instead of disappearing into an untraceable number.
+					"differences", describeHoldingDuplicateDifferences(domainHoldings[existing], h),
 					"item_id", linkedItem.ID,
 				)
 				continue
@@ -970,7 +1013,7 @@ func synthesizeSecurityName(name string, tickerSymbol *string, plaidSecurityID s
 //
 // Returns nil when Plaid sends neither, or sends a blank one: absent is recorded as absent.
 //
-// #1631 I5: currency_code is VARCHAR(16) (migration 000197) and Postgres HARD-ERRORS (22001) on a
+// #1631 I5: currency_code is VARCHAR(16) (migration 000202) and Postgres HARD-ERRORS (22001) on a
 // value that overflows it rather than truncating. Before this, a Plaid unofficial_currency_code
 // longer than 16 bytes turned into "failed to upsert securities on page N", aborting the whole
 // UpsertBatch page — the watermark never advanced, and that item's investment sync stayed broken

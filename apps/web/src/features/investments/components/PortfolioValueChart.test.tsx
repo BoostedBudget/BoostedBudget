@@ -258,7 +258,7 @@ describe('PortfolioValueChart currency (#1631 CX1)', () => {
   })
 
   // The sibling: an unlabelled series keeps today's dollar rendering, because unknown is not a
-  // conflict and that is the state of every snapshot written before migration 000197.
+  // conflict and that is the state of every snapshot written before migration 000202.
   it('keeps the dollar rendering for an unlabelled series', () => {
     mockUseGetPortfolioHistory.mockReturnValue({
       data: { history, is_mixed_currency: false },

@@ -83,7 +83,7 @@ type UserAccountRepository interface {
 
 	// PendingInvestmentBackfills returns, for the given chain ids OWNED BY userID, those carrying an
 	// outstanding investment-transaction backfill obligation, mapped to the instant it was recorded
-	// (user_accounts.investment_backfill_requested_at, migration 000196). Chains that owe nothing —
+	// (user_accounts.investment_backfill_requested_at, migration 000201). Chains that owe nothing —
 	// and chains userID does not own — are absent from the map rather than present with a zero time.
 	//
 	// The obligation is created by Update below, in the same statement that clears
@@ -538,7 +538,7 @@ func (r *userAccountRepository) FindByInstitutionAndMask(ctx context.Context, us
 // user sets is 'user', and clearing the hide clears the cause.
 //
 // ⚠ investment_backfill_requested_at travels with exclude_investment_sync in the SAME STATEMENT,
-// and unlike hidden_source it is decided HERE rather than by the caller (#1631, migration 000196).
+// and unlike hidden_source it is decided HERE rather than by the caller (#1631, migration 000201).
 // That is deliberate on both counts:
 //
 //   - It must be atomic with the flag write. As of #1631 the investment sync stops persisting
@@ -677,7 +677,7 @@ func (r *userAccountRepository) ClearHidden(ctx context.Context, id, userID stri
 }
 
 // PendingInvestmentBackfills implements UserAccountRepository. See the interface for the contract,
-// and migration 000196 for why the obligation lives on the row.
+// and migration 000201 for why the obligation lives on the row.
 func (r *userAccountRepository) PendingInvestmentBackfills(ctx context.Context, userAccountIDs []string, userID string) (map[string]time.Time, error) {
 	if len(userAccountIDs) == 0 {
 		return map[string]time.Time{}, nil

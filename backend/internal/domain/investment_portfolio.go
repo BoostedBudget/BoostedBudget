@@ -42,7 +42,7 @@ type PortfolioSnapshot struct {
 	// contributing holdings did not agree on one (#1631 M8a).
 	//
 	// ⚠ nil covers BOTH "mixed, so these totals are a currency-blind sum" and "no holding stated
-	// a currency" — including every row written before migration 000197. A reader must therefore
+	// a currency" — including every row written before migration 000202. A reader must therefore
 	// treat nil as "do not assume", never as USD. Its one job is to let GetPortfolioSummary
 	// refuse a day change when the prior snapshot and the live total are in different currencies:
 	// with no FX rate source in this system, that subtraction has no answer.
@@ -50,7 +50,7 @@ type PortfolioSnapshot struct {
 
 	// IsMixedCurrency is TRUE when the holdings behind this row's totals were denominated in two
 	// or more DIFFERENT currencies, making every total on the row a currency-blind sum (#1631 M8a
-	// fix round 2, migration 000198).
+	// fix round 2, migration 000203).
 	//
 	// ⚠ It exists because CurrencyCode's nil was OVERLOADED and one reader could not live with
 	// that. Read the two together:
@@ -59,7 +59,7 @@ type PortfolioSnapshot struct {
 	//	(nil,  false)  no contributing holding stated one — UNKNOWN
 	//	(nil,  true)   two or more currencies — a currency-blind sum
 	//
-	// So false on a row written before 000198 still reads as unknown rather than as a claim,
+	// So false on a row written before 000203 still reads as unknown rather than as a claim,
 	// because its CurrencyCode is nil. The one reader is GetPortfolioSummary: it subtracts this
 	// row from a live total, and CurrenciesConflict deliberately treats an unknown currency as no
 	// conflict — correct for unknown, and catastrophic for mixed, which is how an unflagged
@@ -97,7 +97,7 @@ type PortfolioSummary struct {
 	// outright — because a single cell has a cheap honest fallback that a portfolio total lacks.
 	//
 	// ⚠ Holdings that state NO currency do not make a portfolio mixed. That is the state of every
-	// row written before migration 000197, so counting unknown as a currency would flag the whole
+	// row written before migration 000202, so counting unknown as a currency would flag the whole
 	// existing user base on deploy day with no change to their data.
 	IsMixedCurrency bool `json:"is_mixed_currency"`
 
@@ -147,7 +147,7 @@ type PortfolioHistory struct {
 	// plottable as one unit — either two days disagree, or some single day was itself a
 	// currency-blind sum (portfolio_snapshots.is_mixed_currency) — and false means no day stated a
 	// currency at all, which is unknown rather than a conflict and is the state of every snapshot
-	// written before migration 000197.
+	// written before migration 000202.
 	CurrencyCode    *string `json:"currency_code,omitempty"`
 	IsMixedCurrency bool    `json:"is_mixed_currency"`
 }
@@ -361,7 +361,7 @@ type AllocationBreakdown struct {
 	// the contributing rows are denominated in two or more DIFFERENT known currencies, so the
 	// totals are a currency-blind sum (there is no FX rate source in this system to convert
 	// with); false means no contributing row stated a currency at all — the state of every row
-	// written before migration 000197 — which is unknown, not a conflict. #1631 M8a.
+	// written before migration 000202 — which is unknown, not a conflict. #1631 M8a.
 	CurrencyCode    *string `json:"currency_code,omitempty"`
 	IsMixedCurrency bool    `json:"is_mixed_currency"`
 }
@@ -413,7 +413,7 @@ type TopMovers struct {
 	// The currency chosen is the one carried by the most eligible movers. A holding that states NO
 	// currency is ranked alongside it regardless, on the same unknown-is-not-a-conflict rule the
 	// rest of this surface uses. nil means no mover stated a currency at all -- the state of every
-	// row written before migration 000197 -- or that there were no movers to rank.
+	// row written before migration 000202 -- or that there were no movers to rank.
 	RankingCurrencyCode *string `json:"ranking_currency_code,omitempty"`
 
 	// ExcludedByCurrencyCount is how many otherwise-rankable holdings were left out because they
@@ -426,7 +426,7 @@ type TopMovers struct {
 	// ranked alongside RankingCurrencyCode without being known to be in it (#1631, Codex round 2).
 	//
 	// Served because the alternative was worse in both directions. Excluding these rows would
-	// empty the widget for every holding written before migration 000197 -- the entire existing
+	// empty the widget for every holding written before migration 000202 -- the entire existing
 	// user base -- and saying nothing let the response assert a single ranking currency over a
 	// list that is only partly known to be in it. A client showing "ranked in USD" can now say
 	// "3 holdings of unstated currency included" instead of implying they are dollars.
@@ -454,7 +454,7 @@ type GainLossSummary struct {
 	// the contributing rows are denominated in two or more DIFFERENT known currencies, so the
 	// totals are a currency-blind sum (there is no FX rate source in this system to convert
 	// with); false means no contributing row stated a currency at all — the state of every row
-	// written before migration 000197 — which is unknown, not a conflict. #1631 M8a.
+	// written before migration 000202 — which is unknown, not a conflict. #1631 M8a.
 	CurrencyCode    *string `json:"currency_code,omitempty"`
 	IsMixedCurrency bool    `json:"is_mixed_currency"`
 }
@@ -490,7 +490,7 @@ type IncomeSummary struct {
 	// the contributing rows are denominated in two or more DIFFERENT known currencies, so the
 	// totals are a currency-blind sum (there is no FX rate source in this system to convert
 	// with); false means no contributing row stated a currency at all — the state of every row
-	// written before migration 000197 — which is unknown, not a conflict. #1631 M8a.
+	// written before migration 000202 — which is unknown, not a conflict. #1631 M8a.
 	CurrencyCode    *string `json:"currency_code,omitempty"`
 	IsMixedCurrency bool    `json:"is_mixed_currency"`
 }
