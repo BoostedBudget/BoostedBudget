@@ -20,8 +20,3 @@ export function MixedCurrencyBadge({ className }: { className?: string }) {
     </Badge>
   )
 }
-
-/** The tooltip/aria sentence, exported so chart tooltips (which cannot render a Badge) can reuse
- *  exactly the same wording as the badge. */
-export const MIXED_CURRENCY_NOTE =
-  'Mixed currencies — this total adds positions priced in more than one currency and is not a quantity of any single one.'
