@@ -582,3 +582,20 @@ func TestTradeTypeToSQLPredicate_StructuralBucketsShareOneDefinition(t *testing.
 	assert.Contains(t, cashClause, div, "the cash complement must exclude exactly what dividend claims")
 	assert.Contains(t, cashClause, rei, "the cash complement must exclude exactly what reinvest claims")
 }
+
+// TestIncomeSubtypes_CoversEveryReinvestment is the CX4 regression. reinvestSubtypes has always
+// carried the two capital-gain reinvestments, but IncomeSubtypes hand-listed only the dividend and
+// interest ones -- so a capital-gain reinvestment DISPLAYED as Reinvest and was unreachable from
+// IncomeSummary, while the capital-gain DISTRIBUTION beside it counted. Two hand-maintained lists
+// with an implied relationship is how that gap opened, so the relationship is now derived.
+func TestIncomeSubtypes_CoversEveryReinvestment(t *testing.T) {
+	for _, sub := range reinvestSubtypes {
+		assert.Contains(t, IncomeSubtypes, sub,
+			"a reinvestment is income immediately spent on shares -- it cannot display as Reinvest "+
+				"and be absent from IncomeSummary")
+	}
+	// The asymmetry that made the gap visible: the distribution counts, so the reinvestment of
+	// that same distribution must too.
+	assert.Contains(t, IncomeSubtypes, "long-term capital gain")
+	assert.Contains(t, IncomeSubtypes, "long-term capital gain reinvestment")
+}

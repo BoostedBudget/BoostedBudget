@@ -433,7 +433,10 @@ type IncomeSummary struct {
 // IncomeByType is the income breakdown by normalized income subtype.
 type IncomeByType struct {
 	// IncomeType is one of "dividend", "interest", "capital_gain", "dividend_reinvestment",
-	// "interest_reinvestment", "other_income". #1631 added "capital_gain" (capital-gain
+	// "interest_reinvestment", "capital_gain_reinvestment", "other_income". #1631 CX4 added
+	// "capital_gain_reinvestment": the two capital-gain reinvestment subtypes were in the display
+	// Reinvest bucket but absent from IncomeSubtypes, so they were unreachable from this summary.
+	// #1631 added "capital_gain" (capital-gain
 	// distributions previously matched no set at all and fell through to the generic bucket) and
 	// began counting a structural dividend — a cash credit against a non-cash-equivalent security,
 	// which is how some brokerages report an ETF distribution — under "dividend".
