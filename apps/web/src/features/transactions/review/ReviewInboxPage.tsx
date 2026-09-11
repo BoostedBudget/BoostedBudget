@@ -37,6 +37,7 @@ import { Button } from '@/components/ui/button'
 import { CategoryEditor } from '../../categories/components/CategoryEditor'
 import { useGetUserCategories, useGetPlaidPrimaryCategories } from '@boostedbudget/api-client/endpoints/categories/categories'
 import type { CustomCategory } from '../../categories/types'
+import { formatDate } from '@/shared/transactions/dates'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
 
 const INBOX_PAGE_LIMIT = 30
@@ -314,7 +315,7 @@ export function ReviewInboxPage() {
     {
       id: 'date',
       header: 'Date',
-      render: (tx) => <span className="text-muted-foreground">{tx.date}</span>,
+      render: (tx) => <span className="text-muted-foreground">{formatDate(tx.date)}</span>,
     },
     {
       id: 'merchant',
