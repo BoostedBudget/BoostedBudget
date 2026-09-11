@@ -47,9 +47,20 @@ func (BudgetHierarchyResyncArgs) Kind() string { return "budget_hierarchy_resync
 // the reparented category's CURRENT (post-write) parent linkage, and its direct children — the
 // whole "subtree" a custom-custom nest can have. custom_category.go's Validate/validateParent caps
 // custom-custom nesting at two levels (a parent may not itself have a parent_id), so there are
-// never grandchildren to walk on that axis; the PFC-parent 3-level exception documented on
-// domain.BudgetCategory.IsSubAllocationWithin is a pre-existing, separately-tracked limitation,
-// out of scope here exactly as it is there.
+// never grandchildren to walk on that axis.
+//
+// ⚠ UPDATE (029e15d3): the paragraph this replaced described the PFC-parent 3-level shape (pfc
+// root X ← custom C via parent_pfc_primary ← custom G via parent_id) as an out-of-scope
+// limitation "shared" with domain.BudgetCategory.IsSubAllocationWithin. That shared premise is
+// gone: IsSubAllocationWithin/EscapedNestedChild now recognize the transitive pair via
+// CustomGrandparentPFCPrimary, so it is CLOSED there. It is NOT closed here. This worker's own
+// Work() below builds affectedCustomIDs/affectedPFCPrimaries from the reparented category's
+// DIRECT parent identity only (cc.ParentID / cc.ParentPFCPrimary, plus the OLD parent from job
+// args) — if the reparented category's own parent is a CUSTOM category nested under a PFC root
+// two hops away (rather than the reparented category being a direct PFC-primary child), that
+// root's PFC primary is never added to affectedPFCPrimaries, so a budget row on that root is
+// never flagged as "affected" and its spent_amount is never resynced, even though its rollup
+// total did change. Known, currently open gap — not fixed by this comment update.
 type budgetHierarchyResyncCategoryRepo interface {
 	GetByID(ctx context.Context, id string) (*domain.CustomCategory, error)
 	GetChildren(ctx context.Context, parentID string) ([]*domain.CustomCategory, error)
