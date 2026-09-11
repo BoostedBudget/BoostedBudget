@@ -36,10 +36,18 @@ answer.
 
 Every claim below was re-derived against the tree on this branch, and anything that could not be
 verified is labelled **unverified** in place rather than asserted. That is a description of the
-process, not a guarantee of the result: the first revision of this document asserted that
-`TestEveryCitedTestNameResolves` guarded its cited names, which was false — that guard covers Go
-source only. The claim survived one writing pass and was caught in review. Re-derive before
-relying on anything here; see Decision 4 for what is and is not mechanically checked.
+process, not a guarantee of the result, and two review rounds have now proved it:
+
+- The first revision asserted that `TestEveryCitedTestNameResolves` guarded its cited names. False —
+  that guard covers Go source only.
+- The revision that fixed it then quoted the phrase *"which no guard catches"* as the Markdown
+  guard's wording. Also false: that string is verbatim from `cited_test_names_guard_test.go:46`, the
+  Go-source guard. The substance was right and the attribution was not.
+
+Both slipped a writing pass and were caught by a reviewer re-deriving them; both landed in the
+passage that argues citations must be re-derived. That is the failure mode this repository's guards
+are explicitly unable to catch, demonstrated twice on this document. Re-derive before relying on
+anything here; see Decision 4 for what is and is not mechanically checked.
 
 ---
 
@@ -246,12 +254,20 @@ A manual per-position basis entry would unblock the calculation without the prov
 Rule 1), scoped to tracked `*.md` at the repository root or under `docs/`. Its Go-source sibling,
 `TestEveryCitedTestNameResolves`, does **not** cover Markdown — its own header says so explicitly
 ("SCOPE: tracked Go source only"), and an earlier revision of this ADR named it here and was wrong.
-More importantly, neither guard checks whether a claim is **true**. Both check that a cited test
-*name resolves to a function that exists*; the Markdown guard's header states outright that two of
-the three documentation defects motivating it were false factual claims, "which no guard catches",
-and it is a ratchet over a baseline rather than a ban. Every non-name assertion in this document —
-every line number, every quoted comment, every statement about what the code does — is defended by
-the reader re-deriving it, and by nothing else.
+The Markdown guard has three rules: cited test names must resolve (Rule 1), a `Decision N`
+cross-reference must name a decision that exists (Rule 2), and a backticked repository path must
+resolve on disk (Rule 3). It is a ratchet over a baseline rather than a ban.
+
+**None of the three checks whether a claim is true**, and that guard's header says so in its own
+words, under a heading reading "WHAT IS NOT MECHANICALLY CHECKABLE, PLAINLY". Of the three
+documentation defects that motivated it, two were false factual claims about behaviour —
+*"No regexp reaches it. The only control that has actually worked on this branch is a reviewer
+reproducing the claim."* It closes with: *"It does not close 'the ADR was wrong', and no guard in
+this repository does."*
+
+So every non-name, non-path assertion in this document — every line number, every quoted comment,
+every statement about what the code does — is defended by the reader re-deriving it, and by nothing
+else.
 
 ---
 
