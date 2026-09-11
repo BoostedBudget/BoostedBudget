@@ -14,6 +14,7 @@ import {
   getGetAdminDeadLetterJobStatsQueryKey,
 } from '@boostedbudget/api-client/endpoints/admin/admin'
 import { mutationFailureMessage } from '../lib/mutationFailureMessage'
+import { parseJobErrors, pgErrorSummary } from '../lib/parseJobErrors'
 import { SummaryCard } from '@/features/admin'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -25,7 +26,7 @@ import { DataTable, TablePagination, useTablePreferences } from '@/shared/compon
 import type { ColumnDef } from '@/shared/components/DataTable'
 
 // eslint-disable-next-line react-refresh/only-export-components
-export const ADMIN_DLQ_COLUMN_IDS = ['kind', 'queue', 'user_id', 'failed_at', 'retried_at', 'notes'] as const
+export const ADMIN_DLQ_COLUMN_IDS = ['kind', 'queue', 'last_error', 'user_id', 'failed_at', 'retried_at', 'notes'] as const
 
 const inputClass = 'px-3 py-2 border border-border rounded-md bg-background text-foreground text-sm focus:outline-none focus:border-primary'
 const selectInputClass = `${inputClass} cursor-pointer transition-colors`
@@ -108,6 +109,40 @@ export function DeadLetterPage() {
       render: (job) => (
         <span className="font-mono text-[0.8125rem] text-muted-foreground">{job.queue}</span>
       ),
+    },
+    // #1631: the queue used to be scannable only by job kind, so five dead-letters from one
+    // holdings sync looked exactly like five unrelated failures. SQLSTATE and constraint name
+    // are schema identifiers — NOT row values — which is why this column is deliberately NOT in
+    // maskedColumnIds: masking it would delete the only signal it carries. Everything that CAN
+    // quote a row value (pg detail/hint/message, the error chain, the raw message) is confined to
+    // JobErrorList in the detail modal, where each field is individually masked.
+    {
+      id: 'last_error',
+      header: 'Last Error',
+      hideable: true,
+      resizable: true,
+      defaultSize: 200,
+      minSize: 120,
+      render: (job) => {
+        const summary = pgErrorSummary(parseJobErrors(job.errors))
+        if (!summary) {
+          return (
+            <span className="text-[0.8125rem] text-muted-foreground" data-testid="dlq-no-pg-error">
+              —
+            </span>
+          )
+        }
+        return (
+          <span className="flex items-center gap-1.5 min-w-0">
+            {summary.code && <Badge variant="destructive">{summary.code}</Badge>}
+            {summary.constraintName && (
+              <code className="font-mono text-[0.75rem] text-muted-foreground overflow-hidden text-ellipsis whitespace-nowrap">
+                {summary.constraintName}
+              </code>
+            )}
+          </span>
+        )
+      },
     },
     {
       id: 'user_id',
