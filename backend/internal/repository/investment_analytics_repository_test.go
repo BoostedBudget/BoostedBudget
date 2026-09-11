@@ -24,6 +24,10 @@ func setupInvestmentAnalyticsMockDB(t *testing.T) (pgxmock.PgxPoolIface, Investm
 	return mock, repo
 }
 
+// allocBoolPtr is a local *bool helper for this file's pgxmock rows — the integration-only
+// boolPtr in history_snapshot_integration_test.go is unavailable here (build-tag excluded).
+func allocBoolPtr(v bool) *bool { return &v }
+
 // incomeSubtypeAnyArgs returns a slice of pgxmock.AnyArg() matchers sized for the
 // IncomeSummary query: 3 base args (userID, start, end) + one per IncomeSubtype.
 func incomeSubtypeAnyArgs() []interface{} {
@@ -204,9 +208,11 @@ func TestInvestmentAnalytics_AllocationBreakdown_ReturnsGroupedBuckets(t *testin
 
 	// currency_codes (#1631 M8a) is the set of DISTINCT currencies backing each bucket; both
 	// buckets here are USD, so the breakdown names USD and is not mixed.
-	rows := pgxmock.NewRows([]string{"security_type", "holding_count", "total_value", "currency_codes"}).
-		AddRow("stock", 3, 10000.0, []string{"USD"}).
-		AddRow("etf", 2, 5000.0, []string{"USD"})
+	// is_cash_equivalent (#1631 H1) is the second scanned column now — false for both rows here,
+	// so neither bucket is reclassified.
+	rows := pgxmock.NewRows([]string{"security_type", "is_cash_equivalent", "holding_count", "total_value", "currency_codes"}).
+		AddRow("stock", allocBoolPtr(false), 3, 10000.0, []string{"USD"}).
+		AddRow("etf", allocBoolPtr(false), 2, 5000.0, []string{"USD"})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`COALESCE(sec.type, 'unknown')`)).
 		WithArgs(pgxmock.AnyArg()).
@@ -234,6 +240,92 @@ func TestInvestmentAnalytics_AllocationBreakdown_ReturnsGroupedBuckets(t *testin
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestInvestmentAnalytics_AllocationBreakdown_CashEquivalentSecurity_BucketsAsCash is H1 (#1631):
+// a money-market fund typed "mutual fund" with is_cash_equivalent=true must land in the cash asset
+// class, not "investments" — that flag disambiguates it from an identical fund that is not a sweep
+// vehicle, and securityTypeToAssetClass previously never saw it. A second row with the SAME raw
+// type but is_cash_equivalent NULL must keep its type-derived "investments" bucket — the
+// pre-migration state of the whole table must not be silently reclassified on deploy day.
+func TestInvestmentAnalytics_AllocationBreakdown_CashEquivalentSecurity_BucketsAsCash(t *testing.T) {
+	mock, repo := setupInvestmentAnalyticsMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	userID := uuid.New().String()
+
+	rows := pgxmock.NewRows([]string{"security_type", "is_cash_equivalent", "holding_count", "total_value", "currency_codes"}).
+		AddRow("mutual fund", allocBoolPtr(true), 1, 1000.0, []string{"USD"}).
+		AddRow("mutual fund", (*bool)(nil), 1, 2000.0, []string{"USD"})
+
+	mock.ExpectQuery(regexp.QuoteMeta(`COALESCE(sec.type, 'unknown')`)).
+		WithArgs(pgxmock.AnyArg()).
+		WillReturnRows(rows)
+
+	result, err := repo.AllocationBreakdown(ctx, userID, domain.AllocationOptions{
+		GroupBy: domain.AllocationGroupByAssetClass,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Buckets, 2, "cash-equivalent mutual fund and NULL-flag mutual fund must land in different asset classes")
+
+	byClass := map[string]domain.AllocationItem{}
+	for _, b := range result.Buckets {
+		byClass[b.AssetClass] = b
+	}
+	require.Contains(t, byClass, "cash", "is_cash_equivalent=true must bucket as cash regardless of security_type")
+	assert.InDelta(t, 1000.0, byClass["cash"].TotalValue, 0.01)
+	require.Contains(t, byClass, "investments", "a NULL flag must keep its type-derived bucket, not be reclassified")
+	assert.InDelta(t, 2000.0, byClass["investments"].TotalValue, 0.01)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSecurityTypeToAssetClass_H1 pins securityTypeToAssetClass's per-case behaviour directly,
+// independent of the SQL/scan plumbing — the second, isCashEquivalent, argument is #1631 H1.
+func TestSecurityTypeToAssetClass_H1(t *testing.T) {
+	tests := []struct {
+		name             string
+		secType          string
+		isCashEquivalent bool
+		want             string
+	}{
+		{"mutual fund + cash-equivalent true → cash", "mutual fund", true, "cash"},
+		{"mutual fund + cash-equivalent false → investments", "mutual fund", false, "investments"},
+		{"equity + cash-equivalent true → cash", "equity", true, "cash"},
+		{"unknown (NULL type) + cash-equivalent false → investments", "unknown", false, "investments"},
+		{"synthetic cash bucket, flag false → still cash", "cash", false, "cash"},
+		{"synthetic liabilities bucket, flag true → still liabilities (never cash)", "liabilities", true, "liabilities"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, securityTypeToAssetClass(tt.secType, tt.isCashEquivalent))
+		})
+	}
+}
+
+// TestCollapseToAssetClasses_CashEquivalentSecurityMergesIntoCash proves collapseToAssetClasses
+// (the group_by=asset_class path) also honours IsCashEquivalent, not only the per-item loop in
+// AllocationBreakdown's group_by=security_type path.
+func TestCollapseToAssetClasses_CashEquivalentSecurityMergesIntoCash(t *testing.T) {
+	buckets := []domain.AllocationItem{
+		{SecurityType: "mutual fund", IsCashEquivalent: true, TotalValue: 1000, HoldingCount: 1},
+		{SecurityType: "mutual fund", IsCashEquivalent: false, TotalValue: 2000, HoldingCount: 1},
+		{SecurityType: "cash", TotalValue: 500, HoldingCount: 1},
+	}
+	result := collapseToAssetClasses(buckets)
+
+	byClass := map[string]domain.AllocationItem{}
+	for _, b := range result {
+		byClass[b.AssetClass] = b
+	}
+	require.Contains(t, byClass, "cash")
+	// The cash-equivalent mutual fund (1000) merges with the synthetic cash bucket (500) = 1500.
+	assert.InDelta(t, 1500.0, byClass["cash"].TotalValue, 0.01)
+	require.Contains(t, byClass, "investments")
+	assert.InDelta(t, 2000.0, byClass["investments"].TotalValue, 0.01)
+}
+
 // TestInvestmentAnalytics_AllocationBreakdown_EmptyPortfolio tests that an empty result
 // returns an empty Buckets slice and zero TotalValue.
 func TestInvestmentAnalytics_AllocationBreakdown_EmptyPortfolio(t *testing.T) {
@@ -243,7 +335,7 @@ func TestInvestmentAnalytics_AllocationBreakdown_EmptyPortfolio(t *testing.T) {
 	ctx := context.Background()
 	userID := uuid.New().String()
 
-	rows := pgxmock.NewRows([]string{"security_type", "holding_count", "total_value", "currency_codes"})
+	rows := pgxmock.NewRows([]string{"security_type", "is_cash_equivalent", "holding_count", "total_value", "currency_codes"})
 
 	mock.ExpectQuery(regexp.QuoteMeta(`COALESCE(sec.type, 'unknown')`)).
 		WithArgs(pgxmock.AnyArg()).

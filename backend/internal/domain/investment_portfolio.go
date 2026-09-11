@@ -339,6 +339,15 @@ type AllocationItem struct {
 	TotalValue   float64 `json:"total_value"`
 	Percentage   float64 `json:"percentage"`
 	HoldingCount int     `json:"holding_count"`
+
+	// IsCashEquivalent carries the bucket's securities.is_cash_equivalent verdict (#1631 H1) — an
+	// AFFIRMATIVE true only; a NULL flag (unset by the institution) or a bucket with no single
+	// joined security (the synthetic "cash"/"liabilities" UNION branches) both read false here,
+	// same discipline as domain.SecurityIsStructuralSQL's `IS FALSE`/`IS TRUE` (never `NOT ...`,
+	// which would make a NULL flag silently reclassify the row). It exists only to make
+	// is_cash_equivalent load-bearing for securityTypeToAssetClass; it is not part of the API
+	// response.
+	IsCashEquivalent bool `json:"-"`
 }
 
 // AllocationBreakdown is the response for GET /portfolio/allocation.
