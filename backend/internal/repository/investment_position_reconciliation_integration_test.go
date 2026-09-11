@@ -277,10 +277,23 @@ func TestPositionReconciliation_HoldingWithNoLedgerRowsAtAllIsSuppressed_Integra
 // classification into SQL (COUNT(*) FILTER) instead of calling
 // domain.ClassifyPositionReconciliationMember per row like PositionReconciliation does, so the
 // two paths could in principle drift out of step. This test proves, empirically, that they do
-// not — for the SAME seeded positions across TWO different users, the global summary's DELTA
+// not — for the SAME seeded positions across FOUR different users, the global summary's DELTA
 // (after seeding minus before seeding, so pre-existing rows in a shared test database cannot
 // produce a false pass or a flaky failure) exactly equals the sum of what the per-user,
 // Go-classified report finds for each user individually.
+//
+// ⚠ #1631 M8b round-3 fix: the original two-user version of this test only exercised the
+// has_buy split (drift vs. suppressed), both at a delta comfortably clear of the tolerance
+// band. That left the OTHER half of the classification rule — the tolerance comparison itself —
+// completely unguarded: a SQL regression from `ABS(...) > tol` to `ABS(...) > 0`, or the
+// strictness slip `>` to `>=` at the tolerance boundary, would have passed this test every time,
+// and nothing else in this codebase (no AST guard, no text-diff check) compares the SQL FILTER
+// clauses to ClassifyPositionReconciliationMember. Two more users below close exactly that gap:
+// one sitting just INSIDE the tolerance band (must land in total_checked and NEITHER counter,
+// on both paths) and one sitting just OUTSIDE it (must be a drift on both paths). Together with
+// the original has_buy pair, all four branches of the three-way outcome
+// (drift / suppressed / neither, plus the has_buy split within "beyond tolerance") are now
+// pinned on both the SQL and the Go path at once.
 func TestPositionReconciliationSummary_AgreesWithPerUserReportAcrossUsers_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	ctx := context.Background()
@@ -293,16 +306,33 @@ func TestPositionReconciliationSummary_AgreesWithPerUserReportAcrossUsers_Integr
 	before, err := repo.PositionReconciliationSummary(ctx)
 	require.NoError(t, err)
 
-	// User A: a real drift (has a buy, mismatched quantity) — SQL must count this as DriftCount.
+	// User A: a real drift (has a buy, mismatched quantity, comfortably beyond tolerance) — SQL
+	// must count this as DriftCount.
 	userA, _, accountA, secA := seedInvestmentFixture(ctx, t, tx, "recon-agree-a")
 	seedReconTxn(ctx, t, tx, userA, accountA, secA, "buy", nil, 100, "2025-01-01")
 	seedReconHolding(ctx, t, tx, userA, accountA, secA, 150)
 
-	// User B: a suppressed pre-window position (no buy in the ledger) — SQL must count this as
-	// SuppressedPreWindowCount, not DriftCount.
+	// User B: a suppressed pre-window position (no buy in the ledger, comfortably beyond
+	// tolerance) — SQL must count this as SuppressedPreWindowCount, not DriftCount.
 	userB, _, accountB, secB := seedInvestmentFixture(ctx, t, tx, "recon-agree-b")
 	seedReconTxn(ctx, t, tx, userB, accountB, secB, "sell", nil, -5, "2025-01-01")
 	seedReconHolding(ctx, t, tx, userB, accountB, secB, 45)
+
+	// User C: delta 0.0005 — strictly INSIDE
+	// domain.PositionReconciliationQuantityTolerance (0.001). Must be counted in
+	// total_positions_checked but land in NEITHER drift nor suppressed, on both paths. A SQL
+	// regression to `ABS(...) > 0` (or any comparison against zero) would misclassify this row
+	// as a drift.
+	userC, _, accountC, secC := seedInvestmentFixture(ctx, t, tx, "recon-agree-c")
+	seedReconTxn(ctx, t, tx, userC, accountC, secC, "buy", nil, 100, "2025-01-01")
+	seedReconHolding(ctx, t, tx, userC, accountC, secC, 100.0005)
+
+	// User D: delta 0.002 — strictly OUTSIDE the tolerance, and has a buy. Must be a drift on
+	// both paths. Paired with User C, this pins the exact boundary the strictness of `>` (not
+	// `>=`) has to hold on both sides for the two paths to keep agreeing.
+	userD, _, accountD, secD := seedInvestmentFixture(ctx, t, tx, "recon-agree-d")
+	seedReconTxn(ctx, t, tx, userD, accountD, secD, "buy", nil, 100, "2025-01-01")
+	seedReconHolding(ctx, t, tx, userD, accountD, secD, 100.002)
 
 	after, err := repo.PositionReconciliationSummary(ctx)
 	require.NoError(t, err)
@@ -311,10 +341,16 @@ func TestPositionReconciliationSummary_AgreesWithPerUserReportAcrossUsers_Integr
 	require.NoError(t, err)
 	reportB, err := repo.PositionReconciliation(ctx, userB.String())
 	require.NoError(t, err)
+	reportC, err := repo.PositionReconciliation(ctx, userC.String())
+	require.NoError(t, err)
+	reportD, err := repo.PositionReconciliation(ctx, userD.String())
+	require.NoError(t, err)
 
-	wantDriftDelta := int64(len(reportA.Drifts) + len(reportB.Drifts))
-	wantSuppressedDelta := int64(reportA.SuppressedPreWindowCount + reportB.SuppressedPreWindowCount)
-	wantCheckedDelta := int64(reportA.TotalPositionsChecked + reportB.TotalPositionsChecked)
+	wantDriftDelta := int64(len(reportA.Drifts) + len(reportB.Drifts) + len(reportC.Drifts) + len(reportD.Drifts))
+	wantSuppressedDelta := int64(reportA.SuppressedPreWindowCount + reportB.SuppressedPreWindowCount +
+		reportC.SuppressedPreWindowCount + reportD.SuppressedPreWindowCount)
+	wantCheckedDelta := int64(reportA.TotalPositionsChecked + reportB.TotalPositionsChecked +
+		reportC.TotalPositionsChecked + reportD.TotalPositionsChecked)
 
 	assert.Equal(t, wantDriftDelta, after.DriftCount-before.DriftCount,
 		"the SQL-classified global summary must agree with the sum of the Go-classified per-user reports for drift_count")
@@ -323,10 +359,15 @@ func TestPositionReconciliationSummary_AgreesWithPerUserReportAcrossUsers_Integr
 	assert.Equal(t, wantCheckedDelta, after.TotalPositionsChecked-before.TotalPositionsChecked,
 		"...and for total_positions_checked")
 
-	// Concretely pin the two seeded shapes so a future change that breaks BOTH paths identically
-	// (and would therefore still pass the delta-agreement assertions above) cannot slip through.
-	assert.Equal(t, int64(1), wantDriftDelta, "user A's mismatch must be a real, reported drift")
-	assert.Equal(t, int64(1), wantSuppressedDelta, "user B's no-buy mismatch must be suppressed, not reported")
+	// Concretely pin all four seeded shapes so a future change that breaks BOTH paths
+	// identically (and would therefore still pass the delta-agreement assertions above) cannot
+	// slip through.
+	assert.Equal(t, int64(2), wantDriftDelta, "user A's and user D's mismatches must both be real, reported drifts")
+	assert.Equal(t, int64(1), wantSuppressedDelta, "only user B's no-buy mismatch must be suppressed")
+	assert.Equal(t, int64(4), wantCheckedDelta, "all four seeded positions must be checked, including user C's clean (within-tolerance) match")
+	assert.Empty(t, reportC.Drifts, "user C's 0.0005 delta is within tolerance and must not be a drift on the per-user path")
+	assert.Equal(t, 0, reportC.SuppressedPreWindowCount, "user C's clean match must not be suppressed either — it was never a mismatch to suppress")
+	require.Len(t, reportD.Drifts, 1, "user D's 0.002 delta is beyond tolerance and must be a drift on the per-user path")
 	assert.True(t, before.Available)
 	assert.True(t, after.Available)
 }
