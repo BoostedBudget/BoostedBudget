@@ -626,3 +626,96 @@ func TestAllocationBreakdown_OverdrawnDepository_CashBucketIsZero_Integration(t 
 		assert.GreaterOrEqual(t, result.TotalValue, 0.0, "TotalValue must be non-negative")
 	})
 }
+
+// TestAllocationBreakdown_CashEquivalentSecurity_BucketsAsCash_Integration is H1 (#1631): a
+// money-market fund typed "mutual fund" with is_cash_equivalent=true must land in the "cash" asset
+// class, not "investments" — the flag disambiguates it from an identical fund that is a genuine
+// equity holding, and securityTypeToAssetClass never saw it before this fix. A second holding
+// against an otherwise-identical "mutual fund" security whose is_cash_equivalent is NULL must keep
+// its type-derived "investments" bucket unchanged — the pre-migration state of the whole
+// securities table must not be silently reclassified on deploy day.
+func TestAllocationBreakdown_CashEquivalentSecurity_BucketsAsCash_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID, investAcctID, _, _, _ := seedAllocationFixture(ctx, t, tx, "alloc-cashequiv")
+
+	// A money-market fund, typed "mutual fund" like any other fund, but flagged cash-equivalent.
+	cashEquivSecID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO securities (id, plaid_security_id, name, type, is_cash_equivalent)
+		VALUES ($1, $2, 'Prime Money Market Fund', 'mutual fund', true)
+	`, cashEquivSecID, "cashequiv-sec-"+cashEquivSecID.String())
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_value)
+		VALUES ($1, $2, $3, $4, 1000, 1000)
+	`, uuid.New(), userID, investAcctID, cashEquivSecID)
+	require.NoError(t, err)
+
+	// An otherwise-identical "mutual fund" whose is_cash_equivalent is NULL — the pre-#1631 state
+	// of the whole table. It must NOT be swept into cash by this fix.
+	nullFlagSecID := uuid.New()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO securities (id, plaid_security_id, name, type)
+		VALUES ($1, $2, 'Growth Mutual Fund', 'mutual fund')
+	`, nullFlagSecID, "nullflag-sec-"+nullFlagSecID.String())
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, institution_value)
+		VALUES ($1, $2, $3, $4, 10, 2000)
+	`, uuid.New(), userID, investAcctID, nullFlagSecID)
+	require.NoError(t, err)
+
+	repo := NewInvestmentAnalyticsRepository(tx)
+
+	t.Run("group_by=asset_class: cash-equivalent fund merges into cash, NULL-flag fund stays investments", func(t *testing.T) {
+		opts := domain.AllocationOptions{GroupBy: domain.AllocationGroupByAssetClass}
+		result, err := repo.AllocationBreakdown(ctx, userID.String(), opts)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		byClass := map[string]domain.AllocationItem{}
+		for _, b := range result.Buckets {
+			byClass[b.AssetClass] = b
+		}
+		require.Contains(t, byClass, "cash", "the cash-equivalent mutual fund must bucket as cash")
+		assert.InDelta(t, 1000.0, byClass["cash"].TotalValue, 0.01)
+
+		require.Contains(t, byClass, "investments",
+			"the seeded stock (5000) plus the NULL-flag mutual fund (2000) must stay investments")
+		assert.InDelta(t, 7000.0, byClass["investments"].TotalValue, 0.01,
+			"a NULL is_cash_equivalent must keep its type-derived bucket, not be reclassified")
+	})
+
+	t.Run("group_by=security_type (default): AssetClass field reflects the flag per bucket", func(t *testing.T) {
+		result, err := repo.AllocationBreakdown(ctx, userID.String(), domain.AllocationOptions{})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		var cashEquivBucket, nullFlagBucket *domain.AllocationItem
+		for i := range result.Buckets {
+			b := result.Buckets[i]
+			if b.SecurityType != "mutual fund" {
+				continue
+			}
+			switch {
+			case b.TotalValue == 1000:
+				cashEquivBucket = &b
+			case b.TotalValue == 2000:
+				nullFlagBucket = &b
+			}
+		}
+		require.NotNil(t, cashEquivBucket, "the cash-equivalent mutual fund bucket must be present")
+		assert.Equal(t, "cash", cashEquivBucket.AssetClass,
+			"is_cash_equivalent=true must set AssetClass=cash even under group_by=security_type")
+
+		require.NotNil(t, nullFlagBucket, "the NULL-flag mutual fund bucket must be present")
+		assert.Equal(t, "investments", nullFlagBucket.AssetClass,
+			"a NULL flag must not be reclassified")
+	})
+}
