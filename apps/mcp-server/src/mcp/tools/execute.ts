@@ -264,7 +264,7 @@ function readExecuteRefusal(
   specEntries: ExecuteSpecEntry[],
 ): string | undefined {
   const spec = specEntries.find((e) => e.operationId === call.operationId)
-  const admitted = !!spec && isReadExecuteAdmitted(capability, spec.method)
+  const admitted = !!spec && isReadExecuteAdmitted(capability, spec)
 
   return admitted
     ? undefined

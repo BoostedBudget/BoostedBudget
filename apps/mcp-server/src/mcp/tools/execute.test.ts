@@ -9,8 +9,9 @@ import {
 } from '../../manifest/lazy-init-extension'
 import {
   ACKNOWLEDGED_SAFE_POST_OPERATIONS,
-  findUnacknowledgedSafePostOperations,
-  readSafePostOperationIds,
+  ACKNOWLEDGED_SAFE_POST_OPERATION_IDS,
+  findSafePostDrift,
+  readSafePostOperations,
 } from '../../manifest/safe-post-extension'
 import { readSpecIndex } from '../../../scripts/generate-mcp-capability-summary'
 
@@ -482,7 +483,7 @@ describe("readExecute's REAL guarantee, checked against the real manifest + spec
     // 0, the loop above is broken, not the manifest).
     expect(admittedOperationIds.length).toBeGreaterThan(10)
 
-    const acknowledgedSafePostSet = new Set(ACKNOWLEDGED_SAFE_POST_OPERATIONS)
+    const acknowledgedSafePostSet = new Set(ACKNOWLEDGED_SAFE_POST_OPERATION_IDS)
 
     for (const operationId of admittedOperationIds) {
       const capability = getCapability(operationId)
@@ -525,7 +526,7 @@ describe("readExecute's REAL guarantee, checked against the real manifest + spec
       }
     }
 
-    expect(nonReadOnlyVerbAdmitted.sort()).toEqual([...ACKNOWLEDGED_SAFE_POST_OPERATIONS].sort())
+    expect(nonReadOnlyVerbAdmitted.sort()).toEqual([...ACKNOWLEDGED_SAFE_POST_OPERATION_IDS].sort())
     expect(nonReadOnlyVerbAdmitted).not.toContain('runMCPRecipe')
   })
 
@@ -573,7 +574,7 @@ describe("readExecute's REAL guarantee, checked against the real manifest + spec
 
   // #1630: the mirror-image mechanism — a POST that unexpectedly does NOT write, rather than a
   // GET that unexpectedly does. Same shape as the lazy-init tests above, copied part for part.
-  it.each(ACKNOWLEDGED_SAFE_POST_OPERATIONS)(
+  it.each(ACKNOWLEDGED_SAFE_POST_OPERATION_IDS)(
     'acknowledges %s as an admitted POST proven to write nothing',
     async (operationId) => {
       const proxy = makeProxy({})
@@ -591,12 +592,14 @@ describe("readExecute's REAL guarantee, checked against the real manifest + spec
   )
 
   it('the acknowledged safe-POST list is exactly this one — a new admitted non-read-verb operation needs a human to update this list', () => {
-    expect(ACKNOWLEDGED_SAFE_POST_OPERATIONS).toEqual(['previewCategoryMatches'])
+    expect(ACKNOWLEDGED_SAFE_POST_OPERATIONS).toEqual([
+      { operationId: 'previewCategoryMatches', method: 'POST', path: '/api/v1/budgets/categories/preview' },
+    ])
   })
 
-  it('api/openapi.yaml tags exactly the acknowledged operations with x-mcp-safe-post — no unreviewed drift', () => {
-    const specTagged = readSafePostOperationIds()
-    expect(findUnacknowledgedSafePostOperations(specTagged, ACKNOWLEDGED_SAFE_POST_OPERATIONS)).toEqual([])
+  it('api/openapi.yaml tags exactly the acknowledged operations with x-mcp-safe-post — no unreviewed drift in either direction', () => {
+    const specTagged = readSafePostOperations()
+    expect(findSafePostDrift(specTagged, ACKNOWLEDGED_SAFE_POST_OPERATIONS)).toEqual({ unacknowledged: [], stale: [] })
   })
 })
 

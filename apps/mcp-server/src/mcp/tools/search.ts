@@ -76,7 +76,7 @@ export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
     let classLabel: string = e.manifestClass
     if (e.manifestClass === 'read') {
       const capability = getCapability(e.operationId)
-      const admittedByReadExecute = !!capability && isReadExecuteAdmitted(capability, e.method)
+      const admittedByReadExecute = !!capability && isReadExecuteAdmitted(capability, { method: e.method, path: e.path })
       classLabel = admittedByReadExecute ? 'read' : 'read, NOT admitted by readExecute — use writeExecute'
     }
     const parts = [
