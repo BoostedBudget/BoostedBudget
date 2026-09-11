@@ -1102,7 +1102,8 @@
         {
           "name": "end_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this history response ends on"
         },
         {
           "name": "grouping",
@@ -1117,12 +1118,14 @@
         {
           "name": "requested_end_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) the caller asked this history response to end on"
         },
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this history response starts on"
         }
       ]
     },
@@ -1179,7 +1182,8 @@
         {
           "name": "end_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) the aggregate window ends on"
         },
         {
           "name": "expense_count",
@@ -1213,7 +1217,8 @@
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) the aggregate window starts on"
         }
       ]
     },
@@ -4067,7 +4072,8 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) this budget period ends on; omitted for open-ended budgets"
         },
         {
           "name": "expected_income",
@@ -4112,7 +4118,8 @@
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this budget period starts on"
         },
         {
           "name": "updated_at",
@@ -4191,7 +4198,8 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "description": "Budget period end (open-ended if omitted). Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp."
         },
         {
           "name": "expected_income",
@@ -4240,7 +4248,8 @@
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "Budget period start. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp."
         }
       ],
       "responseBody": [
@@ -4269,7 +4278,8 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) this budget period ends on; omitted for open-ended budgets"
         },
         {
           "name": "expected_income",
@@ -4314,7 +4324,8 @@
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this budget period starts on"
         },
         {
           "name": "updated_at",
@@ -4439,7 +4450,8 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) this budget period ends on; omitted for open-ended budgets"
         },
         {
           "name": "expected_income",
@@ -4484,7 +4496,8 @@
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this budget period starts on"
         },
         {
           "name": "updated_at",
@@ -4544,7 +4557,8 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) this budget period ends on; omitted for open-ended budgets"
         },
         {
           "name": "expected_income",
@@ -4589,7 +4603,8 @@
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this budget period starts on"
         },
         {
           "name": "updated_at",
@@ -4634,7 +4649,8 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "description": "Budget period end. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp."
         },
         {
           "name": "expected_income",
@@ -4680,7 +4696,8 @@
         },
         {
           "name": "start_date",
-          "type": "string"
+          "type": "string",
+          "description": "Budget period start. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp."
         }
       ],
       "responseBody": [
@@ -4709,7 +4726,8 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) this budget period ends on; omitted for open-ended budgets"
         },
         {
           "name": "expected_income",
@@ -4754,7 +4772,8 @@
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this budget period starts on"
         },
         {
           "name": "updated_at",
@@ -5208,7 +5227,8 @@
         },
         {
           "name": "end_date",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) this budget period ends on; omitted for open-ended budgets"
         },
         {
           "name": "expected_income",
@@ -5253,7 +5273,8 @@
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this budget period starts on"
         },
         {
           "name": "updated_at",
@@ -5934,7 +5955,8 @@
         {
           "name": "end_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this history response ends on"
         },
         {
           "name": "granularity",
@@ -5949,7 +5971,8 @@
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this history response starts on"
         }
       ]
     },
@@ -5992,7 +6015,8 @@
         {
           "name": "as_of_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this balance summary is as of"
         },
         {
           "name": "by_type",
@@ -6073,7 +6097,8 @@
         {
           "name": "as_of_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this net worth figure is as of"
         },
         {
           "name": "by_category",
@@ -6152,7 +6177,8 @@
         {
           "name": "end_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this history response ends on"
         },
         {
           "name": "granularity",
@@ -6167,7 +6193,8 @@
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this history response starts on"
         }
       ]
     },
@@ -7027,7 +7054,8 @@
         {
           "name": "end_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this income summary's window ends on"
         },
         {
           "name": "is_mixed_currency",
@@ -7037,7 +7065,8 @@
         {
           "name": "start_date",
           "type": "string",
-          "required": true
+          "required": true,
+          "description": "UTC calendar day (YYYY-MM-DD) this income summary's window starts on"
         },
         {
           "name": "total_income",
@@ -7148,6 +7177,11 @@
         {
           "name": "ranking_currency_code",
           "type": "string"
+        },
+        {
+          "name": "unknown_currency_count",
+          "type": "integer",
+          "required": true
         }
       ]
     },
@@ -8402,7 +8436,8 @@
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) this goal's deadline; omitted when no deadline is set"
         },
         {
           "name": "deleted_at",
@@ -8488,7 +8523,8 @@
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "description": "Goal deadline. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp."
         },
         {
           "name": "description",
@@ -8557,7 +8593,8 @@
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) this goal's deadline; omitted when no deadline is set"
         },
         {
           "name": "deleted_at",
@@ -8662,7 +8699,8 @@
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) this goal's deadline; omitted when no deadline is set"
         },
         {
           "name": "deleted_at",
@@ -8767,7 +8805,8 @@
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) this goal's deadline; omitted when no deadline is set"
         },
         {
           "name": "deleted_at",
@@ -9353,7 +9392,8 @@
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) this goal's deadline; omitted when no deadline is set"
         },
         {
           "name": "deleted_at",
@@ -9444,7 +9484,8 @@
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "description": "Goal deadline. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp."
         },
         {
           "name": "description",
@@ -9504,7 +9545,8 @@
         },
         {
           "name": "deadline",
-          "type": "string"
+          "type": "string",
+          "description": "UTC calendar day (YYYY-MM-DD) this goal's deadline; omitted when no deadline is set"
         },
         {
           "name": "deleted_at",

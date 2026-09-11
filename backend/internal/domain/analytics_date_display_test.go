@@ -51,6 +51,11 @@ func TestCashFlowHistoryResponse_DateFieldsSerializeAsCalendarDays(t *testing.T)
 		StartDateDisplay: "2026-01-02",
 		EndDate:          time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC),
 		EndDateDisplay:   "2026-01-09",
+		// ⚠ requested_end_date is the third date on this struct and was missed by the mechanical
+		// inventory of this defect class: it echoes the caller's request rather than reading a
+		// DATE column, so a scan keyed on migration column names could not see it.
+		RequestedEndDate:        time.Date(2026, 1, 11, 0, 0, 0, 0, time.UTC),
+		RequestedEndDateDisplay: "2026-01-11",
 	}
 
 	payload, err := json.Marshal(resp)
@@ -58,6 +63,7 @@ func TestCashFlowHistoryResponse_DateFieldsSerializeAsCalendarDays(t *testing.T)
 
 	assertExactDateString(t, payload, "start_date", "2026-01-02")
 	assertExactDateString(t, payload, "end_date", "2026-01-09")
+	assertExactDateString(t, payload, "requested_end_date", "2026-01-11")
 }
 
 func TestCashFlowPeriodData_DateFieldsSerializeAsCalendarDays(t *testing.T) {

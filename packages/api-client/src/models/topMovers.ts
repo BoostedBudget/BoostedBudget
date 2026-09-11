@@ -41,4 +41,5 @@ export interface TopMovers {
   /** @nullable */
   losers: TopMoverItem[] | null;
   ranking_currency_code?: string;
+  unknown_currency_count: number;
 }

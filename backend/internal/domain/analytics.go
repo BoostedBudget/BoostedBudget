@@ -105,19 +105,22 @@ type CashFlowHistoryResponse struct {
 	// StartDate/EndDate stay time.Time — NOT serialized — for the same reason as
 	// CashFlowSummaryResponse above; StartDateDisplay/EndDateDisplay are what reach clients
 	// (#1631).
-	//
-	// RequestedEndDate (below) is the SAME defect class (a DATE-shaped value serialized directly
-	// as time.Time) but is OUT OF SCOPE for this batch — not in the fields list this fix was
-	// scoped to — and is deliberately left untouched here.
 	StartDate        time.Time `json:"-"`
 	StartDateDisplay string    `json:"start_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this history response starts on"`
 	EndDate          time.Time `json:"-"`
 	EndDateDisplay   string    `json:"end_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this history response ends on"`
 	// RequestedEndDate is the caller's own end date, echoed unchanged. Equal to EndDate for every
 	// request that does not reach past today, which is nearly all of them.
-	RequestedEndDate time.Time            `json:"requested_end_date"`
-	Grouping         string               `json:"grouping"` // "daily", "weekly", "monthly"
-	Periods          []CashFlowPeriodData `json:"periods"`
+	//
+	// Same treatment as the two above. ⚠ This field was MISSED by the mechanical inventory of
+	// this defect class, and the reason generalises: that inventory matched struct fields against
+	// the DATE columns named in the migrations, and this one echoes the caller's request rather
+	// than reading a column, so it had no column name to match. A date-shaped value does not need
+	// a DATE column behind it to be serialized wrong. Search by SHAPE, not only by column.
+	RequestedEndDate        time.Time            `json:"-"`
+	RequestedEndDateDisplay string               `json:"requested_end_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) the caller asked this history response to end on"`
+	Grouping                string               `json:"grouping"` // "daily", "weekly", "monthly"
+	Periods                 []CashFlowPeriodData `json:"periods"`
 }
 
 // CashFlowPeriodData represents a single period in the cash flow history timeline

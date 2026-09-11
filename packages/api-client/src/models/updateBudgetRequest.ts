@@ -37,6 +37,7 @@ export interface UpdateBudgetRequest {
   readonly $schema?: string;
   amount?: number;
   description?: string;
+  /** Budget period end. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp. */
   end_date?: string;
   expected_income?: number;
   income_amount?: number;
@@ -44,5 +45,6 @@ export interface UpdateBudgetRequest {
   is_active?: boolean;
   name?: string;
   period?: string;
+  /** Budget period start. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp. */
   start_date?: string;
 }

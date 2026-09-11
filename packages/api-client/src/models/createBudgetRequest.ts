@@ -41,6 +41,7 @@ export interface CreateBudgetRequest {
   categories?: CreateBudgetCategoryRequest[] | null;
   currency_code?: string;
   description?: string;
+  /** Budget period end (open-ended if omitted). Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp. */
   end_date?: string;
   expected_income?: number;
   from_budget_id?: string;
@@ -49,5 +50,6 @@ export interface CreateBudgetRequest {
   income_sources?: IncomeSource[] | null;
   name: string;
   period: string;
+  /** Budget period start. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp. */
   start_date: string;
 }
