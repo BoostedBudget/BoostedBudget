@@ -632,6 +632,30 @@ func BuildCategoryEventData(categories []BudgetCategory) map[string]map[string]f
 	return result
 }
 
+// IsCategorySubAllocation reports whether the budget category identified by categoryID within
+// categories (a full slice for ONE budget, e.g. from BudgetRepository.GetCategoriesByBudgetID) is
+// currently a sub-allocation of another budgeted row in the same slice. It computes the same
+// budgetedPFCPrimaries/budgetedCustomIDs sets BuildCategoryEventData does and calls
+// BudgetCategory.IsSubAllocationWithin, but is callable directly against a freshly-loaded,
+// LIVE slice rather than only through a stale triggerData snapshot (Issue #1630 review round 2:
+// the execution-time sub-allocation check previously trusted triggerData's categories map, built
+// when the event FIRED, which can be stale by the time an asynchronously-queued job actually
+// runs).
+//
+// found is false when categoryID does not appear in categories at all (already deleted, wrong
+// budget, etc.) — callers MUST NOT treat "not found" as "not a sub-allocation"; the prior bug was
+// exactly that fail-open shortcut, just taken one layer up (missing triggerData data, not a
+// missing category). Fail closed on found == false.
+func IsCategorySubAllocation(categories []BudgetCategory, categoryID string) (isSubAllocation bool, found bool) {
+	pfcPrimaries, customIDs := budgetedParentSetsFor(categories)
+	for i := range categories {
+		if categories[i].ID == categoryID {
+			return categories[i].IsSubAllocationWithin(pfcPrimaries, customIDs), true
+		}
+	}
+	return false, false
+}
+
 // CreateBudgetRequest represents the request to create a new budget.
 type CreateBudgetRequest struct {
 	Name        string        `json:"name" validate:"required,max=100"`

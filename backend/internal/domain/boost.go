@@ -988,4 +988,17 @@ var (
 	// increment the boost's execution_count or touch last_successful, the same way "boost
 	// disabled" and "conditions not met" are already skipped rather than failed.
 	ErrRolloverSourceBecameSubAllocation = errors.New("category_rollover source category is a sub-allocation of another budgeted category")
+
+	// ErrRolloverSourceUnverifiable is returned by executeCategoryRollover (Issue #1630 review
+	// round 2) when the source category's LIVE sub-allocation status cannot be determined at
+	// execution time — the budget-category repository isn't wired, the category (or its budget)
+	// has since been deleted, or the lookup otherwise failed. The prior behavior trusted
+	// triggerData's categories snapshot (captured when the event was BUILT, not when the queued
+	// job actually runs) and silently treated "no data" as "not a sub-allocation", so a rollover
+	// could still create a suggestion and record success even though the category had since
+	// become a sub-allocation and the check simply couldn't see it. This sentinel makes that
+	// case FAIL CLOSED instead: ExecuteBoost treats it exactly like
+	// ErrRolloverSourceBecameSubAllocation, a SKIP (no execution_count increment, no
+	// last_successful update) rather than a false success.
+	ErrRolloverSourceUnverifiable = errors.New("category_rollover source category's live sub-allocation status could not be verified")
 )
