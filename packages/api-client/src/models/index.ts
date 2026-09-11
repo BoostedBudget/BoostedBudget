@@ -317,6 +317,7 @@ export * from './plaidOrphanedItemMetrics';
 export * from './plaidWebhookResponseBody';
 export * from './portfolioHistoryPoint';
 export * from './portfolioSummary';
+export * from './portfolioSummaryDayChangeUnavailableReason';
 export * from './positionReconciliationSummary';
 export * from './previewRuleBody';
 export * from './previewUpdateInputBody';

@@ -5364,6 +5364,10 @@ components:
           type:
             - number
             - "null"
+        day_change_unavailable_reason:
+          enum:
+            - currency_mismatch
+          type: string
         holdings_count:
           format: int64
           type: integer
@@ -7192,6 +7196,9 @@ components:
           format: uri
           readOnly: true
           type: string
+        excluded_by_currency_count:
+          format: int64
+          type: integer
         gainers:
           items:
             $ref: "#/components/schemas/TopMoverItem"
@@ -7204,9 +7211,12 @@ components:
           type:
             - array
             - "null"
+        ranking_currency_code:
+          type: string
       required:
         - gainers
         - losers
+        - excluded_by_currency_count
       type: object
     TopUnreviewedCategory:
       additionalProperties: false
@@ -13201,7 +13211,7 @@ paths:
         - Investments
   /api/v1/investments/investment-transactions:
     get:
-      description: Returns investment transactions for the authenticated user using keyset (cursor) pagination. Supports filtering by account, security, activity type (buy/sell/dividend/reinvest/fee/cash/other), and date range.
+      description: Returns investment transactions for the authenticated user using keyset (cursor) pagination. Supports filtering by account, security, activity type (buy/sell/dividend/reinvest/interest/fee/transfer/cash/other), and date range.
       operationId: getInvestmentTransactions
       parameters:
         - description: Opaque cursor from previous page's next_cursor; omit for first page
