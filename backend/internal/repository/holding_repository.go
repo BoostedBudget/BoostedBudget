@@ -194,7 +194,8 @@ func (r *holdingRepository) ReplaceForAccount(ctx context.Context, accountID, us
 	// Serialize every replace of THIS account against every other one, for the whole
 	// DELETE+INSERT critical section (the lock auto-releases at transaction end).
 	//
-	// Production DLQ entry 2026-09-11 (webhook_processing job 9): five identical
+	// Production DLQ entry 2026-09-11 (dead_letter_jobs.id 9 = river_job.id 350,
+	// webhook_processing): five identical
 	// `unique_account_security` violations. unique_account_security is UNIQUE (account_id,
 	// security_id), and under READ COMMITTED two concurrent replaces of one account do NOT
 	// serialize on their own — each transaction's DELETE cannot see the other's uncommitted
