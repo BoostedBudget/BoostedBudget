@@ -30,10 +30,26 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { CategoryPreviewBreakdownItem } from './categoryPreviewBreakdownItem';
 
 export interface CategoryPreviewResponse {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  /**
+     * Breaks the rolled-up transaction_count/total_amount down by each nested custom category that actually matched. Empty/nil when the targeted category cannot roll up (a leaf category), or no nested child matched anything.
+     * @nullable
+     */
+  children?: CategoryPreviewBreakdownItem[] | null;
+  /** Amount of matching transactions filed directly under the targeted category itself, excluding any nested custom category and excluding tag-only-outside-category matches. Zero-valued when there is nothing to disclose. */
+  direct_amount?: number;
+  /** Count of matching transactions filed directly under the targeted category itself, excluding any nested custom category and excluding tag-only-outside-category matches. Zero-valued when there is nothing to disclose. */
+  direct_transaction_count?: number;
+  /** Amount of matching transactions pulled into the total by the tag clause (match_logic or/tag_only) that the category clause did not match at all — not the targeted category itself, and not any nested custom category. Always zero for match_logic category_only or and, since every included row there is required to satisfy the category clause. */
+  tag_only_amount?: number;
+  /** Count of matching transactions pulled into the total by the tag clause (match_logic or/tag_only) that the category clause did not match at all — not the targeted category itself, and not any nested custom category. Always zero for match_logic category_only or and, since every included row there is required to satisfy the category clause. */
+  tag_only_transaction_count?: number;
+  /** Total matching transaction amount. direct_amount + every children[].total_amount + tag_only_amount always sum to exactly this value when any of them is populated — see those fields to break the total down. */
   total_amount: number;
+  /** Total matching transaction count. When the targeted category is a pfc_primary or parent custom category, this INCLUDES transactions filed under its nested custom categories — see direct_transaction_count, children, and tag_only_transaction_count to break the total down. */
   transaction_count: number;
 }

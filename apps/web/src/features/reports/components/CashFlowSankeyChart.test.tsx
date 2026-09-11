@@ -3,12 +3,13 @@ import { render as rtlRender, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import React from 'react'
 
-import '@/test/mocks/shared-charts'
+import { MockEChartsChart } from '@/test/mocks/shared-charts'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { createLocationHarness } from '@/test/utils/locationProbe'
 import { CashFlowSankeyChart } from './CashFlowSankeyChart'
 import { buildSankeyData } from './buildSankeyData'
+import type { NodeAction } from './buildSankeyData'
 import type { CategoryHierarchyNode, CategoryHierarchyResponse } from '@boostedbudget/api-client/models'
 
 // CashFlowSankeyChart calls useNavigate() unconditionally, so every render needs a real Router
@@ -84,6 +85,7 @@ beforeEach(() => {
   resetLocationProbe()
   focused = []
   mockTrackEvent.mockClear()
+  MockEChartsChart.mockClear()
 })
 
 describe('CashFlowSankeyChart', () => {
@@ -113,6 +115,71 @@ describe('CashFlowSankeyChart', () => {
         expect(attr.value).not.toContain('Eating Out')
       }
     }
+  })
+
+  // #1630: ECharts' sankey series reads a node-data field literally named `depth` as its LAYOUT
+  // LAYER (its own docs: "the layer of the current node… starting from 0"), not as arbitrary
+  // payload. `buildSankeyData` used to carry a field named `depth` for analytics only, and this
+  // component passed the internal node objects straight through to ECharts
+  // (`data: sankeyData.nodes as any`) — so ECharts silently adopted it as the render layer,
+  // pinning synthetic nodes (depth 0) on the left and scattering income leaves (their real
+  // category depth) among the expense layers on the right. A link/topology assertion cannot catch
+  // this: the links were always correct, only the LAYOUT was wrong. These assertions are
+  // option-level on purpose.
+  describe('the ECharts series payload (#1630)', () => {
+    // ECharts' sankey default (`nodeAlign: 'justify'`) pins every TERMINAL node to the right
+    // edge — so a leaf expense parent (which terminates the flow, having no rendered children in
+    // the 'parents' view) would be stretched to the chart's max depth instead of sitting in its
+    // own column. `nodeAlign: 'left'` is what "leaf parents terminate at their own column" means
+    // in ECharts' vocabulary. This is option-level on purpose: a bun test cannot observe pixel
+    // layout, only the series option ECharts is handed.
+    it('sets nodeAlign to left so leaf expense parents terminate at their own column, not the right edge', () => {
+      render(<CashFlowSankeyChart {...defaultProps} viewMode={{ kind: 'parents' }} />)
+      const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+        series?: Array<{ nodeAlign?: string }>
+      }
+      expect(option?.series?.[0]?.nodeAlign).toBe('left')
+    })
+
+    it('projects node data down to id/name/itemStyle — no internal field (least of all `depth`) leaks through', () => {
+      render(<CashFlowSankeyChart {...defaultProps} viewMode={{ kind: 'parents' }} />)
+      const option = MockEChartsChart.mock.calls.at(-1)?.[0]?.option as {
+        series?: Array<{ data?: Array<Record<string, unknown>> }>
+      }
+      const nodeData = option?.series?.[0]?.data ?? []
+      expect(nodeData.length).toBeGreaterThan(0)
+      for (const n of nodeData) {
+        expect(Object.keys(n).sort()).toEqual(['id', 'itemStyle', 'name'])
+        expect(Object.prototype.hasOwnProperty.call(n, 'depth')).toBe(false)
+      }
+    })
+
+    // ⚠ THE TRAP: because the payload is now projected, ECharts hands the SAME projected object
+    // back in click params (id/name/itemStyle only — no action, nodeKind, or categoryDepth).
+    // handleClick must resolve the real node from sankeyData.nodes BY ID rather than trusting
+    // `p.data`'s other fields, or a click would silently stop navigating and stop reporting a depth.
+    it('resolves the clicked node by id from the projected payload, and still navigates with a real depth', () => {
+      render(<CashFlowSankeyChart {...defaultProps} viewMode={{ kind: 'parents' }} />)
+      const built = buildSankeyData(mockIncomeData.levels ?? [], mockExpenseData.levels ?? [], { kind: 'parents' })
+      const parent = built.nodes.find(n => n.action.kind === 'focus')
+      if (!parent) throw new Error('expected a focus node in the parents view')
+      const action = parent.action as Extract<NodeAction, { kind: 'focus' }>
+
+      const clickHandler = MockEChartsChart.mock.calls.at(-1)?.[0]?.onEvents?.click as
+        ((params: unknown) => void) | undefined
+      if (!clickHandler) throw new Error('expected onEvents.click to be wired')
+
+      // Simulate what real (unmocked) ECharts hands back: dataType 'node', data === the PROJECTED
+      // payload only — exactly what the option memo now builds, never the internal SankeyNode.
+      clickHandler({ dataType: 'node', data: { id: parent.id, name: parent.name, itemStyle: parent.itemStyle } })
+
+      expect(focused).toEqual([action.key])
+      expect(parent.categoryDepth).toBeGreaterThan(0)
+      expect(mockTrackEvent).toHaveBeenCalledWith(
+        ANALYTICS_EVENTS.REPORT_SANKEY_CATEGORY_FOCUSED,
+        { depth: parent.categoryDepth },
+      )
+    })
   })
 
   describe('the action model', () => {
@@ -147,8 +214,8 @@ describe('CashFlowSankeyChart', () => {
       expect(currentUrl()).not.toContain('/transactions')
     })
 
-    // The depth must come from node.depth, NOT from splitting the node id on ':'. events.ts says so
-    // in as many words, and the sibling navigate event obeys it; this one derived 'l1' from the id.
+    // The depth must come from node.categoryDepth, NOT from splitting the node id on ':'. events.ts
+    // says so in as many words, and the sibling navigate event obeys it; this one derived 'l1' from the id.
     // It happens to be right today because only expense nodes focus and their ids encode true
     // depth — but the income fan is flattened to `in:l1:*`, so the moment anything in that fan can
     // focus, the id would report a plausible-looking level that is simply wrong.

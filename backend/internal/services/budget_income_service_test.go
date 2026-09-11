@@ -22,13 +22,8 @@ type MockIncomeTransactionGetter struct {
 	mock.Mock
 }
 
-func (m *MockIncomeTransactionGetter) GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error) {
-	args := m.Called(ctx, userID, category, startDate, endDate)
-	return args.Get(0).(float64), args.Error(1)
-}
-
-func (m *MockIncomeTransactionGetter) GetIncomeSumByTag(ctx context.Context, userID string, tag string, startDate, endDate time.Time) (float64, error) {
-	args := m.Called(ctx, userID, tag, startDate, endDate)
+func (m *MockIncomeTransactionGetter) GetIncomeSumForSources(ctx context.Context, userID string, pfcPrimaries, tags []string, startDate, endDate time.Time) (float64, error) {
+	args := m.Called(ctx, userID, pfcPrimaries, tags, startDate, endDate)
 	return args.Get(0).(float64), args.Error(1)
 }
 
@@ -66,7 +61,7 @@ func TestBudgetIncomeService_CalculateBudgetIncome_PlaidCategory(t *testing.T) {
 		},
 	}
 
-	mockRepo.On("GetIncomeSumByCategory", ctx, "user-123", "Paycheck", startDate, endDate).
+	mockRepo.On("GetIncomeSumForSources", ctx, "user-123", []string{"Paycheck"}, []string(nil), startDate, endDate).
 		Return(5000.00, nil)
 
 	income, err := service.CalculateBudgetIncome(ctx, budget, startDate, endDate)
@@ -93,7 +88,7 @@ func TestBudgetIncomeService_CalculateBudgetIncome_Tag(t *testing.T) {
 		},
 	}
 
-	mockRepo.On("GetIncomeSumByTag", ctx, "user-123", "bonus", startDate, endDate).
+	mockRepo.On("GetIncomeSumForSources", ctx, "user-123", []string(nil), []string{"bonus"}, startDate, endDate).
 		Return(1000.00, nil)
 
 	income, err := service.CalculateBudgetIncome(ctx, budget, startDate, endDate)
@@ -125,8 +120,7 @@ func TestBudgetIncomeService_CalculateBudgetIncome_Manual(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1500.50, income)
 	// No repository calls for manual sources
-	mockRepo.AssertNotCalled(t, "GetIncomeSumByCategory")
-	mockRepo.AssertNotCalled(t, "GetIncomeSumByTag")
+	mockRepo.AssertNotCalled(t, "GetIncomeSumForSources")
 }
 
 // TestBudgetIncomeService_CalculateBudgetIncome_MixedSources tests income calculation with multiple source types
@@ -148,15 +142,82 @@ func TestBudgetIncomeService_CalculateBudgetIncome_MixedSources(t *testing.T) {
 		},
 	}
 
-	mockRepo.On("GetIncomeSumByCategory", ctx, "user-123", "Paycheck", startDate, endDate).
-		Return(5000.00, nil)
-	mockRepo.On("GetIncomeSumByTag", ctx, "user-123", "bonus", startDate, endDate).
-		Return(1000.00, nil)
+	mockRepo.On("GetIncomeSumForSources", ctx, "user-123", []string{"Paycheck"}, []string{"bonus"}, startDate, endDate).
+		Return(6000.00, nil)
 
 	income, err := service.CalculateBudgetIncome(ctx, budget, startDate, endDate)
 
 	assert.NoError(t, err)
-	assert.Equal(t, 6500.00, income) // 5000 + 1000 + 500
+	assert.Equal(t, 6500.00, income) // 6000 (single combined query) + 500 (manual)
+	mockRepo.AssertExpectations(t)
+}
+
+// TestBudgetIncomeService_CalculateBudgetIncome_DeduplicatesOverlappingSources pins Issue #1630
+// fixwave 4's HIGH-severity fix: pfc_primary and tag sources must resolve through exactly ONE
+// GetIncomeSumForSources call, not one call per source summed together. Before this fix, a
+// transaction matching BOTH a configured pfc_primary source and a configured tag source was
+// counted once per matching source (once via GetIncomeSumByCategory, again via
+// GetIncomeSumByTag) — this test asserts the repository is called exactly once with BOTH source
+// values combined, which is what makes the double-count structurally impossible: a single query's
+// OR-ed predicates cannot count one row twice.
+func TestBudgetIncomeService_CalculateBudgetIncome_DeduplicatesOverlappingSources(t *testing.T) {
+	mockRepo := new(MockIncomeTransactionGetter)
+	logger := testIncomeServiceLogger()
+	service := NewBudgetIncomeService(mockRepo, logger)
+
+	ctx := context.Background()
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
+
+	budget := &domain.Budget{
+		UserID: "user-123",
+		IncomeSources: []domain.IncomeSource{
+			{Type: domain.IncomeSourceTypePFCPrimary, Value: "INCOME"},
+			{Type: domain.IncomeSourceTypeTag, Value: "salary"},
+		},
+	}
+
+	// A single paycheck deposit matches BOTH sources. The mock returns the TRUE deduplicated
+	// sum ($5000, not $10000) — proving the service must not sum two separate per-source calls.
+	mockRepo.On("GetIncomeSumForSources", ctx, "user-123", []string{"INCOME"}, []string{"salary"}, startDate, endDate).
+		Return(5000.00, nil).Once()
+
+	income, err := service.CalculateBudgetIncome(ctx, budget, startDate, endDate)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 5000.00, income, "the overlapping deposit must be counted once, not twice")
+	mockRepo.AssertExpectations(t)
+	mockRepo.AssertNumberOfCalls(t, "GetIncomeSumForSources", 1)
+}
+
+// TestBudgetIncomeService_CalculateBudgetIncome_DedupesRepeatedSourceValues pins the narrower
+// case: the SAME pfc_primary (or tag) value configured on more than one income source row must
+// only be passed once to GetIncomeSumForSources — duplicate values in the args slice would not
+// double-count (SQL OR is idempotent), but they are pointless work and obscure the dedup intent.
+func TestBudgetIncomeService_CalculateBudgetIncome_DedupesRepeatedSourceValues(t *testing.T) {
+	mockRepo := new(MockIncomeTransactionGetter)
+	logger := testIncomeServiceLogger()
+	service := NewBudgetIncomeService(mockRepo, logger)
+
+	ctx := context.Background()
+	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
+
+	budget := &domain.Budget{
+		UserID: "user-123",
+		IncomeSources: []domain.IncomeSource{
+			{Type: domain.IncomeSourceTypePFCPrimary, Value: "INCOME"},
+			{Type: domain.IncomeSourceTypePFCPrimary, Value: "INCOME"}, // duplicate value
+		},
+	}
+
+	mockRepo.On("GetIncomeSumForSources", ctx, "user-123", []string{"INCOME"}, []string(nil), startDate, endDate).
+		Return(4200.00, nil)
+
+	income, err := service.CalculateBudgetIncome(ctx, budget, startDate, endDate)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 4200.00, income)
 	mockRepo.AssertExpectations(t)
 }
 
@@ -246,14 +307,14 @@ func TestBudgetIncomeService_CalculateBudgetIncome_RepositoryError(t *testing.T)
 		},
 	}
 
-	mockRepo.On("GetIncomeSumByCategory", ctx, "user-123", "Paycheck", startDate, endDate).
+	mockRepo.On("GetIncomeSumForSources", ctx, "user-123", []string{"Paycheck"}, []string(nil), startDate, endDate).
 		Return(0.0, errors.New("database connection failed"))
 
 	income, err := service.CalculateBudgetIncome(ctx, budget, startDate, endDate)
 
 	assert.Error(t, err)
 	assert.Equal(t, 0.0, income)
-	assert.Contains(t, err.Error(), "failed to calculate income for category Paycheck")
+	assert.Contains(t, err.Error(), "failed to calculate income for configured sources")
 	mockRepo.AssertExpectations(t)
 }
 
@@ -281,7 +342,7 @@ func TestBudgetIncomeService_CalculateBudgetIncome_ManualSourceStillSums(t *test
 	}
 
 	// Mock returns $200 from the tag source
-	mockRepo.On("GetIncomeSumByTag", ctx, "user-123", "bonus", startDate, endDate).
+	mockRepo.On("GetIncomeSumForSources", ctx, "user-123", []string(nil), []string{"bonus"}, startDate, endDate).
 		Return(200.00, nil)
 
 	income, err := service.CalculateBudgetIncome(ctx, budget, startDate, endDate)
@@ -549,7 +610,7 @@ func TestBudgetIncomeService_CalculateBudgetIncome_PFCPrimary(t *testing.T) {
 	}
 
 	// The service must forward the enum value "INCOME" to the repo exactly as stored.
-	mockRepo.On("GetIncomeSumByCategory", ctx, "user-123", "INCOME", startDate, endDate).
+	mockRepo.On("GetIncomeSumForSources", ctx, "user-123", []string{"INCOME"}, []string(nil), startDate, endDate).
 		Return(4200.00, nil)
 
 	income, err := service.CalculateBudgetIncome(ctx, budget, startDate, endDate)

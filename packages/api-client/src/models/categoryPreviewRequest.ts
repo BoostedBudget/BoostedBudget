@@ -30,16 +30,20 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { CategoryPreviewRequestMatchLogic } from './categoryPreviewRequestMatchLogic';
 
 export interface CategoryPreviewRequest {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   category_kind: string;
   custom_category_id?: string;
+  /** End of the date range to preview (inclusive; the service extends it to end-of-day). Must not be before start_date. Accepts YYYY-MM-DD or a full RFC3339 timestamp. */
   end_date: string;
-  match_logic: string;
+  /** How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array. */
+  match_logic: CategoryPreviewRequestMatchLogic;
   pfc_detailed?: string;
   pfc_primary?: string;
+  /** Start of the date range to preview. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp. */
   start_date: string;
   /** @nullable */
   tags?: string[] | null;

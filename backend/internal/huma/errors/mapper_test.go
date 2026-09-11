@@ -54,6 +54,18 @@ func TestLoggingMapError_409_AccountAlreadyDisconnected(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
 }
 
+// TestLoggingMapError_409_DuplicateParentCategory: Issue #1630 Task 4 — a second budget
+// category sharing an existing row's parent identity (same pfc_primary primary-only row, or
+// same custom_category_id) must map to 409 Conflict, not the bare-errors.New default 500.
+func TestLoggingMapError_409_DuplicateParentCategory(t *testing.T) {
+	result := humaerrors.LoggingMapError(context.Background(), domain.ErrDuplicateParentCategory)
+	require.NotNil(t, result)
+
+	statusErr, ok := result.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError")
+	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
+}
+
 // Issue #1270: GAP-L — rule validation errors must return 400, not 500.
 func TestLoggingMapError_400_InvalidRule(t *testing.T) {
 	wrapped := fmt.Errorf("%w: condition field 'budget_category.bad_field' is not allowed for event 'budget_period_end'", domain.ErrInvalidBoost)

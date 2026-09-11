@@ -160,6 +160,7 @@ var MCPOperationManifest = map[string]MCPOperationClass{
 	"getWidgetTypes":                                 MCPClassRead,
 	"grantTrial":                                     MCPClassExcluded,
 	"handlePlaidWebhook":                             MCPClassExcluded,
+	"listAdminBudgetHierarchyAudits":                 MCPClassExcluded,
 	"listAdminDeadLetterJobs":                        MCPClassExcluded,
 	"listAdminPaddleWebhooks":                        MCPClassExcluded,
 	"listAdminPlaidOrphanedItems":                    MCPClassExcluded,

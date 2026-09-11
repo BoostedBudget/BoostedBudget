@@ -30,10 +30,12 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { IncomeSourceType } from './incomeSourceType';
 
 export interface IncomeSource {
   description?: string;
-  type: string;
+  /** How this income source is matched. pfc_primary matches transactions by their PFCv2 primary category (e.g. INCOME); tag matches by transaction tag; manual is a fixed, user-entered amount with no automatic matching. */
+  type: IncomeSourceType;
   value: string;
   value_display?: string;
 }

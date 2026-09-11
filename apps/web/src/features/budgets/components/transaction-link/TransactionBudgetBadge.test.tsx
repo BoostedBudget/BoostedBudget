@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { TransactionBudgetBadge } from './TransactionBudgetBadge'
-import type { BudgetCategoryMatch } from '../../utils/transactionBudgetMatcher'
+import type { BudgetCategoryMatch } from '../../types'
 import type { BudgetCategory } from '../../types'
 
 function createBudgetCategory(

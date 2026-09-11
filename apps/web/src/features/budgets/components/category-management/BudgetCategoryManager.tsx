@@ -26,7 +26,13 @@ import type {
   CreateBudgetCategoryRequest,
   UpdateBudgetCategoryRequest,
 } from '../../types';
-import { formatBudgetCategoryLabel } from '../../types';
+import {
+  formatBudgetCategoryLabel,
+  filterTopLevel,
+  isSubAllocationOfParent,
+  computeParentAllocationRemainder,
+  formatCurrency,
+} from '../../types';
 import type { UserTag } from '@/features/tags/types';
 import { BudgetCategoryCard } from './BudgetCategoryCard';
 import { BudgetCategoryForm } from './BudgetCategoryForm';
@@ -112,9 +118,14 @@ export function BudgetCategoryManager({
     [userCategories]
   );
 
-  // Calculate unallocated funds
+  // Calculate unallocated funds — top-level categories only (#1203/#1630): a
+  // sub-allocation's amount is already inside its parent's, so summing every row
+  // double-counts.
   const unallocatedFunds = useMemo(() => {
-    const totalAllocated = categories.reduce((sum, cat) => sum + cat.allocated_amount, 0);
+    const totalAllocated = filterTopLevel(categories).reduce(
+      (sum, cat) => sum + cat.allocated_amount,
+      0
+    );
     return totalIncome - totalAllocated;
   }, [categories, totalIncome]);
 
@@ -233,14 +244,54 @@ export function BudgetCategoryManager({
 
   const hasCategories = categories.length > 0;
 
+  // Top-level categories only (#1203/#1630) — otherwise a sub-allocation child summed
+  // alongside its already-inclusive parent falsely trips the form's over-allocation warning.
   const totalAllocatedExcludingCurrent = useMemo(() => {
+    const topLevel = filterTopLevel(categories);
     if (formDialog.mode === 'create' || !formDialog.category) {
-      return categories.reduce((sum, c) => sum + c.allocated_amount, 0);
+      return topLevel.reduce((sum, c) => sum + c.allocated_amount, 0);
     }
-    return categories
+    return topLevel
       .filter((c) => c.id !== formDialog.category!.id)
       .reduce((sum, c) => sum + c.allocated_amount, 0);
   }, [formDialog.mode, formDialog.category, categories])
+
+  // Issue #1630 Task 4 (and the follow-up adversarial-review fix): when the category pending
+  // deletion is a parent, its DIRECT sub-allocation children are promoted to top-level and the
+  // budget total changes by the parent's own unallocated remainder — say so in the delete-confirm
+  // copy rather than leaving it silent.
+  //
+  // `isSubAllocationOfParent` without `directOnly` also recognizes a transitive GRANDCHILD (a
+  // child of a child, attributed to the root via custom_grandparent_pfc_primary) as "belonging"
+  // to the root for total-exclusion purposes. But deleting the root does NOT promote a
+  // grandchild to top level — only the root's direct child is promoted; the grandchild stays
+  // exactly where it is, nested under that (still-existing) direct child. So the promoted-count
+  // copy and the remainder arithmetic must use `directOnly: true` here, or they wrongly claim the
+  // grandchild also moves to top level and double-subtract its allocation (which is already
+  // inside its direct parent's own allocated_amount, not the root's).
+  const deleteDialogDirectChildren = useMemo(() => {
+    if (!deleteDialog.category) return [];
+    return categories.filter((c) =>
+      isSubAllocationOfParent(c, deleteDialog.category!, { directOnly: true })
+    );
+  }, [categories, deleteDialog.category]);
+
+  // Transitive grandchildren of the category pending deletion — these are NOT promoted; they
+  // remain nested under their own direct parent. Tracked only so the confirm copy can describe
+  // their fate accurately instead of staying silent about them.
+  const deleteDialogNestedGrandchildren = useMemo(() => {
+    if (!deleteDialog.category) return [];
+    return categories.filter(
+      (c) =>
+        isSubAllocationOfParent(c, deleteDialog.category!) &&
+        !isSubAllocationOfParent(c, deleteDialog.category!, { directOnly: true })
+    );
+  }, [categories, deleteDialog.category]);
+
+  const deleteDialogRemainder = useMemo(() => {
+    if (!deleteDialog.category) return 0;
+    return computeParentAllocationRemainder(deleteDialog.category, deleteDialogDirectChildren);
+  }, [deleteDialog.category, deleteDialogDirectChildren]);
 
   // Resolve a custom category's display name, with a placeholder during loading/error
   // so a raw UUID is never shown (#1203).
@@ -267,7 +318,8 @@ export function BudgetCategoryManager({
       category: BudgetCategory,
       variant: 'standalone' | 'parent' | 'child' | 'savings',
       flatIndex: number,
-      parentLabel?: string
+      parentLabel?: string,
+      childCategories?: BudgetCategory[]
     ) => (
       <div
         key={category.id}
@@ -283,6 +335,7 @@ export function BudgetCategoryManager({
           variant={variant}
           customCategoryName={getCustomCategoryName(category.custom_category_id)}
           parentLabel={variant === 'child' ? parentLabel : undefined}
+          childCategories={variant === 'parent' ? childCategories : undefined}
           onEdit={() => handleOpenEditForm(category)}
           onDelete={() => handleOpenDeleteDialog(category)}
           disabled={disabled}
@@ -365,7 +418,7 @@ export function BudgetCategoryManager({
                 const parentIdx = flatOrder.findIndex(c => c.id === group.id);
                 return (
                   <div key={groupKey}>
-                    {renderCategoryItem(group, parentVariant, parentIdx)}
+                    {renderCategoryItem(group, parentVariant, parentIdx, undefined, children)}
                     {children.map((child) => {
                       const childIdx = flatOrder.findIndex(c => c.id === child.id);
                       return renderCategoryItem(child, 'child', childIdx, categoryDisplayLabel(group));
@@ -427,7 +480,31 @@ export function BudgetCategoryManager({
         title="Delete Category"
         description={
           deleteDialog.category ? (
-            <>Are you sure you want to delete the category &ldquo;<span data-ph-mask>{categoryDisplayLabel(deleteDialog.category)}</span>&rdquo;? It leaves this budget, but nothing is thrown away &mdash; the spending already recorded against it is kept. This action cannot be undone.</>
+            <>
+              Are you sure you want to delete the category &ldquo;
+              <span data-ph-mask>{categoryDisplayLabel(deleteDialog.category)}</span>&rdquo;? It
+              leaves this budget, but nothing is thrown away &mdash; the spending already
+              recorded against it is kept.
+              {deleteDialogDirectChildren.length > 0 && (
+                <>
+                  {' '}Its {deleteDialogDirectChildren.length === 1 ? '1 child category' : `${deleteDialogDirectChildren.length} child categories`} will move up to the top level of
+                  this budget, and the budget&apos;s total allocation will change by{' '}
+                  <span data-ph-mask>{formatCurrency(deleteDialogRemainder)}</span> (this
+                  category&apos;s own unallocated remainder).
+                  {deleteDialogNestedGrandchildren.length > 0 && (
+                    <>
+                      {' '}
+                      {deleteDialogNestedGrandchildren.length === 1
+                        ? 'A category nested beneath that child will stay nested right where it is'
+                        : `${deleteDialogNestedGrandchildren.length} categories nested beneath those children will stay nested right where they are`}
+                      {' '}&mdash; only its direct{' '}
+                      {deleteDialogDirectChildren.length === 1 ? 'child moves' : 'children move'} up.
+                    </>
+                  )}
+                </>
+              )}
+              {' '}This action cannot be undone.
+            </>
           ) : ''
         }
         variant="destructive"

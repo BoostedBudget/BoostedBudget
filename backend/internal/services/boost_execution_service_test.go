@@ -142,6 +142,80 @@ func (m *mockBoostExecutionRepository) GetByBoostIDWithFilter(ctx context.Contex
 	return result, total, nil
 }
 
+// fakeBudgetCategoryRepo is a minimal fake implementing boostExecutionCategoryRepo, used to
+// exercise executeCategoryRollover's live sub-allocation re-derivation (Issue #1630 review
+// round 2) without a full BudgetRepository mock. categoriesByID maps a budget category ID to
+// the category itself (BudgetID must be set); budgetCategories maps a budget ID to the FULL
+// live category slice for that budget (parent linkage fields populated), which is what
+// domain.IsCategorySubAllocation needs to compute the budgeted-parent sets.
+type fakeBudgetCategoryRepo struct {
+	categoriesByID   map[string]*domain.BudgetCategory
+	budgetCategories map[string][]domain.BudgetCategory
+	err              error
+}
+
+func (f *fakeBudgetCategoryRepo) GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	cat, ok := f.categoriesByID[categoryID]
+	if !ok {
+		return nil, domain.ErrBudgetCategoryNotFound
+	}
+	return cat, nil
+}
+
+func (f *fakeBudgetCategoryRepo) GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.budgetCategories[budgetID], nil
+}
+
+// newFakeBudgetCategoryRepoWithSubAllocation builds a fakeBudgetCategoryRepo containing exactly
+// one budget ("budget-live-check") whose live category set makes categoryID's
+// domain.IsSubAllocationWithin result equal isSubAllocation: when true, categoryID is nested as
+// a custom child (category_only) under a budgeted custom parent that is ALSO present in the
+// slice; when false, categoryID is the only category in the budget (no parent to be contained
+// by).
+func newFakeBudgetCategoryRepoWithSubAllocation(categoryID string, isSubAllocation bool) *fakeBudgetCategoryRepo {
+	const budgetID = "budget-live-check"
+	custom := "custom"
+	matchLogic := domain.MatchLogicCategoryOnly
+
+	child := domain.BudgetCategory{
+		ID:               categoryID,
+		BudgetID:         budgetID,
+		CategoryKind:     custom,
+		CustomCategoryID: strPtr(categoryID + "-custom-id"),
+		MatchLogic:       matchLogic,
+	}
+	categories := []domain.BudgetCategory{child}
+	if isSubAllocation {
+		parentCustomID := categoryID + "-parent-custom-id"
+		child.CustomParentID = strPtr(parentCustomID)
+		categories = []domain.BudgetCategory{
+			child,
+			{
+				ID:               categoryID + "-parent-row",
+				BudgetID:         budgetID,
+				CategoryKind:     custom,
+				CustomCategoryID: strPtr(parentCustomID),
+				MatchLogic:       matchLogic,
+			},
+		}
+	}
+
+	return &fakeBudgetCategoryRepo{
+		categoriesByID: map[string]*domain.BudgetCategory{
+			categoryID: {ID: categoryID, BudgetID: budgetID},
+		},
+		budgetCategories: map[string][]domain.BudgetCategory{
+			budgetID: categories,
+		},
+	}
+}
+
 type mockTransferSuggestionRepository struct {
 	suggestions []*domain.TransferSuggestion
 	createError error
@@ -2534,7 +2608,12 @@ func TestFlatActionJSON_ValidateAndExecuteConsistency(t *testing.T) {
 				RolloverType:           "full",
 			},
 			wantSuggestions: 1,
-			setupSvc:        nil,
+			// Issue #1630 review round 2: the sub-allocation check is now re-derived from LIVE
+			// data — wire a fake reporting "cat-1" as a top-level (non-sub-allocation) category
+			// so this flat-JSON round-trip still executes and creates its suggestion.
+			setupSvc: func(svc *boostExecutionService) {
+				svc.SetBudgetCategoryRepo(newFakeBudgetCategoryRepoWithSubAllocation("cat-1", false))
+			},
 		},
 	}
 
@@ -3619,9 +3698,15 @@ func TestBudgetTotalSpentStillResolves(t *testing.T) {
 }
 
 // TestCategoryEventDataKeyContract verifies that BuildCategoryEventData emits exactly
-// the keys {"percent_used", "remaining", "spent", "allocated"} — no more, no less.
-// This is a parity/lock test: if the emitter shape changes, this test fails immediately.
+// the keys {"percent_used", "remaining", "spent", "allocated", "is_sub_allocation"} — no
+// more, no less. This is a parity/lock test: if the emitter shape changes, this test
+// fails immediately.
 // Issue #1271 Item 5: key contract enforcement.
+// Issue #1630 Task 3.6: "is_sub_allocation" added deliberately — it marks whether a row's
+// dollars are already reflected in a budgeted parent, so a rollover boost consuming this
+// data can tell a sub-allocation apart from a top-level row and avoid rolling the same
+// dollars twice. Updating this lock test's expected key set is the intended contract
+// change, not drift.
 func TestCategoryEventDataKeyContract(t *testing.T) {
 	cat := domain.BudgetCategory{
 		ID:              "cat-contract",
@@ -3635,10 +3720,11 @@ func TestCategoryEventDataKeyContract(t *testing.T) {
 	require.True(t, ok, "expected category key in result")
 
 	expectedKeys := map[string]bool{
-		"percent_used": true,
-		"remaining":    true,
-		"spent":        true,
-		"allocated":    true,
+		"percent_used":      true,
+		"remaining":         true,
+		"spent":             true,
+		"allocated":         true,
+		"is_sub_allocation": true,
 	}
 	// Every expected key must be present
 	for k := range expectedKeys {
@@ -4005,4 +4091,407 @@ func TestGetUserExecutionHistory_PassesTheStatusFilterThrough(t *testing.T) {
 	assert.Equal(t, 1, total)
 	require.Len(t, executions, 1)
 	assert.Equal(t, "e-failed", executions[0].ID)
+}
+
+// ===========================================================================
+// Issue #1630 Task 3.6: rollover boosts must not roll a sub-allocation's dollars
+// ===========================================================================
+
+// TestExecuteCategoryRollover_SkipsSubAllocationCategory proves that a category_rollover
+// boost whose SourceBudgetCategoryID names a category marked "is_sub_allocation": 1.0 in
+// the per-category event data creates NO suggestion. The child's dollars are already
+// reflected in its budgeted parent's own remaining/spent (Issue #1630); rolling the
+// child independently would roll those same dollars a second time.
+//
+// RED (pre-fix): executeCategoryRollover reads only the flat top-level "remaining" key
+// and never consults the per-category "is_sub_allocation" marker, so it creates a
+// suggestion regardless of hierarchy.
+func TestExecuteCategoryRollover_SkipsSubAllocationCategory(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-rollover-suballoc"
+
+	actionsJSON, err := json.Marshal(domain.RolloverAction{
+		SourceBudgetCategoryID: "child-cat",
+		RolloverType:           "full",
+	})
+	require.NoError(t, err)
+
+	boost := &domain.Boost{
+		ID:             "rule-rollover-suballoc",
+		UserID:         userID,
+		Name:           "Rollover child category",
+		Enabled:        true,
+		BoostType:      domain.BoostTypeCategoryRollover,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+		ConditionLogic: "AND",
+		Conditions:     []domain.BoostCondition{},
+		Actions:        actionsJSON,
+	}
+
+	execRepo := &mockBoostExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	boostRepo := &mockBoostsRepository{}
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
+	// Issue #1630 review round 2: the check is re-derived from LIVE data now, not
+	// triggerData's snapshot — wire a fake reporting "child-cat" as a real live
+	// sub-allocation so this test proves the SAME outcome under the new mechanism.
+	svc.SetBudgetCategoryRepo(newFakeBudgetCategoryRepoWithSubAllocation("child-cat", true))
+
+	triggerData := map[string]interface{}{
+		"remaining": 300.0, // whole-budget remaining; nonzero so a naive read would roll it
+		domain.EventDataKeyCategories: map[string]map[string]float64{
+			"child-cat": {
+				"percent_used": 50.0,
+				"remaining":    30.0,
+				"spent":        30.0,
+				"allocated":    60.0,
+				domain.EventDataCategoryKeyIsSubAllocation: 1.0,
+			},
+		},
+	}
+
+	execution, err := svc.ExecuteBoost(ctx, boost, triggerData)
+	require.NoError(t, err, "ExecuteBoost must not error for a skipped sub-allocation rollover")
+	assert.Empty(t, suggestionRepo.suggestions,
+		"a rollover boost on a sub-allocation category must not create a suggestion")
+
+	// Issue #1630 B6: reporting success (ExecutionStatusCompleted, execution_count incremented,
+	// last_successful touched) while doing nothing is the bug — this must be recorded as a
+	// SKIP, exactly like "boost disabled" / "conditions not met".
+	require.NotNil(t, execution)
+	assert.Equal(t, ExecutionStatusSkipped, execution.Status,
+		"a rollover on a sub-allocation source must be recorded as SKIPPED, not completed")
+	assert.False(t, boostRepo.incrementExecCalled,
+		"a skipped rollover must not increment execution_count")
+	assert.False(t, boostRepo.updateSuccessCalled,
+		"a skipped rollover must not update last_successful")
+}
+
+// TestExecuteCategoryRollover_SkipsSubAllocationCategory_AfterRiverJSONRoundTrip proves the
+// same skip behaviour holds when the categories map has been through a River JSON
+// round-trip (map[string]interface{} shape, numeric values as json.Number/float64).
+func TestExecuteCategoryRollover_SkipsSubAllocationCategory_AfterRiverJSONRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-rollover-suballoc-rt"
+
+	actionsJSON, err := json.Marshal(domain.RolloverAction{
+		SourceBudgetCategoryID: "child-cat",
+		RolloverType:           "full",
+	})
+	require.NoError(t, err)
+
+	boost := &domain.Boost{
+		ID:             "rule-rollover-suballoc-rt",
+		UserID:         userID,
+		Name:           "Rollover child category (round-tripped)",
+		Enabled:        true,
+		BoostType:      domain.BoostTypeCategoryRollover,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+		ConditionLogic: "AND",
+		Conditions:     []domain.BoostCondition{},
+		Actions:        actionsJSON,
+	}
+
+	original := map[string]interface{}{
+		"remaining": 300.0,
+		domain.EventDataKeyCategories: map[string]map[string]float64{
+			"child-cat": {
+				"percent_used": 50.0,
+				"remaining":    30.0,
+				"spent":        30.0,
+				"allocated":    60.0,
+				domain.EventDataCategoryKeyIsSubAllocation: 1.0,
+			},
+		},
+	}
+	raw, err := json.Marshal(original)
+	require.NoError(t, err)
+	var roundTripped map[string]interface{}
+	require.NoError(t, json.Unmarshal(raw, &roundTripped))
+
+	execRepo := &mockBoostExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	boostRepo := &mockBoostsRepository{}
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
+	svc.SetBudgetCategoryRepo(newFakeBudgetCategoryRepoWithSubAllocation("child-cat", true))
+
+	execution, err := svc.ExecuteBoost(ctx, boost, roundTripped)
+	require.NoError(t, err, "ExecuteBoost must not error for a skipped sub-allocation rollover")
+	assert.Empty(t, suggestionRepo.suggestions,
+		"a rollover boost on a sub-allocation category must not create a suggestion, even after a River JSON round-trip")
+
+	require.NotNil(t, execution)
+	assert.Equal(t, ExecutionStatusSkipped, execution.Status)
+	assert.False(t, boostRepo.incrementExecCalled)
+	assert.False(t, boostRepo.updateSuccessCalled)
+}
+
+// TestExecuteCategoryRollover_StillRollsTopLevelCategory is a regression guard: a
+// category_rollover boost on a TOP-LEVEL category (is_sub_allocation: 0.0, or the key
+// absent entirely for a legacy/flat trigger payload) must still create a suggestion.
+// The fix must not turn every rollover boost into a no-op.
+func TestExecuteCategoryRollover_StillRollsTopLevelCategory(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-rollover-toplevel"
+
+	actionsJSON, err := json.Marshal(domain.RolloverAction{
+		SourceBudgetCategoryID: "parent-cat",
+		RolloverType:           "full",
+	})
+	require.NoError(t, err)
+
+	boost := &domain.Boost{
+		ID:             "rule-rollover-toplevel",
+		UserID:         userID,
+		Name:           "Rollover parent category",
+		Enabled:        true,
+		BoostType:      domain.BoostTypeCategoryRollover,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+		ConditionLogic: "AND",
+		Conditions:     []domain.BoostCondition{},
+		Actions:        actionsJSON,
+	}
+
+	execRepo := &mockBoostExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	boostRepo := &mockBoostsRepository{}
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
+	svc.SetBudgetCategoryRepo(newFakeBudgetCategoryRepoWithSubAllocation("parent-cat", false))
+
+	triggerData := map[string]interface{}{
+		"remaining": 300.0,
+		domain.EventDataKeyCategories: map[string]map[string]float64{
+			"parent-cat": {
+				"percent_used": 60.0,
+				"remaining":    200.0,
+				"spent":        300.0,
+				"allocated":    500.0,
+				domain.EventDataCategoryKeyIsSubAllocation: 0.0,
+			},
+		},
+	}
+
+	_, err = svc.ExecuteBoost(ctx, boost, triggerData)
+	require.NoError(t, err)
+	assert.Len(t, suggestionRepo.suggestions, 1,
+		"a rollover boost on a top-level (non-sub-allocation) category must still create a suggestion")
+}
+
+// TestExecuteCategoryRollover_NoCategoriesMapStillRolls is a backward-compatibility
+// regression guard: a legacy/flat trigger payload with no "categories" key at all
+// (e.g. a hand-built test payload, or an emitter that predates Issue #1270) must still
+// let a rollover boost fire using the flat "remaining" key, unaffected by the new
+// sub-allocation check.
+func TestExecuteCategoryRollover_NoCategoriesMapStillRolls(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-rollover-flat"
+
+	actionsJSON, err := json.Marshal(domain.RolloverAction{
+		SourceBudgetCategoryID: "cat-1",
+		RolloverType:           "full",
+	})
+	require.NoError(t, err)
+
+	boost := &domain.Boost{
+		ID:             "rule-rollover-flat",
+		UserID:         userID,
+		Name:           "Rollover flat payload",
+		Enabled:        true,
+		BoostType:      domain.BoostTypeCategoryRollover,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+		ConditionLogic: "AND",
+		Conditions:     []domain.BoostCondition{},
+		Actions:        actionsJSON,
+	}
+
+	execRepo := &mockBoostExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	boostRepo := &mockBoostsRepository{}
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
+	svc.SetBudgetCategoryRepo(newFakeBudgetCategoryRepoWithSubAllocation("cat-1", false))
+
+	_, err = svc.ExecuteBoost(ctx, boost, map[string]interface{}{"remaining": 200.0})
+	require.NoError(t, err)
+	assert.Len(t, suggestionRepo.suggestions, 1,
+		"a rollover boost must still fire against a flat payload with no categories map")
+}
+
+// ===========================================================================
+// Issue #1630 review round 2: the sub-allocation check must be re-derived from LIVE state at
+// execution time, not trusted from triggerData's snapshot — and must FAIL CLOSED when that live
+// state cannot be determined at all.
+// ===========================================================================
+
+// TestExecuteCategoryRollover_StaleTriggerDataOverriddenByLiveState is the RED/GREEN test for the
+// "stale data" half of the review finding: triggerData's categories snapshot says "cat-1" is NOT
+// a sub-allocation (built when the event fired), but by EXECUTION time the category has become a
+// live sub-allocation (a reparent happened in between, or a new parent was budgeted afterward).
+// The execution must trust the LIVE state and skip, exactly as if the category had always been a
+// sub-allocation — proving isSubAllocationCategory's triggerData-only read (the pre-fix
+// behaviour) is no longer authoritative.
+//
+// RED (pre-fix): executeCategoryRollover read only isSubAllocationCategory(triggerData, ...),
+// which reports false here (triggerData says NOT a sub-allocation) — the boost would incorrectly
+// create a suggestion despite the category's real, current state.
+func TestExecuteCategoryRollover_StaleTriggerDataOverriddenByLiveState(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-rollover-stale"
+
+	actionsJSON, err := json.Marshal(domain.RolloverAction{
+		SourceBudgetCategoryID: "cat-1",
+		RolloverType:           "full",
+	})
+	require.NoError(t, err)
+
+	boost := &domain.Boost{
+		ID:             "rule-rollover-stale",
+		UserID:         userID,
+		Name:           "Rollover with stale trigger snapshot",
+		Enabled:        true,
+		BoostType:      domain.BoostTypeCategoryRollover,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+		ConditionLogic: "AND",
+		Conditions:     []domain.BoostCondition{},
+		Actions:        actionsJSON,
+	}
+
+	execRepo := &mockBoostExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	boostRepo := &mockBoostsRepository{}
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
+	// LIVE state: cat-1 IS now a sub-allocation — this is what must win.
+	svc.SetBudgetCategoryRepo(newFakeBudgetCategoryRepoWithSubAllocation("cat-1", true))
+
+	// STALE triggerData snapshot: says NOT a sub-allocation (as it was when the event fired).
+	triggerData := map[string]interface{}{
+		"remaining": 300.0,
+		domain.EventDataKeyCategories: map[string]map[string]float64{
+			"cat-1": {
+				"percent_used": 20.0,
+				"remaining":    240.0,
+				"spent":        60.0,
+				"allocated":    300.0,
+				domain.EventDataCategoryKeyIsSubAllocation: 0.0,
+			},
+		},
+	}
+
+	execution, err := svc.ExecuteBoost(ctx, boost, triggerData)
+	require.NoError(t, err, "a live-detected sub-allocation must SKIP, not error")
+	assert.Empty(t, suggestionRepo.suggestions,
+		"the LIVE state (now a sub-allocation) must win over the stale triggerData snapshot — "+
+			"no suggestion may be created")
+	require.NotNil(t, execution)
+	assert.Equal(t, ExecutionStatusSkipped, execution.Status)
+	assert.False(t, boostRepo.incrementExecCalled)
+	assert.False(t, boostRepo.updateSuccessCalled)
+}
+
+// TestExecuteCategoryRollover_UnverifiableLiveStateFailsClosed is the RED/GREEN test for the
+// "missing data" half of the review finding: when the live sub-allocation status cannot be
+// determined at all (no budget-category repository wired), the boost must FAIL CLOSED — no
+// suggestion created, no success recorded — rather than falling back to "assume not a
+// sub-allocation" the way the old triggerData-only check did on any missing data.
+//
+// RED (pre-fix): the old check, isSubAllocationCategory(triggerData, ...), returned false
+// whenever data was absent — proceeding to create the suggestion and record success. This test
+// fails under that behaviour (a suggestion IS created) and passes once missing live data is
+// treated as "cannot verify, do not roll".
+func TestExecuteCategoryRollover_UnverifiableLiveStateFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-rollover-unverifiable"
+
+	actionsJSON, err := json.Marshal(domain.RolloverAction{
+		SourceBudgetCategoryID: "cat-1",
+		RolloverType:           "full",
+	})
+	require.NoError(t, err)
+
+	boost := &domain.Boost{
+		ID:             "rule-rollover-unverifiable",
+		UserID:         userID,
+		Name:           "Rollover with no live data available",
+		Enabled:        true,
+		BoostType:      domain.BoostTypeCategoryRollover,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+		ConditionLogic: "AND",
+		Conditions:     []domain.BoostCondition{},
+		Actions:        actionsJSON,
+	}
+
+	execRepo := &mockBoostExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	boostRepo := &mockBoostsRepository{}
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
+	// Deliberately NOT calling svc.SetBudgetCategoryRepo — no live data source available at all,
+	// mirroring a deployment that has not wired one, or any other lookup failure.
+
+	// triggerData says NOT a sub-allocation, exactly the shape the old fail-open check trusted.
+	triggerData := map[string]interface{}{
+		"remaining": 300.0,
+		domain.EventDataKeyCategories: map[string]map[string]float64{
+			"cat-1": {
+				"percent_used": 20.0,
+				"remaining":    240.0,
+				"spent":        60.0,
+				"allocated":    300.0,
+				domain.EventDataCategoryKeyIsSubAllocation: 0.0,
+			},
+		},
+	}
+
+	execution, err := svc.ExecuteBoost(ctx, boost, triggerData)
+	require.NoError(t, err, "an unverifiable live check must SKIP, not surface as an execution error")
+	assert.Empty(t, suggestionRepo.suggestions,
+		"missing live data must FAIL CLOSED — no suggestion may be created just because "+
+			"triggerData happened to say 'not a sub-allocation'")
+	require.NotNil(t, execution)
+	assert.Equal(t, ExecutionStatusSkipped, execution.Status,
+		"an unverifiable rollover must be recorded as SKIPPED, not completed")
+	assert.False(t, boostRepo.incrementExecCalled,
+		"a skipped (unverifiable) rollover must not increment execution_count")
+	assert.False(t, boostRepo.updateSuccessCalled,
+		"a skipped (unverifiable) rollover must not update last_successful")
+}
+
+// TestExecuteCategoryRollover_UnverifiableWhenCategoryLookupFails covers the second missing-data
+// shape: a repository IS wired, but the lookup itself fails (category deleted, budget deleted,
+// or any other repository error). Must fail closed identically to the unwired case.
+func TestExecuteCategoryRollover_UnverifiableWhenCategoryLookupFails(t *testing.T) {
+	ctx := context.Background()
+	userID := "user-rollover-lookup-fails"
+
+	actionsJSON, err := json.Marshal(domain.RolloverAction{
+		SourceBudgetCategoryID: "cat-deleted",
+		RolloverType:           "full",
+	})
+	require.NoError(t, err)
+
+	boost := &domain.Boost{
+		ID:             "rule-rollover-lookup-fails",
+		UserID:         userID,
+		Name:           "Rollover with a lookup failure",
+		Enabled:        true,
+		BoostType:      domain.BoostTypeCategoryRollover,
+		TriggerConfig:  domain.TriggerConfig{Type: domain.TriggerTypeEvent, Event: "budget_period_end"},
+		ConditionLogic: "AND",
+		Conditions:     []domain.BoostCondition{},
+		Actions:        actionsJSON,
+	}
+
+	execRepo := &mockBoostExecutionRepository{}
+	suggestionRepo := &mockTransferSuggestionRepository{}
+	boostRepo := &mockBoostsRepository{}
+	svc := NewBoostExecutionService(execRepo, suggestionRepo, boostRepo, nil)
+	// Repo is wired, but "cat-deleted" is absent from categoriesByID — the live lookup fails.
+	svc.SetBudgetCategoryRepo(&fakeBudgetCategoryRepo{})
+
+	execution, err := svc.ExecuteBoost(ctx, boost, map[string]interface{}{"remaining": 200.0})
+	require.NoError(t, err, "a category lookup failure must SKIP, not surface as an execution error")
+	assert.Empty(t, suggestionRepo.suggestions,
+		"a category the live repository cannot find must FAIL CLOSED — no suggestion created")
+	require.NotNil(t, execution)
+	assert.Equal(t, ExecutionStatusSkipped, execution.Status)
+	assert.False(t, boostRepo.incrementExecCalled)
+	assert.False(t, boostRepo.updateSuccessCalled)
 }

@@ -9,11 +9,11 @@
 import { Link } from 'react-router'
 import { FolderIcon, TagIcon, SparklesIcon } from 'lucide-react'
 import { getBudgetDetailPath } from '../../constants'
-import type { BudgetCategoryMatch, MatchReason } from '../../utils/transactionBudgetMatcher'
+import type { BudgetCategoryMatch, MatchReason } from '../../types'
 import { formatBudgetCategoryLabel } from '../../types'
 
 export interface TransactionBudgetBadgeProps {
-  /** Match result from transactionBudgetMatcher, or null/undefined if no match */
+  /** Match result (BudgetCategoryMatch, budgets/types.ts), or null/undefined if no match */
   match: BudgetCategoryMatch | null | undefined
 }
 

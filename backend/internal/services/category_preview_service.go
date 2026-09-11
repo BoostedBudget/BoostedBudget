@@ -17,6 +17,12 @@ import (
 // This follows the minimal dependency interface pattern used throughout the codebase.
 type TransactionStatsCalculator interface {
 	GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (count int, totalAmount float64, err error)
+
+	// GetCategoryMatchBreakdown discloses a real partition of the rolled-up total —
+	// category-direct + nested-descendant + tag-only-outside-category (Issue #1630 Task
+	// B5). See repository.TransactionRepository's doc comment for the bucket definitions
+	// and the leaf/unsupported no-op case.
+	GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (children []domain.CategoryPreviewBreakdownItem, directCount int, directAmount float64, tagOnlyCount int, tagOnlyAmount float64, err error)
 }
 
 // CategoryPreviewService provides transaction preview functionality for budget category configuration.
@@ -49,14 +55,23 @@ func (s *categoryPreviewService) PreviewCategoryMatches(ctx context.Context, use
 		return nil, errors.New("invalid match_logic")
 	}
 
-	// Parse dates
-	startDate, endDate, err := dateutil.ParseDateRange(req.StartDate, req.EndDate)
-	if err != nil {
+	// Issue #1630 Task B5 (gap #21): StartDate/EndDate are domain.FlexibleDate — the JSON
+	// unmarshal boundary already rejected anything but YYYY-MM-DD/RFC3339, so only ordering
+	// remains to check here. Ordering is checked against the RAW values (before the
+	// end-of-day adjustment below) so "same calendar day" ordering reads naturally.
+	startDate := req.StartDate.Time()
+	endDate := req.EndDate.Time()
+	if err := dateutil.ValidateDateRange(startDate, endDate); err != nil {
 		return nil, errors.New(err.Error())
 	}
 
-	// Set end date to end of day for inclusive range
-	endDate = endDate.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
+	// ⚠ Review round 2: this used to unconditionally Add(23h59m59s) regardless of whether
+	// EndDate already carried a real time-of-day. For a date-only value ("2026-09-30") that
+	// correctly covers the whole day, but for a full RFC3339 timestamp
+	// ("2026-09-30T15:00:00Z") it pushed the boundary to within an hour of the NEXT calendar
+	// day (2026-10-01T14:59:59Z) — almost a full extra day of transactions counted. EndOfDay
+	// only extends a date-only (midnight) value and respects any other timestamp exactly.
+	endDate = req.EndDate.EndOfDay()
 
 	// Validate that we have a category or tags depending on match logic
 	hasCategoryKind := req.CategoryKind != ""
@@ -98,8 +113,40 @@ func (s *categoryPreviewService) PreviewCategoryMatches(ctx context.Context, use
 		return nil, err
 	}
 
-	return &domain.CategoryPreviewResponse{
+	resp := &domain.CategoryPreviewResponse{
 		TransactionCount: count,
 		TotalAmount:      totalAmount,
-	}, nil
+	}
+
+	// Issue #1630 Task B5: disclose a real partition of the total whenever there is
+	// anything to disclose — a category-shaped request (which may roll up nested
+	// children) OR a tag-involving match_logic (or/tag_only/and) that can pull in
+	// transactions the category clause never matched. The repository itself is a no-op
+	// for category_only against a non-rollup-eligible target (nothing to disclose there).
+	if hasCategoryKind || len(req.Tags) > 0 {
+		children, directCount, directAmount, tagOnlyCount, tagOnlyAmount, err := s.statsCalculator.GetCategoryMatchBreakdown(
+			ctx,
+			userID,
+			req.CategoryKind,
+			req.PFCPrimary,
+			req.PFCDetailed,
+			req.CustomCategoryID,
+			req.Tags,
+			req.MatchLogic,
+			startDate,
+			endDate,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if len(children) > 0 || directCount > 0 || tagOnlyCount > 0 {
+			resp.Children = children
+			resp.DirectTransactionCount = directCount
+			resp.DirectAmount = directAmount
+			resp.TagOnlyTransactionCount = tagOnlyCount
+			resp.TagOnlyAmount = tagOnlyAmount
+		}
+	}
+
+	return resp, nil
 }

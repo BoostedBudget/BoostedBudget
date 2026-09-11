@@ -53,6 +53,17 @@ type BoostExecutionService interface {
 	TestBoost(ctx context.Context, boost *domain.Boost, triggerData map[string]interface{}) (*domain.BoostTestResult, error)
 }
 
+// boostExecutionCategoryRepo is the minimal budget-category read surface
+// executeCategoryRollover needs to re-derive a rollover source category's LIVE sub-allocation
+// status at execution time, rather than trusting the "categories" snapshot in triggerData —
+// which is built once, when the triggering event FIRES, and can be stale by the time this job
+// actually runs off the queue (Issue #1630 review round 2). A plain subset of
+// repository.BudgetRepository so tests can fake it without a full mock.
+type boostExecutionCategoryRepo interface {
+	GetCategoryByIDAndUser(ctx context.Context, categoryID, userID string) (*domain.BudgetCategory, error)
+	GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
+}
+
 // boostExecutionService implements BoostExecutionService.
 type boostExecutionService struct {
 	executionRepo       repository.BoostExecutionRepository
@@ -64,6 +75,11 @@ type boostExecutionService struct {
 	notificationRepo    repository.NotificationRepository
 	analytics           phclient.Analytics
 	chainResolver       AccountChainResolver // Issue #1109: resolves active account IDs across re-links
+	// budgetCategoryRepo is optional; see SetBudgetCategoryRepo. When nil, executeCategoryRollover
+	// cannot verify a rollover source's live sub-allocation status and FAILS CLOSED (Issue #1630
+	// review round 2) rather than assuming "not a sub-allocation" the way the old triggerData-only
+	// check did.
+	budgetCategoryRepo boostExecutionCategoryRepo
 }
 
 // NotificationService defines the interface for sending notifications.
@@ -112,6 +128,14 @@ func (s *boostExecutionService) SetAccountRepo(repo repository.AccountRepository
 // Issue #1109: Used by executeTransferSuggestion and executeSavingsGoal.
 func (s *boostExecutionService) SetChainResolver(resolver AccountChainResolver) {
 	s.chainResolver = resolver
+}
+
+// SetBudgetCategoryRepo injects the budget-category repository executeCategoryRollover uses to
+// re-derive a rollover source's LIVE sub-allocation status at execution time (Issue #1630 review
+// round 2). Leaving this unset means every category_rollover execution fails closed (skipped, not
+// a false success) rather than silently trusting a stale triggerData snapshot.
+func (s *boostExecutionService) SetBudgetCategoryRepo(repo boostExecutionCategoryRepo) {
+	s.budgetCategoryRepo = repo
 }
 
 // ExecuteBoost executes a single rule with the given trigger data.
@@ -180,6 +204,21 @@ func (s *boostExecutionService) ExecuteBoost(ctx context.Context, boost *domain.
 		actionErr = s.executeSavingsGoal(ctx, boost, execution.ID, triggerData)
 	default:
 		actionErr = fmt.Errorf("unknown boost type: %s", boost.BoostType)
+	}
+
+	// Issue #1630 B6: a rollover whose source became a sub-allocation after the boost was
+	// created is neither a success (nothing happened) nor a failure (nothing was WRONG about
+	// running it) — record it as SKIPPED, exactly like "boost disabled" / "conditions not met"
+	// above: no increment of execution_count, no update to last_successful.
+	//
+	// ⚠ Review round 2: ErrRolloverSourceUnverifiable gets the SAME treatment. When the live
+	// sub-allocation check couldn't be verified at all (repo unwired, category/budget since
+	// deleted), the safe default is to NOT roll — but that is a data-availability gap, not a
+	// user-actionable failure, so it is recorded the same way a confirmed sub-allocation is.
+	if errors.Is(actionErr, domain.ErrRolloverSourceBecameSubAllocation) || errors.Is(actionErr, domain.ErrRolloverSourceUnverifiable) {
+		s.markExecutionSkipped(execution, startTime, actionErr.Error())
+		_ = s.executionRepo.Update(ctx, execution)
+		return execution, nil
 	}
 
 	// Update execution record
@@ -386,6 +425,12 @@ func (s *boostExecutionService) simulateAction(boost *domain.Boost, triggerData 
 			remaining = r
 		}
 		amount := s.calculateRolloverAmount(rollover, remaining)
+		// Issue #1630 Task 3.6: mirror the executing path's sub-allocation guard so a
+		// dry-run/preview never claims a rollover the executing path would refuse to
+		// perform (see executeCategoryRollover for the reasoning).
+		if isSubAllocationCategory(triggerData, rollover.SourceBudgetCategoryID) {
+			amount = 0
+		}
 		simulatedAction["action_type"] = "category_rollover"
 		simulatedAction["rollover_type"] = rollover.RolloverType
 		simulatedAction["rollover_amount"] = amount
@@ -679,6 +724,38 @@ func (s *boostExecutionService) executeCategoryRollover(ctx context.Context, boo
 		return fmt.Errorf("rollover action not defined")
 	}
 
+	// Issue #1630 Task 3.6 / B6: a rollover boost scoped to a sub-allocation category (a child
+	// whose dollars are already reflected in its budgeted parent's own remaining/spent —
+	// see BudgetCategory.IsSubAllocationWithin) must not roll independently. Doing so would
+	// roll the same dollars twice: once via the parent's own rollover (if any), and again
+	// here via the child. Nothing to do — the parent is the sole rollover source.
+	//
+	// ⚠ B6: this used to `return nil` — reporting SUCCESS while doing nothing. boost_service.go
+	// refuses this shape at creation time now, but a source that was valid when the boost was
+	// created can become a sub-allocation LATER if the hierarchy changes (a reparent, or a new
+	// parent budgeted afterward); this is the execution-time half of that fix. The sentinel lets
+	// ExecuteBoost tell this apart from an actual failure — it must not increment
+	// execution_count or touch last_successful, but it is also not an error a user needs paged
+	// about; it is recorded as a SKIP (ExecutionStatusSkipped), the same outcome "boost
+	// disabled" and "conditions not met" already use.
+	//
+	// ⚠ Review round 2: this used to read isSubAllocationCategory(triggerData, ...) — the
+	// per-category snapshot from BuildCategoryEventData, computed once when the triggering
+	// event was BUILT (budget_period_close_check.go). A category can become a sub-allocation
+	// AFTER that snapshot was taken but BEFORE this queued job actually runs (River queue delay,
+	// retries, a reparent racing the job). Worse, isSubAllocationCategory returned false (not a
+	// sub-allocation) whenever the categories data was simply missing — fail OPEN. This now
+	// re-derives from LIVE database state via isSubAllocationLive, and fails CLOSED
+	// (ErrRolloverSourceUnverifiable, also routed to markExecutionSkipped by ExecuteBoost) when
+	// that live state cannot be determined.
+	isSubAlloc, err := s.isSubAllocationLive(ctx, boost.UserID, rollover.SourceBudgetCategoryID)
+	if err != nil {
+		return fmt.Errorf("%w: source_budget_category_id %q: %v", domain.ErrRolloverSourceUnverifiable, rollover.SourceBudgetCategoryID, err)
+	}
+	if isSubAlloc {
+		return fmt.Errorf("%w: source_budget_category_id %q", domain.ErrRolloverSourceBecameSubAllocation, rollover.SourceBudgetCategoryID)
+	}
+
 	// Calculate rollover amount from trigger data
 	remaining := 0.0
 	if r, ok := triggerData["remaining"].(float64); ok {
@@ -970,6 +1047,67 @@ func lookupCategoryMetric(categoriesRaw interface{}, categoryID, suffix string) 
 		}
 	}
 	return nil, false
+}
+
+// isSubAllocationCategory reports whether categoryID is marked
+// domain.EventDataCategoryKeyIsSubAllocation in triggerData's categories map (Issue #1630
+// Task 3.6). Returns false (never treat as a sub-allocation) when categoryID is empty,
+// the categories map is absent (a flat/legacy payload), or the category/key isn't found —
+// so a rollover boost with no categories data still fires exactly as it did before this
+// fix. Handles both the typed map[string]map[string]float64 shape emitted directly by
+// BuildCategoryEventData and the map[string]interface{}/json.Number shape that arrives
+// after a River JSON round-trip, via lookupCategoryMetric.
+func isSubAllocationCategory(triggerData map[string]interface{}, categoryID string) bool {
+	if categoryID == "" {
+		return false
+	}
+	val, ok := lookupCategoryMetric(triggerData[domain.EventDataKeyCategories], categoryID, domain.EventDataCategoryKeyIsSubAllocation)
+	if !ok {
+		return false
+	}
+	switch v := val.(type) {
+	case float64:
+		return v != 0
+	case json.Number:
+		f, err := v.Float64()
+		return err == nil && f != 0
+	default:
+		return false
+	}
+}
+
+// isSubAllocationLive re-derives categoryID's sub-allocation status from LIVE database state via
+// s.budgetCategoryRepo, rather than trusting isSubAllocationCategory's triggerData snapshot
+// (Issue #1630 review round 2 — see executeCategoryRollover's call site for the full reasoning).
+// categoryID == "" returns (false, nil) unconditionally, matching isSubAllocationCategory and
+// domain.Boost's own validation, which already rejects an empty source_budget_category_id before
+// execution ever reaches here.
+//
+// Every other failure to determine the live status — the repository isn't wired, the category
+// (or its budget) can no longer be loaded, or the category is missing from its own budget's
+// category list — returns a non-nil error. Callers MUST treat that as FAIL CLOSED: the old bug
+// was treating "no data" as "confirmed not a sub-allocation", and that mistake must not be
+// reintroduced here just because the failure mode moved from "triggerData" to "live lookup".
+func (s *boostExecutionService) isSubAllocationLive(ctx context.Context, userID, categoryID string) (bool, error) {
+	if categoryID == "" {
+		return false, nil
+	}
+	if s.budgetCategoryRepo == nil {
+		return false, errors.New("budget category repository not wired")
+	}
+	cat, err := s.budgetCategoryRepo.GetCategoryByIDAndUser(ctx, categoryID, userID)
+	if err != nil {
+		return false, fmt.Errorf("load rollover source category: %w", err)
+	}
+	categories, err := s.budgetCategoryRepo.GetCategoriesByBudgetID(ctx, cat.BudgetID)
+	if err != nil {
+		return false, fmt.Errorf("load categories for budget %s: %w", cat.BudgetID, err)
+	}
+	isSubAlloc, found := domain.IsCategorySubAllocation(categories, categoryID)
+	if !found {
+		return false, fmt.Errorf("category %s not found among budget %s's live categories", categoryID, cat.BudgetID)
+	}
+	return isSubAlloc, nil
 }
 
 // evaluateCondition evaluates a single condition against the data.
