@@ -2295,8 +2295,32 @@ func buildCategoryClause(categoryKind string, pfcPrimary *string, pfcDetailed *s
 				[]interface{}{*pfcPrimary, *pfcDetailed}
 		}
 		// A PFC primary rolls up its detaileds (via effective_pfc_primary) AND any
-		// custom categories the user nested under it (parent_pfc_primary).
-		clause := fmt.Sprintf(`(effective_pfc_primary = $%d OR (category_override_kind = 'custom' AND custom_category_override_id IN (SELECT id FROM custom_categories WHERE user_id = $1 AND parent_pfc_primary = $%d))) /* tombstone-exempt(custom_categories): HISTORY FILTER (#1569 Task 9) — a PFC-primary budget rolls up the custom categories nested under it, and the transactions filed under a deleted one are still spend that happened in that primary. Excluding them would silently shrink a closed period's total. */`, argStart, argStart)
+		// custom categories the user nested under it (parent_pfc_primary) — TWO hops:
+		// the direct child C (parent_pfc_primary = X) AND a grandchild G nested under C
+		// via parent_id (Issue #1630). Without the second branch, a three-level chain
+		// (pfc X <- custom C (parent_pfc_primary=X) <- custom G (parent_id=C)) is legal
+		// (custom_category_service.go's validateParent and the DB trigger
+		// enforce_custom_category_two_levels both reject only a parent whose OWN
+		// parent_id is set, never one whose parent_pfc_primary is set) but G's spend
+		// vanished from X's total whenever C was excluded as a sub-allocation of X.
+		// A plain 2-hop UNION, not WITH RECURSIVE: depth is capped at three by that same
+		// trigger, this clause runs per-category on every budget recalculation, and a
+		// recursive CTE buys nothing at a fixed known depth. The grandchild join mirrors
+		// customCategoryPathJoins() (analytics_category_path.go) — the same
+		// g.parent_id = c.id predicate walked the other direction — rather than a third
+		// traversal shape. user_id is scoped on BOTH sides of the join (g.user_id = $1 via
+		// the WHERE, and c.user_id = g.user_id on the join itself) so a same-named or
+		// coincidentally-linked row belonging to another user can never leak into this
+		// total; indexes: idx_custom_categories_parent_id (000079, partial on parent_id)
+		// covers the g.parent_id = c.id join, idx_custom_categories_parent_pfc (000080, on
+		// (user_id, parent_pfc_primary)) covers the c.parent_pfc_primary = X filter.
+		clause := fmt.Sprintf(`(effective_pfc_primary = $%d OR (category_override_kind = 'custom' AND custom_category_override_id IN (
+			SELECT id FROM custom_categories WHERE user_id = $1 AND parent_pfc_primary = $%d
+			UNION
+			SELECT g.id FROM custom_categories g
+			JOIN custom_categories c ON c.id = g.parent_id AND c.user_id = g.user_id
+			WHERE g.user_id = $1 AND c.parent_pfc_primary = $%d
+		))) /* tombstone-exempt(custom_categories, custom_categories g, custom_categories c): HISTORY FILTER (#1569 Task 9) — a PFC-primary budget rolls up the custom categories nested under it (both hops, including the two aliased references the Issue #1630 Task B2 grandchild join adds), and the transactions filed under a deleted one are still spend that happened in that primary. Excluding them would silently shrink a closed period's total. */`, argStart, argStart, argStart)
 		return clause, []interface{}{*pfcPrimary}
 	case "custom":
 		if customCategoryID == nil {
