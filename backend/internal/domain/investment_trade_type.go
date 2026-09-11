@@ -303,6 +303,37 @@ func (r TradeTypeRow) isStructuralReinvest() bool {
 // available. It is not a shortcut for polarity — it REQUIRES the sign to agree with the direction
 // the subtype already states, and rejects the row when it does not. SQL mirrors it exactly, because
 // both facts are columns on the same row and need no join; see StructuralDividendSQL.
+//
+// ⚠ READ-TIME CLASSIFICATION AGAINST MUTABLE SHARED METADATA (#1631 H7, Codex CX3(b), raised twice
+// and left undocumented until now). `securities` is NOT scoped to one transaction or one user — the
+// SAME row backs every historical investment_transactions row that ever referenced it — and
+// `is_cash_equivalent` is a Plaid-sourced, MUTABLE column: a later sync can change it, and every
+// caller (this function, TradeTypeToSQLPredicate, IncomeSummary) re-derives the label from
+// WHATEVER value the joined row holds at READ time, not from anything stored on the transaction
+// itself. An immutable past transaction can therefore change its displayed classification — and,
+// via IncomeSummary, its dollar contribution to reported income — with NO data of its own changing,
+// purely because a later Plaid payload flipped the security's flag.
+//
+//   - WHAT CAN CHANGE: the label/income bucket of every transaction (past and future) referencing a
+//     security whose is_cash_equivalent flips value. A dividend reclassified to a structural cash
+//     movement (or vice versa) retroactively relabels every historical row against that security,
+//     silently, on the next read — no migration, no event, no audit trail.
+//   - WHAT CANNOT CHANGE: the underlying investment_transactions row itself (type, subtype, amount,
+//     quantity — the columns this file's structural rule reads are on the TRANSACTION, not the
+//     security, and are never touched here) and, separately, a NULL flag turning into a "true"
+//     classification from silence alone — commit 3d29bec7's COALESCE-preserving upsert stops a
+//     NULL-omitting payload from erasing an existing FALSE, but it does not and cannot stop a
+//     genuine, correctly-sourced true→false or false→true flip from Plaid, which is data, not loss.
+//   - WHY READ-TIME WAS STILL THE RIGHT CALL: the alternative is a backfill — stamping a
+//     classification onto every existing investment_transactions row at write time and re-stamping
+//     all of them whenever a security's metadata changes. That is an unbounded, security-fanout
+//     write on every Plaid sync (one flag flip touches every user who ever held that security,
+//     across all of history), for a case with no known production occurrence (Plaid does not
+//     document is_cash_equivalent as time-varying; #1631's evidence is all a single false today).
+//     Read-time derivation was chosen deliberately to avoid exactly that backfill, accepting the
+//     re-derivation risk as the cheaper failure mode. This is a DESIGN CONSEQUENCE, not a defect —
+//     but it is a real one, and a change to a security's is_cash_equivalent should be understood as
+//     retroactive before this trade-off is revisited.
 func NormalizeTradeType(row TradeTypeRow) string {
 	sub := normalizeSubtype(row.Subtype)
 	// A cash movement against a security KNOWN not to be cash-equivalent is a security-level event.
