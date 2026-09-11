@@ -426,6 +426,19 @@ type BudgetCategory struct {
 	CustomParentID         *string `json:"custom_parent_id,omitempty" db:"-"`
 	CustomParentPFCPrimary *string `json:"custom_parent_pfc_primary,omitempty" db:"-"`
 
+	// CustomGrandparentPFCPrimary is the PFC primary this category's PARENT (CustomParentID)
+	// is itself nested under via parent_pfc_primary — i.e. this row is a GRANDCHILD of a PFC
+	// root two hops down: pfc root -> custom parent (CustomParentPFCPrimary on the PARENT,
+	// not on this row) -> this custom category (CustomParentID). Populated from a second join
+	// hop alongside CustomParentID/CustomParentPFCPrimary (Issue #1630 Task B2), only ever set
+	// when CustomParentID is also set (a row nested via CustomParentPFCPrimary directly has no
+	// further custom grandparent to report — see analytics_category_path.go's ragged 3-level
+	// tree). Needed because buildCategoryClause's widened "pfc" branch now rolls this row's
+	// transactions into that root's total two hops away, so IsSubAllocationWithin and
+	// EscapedNestedChild must be able to recognize the same transitive pair or they double
+	// count: this row is uncounted as its own top-level total AND rolled into the root's.
+	CustomGrandparentPFCPrimary *string `json:"custom_grandparent_pfc_primary,omitempty" db:"-"`
+
 	// SavingsGoalName is the display name of the linked savings goal, populated
 	// via a JOIN when categories are loaded (Issue #1300). Not stored in the
 	// budget_categories table — sourced from savings_goals.name on read.
@@ -446,17 +459,19 @@ type BudgetCategory struct {
 // own match_logic is 'category_only'/'or' is present in them — see budgetedParentSets), so
 // this method only needs to additionally gate on the CHILD's own match_logic: a 'tag_only' or
 //
-// ⚠ The containment test above is only ONE LEVEL DEEP, and that is a real limitation, not a
-// closed case (pre-existing since #1203's hierarchy-only exclusion; out of scope to fix here).
+// ⚠ UPDATE (Issue #1630 Task B2): the paragraph below described a real gap that is now CLOSED.
 // custom_category_service.go's validateParent rejects a parent only when parent.ParentID != nil
 // — it does NOT reject a parent whose own ParentPFCPrimary is set. So a three-level chain is
-// constructible: pfc X ← custom C (ParentPFCPrimary = X) ← custom G (ParentID = C). Then: C is
-// excluded here as a sub-allocation of X (this method's job); C's own SpentAmount rolls up G's
-// transactions (buildCategoryClause is hierarchical); but X's clause requires
-// parent_pfc_primary = X DIRECTLY, and G's is NULL (G is parented by ID, not by PFC primary) — so
-// a transaction filed under G is rolled up by NEITHER C's top-level row (excluded here) NOR X's
-// (wrong parent linkage). It appears in NO top-level total. A grandchild nested under a nested
-// child falls out of every total; this method only ever checks one hop of parent linkage.
+// constructible: pfc X ← custom C (ParentPFCPrimary = X) ← custom G (ParentID = C).
+// buildCategoryClause's "pfc" branch now rolls X's total up through BOTH hops (the direct child
+// C via parent_pfc_primary, and the grandchild G via a second join through C), so a transaction
+// filed under G IS counted in X's SpentAmount. That widening, by itself, would create a NEW
+// double-count whenever G is budgeted directly and C is not: G's own top-level row would count
+// its transactions AND X's roll-up would count them again, because this method previously only
+// ever inspected bc's DIRECT parent linkage (CustomParentID/CustomParentPFCPrimary) and had no
+// way to recognize that G nests under X two hops away. CustomGrandparentPFCPrimary closes that:
+// it carries the PFC primary of bc's parent's own parent_pfc_primary, so a grandchild is now
+// recognized as a sub-allocation of a budgeted PFC root exactly like a direct child is.
 // 'or' child can match transactions outside the parent's category clause entirely, so it must
 // never be treated as a sub-allocation even when it is hierarchically nested.
 func (bc *BudgetCategory) IsSubAllocationWithin(budgetedPFCPrimaries, budgetedCustomIDs map[string]bool) bool {
@@ -474,6 +489,14 @@ func (bc *BudgetCategory) IsSubAllocationWithin(budgetedPFCPrimaries, budgetedCu
 			return true
 		}
 		if bc.CustomParentPFCPrimary != nil && budgetedPFCPrimaries[*bc.CustomParentPFCPrimary] {
+			return true
+		}
+		// Transitive case (Issue #1630 Task B2): bc is a GRANDCHILD of a PFC root — its own
+		// parent (CustomParentID) is itself nested under CustomGrandparentPFCPrimary via
+		// parent_pfc_primary. buildCategoryClause's widened roll-up reaches bc from that root
+		// two hops away regardless of whether the intermediate parent is itself budgeted, so
+		// this must agree even when the intermediate parent has no budget row at all.
+		if bc.CustomGrandparentPFCPrimary != nil && budgetedPFCPrimaries[*bc.CustomGrandparentPFCPrimary] {
 			return true
 		}
 	}
@@ -872,6 +895,13 @@ func DuplicateParentIdentity(existing []BudgetCategory, candidate *BudgetCategor
 // constructing a *BudgetCategory in memory must populate them itself via a custom-category
 // lookup (mirrors budget_service.go's existing IDOR-check calls to customCategoryRepo), or this
 // always reports "not nested" for that candidate's custom-parent-of-existing direction.
+//
+// Also recognizes the TRANSITIVE pair (Issue #1630 Task B2): child.CustomGrandparentPFCPrimary
+// set and equal to a PFC-root parent's own PFCPrimary — child is a grandchild of that root two
+// hops away (root -> child's own parent via parent_pfc_primary -> child via parent_id), the same
+// pair buildCategoryClause's widened roll-up now sums together. Without this, EscapedNestedChild
+// would let an 'or'/'tag_only' grandchild coexist with a budgeted root that its own roll-up
+// double-counts, exactly the shape this function exists to refuse for the one-hop case.
 func hierarchyHasNestedChild(parent, child *BudgetCategory) bool {
 	switch child.CategoryKind {
 	case "pfc":
@@ -885,6 +915,10 @@ func hierarchyHasNestedChild(parent, child *BudgetCategory) bool {
 		}
 		if child.CustomParentPFCPrimary != nil && parent.CategoryKind == "pfc" && !hasPFCDetailed(parent.PFCDetailed) &&
 			parent.PFCPrimary != nil && *parent.PFCPrimary == *child.CustomParentPFCPrimary {
+			return true
+		}
+		if child.CustomGrandparentPFCPrimary != nil && parent.CategoryKind == "pfc" && !hasPFCDetailed(parent.PFCDetailed) &&
+			parent.PFCPrimary != nil && *parent.PFCPrimary == *child.CustomGrandparentPFCPrimary {
 			return true
 		}
 	}

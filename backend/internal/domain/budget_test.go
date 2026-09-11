@@ -364,6 +364,37 @@ func TestBudget_Totals_NoDoubleCountSubAllocations(t *testing.T) {
 		}
 	})
 
+	// Issue #1630 Task B2: pfc X <- custom C (parent_pfc_primary = X, NOT itself budgeted here)
+	// <- custom G (parent_id = C, budgeted). Only X and G have budget rows; C has none at all.
+	// buildCategoryClause's widened "pfc" branch (Commit 1) now rolls X's SpentAmount up
+	// through BOTH hops, so X's own SpentAmount already reflects G's transactions. Without this
+	// test's fix (CustomGrandparentPFCPrimary), IsSubAllocationWithin has no way to recognize G
+	// as nested under X — it only ever checked G's DIRECT parent linkage, and C (the direct
+	// parent) is not itself a budgeted row — so G's own top-level SpentAmount would ALSO be
+	// summed, double-counting the same transactions.
+	t.Run("custom grandchild nested under budgeted PFC primary two hops through an unbudgeted parent", func(t *testing.T) {
+		grandchildID := "44444444-4444-4444-4444-444444444444"
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300, SpentAmount: 150},
+			{
+				CategoryKind:                "custom",
+				CustomCategoryID:            &grandchildID,
+				CustomParentID:              &customParentID, // G's direct parent is C (not budgeted)
+				CustomGrandparentPFCPrimary: &food,            // C's own parent is the pfc root X
+				AllocatedAmount:             50,
+				SpentAmount:                 20,
+			},
+		}}
+		if got := b.TotalAllocated(); got != 300 {
+			t.Errorf("TotalAllocated() = %v, want 300 (grandchild's allocation is already inside the root's)", got)
+		}
+		if got := b.TotalSpent(); got != 150 {
+			t.Errorf("TotalSpent() = %v, want 150 (grandchild's spend is already rolled into the root's — "+
+				"if this reads 170, the transitive sub-allocation classification regressed and the "+
+				"grandchild's spend is being double-counted)", got)
+		}
+	})
+
 	// Issue #1630: hierarchy alone is not sufficient — containment is gated on match_logic too.
 	t.Run("savings category is never excluded, even nested under a same-name parent", func(t *testing.T) {
 		goalID := "33333333-3333-3333-3333-333333333333"
@@ -2218,6 +2249,39 @@ func TestEscapedNestedChild(t *testing.T) {
 				CustomCategoryID: &customChild,
 				CustomParentID:   &customParent,
 				MatchLogic:       MatchLogicCategoryOnly,
+			},
+			want: false,
+		},
+		{
+			// Issue #1630 Task B2: G (candidate) nests under X two hops away — G's direct
+			// parent is C (CustomParentID), and C itself nests under X via parent_pfc_primary
+			// (CustomGrandparentPFCPrimary). buildCategoryClause's widened roll-up (Commit 1)
+			// now sums G's transactions into X's SpentAmount regardless of whether C is itself
+			// budgeted, so an 'or' G must be refused here exactly like a direct 'or' child is.
+			name: "custom: transitive grandchild via CustomGrandparentPFCPrimary escapes a category_only PFC root",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{
+				CategoryKind:                "custom",
+				CustomCategoryID:            &customChild,
+				CustomParentID:              &customParent,
+				CustomGrandparentPFCPrimary: &food,
+				MatchLogic:                  MatchLogicOr,
+			},
+			want: true,
+		},
+		{
+			name: "custom: transitive grandchild via CustomGrandparentPFCPrimary does NOT escape when cleanly contained",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{
+				CategoryKind:                "custom",
+				CustomCategoryID:            &customChild,
+				CustomParentID:              &customParent,
+				CustomGrandparentPFCPrimary: &food,
+				MatchLogic:                  MatchLogicCategoryOnly,
 			},
 			want: false,
 		},
