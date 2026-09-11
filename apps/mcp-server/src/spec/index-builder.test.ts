@@ -469,13 +469,24 @@ describe('issue #1610a: spec-index.json byte budget', () => {
   it('stays under a generous ceiling — regression guard against depth-2 response schemas, not a precision pin', () => {
     const raw = readFileSync(COMMITTED_INDEX_PATH, 'utf-8')
     const bytes = Buffer.byteLength(raw, 'utf-8')
-    // ~350 KB: headroom above the ~332 KB measured at depth 1 + allowed-only, comfortably below
-    // the ~467-487 KB a depth-2 (with-or-without-descriptions) response schema would produce.
-    // Raised from 330 KB in this round: effective_merchant condition, uncoercible_condition_value
-    // quarantine reason, quarantine reason→behaviour mappings in doc tags, PFC closed-set endpoint
-    // pointers, and minimum/maxLength constraints on savings-goal request schemas. This guard exists
-    // to catch a depth-2 explosion, not to pin the index to the byte, so the headroom is restored
-    // rather than the entry cut.
-    expect(bytes).toBeLessThan(350_000)
+    // ~365 KB: headroom above today's measured size, comfortably below the ~467-487 KB a depth-2
+    // (with-or-without-descriptions) response schema would produce. This guard exists to catch a
+    // depth-2 explosion, not to pin the index to the byte, so the headroom is restored rather than
+    // the entry cut.
+    //
+    // Raised 350 -> 365 KB by #1631, which took the index from 345,461 to 351,802 bytes (+6.3 KB,
+    // +1.8%). ⚠ The 350 KB ceiling was ALREADY at 98.7% on staging before this branch touched it,
+    // so this raise is not really about #1631's share: any feature adding a handful of response
+    // fields was going to trip it next. What #1631 added is proportionate and is all depth-1 field
+    // growth, not structural — currency_code/is_mixed_currency across the investment aggregates,
+    // date display siblings with format:date, day_change_as_of/_is_stale/_unavailable_reason,
+    // unknown_currency_count and excluded_by_currency_count, and the doc strings for the nine
+    // activity types.
+    //
+    // ⚠ If you are here because the ceiling tripped again, MEASURE BEFORE RAISING. Compare against
+    // the depth-2 figure above: growth of a few KB from new fields is what this budget is meant to
+    // absorb, and a jump toward ~467 KB is the regression it exists to catch. Those two need
+    // different answers, and only the byte count tells you which one you have.
+    expect(bytes).toBeLessThan(365_000)
   })
 })
