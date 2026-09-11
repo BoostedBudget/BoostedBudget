@@ -21,7 +21,7 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 
 **Budget policy:**
 - Per-feature chunks are budgeted at their gzipped baseline + 20%.
-- The shared `vendor` chunk sits at **~97.7% of its 460 kB limit** (449.20 kB measured, ~10.8 kB headroom — see the stamped table below). ⚠ Until #1625 re-measured it, this bullet described a **435 kB limit that no longer existed** and a measurement two dependency waves stale. Both the limit and the actual drift; re-read them off the stamped table rather than this sentence. Treat `vendor` as budget-saturated, not comfortable: with only ~6 kB of headroom left, a new dependency whose gzipped contribution exceeds that headroom will fail CI — and, because of the shared-chunk model, it will fail on whichever PR happens to push it over rather than the one that used up the room. Raising the limit requires a measured before/after in the PR description — and measure on a clean `bun install`, because a stale `node_modules` can carry duplicate copies of a package and inflate this figure by double digits.
+- The shared `vendor` chunk sits at **~97.7% of its 460 kB limit** (449.30 kB measured, 10.70 kB headroom — see the stamped table below). ⚠ Until #1625 re-measured it, this bullet described a **435 kB limit that no longer existed** and a measurement two dependency waves stale. Both the limit and the actual drift; re-read them off the stamped table rather than this sentence. Treat `vendor` as budget-saturated, not comfortable: with only ~6 kB of headroom left, a new dependency whose gzipped contribution exceeds that headroom will fail CI — and, because of the shared-chunk model, it will fail on whichever PR happens to push it over rather than the one that used up the room. Raising the limit requires a measured before/after in the PR description — and measure on a clean `bun install`, because a stale `node_modules` can carry duplicate copies of a package and inflate this figure by double digits.
 - The limit was last raised **410 → 435 kB in #1513**, the consolidated Dependabot bump. Attribution was measured by bisecting in a clean worktree off `staging`: baseline 408.32 kB, final 428.36 kB, and essentially all of the +20 kB came from the eight-package `@radix-ui/*` group (PR #1317) — gridstack 12→13 contributed ~0.7 kB. The growth is spread across the group rather than concentrated: applied individually, `react-dialog` costs +6.1 kB, the other six +8.0 kB and `react-avatar` +0.9 kB, but applied together they cost +19.3 kB, because their shared internals dedupe worse across eight simultaneously-bumped packages. There was no single package to hold back. **If `vendor` needs to come back down, the lever is splitting `@radix-ui/*` into its own lazy chunk** via a `codeSplitting.groups` entry plus a matching `.size-limit.json` budget — deliberately not done in #1513 to keep that PR dependency-only.
 - Initial budgets were set at the time lazy-loading was introduced (issue #1126); updated to Rolldown baselines in issue #1225.
 
@@ -39,37 +39,40 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 **Claude Code pre-push hook:** The Claude Code hook at `.claude/hooks/pre-push-checks.sh` invokes `make check-bundle-size` on every push that touches frontend files, enforcing both size-limit budgets AND the orphan-chunk guard automatically.
 
 **Current footprints** — baseline established post-#1225 (Vite 8 / Rolldown `codeSplitting.groups` migration).
-**Measured at commit `b75f87ed` (2026-09-09, #1625) via `make check-bundle-size` — every value re-measured in one run.** This table is a point-in-time snapshot, not a live check — if it's older than the last budget or dependency change, re-run `make check-bundle-size` and update every value (and this stamp) before trusting it. Do not hand-edit individual numbers without re-measuring the whole table in one run.
+**Measured at commit `2b610c28` (2026-09-11, #1631) via `make check-bundle-size` — every value re-measured in one run.** This table is a point-in-time snapshot, not a live check — if it's older than the last budget or dependency change, re-run `make check-bundle-size` and update every value (and this stamp) before trusting it. Do not hand-edit individual numbers without re-measuring the whole table in one run.
 
 | Chunk | Budget | Actual (gzip) | Headroom |
 |-------|--------|---------------|----------|
-| `vendor` | 460 kB | 449.20 kB | 10.80 kB |
+| `rolldown-runtime` | 5 kB | 0.42 kB | 4.58 kB |
+| `preload-helper` | 3 kB | 0.68 kB | 2.32 kB |
+| `entry` | 20 kB | 14.56 kB | 5.44 kB |
+| `vendor` | 460 kB | 449.30 kB | 10.70 kB |
 | `charts` | 230 kB | 223.14 kB | 6.86 kB |
-| `shared` | 40 kB | 37.95 kB | 2.05 kB |
 | `api-client` | 10 kB | 7.94 kB | 2.06 kB |
-| `entry` | 20 kB | 14.59 kB | 5.41 kB |
-| `budgets` | 25 kB | 20.04 kB | 4.96 kB |
-| `dashboard` | 20 kB | 16.39 kB | 3.61 kB |
-| `admin` | 20 kB | 18.23 kB | 1.77 kB |
-| `legal` | 20 kB | 17.45 kB | 2.55 kB |
-| `boosts` | 22 kB | 18.78 kB | 3.22 kB |
-| `accounts` | 20 kB | 16.31 kB | 3.69 kB |
-| `auto-categorization` | 18.5 kB | 15.36 kB | 3.14 kB |
-| `billing` | 15 kB | 11.45 kB | 3.55 kB |
-| `transactions` | 22 kB | 15.45 kB | 6.55 kB |
-| `profile` | 12 kB | 9.39 kB | 2.61 kB |
-| `savings` | 12 kB | 11.33 kB | 0.67 kB |
-| `net-worth` | 6 kB | 4.69 kB | 1.31 kB |
-| `reports` | 6 kB | 5.74 kB | 0.26 kB |
-| `household` | 9 kB | 8.58 kB | 0.42 kB |
-| `mcp` | 13 kB | 8.41 kB | 4.59 kB |
-| `custom-category-manager` | 7 kB | 3.72 kB | 3.28 kB |
-| `category-editor` | 4 kB | 1.64 kB | 2.36 kB |
-| `planning` | 2 kB | 0.69 kB | 1.31 kB |
-| `insights` | 2 kB | 0.76 kB | 1.24 kB |
-| `investments` | 7.3 kB | 7.02 kB | 0.28 kB |
+| `shared` | 40 kB | 38.35 kB | 1.65 kB |
 | `layout-chrome` | 2.5 kB | 2.20 kB | 0.30 kB |
 | `header` | 3.6 kB | 3.28 kB | 0.32 kB |
+| `admin` | 20 kB | 18.98 kB | 1.02 kB |
+| `accounts` | 20 kB | 16.45 kB | 3.55 kB |
+| `auto-categorization` | 18.5 kB | 15.54 kB | 2.96 kB |
+| `billing` | 15 kB | 11.46 kB | 3.54 kB |
+| `budgets` | 25 kB | 19.99 kB | 5.01 kB |
+| `dashboard` | 20 kB | 16.37 kB | 3.63 kB |
+| `legal` | 20 kB | 17.45 kB | 2.55 kB |
+| `net-worth` | 6 kB | 4.71 kB | 1.29 kB |
+| `profile` | 12 kB | 9.39 kB | 2.61 kB |
+| `reports` | 7.5 kB | 7.29 kB | 0.21 kB |
+| `boosts` | 22 kB | 18.77 kB | 3.23 kB |
+| `household` | 9 kB | 8.58 kB | 0.42 kB |
+| `mcp` | 13 kB | 8.41 kB | 4.59 kB |
+| `savings` | 12 kB | 11.33 kB | 0.67 kB |
+| `transactions` | 22 kB | 15.84 kB | 6.16 kB |
+| `custom-category-manager` | 7 kB | 3.72 kB | 3.28 kB |
+| `category-editor` | 4 kB | 1.64 kB | 2.36 kB |
+| `css` | 68 kB | 23.06 kB | 44.94 kB |
+| `planning` | 2 kB | 0.69 kB | 1.31 kB |
+| `insights` | 2 kB | 0.75 kB | 1.25 kB |
+| `investments` | 7.5 kB | 7.32 kB | 0.18 kB |
 
 *Excludes `rolldown-runtime`, `preload-helper`, and `css` — framework/runtime and global-stylesheet budgets, not per-feature or vendor-family chunks. All three sit at ≤35% of their limit as of the same measurement, so they're omitted here as low-risk; they're still enforced in `.size-limit.json`.*
 *`layout-chrome` and `header` are newly LISTED, not newly created: both are real chunks with real budgets in `.size-limit.json` that the previous stamp (2026-08-11) simply predates. An absent row here never meant an absent budget — the orphan-chunk guard, not this table, is what makes a budget mandatory.*
