@@ -420,7 +420,8 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 		}
 
 		domainHoldings := make([]domain.Holding, 0, len(plaidHoldings))
-		// Production DLQ 2026-09-11 (webhook_processing job 9): holdings is
+		// Production DLQ 2026-09-11 (dead_letter_jobs.id 9 = river_job.id 350,
+		// webhook_processing): holdings is
 		// UNIQUE (account_id, security_id), so a payload carrying one security twice for one
 		// account cannot be written AT ALL — every attempt fails identically until the job dead-
 		// letters, and the account's holdings stop syncing entirely. Two payloads produce that:

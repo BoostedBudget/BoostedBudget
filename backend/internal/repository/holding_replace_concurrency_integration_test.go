@@ -2,7 +2,8 @@
 
 package repository
 
-// Production DLQ entry, 2026-09-11: webhook_processing job 9 (webhook_type HOLDINGS, item
+// Production DLQ entry, 2026-09-11: webhook_processing, dead_letter_jobs.id 9 =
+// river_job.id 350 (webhook_type HOLDINGS, item
 // vbPwMYDb0bIzy6LayKKvCpveak1AMJfMXBAwj) burned all five attempts with the identical error
 //
 //	failed to replace holdings for account ae944376-3d01-41eb-bc3e-f275a3c36c02:
