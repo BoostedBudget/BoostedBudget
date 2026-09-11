@@ -63,7 +63,7 @@ package repository
 //       repo_test.go:240 → account_repository.go:244    (anchor was a blank line)
 //       repo_test.go:297 → cmd/server/main.go:2080                 (anchor was a blank line)
 //       repo_test.go:300 → cmd/server/main.go:2080                 (anchor was a blank line)
-//       repo_test.go:330 → savings_goal_service.go:478  (anchor was a bare `)`)
+//       repo_test.go:330 → savings_goal_service.go:487  (anchor was a bare `)`)
 //       repo_test.go:355 → user_account_service.go:262  (anchor was `return nil`)
 //       repo_test.go:358 → backfill.go:143              (old text now appears twice)
 //
@@ -892,7 +892,7 @@ func methodCitationProblem(resolved, method string, lo, hi int) (string, bool) {
 	// It is NOT, however, an error outright, and the briefing that asked for that was wrong:
 	// measured over all pairs, absence fires on the most common legitimate idiom in this file —
 	// citing a method at its CALL SITE in another file (`budgetService.UpdateCategory`
-	// (`budget_service.go:716`) is `s.budgetRepo.UpdateCategory(...)`, and budget_service.go
+	// (`budget_service.go:721`) is `s.budgetRepo.UpdateCategory(...)`, and budget_service.go
 	// naturally declares no such function). Five of the nine absences were of that kind.
 	//
 	// So absence falls back to the weaker relation that IS available: the identifier must appear

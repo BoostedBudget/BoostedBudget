@@ -1731,3 +1731,43 @@ func TestGetNetWorthHistory_UntypedNegativeBalance_ReadsAsALiability(t *testing.
 	assert.InDelta(t, 0.00, result.Snapshots[0].TotalAssets, 0.01)
 	assert.InDelta(t, -300.00, result.Snapshots[0].NetWorth, 0.01)
 }
+
+// #1631 gap D1. BalanceSummaryResponse.AsOfDateDisplay documents its value as the UTC calendar
+// day, but asOfDate is COMPUTED here — either from time.Now() or from a caller-supplied filter —
+// so the day it reports was decided by whatever location that value carried.
+//
+// The instant was never wrong: Truncate(24*time.Hour) floors to a UTC-midnight-aligned instant.
+// Only the LOCATION was, and the location is the sole thing that decides which day
+// domain.formatDateOnly prints. Every cutoff derived from asOfDate is therefore unchanged by the
+// fix; the rendered day is not.
+func TestGetBalanceSummary_AsOfDateDisplayIsTheUTCCalendarDay(t *testing.T) {
+	mockSnapshotRepo := new(MockBalanceSnapshotRepository)
+	mockAccountRepo := new(MockAccountRepository)
+
+	ctx := context.Background()
+	userID := "user-123"
+
+	// Midnight on 2026-07-01 in -11:00 is 2026-07-01T11:00:00Z. Truncate(24*time.Hour) floors
+	// that to the 2026-07-01T00:00:00Z instant — the right instant — but leaves it LOCATED in
+	// -11:00, where the same instant reads 2026-06-30T13:00. A negative offset is the direction
+	// that bites: the truncated instant is already UTC-midnight-aligned, so a positive offset
+	// happens to render the UTC day anyway and hides the defect.
+	asOf := time.Date(2026, 7, 1, 0, 0, 0, 0, time.FixedZone("-11", -11*3600))
+	filters := &domain.DashboardFilters{AsOfDate: &asOf}
+
+	mockSnapshotRepo.On("GetSnapshotsAsOfForUser", ctx, userID, mock.AnythingOfType("time.Time")).
+		Return([]domain.BalanceSnapshot{}, nil)
+	mockAccountRepo.On("GetByUserID", ctx, userID).Return([]domain.Account{}, nil)
+
+	service := NewDashboardService(mockSnapshotRepo, mockAccountRepo)
+
+	result, err := service.GetBalanceSummary(ctx, userID, filters)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "2026-07-01", result.AsOfDateDisplay,
+		"as_of_date must be the UTC calendar day, not the day the caller's offset names")
+	// The two must not be allowed to drift apart: AsOfDate is the SQL-bound sibling and the
+	// display is what serializes.
+	assert.Equal(t, result.AsOfDateDisplay, result.AsOfDate.UTC().Format(time.DateOnly))
+}
