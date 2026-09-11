@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -724,15 +725,18 @@ func (r *userAccountRepository) ClearInvestmentBackfillRequests(ctx context.Cont
 		return nil
 	}
 
-	// No updated_at bump and no RowsAffected check. This column is an internal sync marker, not a
-	// customization the user can see, and zero rows affected is the ordinary outcome when the owner
-	// re-excluded the chain mid-run — the case notAfter exists to protect. Treating that as
-	// ErrUserAccountNotFound would turn correct behaviour into a sync error.
+	// No updated_at bump and no RowsAffected check turned into an error. This column is an internal
+	// sync marker, not a customization the user can see, and a short count is the ordinary outcome
+	// when the owner re-excluded the chain mid-run — the case notAfter exists to protect. Treating
+	// that as ErrUserAccountNotFound would turn correct behaviour into a sync error.
 	//
-	// ⚠ AND user_id = $2 is a real predicate, not a redundant one, and it is the reason zero rows
-	// affected cannot be used as an error signal here: a foreign id and a legitimately-superseded
-	// marker are indistinguishable in the row count. The statement refuses the foreign row; the
-	// count reports nothing about which case occurred.
+	// ⚠ AND user_id = $2 is a real predicate, not a redundant one, and it is the reason a short count
+	// cannot be used as an error signal here: a foreign id and a legitimately-superseded marker are
+	// indistinguishable in the row count. The statement refuses the foreign row; the count reports
+	// nothing about which case occurred. #1631: a short count IS still worth an observable trace —
+	// today it is silently indistinguishable from a caller passing an id it does not own, which is
+	// exactly the shape of a cross-tenant write attempt. A WARN log (not an error, so the method's
+	// error semantics are unchanged) names both counts so that case is at least visible in logs.
 	query := `
 		UPDATE user_accounts
 		SET investment_backfill_requested_at = NULL
@@ -741,6 +745,14 @@ func (r *userAccountRepository) ClearInvestmentBackfillRequests(ctx context.Cont
 		  AND investment_backfill_requested_at IS NOT NULL
 		  AND investment_backfill_requested_at <= $3
 	`
-	_, err := r.db.Exec(ctx, query, userAccountIDs, userID, notAfter)
-	return err
+	tag, err := r.db.Exec(ctx, query, userAccountIDs, userID, notAfter)
+	if err != nil {
+		return err
+	}
+	if requested := len(userAccountIDs); int(tag.RowsAffected()) < requested {
+		slog.WarnContext(ctx, "ClearInvestmentBackfillRequests: rows affected fewer than requested — "+
+			"either a legitimately-superseded marker or a caller-supplied id this user does not own",
+			"requested_count", requested, "affected_count", tag.RowsAffected(), "user_id", userID)
+	}
+	return nil
 }
