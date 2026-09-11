@@ -1,8 +1,10 @@
-# ADR: Money Stays `float64` in Go, and Is Rounded at the API Edge
+# ADR: Money Stays `float64` in Go; Rounding Belongs at the API Edge
 
 **Date:** 2026-09-11
-**Status:** Accepted
+**Status:** Accepted — Decisions 1, 2 and 4 describe the tree; **Decision 3 is not implemented**
 **Issue:** #1631
+**Implementation:** #1636 (the rounding boundary Decision 3 specifies, plus the `roundToCents`
+reconciliation it names). Nothing in the investment path rounds today.
 **Related:** `docs/decisions/2026-09-11-realized-gain-loss-not-supported.md` (the companion decision
 on what we compute); `backend/internal/domain/investment_currency.go` (the mixed-currency decision,
 which is a *different* problem and is distinguished below)
@@ -28,19 +30,28 @@ Three things were true when #1631 started, and all three were verified again whi
    cross the boundary through `pgx/v5` v5.10.0's conversion into `float64` at `rows.Scan`.
 2. **There was no ADR about money representation.** `docs/decisions/` had six records, none about
    this. The most load-bearing type decision in a financial product was an unrecorded default.
-3. **There is no rounding boundary in the investment domain.** `math.Round` appears in exactly two
-   handlers, neither of them here and neither of them an output boundary: `savings_impact.go` rounds
-   a public aggregate to the nearest $1,000 to prevent fingerprinting, and
-   `transfer_suggestion.go`'s `ConfirmMatch` rounds an **inbound** `actual_amount` to 2dp so the
-   idempotency-key fold and the service call agree on one canonical value. No investment response
-   field is rounded before it is serialised.
+3. **There is no rounding boundary in the investment domain.** `math.Round` appears at exactly three
+   non-test sites in `backend/internal/`, none of them in the investment path:
+   - `huma/operations/savings_impact.go:84` — rounds a public aggregate to the nearest $1,000 to
+     prevent fingerprinting. An anonymisation step, not a precision boundary.
+   - `huma/operations/transfer_suggestion.go:318` — `ConfirmMatch` rounds an **inbound**
+     `actual_amount` to 2dp so the idempotency-key fold and the service call agree on one canonical
+     value. An input canonicalisation, not an output boundary.
+   - `services/savings_progress_service.go:419-422` — `roundToCents(v float64) float64 {
+     return math.Round(v*100) / 100 }`. **This one is the 2dp fold this ADR prescribes, and it
+     already exists — at the SERVICE layer, which is not where Decision 3 below puts it.** See the
+     note under Decision 3: this is a live inconsistency, named rather than papered over.
 
-The consequence is visible in responses. A client asking for
-`/api/v1/investments/portfolio/gain-loss` can receive `total_unrealized_gain_loss` or
-`total_unrealized_gain_loss_pct` rendered as `1234.5600000000002`. That is not a wrong number. It is
-a correct number presented in a way that makes the product look broken and gives a downstream
-consumer — including the AI tool-call surface this analytics layer is explicitly designed to feed —
-a string it has to decide what to do with.
+   No investment response field is rounded before it is serialised.
+
+The consequence reaches responses. A client asking for `/api/v1/investments/portfolio/gain-loss`
+**can** receive `total_unrealized_gain_loss` or `total_unrealized_gain_loss_pct` rendered with a
+long binary tail — `1234.5600000000002` is the illustrative shape, constructed here rather than
+captured from a production response; no repro is cited because none was recorded. What *is* verified
+is the mechanism that produces it, enumerated below. Such a value is not a wrong number. It is a
+correct number presented in a way that makes the product look broken and gives a downstream consumer
+— including the AI tool-call surface this analytics layer is explicitly designed to feed — a string
+it has to decide what to do with.
 
 ---
 
@@ -77,19 +88,29 @@ be right to distrust everything else in this document.
 ### It IS representation at the boundary
 
 What actually reaches clients is the artefact of the final arithmetic step, and there are two shapes
-of it, both in the same file:
+of it. The first lives in the analytics repository; the second is spread across the repository AND
+the domain layer, so the boundary this ADR decides on is **surface-scoped, not file-scoped**:
 
 - **Derived subtraction.** `SUM(institution_value) - SUM(cost_basis)` produces a value whose exact
   decimal result is representable in `NUMERIC` and is not representable in binary — the classic
   `0.1 + 0.2` situation, arrived at by subtraction rather than addition.
-- **`× 100` percentages.** Five Go-side sites in
-  `investment_analytics_repository.go` multiply a ratio by 100: four of the
-  `buckets[i].TotalValue / grandTotal * 100` shape in `AllocationBreakdown` and
-  `allocationBreakdownByAccount`, plus `totalGL / totalKnownPairCost * 100` for the gain/loss
-  percentage. (Two further `* 100` occurrences in that file sit inside SQL string literals and are
-  therefore exact `NUMERIC` arithmetic, converted once at the scan — the same distinction as
-  above.) Dividing and then multiplying by 100 is a reliable way to manufacture a long tail of
-  digits out of two clean inputs.
+- **`× 100` percentages.** Dividing and then multiplying by 100 is a reliable way to manufacture a
+  long tail of digits out of two clean inputs, and **eight** Go-side sites do it on values that
+  reach clients:
+
+  | Where | Sites | Reaches the client as |
+  |---|---|---|
+  | `repository/investment_analytics_repository.go` | 4 × `buckets[i].TotalValue / grandTotal * 100` (`AllocationBreakdown`, `allocationBreakdownByAccount`) | `percentage` on each allocation bucket |
+  | `repository/investment_analytics_repository.go` | `totalGL / totalKnownPairCost * 100` | `total_unrealized_gain_loss_pct` |
+  | `domain/investment.go:151` | `Holding.GainLossPct()` | `gain_loss_pct`, via `investment_portfolio.go:227-230` |
+  | `domain/investment.go:199` | `Holding.DayChangePct()` | `day_change_pct`, via the same conversion |
+  | `domain/holding_snapshot_view.go:99` | `ComputeGainLoss` | `gain_loss_pct` on the historical view |
+
+  The three domain-layer sites matter disproportionately to Decision 3: they are **not** in a
+  handler, so a rounding boundary placed at the handler must round the *field* on the way out
+  rather than assume the producing function rounded. (Two further `* 100` occurrences in the
+  analytics repository sit inside SQL string literals and are therefore exact `NUMERIC` arithmetic,
+  converted once at the scan — the same distinction as above.)
 
 Both emit into `json` tags that the client renders directly. The severity is therefore
 **presentational and contractual, not arithmetic**: the number is right, the *representation* is
@@ -98,23 +119,29 @@ carries.
 
 ### The one place the column genuinely exceeds `float64`
 
-`DECIMAL(18, 8)` is 18 significant digits. `float64` has ~15–17. This is not a rounding-style
-concern; it is a range-of-representable-values concern, and it is real for
-`holdings.quantity`, `investment_transactions.quantity`, `institution_price` and `close_price`
-(migrations `000051`, `000160`). A crypto position large enough to use the integer part while also
-using the eight fractional digits — the shape `DECIMAL(18,8)` exists for — **can round on the
-round-trip through Go.** For equity share counts and prices at ordinary magnitudes it cannot; the
-digits are simply not there to lose.
+`DECIMAL(18, 8)` carries 18 significant digits. `float64` carries ~15–17. This is a
+**significant-digit** concern, not a range concern — `float64`'s exponent range is about `1e±308`,
+so magnitude is never the issue; the issue is how many digits survive between the largest and
+smallest that a single value uses at once. It is real for `holdings.quantity`,
+`investment_transactions.quantity`, `institution_price` and `close_price` (migrations `000051`,
+`000160`). A crypto position large enough to use the integer part while *also* using all eight
+fractional digits — the exact shape `DECIMAL(18,8)` exists for — needs more digits than `float64`
+has and **can round on the round-trip through Go**. For equity share counts and prices at ordinary
+magnitudes it cannot: the digits are simply not there to lose.
 
-This is not hypothetical, and #1631 documented it independently before this ADR existed. The header
-comment on `PositionReconciliationQuantityTolerance`
-(`backend/internal/domain/investment_reconciliation.go`) records a *provable* divergence: the
+⚠ **Do not use the reconciliation tolerance as evidence for this.** The header comment on
+`PositionReconciliationQuantityTolerance`
+(`backend/internal/domain/investment_reconciliation.go`) records a genuine, provable divergence: the
 reconciliation's SQL compares exact `NUMERIC` arithmetic against the tolerance, while
 `ClassifyPositionReconciliationMember` compares whatever `float64` the same decimal rounds to after
 scanning, so within roughly `1e-15` of the tolerance the two comparisons can land on opposite sides
-of a strict `>`. It is labelled there as real production behaviour that no integration-test row can
-prove, because the band is too thin to construct one in. That is the honest scale of this risk: a
-razor-thin band that is genuinely reachable and is not going to move anyone's balance.
+of a strict `>`. That is real, and it is labelled there as production behaviour no integration-test
+row can construct. **But it is a different phenomenon** — ordinary representation error on `0.001`
+at magnitude ~1, which is well inside `float64`'s 15 digits and would occur with a `DECIMAL(18,3)`
+column just the same. It is not the 18-digit ceiling. The source comment runs the two together, and
+an earlier revision of this ADR reproduced that conflation rather than inventing it; a document
+about precision has to keep them apart. The honest summary is: **the ceiling is real and
+unobserved; the tolerance band is real and observed, and they are unrelated.**
 
 ---
 
@@ -190,12 +217,20 @@ way: a per-row Go loop that re-derives what `SUM` could have computed is both sl
 
 ### 3. Round at the API edge — the handler — and nowhere else
 
-The boundary belongs in `backend/internal/huma/operations/`, on the way out, after every computation
-is finished:
+⚠ **This boundary does not exist yet. Nothing in the investment path rounds anything today.** The
+three non-test `math.Round` sites in the backend are enumerated in Context item 3 above and none is
+in this path, so every artefact this ADR describes is still emitted, unmodified, at the time of
+writing. What follows is a specification of where the boundary belongs, not a description of code
+that runs — it is filed as **#1636** rather than implemented here, because this issue's branch is a
+bugfix for activity types and a portfolio 500 and the implementation is a change to every
+investment handler plus its tests. Read every sentence below in the future tense.
 
-- **Currency-denominated fields** round to 2 decimal places.
-- **Percentage fields** round to 2 decimal places.
-- **Quantity and per-unit price fields do NOT round to 2dp.** `DECIMAL(18,8)` exists because
+The boundary **will** live in `backend/internal/huma/operations/`, on the way out, after every
+computation is finished:
+
+- **Currency-denominated fields** will round to 2 decimal places.
+- **Percentage fields** will round to 2 decimal places.
+- **Quantity and per-unit price fields will NOT round to 2dp.** `DECIMAL(18,8)` exists because
   fractional shares and crypto need those digits; rounding a quantity to cents destroys real data
   rather than cosmetic noise. If a quantity ever needs presentational rounding, it is 8dp, and it is
   a separate decision.
@@ -208,6 +243,24 @@ definition of a boundary.
 
 **Why not the database:** a `ROUND()` in SQL rounds before Go's own division and `× 100`, which
 re-introduces the tail it was meant to remove.
+
+**Why not the domain layer, and the inconsistency this creates.** Three of the eight percentage
+sites inventoried above (`domain/investment.go:151`, `:199`,
+`domain/holding_snapshot_view.go:99`) are domain methods, and it is tempting to round there instead
+— one edit, three sites, done. It is the wrong place for the same reason the repository is: those
+values feed `investment_portfolio.go`'s conversion and could feed further composition. The handler
+rounds the *field*, and must not assume any producing function rounded for it.
+
+⚠ **This puts the decision in direct tension with existing code, and the tension is real rather than
+theoretical.** `savings_progress_service.go:419-422` already defines
+`roundToCents(v float64) float64 { return math.Round(v*100) / 100 }` — precisely the 2dp fold
+specified here — and applies it in the **service** layer, one layer below where this ADR puts the
+boundary. That predates this decision, it is not wrong in isolation, and this ADR does not
+retroactively condemn it. But "round at the handler and nowhere else" and a service that rounds
+cannot both be the convention indefinitely: either `roundToCents` moves up to the handler, or the
+decision is amended to name the service as the boundary and the handler sites follow it down.
+**#1636 carries that reconciliation** and must resolve it in one direction; it is listed here so the
+next reader finds a named inconsistency rather than discovering an undocumented one.
 
 **Honest limitation, stated rather than implied:** `math.Round(x*100)/100` is itself binary
 arithmetic and is not exact at every input. This repo already has the worked example, in
@@ -252,8 +305,10 @@ clause. **Rounding never turns a withheld figure into a shown one, and never con
 
 - The convention is written down, so the next reader knows `float64` was chosen rather than
   defaulted into, and knows the argument for it.
-- API responses stop emitting `1234.5600000000002`. Length becomes bounded and predictable, which
-  matters most for the machine consumers this analytics layer is designed for.
+- Once #1636 implements the boundary, API responses stop emitting long binary tails and field length
+  becomes bounded and predictable, which matters most for the machine consumers this analytics layer
+  is designed for. **This benefit is not yet realised** — this ADR decides where the boundary goes;
+  it does not put one there.
 - The scope boundary is explicit, so nobody converts one domain to decimals in isolation and creates
   the two-money-types problem.
 - The precision question and the currency question are separated in writing, so a complaint about
@@ -263,9 +318,16 @@ clause. **Rounding never turns a withheld figure into a shown one, and never con
 
 - **`float64` remains inexact, and this ADR does not change that.** It bounds the *presentation*, not
   the representation. The `PositionReconciliationQuantityTolerance` band stays exactly as documented.
-- **A rounding boundary is a convention, and conventions decay.** A new handler that forgets to round
-  emits the old artefact, and nothing in the tree currently detects that. This ADR does not claim a
-  guard exists — see the note below.
+- **No boundary exists yet, so nothing has improved today.** Until #1636 lands, every artefact
+  described above is still emitted. A decision recorded ahead of its implementation is a real risk:
+  the next reader may take this document as a description of the tree. It is not, and Decision 3
+  says so in its first line.
+- **A rounding boundary is a convention, and conventions decay.** Once it exists, a new handler that
+  forgets to round will emit the old artefact, and nothing in the tree would detect that. This ADR
+  does not claim a guard exists — see the note below.
+- **One live inconsistency is being carried deliberately.** `roundToCents` in
+  `savings_progress_service.go` rounds at the service layer while this ADR names the handler.
+  Documented under Decision 3 and assigned to #1636 rather than silently tolerated.
 - **The `DECIMAL(18,8)` ceiling is unaddressed.** Deliberately: no production position is known to
   hit it, and fixing it properly means an exact quantity type, which is the out-of-scope programme.
   This is an accepted, named exposure, not an oversight.
@@ -278,10 +340,17 @@ clause. **Rounding never turns a withheld figure into a shown one, and never con
 that fail when its rules are broken, and it says outright that a principle written down is not a
 principle kept. **This ADR has no equivalent guard**, and pretending otherwise would be the failure
 mode that ADR warns about. A convention-only decision is the weaker artefact; the honest statement is
-that this one is currently enforced by review and by this document. The natural guard — an AST scan
-asserting that every currency- or percentage-typed field in an investment response passes through a
-rounding helper before serialisation — is a follow-up, and it should be built the way the existing
-guards were: with a meta-test that constructs the violation and proves the guard reports it.
+that this one is currently enforced by review and by this document — and that Decision 3, the part a
+guard would protect, has no implementation to protect yet. The natural guard — an AST scan asserting
+that every currency- or percentage-typed field in an investment response passes through a rounding
+helper before serialisation — belongs with #1636, and it should be built the way the existing guards
+were: with a meta-test that constructs the violation and proves the guard reports it.
+
+The same limit applies to this document's own citations. `TestMarkdownCitedTestNamesResolve`
+(`backend/internal/testsupport/citations/markdown_citations_guard_test.go`, Rule 1) checks that the
+test names cited here resolve to functions that exist — names only. It says nothing about line
+numbers, and its own header states that no guard catches a false factual claim. Re-derive before
+relying on any assertion here.
 
 ---
 
@@ -301,8 +370,13 @@ guards were: with a meta-test that constructs the violation and proves the guard
 - `backend/internal/huma/operations/transfer_suggestion.go` and `..._test.go` — the existing
   2dp-rounding precedent and its documented `.005` limitation
   (`TestConfirmMatch_SubCent_IdempotencyRounding_GAPCG`)
-- `backend/internal/huma/operations/savings_impact.go` — the other existing `math.Round`, an
+- `backend/internal/huma/operations/savings_impact.go:84` — the second existing `math.Round`, an
   anonymisation step rather than a precision boundary
+- `backend/internal/services/savings_progress_service.go:419-422` — `roundToCents`, the third, and
+  the live inconsistency with Decision 3
+- `backend/internal/domain/investment.go:151,199` and
+  `backend/internal/domain/holding_snapshot_view.go:99` — the three domain-layer `× 100` percentage
+  sites that reach clients
 - `backend/migrations/000051_create_investment_tables.up.sql`,
   `backend/migrations/000160_create_holding_and_liability_history.up.sql` — the `DECIMAL(18,8)` and
   `DECIMAL(18,2)` columns
