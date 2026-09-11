@@ -76,9 +76,21 @@ var capitalGainSubtypes = []string{
 
 // transferSubtypes are cash movements that shift money between accounts rather than earning or
 // spending it. Plaid types them "cash", so without this set they read as generic Cash.
+//
+// "stock distribution" (#1631) is here for a different reason than its cash siblings: it delivers
+// SHARES, not money, so it is not "cash" in any economic sense — but it is not income either. Cash
+// and Dividend are both wrong: Dividend would have IncomeSummary count a share delivery as money
+// received (IncomeSubtypes deliberately excludes this whole set, dividend and stock-distribution
+// alike), and Cash would hide it behind the same generic label as an unclassified cash movement.
+// Transfer is the honest bucket — like "distribution" beside it, it is value moving INTO the
+// account without being earned there — so it is added to this set rather than to
+// dividendSubtypes/capitalGainSubtypes. It rides the same shared slice as "distribution" into
+// NormalizeTradeType's cash case and TradeTypeToSQLPredicate's transfer/cash buckets, so both
+// halves of the display/filter partition move together automatically.
 var transferSubtypes = []string{
 	"contribution",
 	"distribution",
+	"stock distribution",
 }
 
 // corporateActionSubtypes carve specific rows OUT of the "transfer" bucket. Plaid types a stock

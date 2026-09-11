@@ -979,6 +979,7 @@ func TestInvestment_TradeTypePartition_RoundTrip_Integration(t *testing.T) {
 		{plaidID: "r43-transfer", sqlType: "transfer", sqlSub: subPtr("transfer"), security: secID, expected: "transfer"},
 		{plaidID: "r43-split", sqlType: "transfer", sqlSub: subPtr("split"), security: secID, expected: "other"},
 		{plaidID: "r43-contrib", sqlType: "cash", sqlSub: subPtr("contribution"), security: cashEquivSecID, expected: "transfer"},
+		{plaidID: "r43-stockdist", sqlType: "cash", sqlSub: subPtr("stock distribution"), security: secID, expected: "transfer"},
 
 		// The structural pair — the #1631 production shape. Same subtypes, opposite classification,
 		// decided solely by the joined security.
