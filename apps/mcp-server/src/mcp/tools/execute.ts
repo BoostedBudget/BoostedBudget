@@ -36,13 +36,21 @@
  * confirmationRequired is honestly false, but the method still isn't safe to admit on class
  * alone without also checking the verb.
  *
- * So readExecute admits a call only when ALL THREE hold:
+ * So readExecute admits a call only when ALL of:
  *   1. capability.class === 'read', AND
- *   2. the spec entry's method is in READ_ONLY_METHODS, AND
- *   3. capability.confirmationRequired === false.
- * Any one of the three alone is bypassable — see the two real counter-examples above (the first
+ *   2. capability.confirmationRequired === false, AND
+ *   3. EITHER the spec entry's method is in READ_ONLY_METHODS, OR the operationId is in
+ *      ACKNOWLEDGED_SAFE_POST_OPERATIONS (mcp/tools/read-execute-admission.ts /
+ *      manifest/safe-post-extension.ts, #1630) — a reviewed, human-maintained, explicitly
+ *      enumerated list of POSTs proven (by an integration test asserting no rows and no audit
+ *      entries change) to write nothing. `previewCategoryMatches` is the sole entry.
+ * Any of the first two alone is bypassable — see the two real counter-examples above (the first
  * defeats class-alone, the second defeats class+confirmationRequired without also checking the
- * verb). A call that fails the gate is refused, naming writeExecute as the alternative.
+ * verb). `runMCPRecipe` has the EXACT SAME shape as `previewCategoryMatches` (class 'read',
+ * confirmationRequired false, method POST) yet is NOT in ACKNOWLEDGED_SAFE_POST_OPERATIONS and
+ * so stays refused — the difference between the two is not inferred from the method or the
+ * manifest, it is a deliberate, reviewed, enumerable exception. A call that fails the gate is
+ * refused, naming writeExecute as the alternative.
  *
  * ── readExecute's REAL guarantee (not "read-only by construction") ─────────────────────────
  * Passing all three checks proves an admitted call is non-destructive, not confirmation-gated,
@@ -61,6 +69,7 @@
 import { getCapability } from '../../manifest/capability-manifest'
 import type { CapabilityEntry, OperationClass as AuditOperationClass } from '../../manifest/capability-manifest'
 import { HostProxyError } from '../../sandbox/host-proxy'
+import { isReadExecuteAdmitted, READ_ONLY_METHODS } from './read-execute-admission'
 import type { McpToolResult } from './search'
 
 export interface ExecuteCall {
@@ -149,16 +158,6 @@ function buildRequestArgs(
 
   return args
 }
-
-/**
- * HTTP methods this gate treats as conventionally non-mutating — required by leg 2 of
- * readExecute's three-part admission check, and by deniedOperationClass's method-based
- * fallback. This is NOT a proof that no method in this set can produce a server-side write:
- * `getPrivacySettings` / `getUserProfile` are GET and lazily create a row on first access (see
- * the module doc's "readExecute's REAL guarantee"). Membership here is a convention this gate
- * requires, not evidence the gate verifies.
- */
-const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 /**
  * Max characters of a single call's JSON result surfaced in the tool output.
@@ -265,9 +264,7 @@ function readExecuteRefusal(
   specEntries: ExecuteSpecEntry[],
 ): string | undefined {
   const spec = specEntries.find((e) => e.operationId === call.operationId)
-  const methodIsReadOnly = !!spec && READ_ONLY_METHODS.has(spec.method.toUpperCase())
-  const admitted =
-    capability.class === 'read' && methodIsReadOnly && capability.confirmationRequired === false
+  const admitted = !!spec && isReadExecuteAdmitted(capability, spec)
 
   return admitted
     ? undefined

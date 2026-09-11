@@ -2156,18 +2156,108 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 
 // GetBudgetVsActual returns active budgets for a user filtered by their budget period,
 // joined with aggregated allocated and spent amounts from budget_categories.
+//
+// A budget_categories row that is a SUB-ALLOCATION of another live row in the same budget
+// is excluded from both sums: the parent's own allocated/spent amount already rolls the
+// child up (Issue #1203), so summing every row double-counts it. The exclusion rule mirrors
+// domain.BudgetCategory.IsSubAllocationWithin exactly, including its Issue #1630 correction:
+// hierarchy alone is NOT sufficient. A child is excluded only when BOTH
+//   - the PARENT's own match_logic is 'category_only' or 'or' (its matched set still contains
+//     the plain category match — an 'and'/'tag_only' parent has no envelope a plain-category
+//     child could fall inside), AND
+//   - the CHILD's own match_logic is 'category_only' or 'and' (it cannot escape the parent's
+//     category clause via tags — a 'tag_only'/'or' child can match transactions outside the
+//     parent's category clause entirely, so summing it separately is not a NEW double-count).
+//
+// ⚠ UPDATE (Issue #1630 Task B2, 029e15d3): the paragraph this replaces described a real,
+// then-open depth gap — this query's sub.is_sub_allocation lateral used to look only ONE level
+// up (bc's direct parent bc2), so a three-level chain (pfc X ← custom C with
+// parent_pfc_primary = X ← custom G with parent_id = C) rolled G's transactions up through X
+// (buildCategoryClause is hierarchical) but excluded G from NEITHER C's row (which the lateral
+// correctly excluded as X's sub-allocation) NOR its own top-level row, so G's spend appeared in
+// NO total this query returns. That gap is CLOSED: the lateral now also joins gp (cc's own
+// parent, resolved via gp.id = cc.parent_id) and carries a fourth predicate keyed on
+// gp.parent_pfc_primary, so a transitive grandchild like G is recognized as X's sub-allocation
+// exactly like a direct child is — mirroring domain.BudgetCategory.IsSubAllocationWithin's own
+// CustomGrandparentPFCPrimary check, which this comment's "mirrors IsSubAllocationWithin
+// exactly" claim now covers for hierarchy DEPTH as well as match_logic containment.
+//
+// The remaining depth limit is not a gap: custom_category_service.go's validateParent rejects a
+// parent only when parent.ParentID != nil, capping a custom-to-custom chain at ONE parent_id hop
+// (enforce_custom_category_two_levels), so the maximum nesting the schema allows from a PFC root
+// is exactly the two hops this lateral now walks (one parent_pfc_primary hop, then one parent_id
+// hop). There is no deeper (great-grandchild) shape left to reach, because the schema itself
+// cannot construct one.
+//
+// ⚠ That does NOT mean an escaping child's spend is absent from the parent's own sum. The
+// parent's roll-up (buildCategoryClause, transaction_repository.go) is hierarchical and
+// match_logic-BLIND — it has no sibling/match_logic context — so it counts every transaction
+// filed under a nested custom category or PFC detailed regardless of that child's own
+// match_logic. A legal shape (a budgeted 'category_only'/'or' parent with a nested child whose
+// own match_logic is 'or' or 'tag_only') is therefore double-counted here: once via the child's
+// own top-level row (this method does not exclude it, per the rule above) and again inside the
+// parent's SpentAmount (which the child's SQL-side transactions still feed). This was a
+// HIGH-severity finding on Issue #1630's own fix. It is addressed by refusing to PERSIST that
+// shape at write time (domain.EscapedNestedChild, wired into budget_service.go's CreateBudget
+// and AddCategory, and NOT UpdateBudget, which never touches Categories) rather than by
+// changing this query, which has no sibling context to subtract from — a pre-existing row of
+// this shape (grandfathered; write-time guards do not retroactively touch already-persisted
+// rows — see ErrEscapedNestedChild's doc comment in domain/budget.go) keeps the double-count.
+//
+// '' is treated as 'category_only' (the domain default and the column default), which SQL
+// will not coerce on its own. A savings-kind category is never a parent or a child of this
+// rule — Issue #1203's original switch has no "savings" case, and this reproduces that
+// omission deliberately: a savings-kind row always counts in full.
+//
+// pfc_detailed = '' is treated identically to NULL/absent (Issue #1630): a plain
+// `IS NOT NULL` / `IS NULL` test disagreed with the frontend's `!cat.pfc_detailed`, which
+// already reads '' as falsy — the same row would be excluded from a total here but included
+// there. `bc.pfc_detailed IS NOT NULL AND bc.pfc_detailed <> ''` / `(bc2.pfc_detailed IS NULL
+// OR bc2.pfc_detailed = '')` below keep this query in agreement with
+// domain.hasPFCDetailed and the frontend predicates.
 // period selects by budget.period column (weekly/monthly/quarterly/yearly/custom).
-// Returns an empty slice when no matching active budgets exist. Issue #1215 PR3.
+// Returns an empty slice when no matching active budgets exist. Issue #1215 PR3; Issue #1630.
 func (r *analyticsRepository) GetBudgetVsActual(ctx context.Context, userID, period string) ([]domain.BudgetVsActualRow, error) {
 	const query = `
 		SELECT
 			b.id,
 			b.name,
 			b.period,
-			COALESCE(SUM(bc.allocated_amount), 0) AS allocated_amount,
-			COALESCE(SUM(bc.spent_amount), 0)     AS spent_amount
+			COALESCE(SUM(CASE WHEN sub.is_sub_allocation THEN 0 ELSE bc.allocated_amount END), 0) AS allocated_amount,
+			COALESCE(SUM(CASE WHEN sub.is_sub_allocation THEN 0 ELSE bc.spent_amount END), 0)     AS spent_amount
 		FROM budgets b
 		LEFT JOIN budget_categories bc ON bc.budget_id = b.id AND bc.deleted_at IS NULL
+		-- tombstone-exempt(custom_categories cc, custom_categories gp): the cc join resolves the PARENT LINKAGE of a
+		-- live budget line (bc.deleted_at IS NULL already filtered above), mirroring
+		-- budget_repository.go's GetCategoriesByBudgetID. gp resolves cc's OWN parent (the
+		-- GRANDPARENT linkage, Issue #1630 Task B2), same mirror, one hop further. DeleteWithReassignment
+		-- tombstones a category's budget lines in the same transaction as the category, so a live bc never
+		-- names a tombstoned cc, and cc's own parent is subject to the identical invariant; adding
+		-- AND cc.deleted_at IS NULL / AND gp.deleted_at IS NULL would buy nothing and would
+		-- silently blank sub-allocation detection if that invariant ever slipped. #1569 T9.
+		LEFT JOIN custom_categories cc ON cc.id = bc.custom_category_id
+		LEFT JOIN custom_categories gp ON gp.id = cc.parent_id
+		LEFT JOIN LATERAL (
+			SELECT EXISTS (
+				SELECT 1
+				FROM budget_categories bc2
+				WHERE bc2.budget_id = bc.budget_id
+				  AND bc2.deleted_at IS NULL
+				  AND bc2.id <> bc.id
+				  AND COALESCE(NULLIF(bc2.match_logic, ''), 'category_only') IN ('category_only', 'or')
+				  AND COALESCE(NULLIF(bc.match_logic, ''), 'category_only') IN ('category_only', 'and')
+				  AND (
+					(bc.category_kind = 'pfc' AND bc.pfc_detailed IS NOT NULL AND bc.pfc_detailed <> '' AND bc.pfc_primary IS NOT NULL
+					 AND bc2.category_kind = 'pfc' AND (bc2.pfc_detailed IS NULL OR bc2.pfc_detailed = '') AND bc2.pfc_primary = bc.pfc_primary)
+					OR (bc.category_kind = 'custom' AND cc.parent_id IS NOT NULL
+					 AND bc2.category_kind = 'custom' AND bc2.custom_category_id = cc.parent_id)
+					OR (bc.category_kind = 'custom' AND cc.parent_pfc_primary IS NOT NULL
+					 AND bc2.category_kind = 'pfc' AND (bc2.pfc_detailed IS NULL OR bc2.pfc_detailed = '') AND bc2.pfc_primary = cc.parent_pfc_primary)
+					OR (bc.category_kind = 'custom' AND cc.parent_id IS NOT NULL AND gp.parent_pfc_primary IS NOT NULL
+					 AND bc2.category_kind = 'pfc' AND (bc2.pfc_detailed IS NULL OR bc2.pfc_detailed = '') AND bc2.pfc_primary = gp.parent_pfc_primary)
+				  )
+			) AS is_sub_allocation
+		) sub ON true
 		WHERE b.user_id = $1
 		  AND b.is_active = true
 		  AND b.period = $2

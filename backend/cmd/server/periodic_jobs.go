@@ -38,6 +38,10 @@ type periodicJobsDeps struct {
 	savingsStatsWorker                  *jobs.SavingsStatsWorker
 	portfolioSnapshotWorker             *jobs.PortfolioSnapshotWorker
 	ruleQuarantineCensusWorker          *jobs.RuleQuarantineCensusWorker
+	// budgetHierarchyAuditWorker is the Issue #1630 Task B7 periodic sweep over budgets the
+	// write-time guards (domain.DuplicateParentIdentity, domain.EscapedNestedChild) would refuse
+	// if created today, but which predate them. No Plaid dependency.
+	budgetHierarchyAuditWorker *jobs.BudgetHierarchyAuditWorker
 	// balanceSnapshotDispatchWorker is Plaid-specific and nil when Plaid is not configured: its
 	// capture jobs call /accounts/get, so with no Plaid there is nothing for it to dispatch
 	// (#1626 Phase 3, Defect 3).
@@ -270,6 +274,24 @@ func buildPeriodicJobSpecs(deps periodicJobsDeps) []periodicJobSpec {
 				return jobs.PortfolioSnapshotArgs{TriggerSource: "periodic"}, jobs.PortfolioSnapshotInsertOpts()
 			},
 			opts: jobs.PortfolioSnapshotPeriodicOpts(),
+		})
+	}
+
+	// Issue #1630 Task B7: Budget hierarchy audit (daily) — sweeps budgets
+	// BudgetIDsWithUnexaminedHierarchy reports, most-behind-first. Daily + QueueLow matches this
+	// file's other full-table-scan-into-a-ledger jobs (portfolio snapshot's own #1569 Task 11
+	// repair pass runs at the SAME cadence for the same reason: a bounded per-run cap plus a
+	// resumable enumeration means daily is frequent enough to drain any backlog without a
+	// dedicated schedule).
+	if deps.budgetHierarchyAuditWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "budget hierarchy audit",
+			logMessage: "Budget hierarchy audit periodic job configured (daily)",
+			interval:   24 * time.Hour,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.BudgetHierarchyAuditArgs{TriggerSource: "periodic"}, jobs.BudgetHierarchyAuditInsertOpts()
+			},
+			opts: jobs.BudgetHierarchyAuditPeriodicOpts(),
 		})
 	}
 

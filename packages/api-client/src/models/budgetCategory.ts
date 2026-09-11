@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { BudgetCategoryMatchLogic } from './budgetCategoryMatchLogic';
 
 export interface BudgetCategory {
   /** A URL to the JSON Schema for this object. */
@@ -40,11 +41,12 @@ export interface BudgetCategory {
   category_kind: string;
   created_at: string;
   custom_category_id?: string;
+  custom_grandparent_pfc_primary?: string;
   custom_parent_id?: string;
   custom_parent_pfc_primary?: string;
   id: string;
   managed_by_goal_id?: string;
-  match_logic: string;
+  match_logic: BudgetCategoryMatchLogic;
   pfc_detailed?: string;
   pfc_detailed_display?: string;
   pfc_primary?: string;

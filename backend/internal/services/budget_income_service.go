@@ -17,8 +17,11 @@ import (
 // IncomeTransactionGetter is a minimal interface for retrieving income transaction data.
 // This allows BudgetIncomeService to depend only on what it needs from TransactionRepository.
 type IncomeTransactionGetter interface {
-	GetIncomeSumByCategory(ctx context.Context, userID string, category string, startDate, endDate time.Time) (float64, error)
-	GetIncomeSumByTag(ctx context.Context, userID string, tag string, startDate, endDate time.Time) (float64, error)
+	// GetIncomeSumForSources sums income from ALL configured pfc_primary/tag sources in ONE
+	// query, so a transaction matching more than one source is counted once, not once per
+	// source (Issue #1630 fixwave 4 — see CalculateBudgetIncome and
+	// transactionRepository.GetIncomeSumForSources for the double-count this replaces).
+	GetIncomeSumForSources(ctx context.Context, userID string, pfcPrimaries, tags []string, startDate, endDate time.Time) (float64, error)
 	GetByUserIDWithFilters(ctx context.Context, userID string, filters domain.TransactionFilters, limit, offset int) ([]domain.Transaction, error)
 }
 
@@ -30,8 +33,13 @@ type BudgetIncomeService interface {
 	// - tag sources: Sum of inflow transactions with the matching tag
 	// - manual sources: Parsed float value from IncomeSource.Value
 	//
-	// Note: Overlapping sources (same transaction matching multiple sources) may result in double-counting.
-	// Users should configure non-overlapping income sources for accurate totals.
+	// A transaction matching MORE THAN ONE configured pfc_primary/tag source contributes to the
+	// total exactly ONCE (Issue #1630 fixwave 4 — an independent adversarial review found the
+	// previous implementation summed each source's own query independently, so an overlapping
+	// transaction was counted once per matching source; the prior version of this doc comment
+	// even conceded the double-count as a known limitation instead of a defect). All non-manual
+	// sources are now combined into a single query (GetIncomeSumForSources) whose predicates are
+	// OR-ed together, so an overlapping row is still just one row in that query's result set.
 	CalculateBudgetIncome(ctx context.Context, budget *domain.Budget, startDate, endDate time.Time) (float64, error)
 
 	// GetMatchingIncomeTransactions returns all transactions matching any of the income sources.
@@ -55,34 +63,35 @@ func NewBudgetIncomeService(transactionRepo IncomeTransactionGetter, logger *slo
 }
 
 // CalculateBudgetIncome calculates total income for a budget from all configured income sources.
+//
+// Issue #1630 fixwave 4: pfc_primary and tag sources are collected into dedup'd slices and
+// resolved through ONE GetIncomeSumForSources call, instead of one query per source summed
+// together. A caller can legally configure a pfc_primary source and a tag source that both match
+// the same real-world deposit (e.g. pfc_primary=INCOME and tag="salary" on the same paycheck); the
+// old per-source-sum approach counted that transaction once per matching source. Collecting into
+// one query means an overlapping transaction is still just one row in that query's result set, so
+// SUM(amount) counts it once no matter how many configured sources it satisfies.
 func (s *budgetIncomeService) CalculateBudgetIncome(ctx context.Context, budget *domain.Budget, startDate, endDate time.Time) (float64, error) {
 	var totalIncome float64
+
+	pfcPrimarySeen := make(map[string]bool)
+	var pfcPrimaries []string
+	tagSeen := make(map[string]bool)
+	var tags []string
 
 	for _, source := range budget.IncomeSources {
 		switch source.Type {
 		case domain.IncomeSourceTypePFCPrimary:
-			sum, err := s.transactionRepo.GetIncomeSumByCategory(ctx, budget.UserID, source.Value, startDate, endDate)
-			if err != nil {
-				s.logger.Error("failed to get income by category",
-					slog.String("category", source.Value),
-					slog.String("user_id", budget.UserID),
-					slog.String("error", err.Error()),
-				)
-				return 0, fmt.Errorf("failed to calculate income for category %s: %w", source.Value, err)
+			if !pfcPrimarySeen[source.Value] {
+				pfcPrimarySeen[source.Value] = true
+				pfcPrimaries = append(pfcPrimaries, source.Value)
 			}
-			totalIncome += sum
 
 		case domain.IncomeSourceTypeTag:
-			sum, err := s.transactionRepo.GetIncomeSumByTag(ctx, budget.UserID, source.Value, startDate, endDate)
-			if err != nil {
-				s.logger.Error("failed to get income by tag",
-					slog.String("tag", source.Value),
-					slog.String("user_id", budget.UserID),
-					slog.String("error", err.Error()),
-				)
-				return 0, fmt.Errorf("failed to calculate income for tag %s: %w", source.Value, err)
+			if !tagSeen[source.Value] {
+				tagSeen[source.Value] = true
+				tags = append(tags, source.Value)
 			}
-			totalIncome += sum
 
 		case domain.IncomeSourceTypeManual:
 			amount, err := strconv.ParseFloat(source.Value, 64)
@@ -110,6 +119,20 @@ func (s *budgetIncomeService) CalculateBudgetIncome(ctx context.Context, budget 
 				slog.String("user_id", budget.UserID),
 			)
 		}
+	}
+
+	if len(pfcPrimaries) > 0 || len(tags) > 0 {
+		sum, err := s.transactionRepo.GetIncomeSumForSources(ctx, budget.UserID, pfcPrimaries, tags, startDate, endDate)
+		if err != nil {
+			s.logger.Error("failed to get income sum for sources",
+				slog.Any("pfc_primaries", pfcPrimaries),
+				slog.Any("tags", tags),
+				slog.String("user_id", budget.UserID),
+				slog.String("error", err.Error()),
+			)
+			return 0, fmt.Errorf("failed to calculate income for configured sources: %w", err)
+		}
+		totalIncome += sum
 	}
 
 	return totalIncome, nil

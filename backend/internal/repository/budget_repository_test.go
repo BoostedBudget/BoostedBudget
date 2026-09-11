@@ -164,7 +164,7 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 	categoryColumns := []string{
 		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed", "custom_category_id",
 		"allocated_amount", "spent_amount", "created_at", "updated_at", "tags", "match_logic",
-		"parent_id", "parent_pfc_primary",
+		"parent_id", "parent_pfc_primary", "grandparent_pfc_primary", // Issue #1630 Task B2
 		"savings_goal_id", "auto_created", "managed_by_goal_id",
 		"savings_goal_name", // JOIN savings_goals — Issue #1300
 	}
@@ -187,6 +187,7 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 			"category_only", // match_logic
 			nil,             // parent_id (custom join)
 			nil,             // parent_pfc_primary (custom join)
+			nil,             // grandparent_pfc_primary (custom join)
 			nil,             // savings_goal_id (#1300)
 			false,           // auto_created
 			nil,             // managed_by_goal_id
@@ -522,7 +523,7 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
 		"custom_category_id", "allocated_amount", "spent_amount",
 		"created_at", "updated_at", "tags", "match_logic",
-		"parent_id", "parent_pfc_primary",
+		"parent_id", "parent_pfc_primary", "grandparent_pfc_primary", // Issue #1630 Task B2
 		"savings_goal_id", "auto_created", "managed_by_goal_id",
 		"savings_goal_name", // JOIN savings_goals — Issue #1300
 	}
@@ -547,6 +548,7 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 				"category_only",
 				nil,   // parent_id
 				nil,   // parent_pfc_primary
+				nil,   // grandparent_pfc_primary
 				nil,   // savings_goal_id
 				false, // auto_created
 				nil,   // managed_by_goal_id
@@ -567,6 +569,7 @@ func TestBudgetRepository_GetCategoriesByBudgetID(t *testing.T) {
 				"category_only",
 				nil,   // parent_id
 				nil,   // parent_pfc_primary
+				nil,   // grandparent_pfc_primary
 				nil,   // savings_goal_id
 				false, // auto_created
 				nil,   // managed_by_goal_id
@@ -724,361 +727,6 @@ func TestBudgetRepository_DeleteCategory_NotFound(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestBudgetRepository_GetCategoriesMatchingTransaction tests finding matching categories by PFC primary
-func TestBudgetRepository_GetCategoriesMatchingTransaction(t *testing.T) {
-	mock, repo := setupBudgetMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	userID := uuid.New().String()
-	pfcPrimary := "FOOD_AND_DRINK"
-	effective := &domain.EffectiveCategory{
-		Kind:       domain.EffectiveCategoryKindPFC,
-		PFCPrimary: &pfcPrimary,
-	}
-	now := time.Now()
-
-	columns := []string{
-		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
-		"custom_category_id", "allocated_amount", "spent_amount",
-		"created_at", "updated_at", "tags", "match_logic",
-	}
-
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT bc.id`)).
-		WithArgs(userID, &pfcPrimary).
-		WillReturnRows(pgxmock.NewRows(columns).AddRow(
-			uuid.New().String(),
-			uuid.New().String(),
-			"pfc",
-			&pfcPrimary,
-			nil,
-			nil,
-			100.00,
-			50.00,
-			now,
-			now,
-			`[]`,
-			"category_only",
-		))
-
-	categories, err := repo.GetCategoriesMatchingTransaction(ctx, userID, effective)
-
-	assert.NoError(t, err)
-	assert.Len(t, categories, 1)
-	assert.Equal(t, "pfc", categories[0].CategoryKind)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TestBudgetRepository_GetCategoriesMatchingTransaction_NoMatches tests when no categories match
-func TestBudgetRepository_GetCategoriesMatchingTransaction_NoMatches(t *testing.T) {
-	mock, repo := setupBudgetMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	userID := uuid.New().String()
-	pfcPrimary := "ENTERTAINMENT"
-	effective := &domain.EffectiveCategory{
-		Kind:       domain.EffectiveCategoryKindPFC,
-		PFCPrimary: &pfcPrimary,
-	}
-
-	columns := []string{
-		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
-		"custom_category_id", "allocated_amount", "spent_amount",
-		"created_at", "updated_at", "tags", "match_logic",
-	}
-
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT bc.id`)).
-		WithArgs(userID, &pfcPrimary).
-		WillReturnRows(pgxmock.NewRows(columns))
-
-	categories, err := repo.GetCategoriesMatchingTransaction(ctx, userID, effective)
-
-	assert.NoError(t, err)
-	assert.Empty(t, categories)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TestBudgetRepository_GetCategoriesMatchingTransaction_WithDetailed_SiblingExclusion tests that
-// a transaction with detailed=RESTAURANTS does NOT match a FAST_FOOD budget category (regression #1200).
-func TestBudgetRepository_GetCategoriesMatchingTransaction_WithDetailed_SiblingExclusion(t *testing.T) {
-	mock, repo := setupBudgetMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	userID := uuid.New().String()
-	pfcPrimary := "FOOD_AND_DRINK"
-	pfcDetailed := "FOOD_AND_DRINK_RESTAURANTS"
-	effective := &domain.EffectiveCategory{
-		Kind:        domain.EffectiveCategoryKindPFC,
-		PFCPrimary:  &pfcPrimary,
-		PFCDetailed: &pfcDetailed,
-	}
-	now := time.Now()
-
-	columns := []string{
-		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
-		"custom_category_id", "allocated_amount", "spent_amount",
-		"created_at", "updated_at", "tags", "match_logic",
-	}
-
-	// The query should include $3 (the detailed value) so the DB can filter out sibling categories.
-	// Only the primary-only budget (pfc_detailed IS NULL) should be returned.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT bc.id`)).
-		WithArgs(userID, &pfcPrimary, &pfcDetailed).
-		WillReturnRows(pgxmock.NewRows(columns).AddRow(
-			uuid.New().String(),
-			uuid.New().String(),
-			"pfc",
-			&pfcPrimary,
-			nil, // pfc_detailed IS NULL — the primary-only rollup budget
-			nil,
-			200.00,
-			80.00,
-			now,
-			now,
-			`[]`,
-			"category_only",
-		))
-
-	categories, err := repo.GetCategoriesMatchingTransaction(ctx, userID, effective)
-
-	assert.NoError(t, err)
-	assert.Len(t, categories, 1)
-	assert.Nil(t, categories[0].PFCDetailed, "primary-only budget should have nil pfc_detailed")
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TestBudgetRepository_GetCategoriesMatchingTransaction_WithDetailed_MatchesPrimaryAndExact tests
-// that a transaction with detailed=FAST_FOOD matches BOTH the primary-only budget AND the exact
-// FAST_FOOD budget (correct rollup behaviour — #1200).
-func TestBudgetRepository_GetCategoriesMatchingTransaction_WithDetailed_MatchesPrimaryAndExact(t *testing.T) {
-	mock, repo := setupBudgetMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	userID := uuid.New().String()
-	pfcPrimary := "FOOD_AND_DRINK"
-	pfcDetailed := "FOOD_AND_DRINK_FAST_FOOD"
-	effective := &domain.EffectiveCategory{
-		Kind:        domain.EffectiveCategoryKindPFC,
-		PFCPrimary:  &pfcPrimary,
-		PFCDetailed: &pfcDetailed,
-	}
-	now := time.Now()
-
-	columns := []string{
-		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
-		"custom_category_id", "allocated_amount", "spent_amount",
-		"created_at", "updated_at", "tags", "match_logic",
-	}
-
-	// Query uses (bc.pfc_detailed IS NULL OR bc.pfc_detailed = $3) so it returns
-	// both the primary-only budget and the exact FAST_FOOD budget.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT bc.id`)).
-		WithArgs(userID, &pfcPrimary, &pfcDetailed).
-		WillReturnRows(pgxmock.NewRows(columns).
-			AddRow(
-				uuid.New().String(),
-				uuid.New().String(),
-				"pfc",
-				&pfcPrimary,
-				nil, // primary-only rollup
-				nil,
-				200.00,
-				80.00,
-				now,
-				now,
-				`[]`,
-				"category_only",
-			).
-			AddRow(
-				uuid.New().String(),
-				uuid.New().String(),
-				"pfc",
-				&pfcPrimary,
-				&pfcDetailed, // exact match
-				nil,
-				50.00,
-				20.00,
-				now,
-				now,
-				`[]`,
-				"category_only",
-			))
-
-	categories, err := repo.GetCategoriesMatchingTransaction(ctx, userID, effective)
-
-	assert.NoError(t, err)
-	assert.Len(t, categories, 2)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TestBudgetRepository_GetCategoriesMatchingTransaction_NilDetailed_MatchesPrimaryOnly tests
-// that a transaction with no detailed sub-category (PFCDetailed nil) only matches primary-only
-// budget categories (pfc_detailed IS NULL) — not detailed-specific ones (#1200).
-func TestBudgetRepository_GetCategoriesMatchingTransaction_NilDetailed_MatchesPrimaryOnly(t *testing.T) {
-	mock, repo := setupBudgetMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	userID := uuid.New().String()
-	pfcPrimary := "FOOD_AND_DRINK"
-	// PFCDetailed is nil — transaction has no detailed sub-category
-	effective := &domain.EffectiveCategory{
-		Kind:        domain.EffectiveCategoryKindPFC,
-		PFCPrimary:  &pfcPrimary,
-		PFCDetailed: nil,
-	}
-	now := time.Now()
-
-	columns := []string{
-		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
-		"custom_category_id", "allocated_amount", "spent_amount",
-		"created_at", "updated_at", "tags", "match_logic",
-	}
-
-	// When PFCDetailed is nil, query uses AND bc.pfc_detailed IS NULL (hardcoded in SQL)
-	// and only passes $1, $2 — no third parameter needed.
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT bc.id`)).
-		WithArgs(userID, &pfcPrimary).
-		WillReturnRows(pgxmock.NewRows(columns).AddRow(
-			uuid.New().String(),
-			uuid.New().String(),
-			"pfc",
-			&pfcPrimary,
-			nil,
-			nil,
-			150.00,
-			60.00,
-			now,
-			now,
-			`[]`,
-			"category_only",
-		))
-
-	categories, err := repo.GetCategoriesMatchingTransaction(ctx, userID, effective)
-
-	assert.NoError(t, err)
-	assert.Len(t, categories, 1)
-	assert.Nil(t, categories[0].PFCDetailed)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TestBudgetRepository_GetCategoriesMatchingTransaction_Custom_RollsUpToParent tests that a
-// transaction on a custom CHILD category matches a budget allocated on its custom PARENT, in
-// addition to any exact-child budget. This gives the incremental recalc path the same
-// child→parent rollup the full resync already does (#1203). The expectation matches on the
-// parent-lookup SQL fragment, so it fails until the rollup clause is added (RED).
-func TestBudgetRepository_GetCategoriesMatchingTransaction_Custom_RollsUpToParent(t *testing.T) {
-	mock, repo := setupBudgetMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	userID := uuid.New().String()
-	childID := uuid.New().String()
-	parentCatID := uuid.New().String()
-	effective := &domain.EffectiveCategory{
-		Kind:             domain.EffectiveCategoryKindCustom,
-		CustomCategoryID: &childID,
-	}
-	now := time.Now()
-
-	columns := []string{
-		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
-		"custom_category_id", "allocated_amount", "spent_amount",
-		"created_at", "updated_at", "tags", "match_logic",
-	}
-
-	mock.ExpectQuery(`parent_id FROM custom_categories`).
-		WithArgs(userID, &childID).
-		WillReturnRows(pgxmock.NewRows(columns).
-			AddRow(
-				uuid.New().String(),
-				uuid.New().String(),
-				"custom",
-				nil,
-				nil,
-				&parentCatID, // budget allocated on the custom PARENT
-				300.00,
-				100.00,
-				now,
-				now,
-				`[]`,
-				"category_only",
-			).
-			AddRow(
-				uuid.New().String(),
-				uuid.New().String(),
-				"custom",
-				nil,
-				nil,
-				&childID, // exact-child budget
-				50.00,
-				20.00,
-				now,
-				now,
-				`[]`,
-				"category_only",
-			))
-
-	categories, err := repo.GetCategoriesMatchingTransaction(ctx, userID, effective)
-
-	assert.NoError(t, err)
-	assert.Len(t, categories, 2)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TestBudgetRepository_GetCategoriesMatchingTransaction_Custom_RollsUpToPFCPrimary tests that a
-// transaction on a custom category nested under a PFC primary (parent_pfc_primary) also matches
-// the PFC primary-only budget — giving the incremental recalc path the same custom-under-PFC
-// rollup the full resync already does (#1203). The expectation matches on the PFC-parent lookup
-// SQL fragment, so it fails until that clause is added (RED).
-func TestBudgetRepository_GetCategoriesMatchingTransaction_Custom_RollsUpToPFCPrimary(t *testing.T) {
-	mock, repo := setupBudgetMockDB(t)
-	defer mock.Close()
-
-	ctx := context.Background()
-	userID := uuid.New().String()
-	customID := uuid.New().String()
-	pfcPrimary := "FOOD_AND_DRINK"
-	effective := &domain.EffectiveCategory{
-		Kind:             domain.EffectiveCategoryKindCustom,
-		CustomCategoryID: &customID,
-	}
-	now := time.Now()
-
-	columns := []string{
-		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed",
-		"custom_category_id", "allocated_amount", "spent_amount",
-		"created_at", "updated_at", "tags", "match_logic",
-	}
-
-	mock.ExpectQuery(`parent_pfc_primary FROM custom_categories`).
-		WithArgs(userID, &customID).
-		WillReturnRows(pgxmock.NewRows(columns).AddRow(
-			uuid.New().String(),
-			uuid.New().String(),
-			"pfc",
-			&pfcPrimary,
-			nil, // primary-only rollup budget the custom category nests under
-			nil,
-			200.00,
-			80.00,
-			now,
-			now,
-			`[]`,
-			"category_only",
-		))
-
-	categories, err := repo.GetCategoriesMatchingTransaction(ctx, userID, effective)
-
-	assert.NoError(t, err)
-	assert.Len(t, categories, 1)
-	assert.Equal(t, "pfc", categories[0].CategoryKind)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
 // =============================================================================
 // ExpectedIncome Tests (Issue #1048: Budgets/Income Unification)
 // =============================================================================
@@ -1196,7 +844,7 @@ func TestBudgetRepository_GetByID_ReturnsExpectedIncome(t *testing.T) {
 	categoryColumns := []string{
 		"id", "budget_id", "category_kind", "pfc_primary", "pfc_detailed", "custom_category_id",
 		"allocated_amount", "spent_amount", "created_at", "updated_at", "tags", "match_logic",
-		"parent_id", "parent_pfc_primary",
+		"parent_id", "parent_pfc_primary", "grandparent_pfc_primary", // Issue #1630 Task B2
 		"savings_goal_id", "auto_created", "managed_by_goal_id",
 		"savings_goal_name",
 	}

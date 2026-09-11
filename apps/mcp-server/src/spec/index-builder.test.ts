@@ -313,6 +313,103 @@ describe('issue #1609 task 6: request body extraction', () => {
   })
 })
 
+// ── Issue #1630 Task 12a: format + anyOf extraction ───────────────────────────
+//
+// #1630's reporter could not discover that createBudget wanted a different date format from
+// every read endpoint. Half the cause: `format` was never read off the body schema at all, so
+// a plain `type: string, format: date` field rendered as bare `(string)` with no hint that it
+// was a date. The other, WORSE half: Task 9 (domain.FlexibleDate, commit 85edc1fe) changed
+// createBudget's start_date/end_date to publish `anyOf: [{type: string, format: date}, {type:
+// string, format: date-time}]` — and the flattener, reading only a top-level `prop.type` /
+// `prop.format`, drops BOTH for an anyOf field, rendering it with no type at all. These tests
+// pin the fix on the REAL committed artifact (createBudget), not just a synthetic fixture —
+// a synthetic-only test could pass while the real spec-index.json stayed broken.
+
+describe('issue #1630 task 12a: format + anyOf extraction', () => {
+  it('extracts format on a plain (non-anyOf) date field', () => {
+    const specWithFormat = {
+      paths: {
+        '/api/v1/auto-categorization': {
+          post: {
+            operationId: 'createRule',
+            summary: 'format test',
+            requestBody: {
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/HasDate' } } },
+            },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          HasDate: {
+            type: 'object',
+            properties: {
+              as_of: { type: 'string', format: 'date', description: 'A plain date field' },
+            },
+          },
+        },
+      },
+    }
+    const index = indexFromSpec(specWithFormat)
+    const entry = index.entries.find((e) => e.operationId === 'createRule')
+    const field = entry?.requestBody?.find((f) => f.name === 'as_of')
+    expect(field?.type).toBe('string')
+    expect(field?.format).toBe('date')
+  })
+
+  it('merges type and format across anyOf branches (the FlexibleDate shape)', () => {
+    const specWithAnyOf = {
+      paths: {
+        '/api/v1/auto-categorization': {
+          post: {
+            operationId: 'createRule',
+            summary: 'anyOf test',
+            requestBody: {
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/HasFlexibleDate' } } },
+            },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          HasFlexibleDate: {
+            type: 'object',
+            properties: {
+              start_date: {
+                anyOf: [
+                  { type: 'string', format: 'date' },
+                  { type: 'string', format: 'date-time' },
+                ],
+                description: 'Budget start date',
+              },
+            },
+          },
+        },
+      },
+    }
+    const index = indexFromSpec(specWithAnyOf)
+    const entry = index.entries.find((e) => e.operationId === 'createRule')
+    const field = entry?.requestBody?.find((f) => f.name === 'start_date')
+    // Must NOT drop type entirely (the regression) — both anyOf branches agree on 'string'.
+    expect(field?.type).toBe('string')
+    expect(field?.format).toBe('date|date-time')
+  })
+
+  it('the committed createBudget.start_date carries type "string" and both formats (real artifact, not synthetic)', () => {
+    const entry = entries.find((e) => e.operationId === 'createBudget')
+    expect(entry).toBeDefined()
+
+    const startDate = entry?.requestBody?.find((f) => f.name === 'start_date')
+    expect(startDate?.type).toBe('string')
+    expect(startDate?.format).toBe('date|date-time')
+    expect(startDate?.required).toBe(true)
+
+    const endDate = entry?.requestBody?.find((f) => f.name === 'end_date')
+    expect(endDate?.type).toBe('string')
+    expect(endDate?.format).toBe('date|date-time')
+  })
+})
+
 // ── Issue #1610a: response schema extraction ─────────────────────────────────
 //
 // search() exposed request-body schemas (#1609 Task 6) but nothing about what an operation
@@ -469,13 +566,14 @@ describe('issue #1610a: spec-index.json byte budget', () => {
   it('stays under a generous ceiling — regression guard against depth-2 response schemas, not a precision pin', () => {
     const raw = readFileSync(COMMITTED_INDEX_PATH, 'utf-8')
     const bytes = Buffer.byteLength(raw, 'utf-8')
-    // ~350 KB: headroom above the ~332 KB measured at depth 1 + allowed-only, comfortably below
+    // ~380 KB: headroom above the ~363 KB measured at depth 1 + allowed-only, comfortably below
     // the ~467-487 KB a depth-2 (with-or-without-descriptions) response schema would produce.
-    // Raised from 330 KB in this round: effective_merchant condition, uncoercible_condition_value
-    // quarantine reason, quarantine reason→behaviour mappings in doc tags, PFC closed-set endpoint
-    // pointers, and minimum/maxLength constraints on savings-goal request schemas. This guard exists
-    // to catch a depth-2 explosion, not to pin the index to the byte, so the headroom is restored
-    // rather than the entry cut.
-    expect(bytes).toBeLessThan(350_000)
+    // Raised from 350 KB in this round (#1630 Task 12a): every request AND response body field
+    // that carries an OpenAPI `format` (dates, uuids, doubles, int64s, etc.) now emits a `format`
+    // key — this is a real, permanent, and desired size increase (the whole point of the fix:
+    // date fields must announce themselves), not a leak. This guard exists to catch a depth-2
+    // explosion, not to pin the index to the byte, so the headroom is restored rather than the
+    // entry cut.
+    expect(bytes).toBeLessThan(380_000)
   })
 })
