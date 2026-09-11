@@ -87,8 +87,8 @@ func TestPreviewCategoryMatches_WritesNothing_Integration(t *testing.T) {
 	txnRepo := repository.NewTransactionRepository(tx, enc)
 	previewSvc := NewCategoryPreviewService(txnRepo)
 
-	startDate := "2026-01-01"
-	endDate := "2026-03-01"
+	startDate := domain.FlexibleDate(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	endDate := domain.FlexibleDate(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC))
 
 	// A representative snapshot of everything a write could plausibly touch: row counts for the
 	// three tables the query joins/reads, PLUS an amount checksum on transactions (catches an

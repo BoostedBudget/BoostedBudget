@@ -2022,7 +2022,12 @@ components:
         custom_category_id:
           type: string
         end_date:
-          type: string
+          anyOf:
+            - format: date
+              type: string
+            - format: date-time
+              type: string
+          description: End of the date range to preview (inclusive; the service extends it to end-of-day). Must not be before start_date. Accepts YYYY-MM-DD or a full RFC3339 timestamp.
         match_logic:
           description: How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array.
           enum:
@@ -2036,7 +2041,12 @@ components:
         pfc_primary:
           type: string
         start_date:
-          type: string
+          anyOf:
+            - format: date
+              type: string
+            - format: date-time
+              type: string
+          description: Start of the date range to preview. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp.
         tags:
           items:
             type: string

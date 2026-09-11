@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -45,8 +46,8 @@ func TestPreviewCategoryMatches_Success(t *testing.T) {
 		CategoryKind: "pfc",
 		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
 		MatchLogic:   domain.MatchLogicCategoryOnly,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	output, err := handler.PreviewCategoryMatches(context.Background(), input)
@@ -76,8 +77,8 @@ func TestPreviewCategoryMatches_WithTags(t *testing.T) {
 		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
 		Tags:         []string{"business-expense"},
 		MatchLogic:   domain.MatchLogicAnd,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	output, err := handler.PreviewCategoryMatches(context.Background(), input)
@@ -102,8 +103,8 @@ func TestPreviewCategoryMatches_ValidationError(t *testing.T) {
 		CategoryKind: "pfc",
 		PFCPrimary:   ptrStr("FOOD_AND_DRINK"),
 		MatchLogic:   domain.MatchLogicCategoryOnly,
-		StartDate:    "2024-01-31",
-		EndDate:      "2024-01-01", // End before start
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	output, err := handler.PreviewCategoryMatches(context.Background(), input)
@@ -127,8 +128,8 @@ func TestPreviewCategoryMatches_EmptyCategories(t *testing.T) {
 	input.Body = domain.CategoryPreviewRequest{
 		CategoryKind: "pfc",
 		MatchLogic:   domain.MatchLogicCategoryOnly,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	output, err := handler.PreviewCategoryMatches(context.Background(), input)
@@ -156,8 +157,8 @@ func TestPreviewCategoryMatches_ZeroResults(t *testing.T) {
 		CategoryKind: "pfc",
 		PFCPrimary:   ptrStr("TRANSFER_IN"),
 		MatchLogic:   domain.MatchLogicCategoryOnly,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	output, err := handler.PreviewCategoryMatches(context.Background(), input)
@@ -193,8 +194,8 @@ func TestPreviewCategoryMatches_WithChildBreakdown(t *testing.T) {
 		CategoryKind: "pfc",
 		PFCPrimary:   ptrStr("RENT_AND_UTILITIES"),
 		MatchLogic:   domain.MatchLogicCategoryOnly,
-		StartDate:    "2024-01-01",
-		EndDate:      "2024-01-31",
+		StartDate:    domain.FlexibleDate(time.Now()),
+		EndDate:      domain.FlexibleDate(time.Now()),
 	}
 
 	output, err := handler.PreviewCategoryMatches(context.Background(), input)
