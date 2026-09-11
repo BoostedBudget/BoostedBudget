@@ -328,7 +328,8 @@ components:
           format: double
           type: number
         authorized_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted for investment rows and when the provider gave none
+          format: date
           type: string
         category_override_kind:
           type: string
@@ -339,7 +340,8 @@ components:
         data_source:
           type: string
         date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) of this item
+          format: date
           type: string
         effective_category_name:
           type: string
@@ -411,7 +413,8 @@ components:
         security_name:
           type: string
         sort_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) this item sorts on
+          format: date
           type: string
         source:
           type: string
@@ -6268,7 +6271,8 @@ components:
         current_category:
           type: string
         date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) of the matched transaction
+          format: date
           type: string
         merchant_name:
           type: string
@@ -7251,7 +7255,8 @@ components:
           format: double
           type: number
         authorized_date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted when the provider gave none
+          format: date
           type: string
         category_override_date:
           format: date-time
@@ -7268,7 +7273,8 @@ components:
         custom_category_override_id:
           type: string
         date:
-          format: date-time
+          description: UTC calendar day (YYYY-MM-DD) the transaction posted
+          format: date
           type: string
         deleted_at:
           format: date-time

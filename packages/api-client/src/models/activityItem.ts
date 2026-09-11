@@ -37,11 +37,13 @@ export interface ActivityItem {
   account_id: string;
   activity_type?: string;
   amount: number;
+  /** UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted for investment rows and when the provider gave none */
   authorized_date?: string;
   category_override_kind?: string;
   custom_category_override_display?: string;
   custom_category_override_id?: string;
   data_source?: string;
+  /** UTC calendar day (YYYY-MM-DD) of this item */
   date: string;
   effective_category_name?: string;
   effective_merchant_name?: string;
@@ -75,6 +77,7 @@ export interface ActivityItem {
   reviewed_at?: string;
   security_id?: string;
   security_name?: string;
+  /** UTC calendar day (YYYY-MM-DD) this item sorts on */
   sort_date: string;
   source: string;
   /** @nullable */
