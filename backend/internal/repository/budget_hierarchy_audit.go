@@ -46,14 +46,17 @@ import (
 // Go-side query construction (transaction_repository.go's buildCategoryClause), and duplicating
 // that dispatch as a second, parallel SQL template would be the exact kind of drift Task B1's
 // resync job was written to avoid by calling the SAME calculator. So the shape here is: the
-// diagnostic READS (loading categories, calling CalculateCategorySpent) run first, against
-// currently-committed data, outside any transaction this audit owns; every WRITE this audit makes —
-// every spent_amount correction AND the ledger row recording the verdict — commits in ONE
-// transaction (AuditBudgetHierarchy below). A crash before that transaction's Commit leaves NEITHER
-// the corrections NOR the ledger row; a crash after leaves BOTH. What the one-statement precedent
-// buys is exactly this write-atomicity, not atomicity over the diagnostic read — and reading
-// slightly-stale-by-milliseconds committed data before deciding what to write is the same risk every
-// other resync job in this codebase (including Task B1's) already accepts.
+// diagnostic READS (loading categories, calling CalculateCategorySpent) and every WRITE this audit
+// makes — every spent_amount correction AND the ledger row recording the verdict — all happen
+// INSIDE the one transaction AuditBudgetHierarchy opens, AFTER that transaction locks every live
+// category row for this budget FOR UPDATE. A crash before that transaction's Commit leaves NEITHER
+// the corrections NOR the ledger row; a crash after leaves BOTH. Locking the category rows before
+// reading them (Issue #1630 review fix, HIGH — see AuditBudgetHierarchy's own doc comment) is what
+// ties the later write to the snapshot the diagnostic read produced: a concurrent writer to the
+// SAME rows (BudgetRepository.UpdateCategorySpentAmount, called by Task B1's own resync job and by
+// BudgetSyncService.RecalculateBudget) either commits before this audit's lock query runs — so this
+// audit's own read already reflects it — or blocks until this audit's transaction ends, so its
+// write lands strictly after and is never clobbered.
 //
 // IDEMPOTENCY
 // budget_hierarchy_audits has a UNIQUE index on budget_id; the ledger INSERT here is ON CONFLICT DO
@@ -137,18 +140,72 @@ func budgetHierarchyAuditSortedKeys(m map[string]bool) []string {
 	return out
 }
 
+// lockLiveCategoriesForAuditInTx locks every live budget_categories row for budgetID FOR UPDATE,
+// inside tx, without reading their columns — the read that matters (getCategoriesByBudgetIDQuerier)
+// runs separately, right after this returns, so it observes exactly what this lock query already
+// froze. Deliberately NOT `FOR UPDATE` tacked onto getCategoriesByBudgetIDQuerier's own query: that
+// query LEFT JOINs custom_categories/savings_goals, and locking would need `FOR UPDATE OF bc` to
+// avoid touching the nullable side of those joins — simpler, and cheaper for every OTHER caller of
+// that shared query, to keep the lock as its own narrow statement used only here.
+//
+// Blocks until any other transaction already holding one of these row locks commits or rolls
+// back — in particular BudgetRepository.UpdateCategorySpentAmount's bare
+// `UPDATE budget_categories ... WHERE id = $2`, which takes the same implicit row lock for the
+// duration of its own (separate) transaction. See AuditBudgetHierarchy's doc comment for why this,
+// not lockBudgetRowInTx (which only locks the budgets table and would not serialize with that
+// UPDATE at all).
+func (r *budgetRepository) lockLiveCategoriesForAuditInTx(ctx context.Context, tx Querier, budgetID string) error {
+	rows, err := tx.Query(ctx, `
+		SELECT id FROM budget_categories WHERE budget_id = $1 AND deleted_at IS NULL FOR UPDATE
+	`, budgetID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var discard string
+		if err := rows.Scan(&discard); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 // AuditBudgetHierarchy examines ONE budget's live categories for the two write-time-guard shapes
 // (duplicate parent identity, escaping nested pair) and recomputes every live non-savings category's
 // spent_amount against the budget's own stored period, all inside one transaction with the ledger
 // INSERT — see this file's header comment for the full design and why this is not one raw SQL
 // statement.
 //
-// budget must be a freshly-loaded *domain.Budget with Categories already populated (as
-// BudgetRepository.GetByID / GetActiveByUserID already do) — this audit does not re-fetch it, so a
-// caller iterating many budgets should load each one itself. periodStart/periodEnd must come from
-// services.NarrowBudgetPeriodDates(budget) (or an equivalent that anchors on the budget's OWN
-// stored period, never time.Now()) — this package cannot import services (services already imports
-// repository) so it accepts the already-derived bounds rather than recomputing them.
+// budget need only carry a valid ID (and UserID, for the ledger row and CalculateCategorySpent) —
+// budget.Categories, if populated by the caller, is IGNORED. Every read this audit acts on — the
+// category list, and the spend recomputation — happens AFTER this function locks every live
+// budget_categories row for this budget FOR UPDATE inside its own write transaction, not before it.
+//
+// Issue #1630 review fix (HIGH): the previous version read categories and recomputed spend BEFORE
+// opening the write transaction, with no lock or version check tying the later write to that
+// snapshot. A concurrent transaction-sync recompute (BudgetRepository.UpdateCategorySpentAmount,
+// called by both queue/jobs/budget_hierarchy_resync.go's Task B1 resync and
+// BudgetSyncService.RecalculateBudget) landing in that window could commit a correct NEWER
+// spent_amount that this audit would then silently overwrite with its stale value — and it would
+// still mark the budget as permanently examined, so BudgetIDsWithUnexaminedHierarchy would never
+// revisit it to fix the clobber.
+//
+// UpdateCategorySpentAmount is a bare `UPDATE budget_categories ... WHERE id = $2`, with no
+// transaction and no lock of its own beyond the row lock Postgres implicitly takes for the
+// statement's own duration — it never touches the budgets table, so locking the BUDGET row (the
+// technique lockBudgetRowInTx uses for AddCategoryChecked/UpdateCategoryChecked's structural
+// guards) would not serialize with it at all. This audit instead locks the budget_categories rows
+// themselves (lockLiveCategoriesForAuditInTx) — the exact rows UpdateCategorySpentAmount's UPDATE
+// needs to touch — so a concurrent call to it must either (a) commit before this audit's lock
+// query runs, in which case this audit's own read already reflects it, or (b) block until this
+// audit's transaction commits or rolls back, in which case its write lands strictly AFTER this
+// audit's and simply applies on top — never clobbered either way.
+//
+// periodStart/periodEnd must come from services.NarrowBudgetPeriodDates(budget) (or an equivalent
+// that anchors on the budget's OWN stored period, never time.Now()) — this package cannot import
+// services (services already imports repository) so it accepts the already-derived bounds rather
+// than recomputing them.
 //
 // Returns domain.ErrBudgetNotFound if budget is nil or has no ID.
 func (r *budgetRepository) AuditBudgetHierarchy(ctx context.Context, budget *domain.Budget, periodStart, periodEnd time.Time, spentCalc BudgetHierarchySpentCalculator) (domain.BudgetHierarchyAuditVerdict, error) {
@@ -157,7 +214,25 @@ func (r *budgetRepository) AuditBudgetHierarchy(ctx context.Context, budget *dom
 		return verdict, domain.ErrBudgetNotFound
 	}
 
-	categories := budget.Categories
+	// Every write this audit makes — the spent_amount corrections AND the ledger row — commits in
+	// one transaction. A crash or error anywhere in this block leaves neither; only Commit below
+	// makes either durable.
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return verdict, fmt.Errorf("audit budget hierarchy %s: begin tx: %w", budget.ID, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op
+
+	// Lock every live category row for this budget FOR UPDATE, then re-read them INSIDE this
+	// transaction — see this method's doc comment above for why the read must happen here, after
+	// the lock, and not before this transaction opened.
+	if err := r.lockLiveCategoriesForAuditInTx(ctx, tx, budget.ID); err != nil {
+		return verdict, fmt.Errorf("audit budget hierarchy %s: lock categories: %w", budget.ID, err)
+	}
+	categories, err := r.getCategoriesByBudgetIDQuerier(ctx, tx, budget.ID)
+	if err != nil {
+		return verdict, fmt.Errorf("audit budget hierarchy %s: load categories: %w", budget.ID, err)
+	}
 
 	// Detect both shapes for EVERY category against every OTHER category in the same budget — not
 	// just against categories seen so far. Both domain.DuplicateParentIdentity and
@@ -184,8 +259,9 @@ func (r *budgetRepository) AuditBudgetHierarchy(ctx context.Context, budget *dom
 	}
 
 	// Recompute spend for every LIVE non-savings category, scoped to the budget's own stored
-	// period. Savings-kind spend comes from the confirmed-contribution ledger (Issue #1300), not
-	// transaction matching — untouched here, exactly as budget_hierarchy_resync.go excludes it.
+	// period, while still holding the budget row's lock acquired above. Savings-kind spend comes
+	// from the confirmed-contribution ledger (Issue #1300), not transaction matching — untouched
+	// here, exactly as budget_hierarchy_resync.go excludes it.
 	type recomputedSpend struct {
 		categoryID string
 		newAmount  float64
@@ -202,15 +278,6 @@ func (r *budgetRepository) AuditBudgetHierarchy(ctx context.Context, budget *dom
 		}
 		recomputed = append(recomputed, recomputedSpend{categoryID: cat.ID, newAmount: spent})
 	}
-
-	// Every write this audit makes — the spent_amount corrections AND the ledger row — commits in
-	// one transaction. A crash or error anywhere in this block leaves neither; only Commit below
-	// makes either durable.
-	tx, err := r.db.Begin(ctx)
-	if err != nil {
-		return verdict, fmt.Errorf("audit budget hierarchy %s: begin tx: %w", budget.ID, err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op
 
 	categoriesRepaired := 0
 	for _, rc := range recomputed {
