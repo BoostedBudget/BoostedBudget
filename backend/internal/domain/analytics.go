@@ -56,8 +56,14 @@ func (f *CashFlowFilters) Validate() error {
 // measure. Compare CashFlowHistoryResponse, which DOES clamp, discloses it in
 // requested_end_date, and has a fabrication problem to solve that this endpoint does not have.
 type CashFlowSummaryResponse struct {
-	StartDate        time.Time                 `json:"start_date"`
-	EndDate          time.Time                 `json:"end_date"`
+	// StartDate/EndDate stay time.Time — NOT serialized — because they are the SQL bind params the
+	// service threads into GetCashFlowAggregation; StartDateDisplay/EndDateDisplay are what
+	// actually reach clients (#1631, same defect HoldingSnapshotView.AsOfDate and
+	// InvestmentTransaction.DateDisplay already fix for this endpoint's siblings).
+	StartDate        time.Time                 `json:"-"`
+	StartDateDisplay string                    `json:"start_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) the aggregate window starts on"`
+	EndDate          time.Time                 `json:"-"`
+	EndDateDisplay   string                    `json:"end_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) the aggregate window ends on"`
 	Income           float64                   `json:"income"`
 	Expenses         float64                   `json:"expenses"`
 	NetCashFlow      float64                   `json:"net_cash_flow"`
@@ -96,8 +102,17 @@ type CashFlowPeriodComparison struct {
 // (institution-local dates run ahead of UTC) widens it rather than being contradicted — see
 // responseEndDate. So end_date > requested_end_date is impossible, but end_date > today is not.
 type CashFlowHistoryResponse struct {
-	StartDate time.Time `json:"start_date"`
-	EndDate   time.Time `json:"end_date"`
+	// StartDate/EndDate stay time.Time — NOT serialized — for the same reason as
+	// CashFlowSummaryResponse above; StartDateDisplay/EndDateDisplay are what reach clients
+	// (#1631).
+	//
+	// RequestedEndDate (below) is the SAME defect class (a DATE-shaped value serialized directly
+	// as time.Time) but is OUT OF SCOPE for this batch — not in the fields list this fix was
+	// scoped to — and is deliberately left untouched here.
+	StartDate        time.Time `json:"-"`
+	StartDateDisplay string    `json:"start_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this history response starts on"`
+	EndDate          time.Time `json:"-"`
+	EndDateDisplay   string    `json:"end_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this history response ends on"`
 	// RequestedEndDate is the caller's own end date, echoed unchanged. Equal to EndDate for every
 	// request that does not reach past today, which is nearly all of them.
 	RequestedEndDate time.Time            `json:"requested_end_date"`
@@ -107,12 +122,17 @@ type CashFlowHistoryResponse struct {
 
 // CashFlowPeriodData represents a single period in the cash flow history timeline
 type CashFlowPeriodData struct {
-	PeriodStart      time.Time `json:"period_start"`
-	PeriodEnd        time.Time `json:"period_end"`
-	Income           float64   `json:"income"`
-	Expenses         float64   `json:"expenses"`
-	NetCashFlow      float64   `json:"net_cash_flow"`
-	TransactionCount int       `json:"transaction_count"`
+	// PeriodStart/PeriodEnd stay time.Time — NOT serialized — for the same reason as
+	// CashFlowSummaryResponse above; PeriodStartDisplay/PeriodEndDisplay are what reach clients
+	// (#1631).
+	PeriodStart        time.Time `json:"-"`
+	PeriodStartDisplay string    `json:"period_start" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this period starts on"`
+	PeriodEnd          time.Time `json:"-"`
+	PeriodEndDisplay   string    `json:"period_end" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this period ends on"`
+	Income             float64   `json:"income"`
+	Expenses           float64   `json:"expenses"`
+	NetCashFlow        float64   `json:"net_cash_flow"`
+	TransactionCount   int       `json:"transaction_count"`
 }
 
 // CashFlowAggregation represents raw aggregated cash flow data from the database

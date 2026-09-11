@@ -446,8 +446,15 @@ type AccountGainLoss struct {
 type IncomeSummary struct {
 	TotalIncome float64        `json:"total_income"`
 	ByType      []IncomeByType `json:"by_type"`
-	StartDate   time.Time      `json:"start_date"`
-	EndDate     time.Time      `json:"end_date"`
+	// StartDate/EndDate stay time.Time — NOT serialized; StartDateDisplay/EndDateDisplay are what
+	// reach clients. investment_transactions.date is a DATE column, and a date-only value
+	// serialized through a timestamp shifts back a day for any client west of UTC — the same
+	// defect class InvestmentTransaction.DateDisplay already fixes for the transaction rows this
+	// summary aggregates (#1631).
+	StartDate        time.Time `json:"-"`
+	StartDateDisplay string    `json:"start_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this income summary's window starts on"`
+	EndDate          time.Time `json:"-"`
+	EndDateDisplay   string    `json:"end_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this income summary's window ends on"`
 
 	// CurrencyCode is the single currency every monetary figure here is expressed in, or nil when
 	// one cannot be stated. IsMixedCurrency distinguishes the two reasons nil happens: true means

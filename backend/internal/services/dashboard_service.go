@@ -915,9 +915,10 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 			// leaves periodComparison nil), and reporting "no change" for a disconnection is
 			// exactly the user-visible lie #1537 round 10 exists to remove.
 			return &domain.BalanceSummaryResponse{
-				AsOfDate:     asOfDate,
-				TotalBalance: totalBalance,
-				ByType:       byType,
+				AsOfDate:        asOfDate,
+				AsOfDateDisplay: asOfDate.Format(time.DateOnly),
+				TotalBalance:    totalBalance,
+				ByType:          byType,
 			}, nil
 		}
 		previousBalance := baselineBalanceForComparison(previousSnapshots, accountMap, historicalMap, accountTypes, true)
@@ -937,6 +938,7 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 
 	return &domain.BalanceSummaryResponse{
 		AsOfDate:         asOfDate,
+		AsOfDateDisplay:  asOfDate.Format(time.DateOnly),
 		TotalBalance:     totalBalance,
 		ByType:           byType,
 		PeriodComparison: periodComparison,
@@ -1217,9 +1219,10 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 				// Omit the comparison rather than compute it over the wrong universe — see the
 				// personal path's identical guard for why silence beats a false "no change".
 				return &domain.BalanceSummaryResponse{
-					AsOfDate:     asOfDate,
-					TotalBalance: totalBalance,
-					ByType:       byType,
+					AsOfDate:        asOfDate,
+					AsOfDateDisplay: asOfDate.Format(time.DateOnly),
+					TotalBalance:    totalBalance,
+					ByType:          byType,
 				}, nil
 			}
 			historicalMap = buildChainAwareAccountMap(historicalAccounts)
@@ -1239,6 +1242,7 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 
 	return &domain.BalanceSummaryResponse{
 		AsOfDate:         asOfDate,
+		AsOfDateDisplay:  asOfDate.Format(time.DateOnly),
 		TotalBalance:     totalBalance,
 		ByType:           byType,
 		PeriodComparison: periodComparison,
@@ -1302,9 +1306,10 @@ func (s *dashboardService) GetBalanceHistory(ctx context.Context, userID string,
 	snapshots := make([]domain.BalanceHistorySnapshot, len(history))
 	for i, point := range history {
 		snapshots[i] = domain.BalanceHistorySnapshot{
-			Date:    point.Date,
-			Balance: point.TotalBalance,
-			ByType:  point.ByType,
+			Date:        point.Date,
+			DateDisplay: point.Date.Format(time.DateOnly),
+			Balance:     point.TotalBalance,
+			ByType:      point.ByType,
 		}
 	}
 
@@ -1314,10 +1319,12 @@ func (s *dashboardService) GetBalanceHistory(ctx context.Context, userID string,
 	}
 
 	return &domain.BalanceHistoryResponse{
-		StartDate:   startDate,
-		EndDate:     endDate,
-		Granularity: granularity,
-		Snapshots:   snapshots,
+		StartDate:        startDate,
+		StartDateDisplay: startDate.Format(time.DateOnly),
+		EndDate:          endDate,
+		EndDateDisplay:   endDate.Format(time.DateOnly),
+		Granularity:      granularity,
+		Snapshots:        snapshots,
 	}, nil
 }
 
@@ -1580,6 +1587,7 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 			// change" for a disconnection is exactly the lie this fix removes.
 			return &domain.NetWorthResponse{
 				AsOfDate:         asOfDate,
+				AsOfDateDisplay:  asOfDate.Format(time.DateOnly),
 				NetWorth:         netWorth,
 				TotalAssets:      totalAssets,
 				TotalLiabilities: totalLiabilities,
@@ -1649,6 +1657,7 @@ func (s *dashboardService) GetNetWorth(ctx context.Context, userID string, filte
 
 	return &domain.NetWorthResponse{
 		AsOfDate:         asOfDate,
+		AsOfDateDisplay:  asOfDate.Format(time.DateOnly),
 		NetWorth:         netWorth,
 		TotalAssets:      totalAssets,
 		TotalLiabilities: totalLiabilities,
@@ -1819,6 +1828,7 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 					// personal path's identical guard.
 					return &domain.NetWorthResponse{
 						AsOfDate:         asOfDate,
+						AsOfDateDisplay:  asOfDate.Format(time.DateOnly),
 						NetWorth:         netWorth,
 						TotalAssets:      totalAssets,
 						TotalLiabilities: totalLiabilities,
@@ -1883,6 +1893,7 @@ func (s *dashboardService) getNetWorthHousehold(ctx context.Context, userID stri
 
 	return &domain.NetWorthResponse{
 		AsOfDate:         asOfDate,
+		AsOfDateDisplay:  asOfDate.Format(time.DateOnly),
 		NetWorth:         netWorth,
 		TotalAssets:      totalAssets,
 		TotalLiabilities: totalLiabilities,
@@ -1978,6 +1989,7 @@ func (s *dashboardService) GetNetWorthHistory(ctx context.Context, userID string
 
 		snapshots[i] = domain.NetWorthHistorySnapshot{
 			Date:             point.Date,
+			DateDisplay:      point.Date.Format(time.DateOnly),
 			NetWorth:         netWorth,
 			TotalAssets:      totalAssets,
 			TotalLiabilities: totalLiabilities,
@@ -1990,9 +2002,11 @@ func (s *dashboardService) GetNetWorthHistory(ctx context.Context, userID string
 	}
 
 	return &domain.NetWorthHistoryResponse{
-		StartDate:   startDate,
-		EndDate:     endDate,
-		Granularity: granularity,
-		Snapshots:   snapshots,
+		StartDate:        startDate,
+		StartDateDisplay: startDate.Format(time.DateOnly),
+		EndDate:          endDate,
+		EndDateDisplay:   endDate.Format(time.DateOnly),
+		Granularity:      granularity,
+		Snapshots:        snapshots,
 	}, nil
 }

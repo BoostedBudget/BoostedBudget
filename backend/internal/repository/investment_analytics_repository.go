@@ -906,12 +906,14 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 	}
 	currencyCode, isMixed := domain.ResolveCurrencyCodes(currencyCodes)
 	return &domain.IncomeSummary{
-		TotalIncome:     totalIncome,
-		ByType:          byType,
-		StartDate:       start,
-		EndDate:         end,
-		CurrencyCode:    currencyCode,
-		IsMixedCurrency: isMixed,
+		TotalIncome:      totalIncome,
+		ByType:           byType,
+		StartDate:        start,
+		StartDateDisplay: start.Format(time.DateOnly),
+		EndDate:          end,
+		EndDateDisplay:   end.Format(time.DateOnly),
+		CurrencyCode:     currencyCode,
+		IsMixedCurrency:  isMixed,
 	}, nil
 }
 

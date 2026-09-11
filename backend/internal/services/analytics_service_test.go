@@ -206,6 +206,15 @@ func TestAnalyticsService_GetCashFlowSummary(t *testing.T) {
 		if result.ExpenseCount != 25 {
 			t.Errorf("expected expense count 25, got %d", result.ExpenseCount)
 		}
+		// #1631 Batch F1: StartDate/EndDate are DATE-shaped, so StartDateDisplay/EndDateDisplay
+		// (the fields that actually serialize as start_date/end_date) must be populated at this
+		// construction site, not left as an empty string.
+		if result.StartDateDisplay != "2024-03-01" {
+			t.Errorf("expected start_date_display 2024-03-01, got %q", result.StartDateDisplay)
+		}
+		if result.EndDateDisplay != "2024-03-31" {
+			t.Errorf("expected end_date_display 2024-03-31, got %q", result.EndDateDisplay)
+		}
 
 		// Check period comparison
 		if result.PeriodComparison == nil {
@@ -374,10 +383,27 @@ func TestAnalyticsService_GetCashFlowHistory(t *testing.T) {
 		if result.Periods[0].NetCashFlow != 50 { // 100 - 50
 			t.Errorf("expected net 50, got %f", result.Periods[0].NetCashFlow)
 		}
+		// #1631 Batch F1: PeriodStart/PeriodEnd are DATE-shaped, so the Display siblings that
+		// actually serialize as period_start/period_end must be populated in the conversion loop.
+		if result.Periods[0].PeriodStartDisplay != "2024-03-01" {
+			t.Errorf("expected period_start_display 2024-03-01, got %q", result.Periods[0].PeriodStartDisplay)
+		}
+		if result.Periods[0].PeriodEndDisplay == "" {
+			t.Error("expected period_end_display to be populated, got empty string")
+		}
 
 		// Check third period (negative net)
 		if result.Periods[2].NetCashFlow != -100 { // 0 - 100
 			t.Errorf("expected net -100, got %f", result.Periods[2].NetCashFlow)
+		}
+
+		// #1631 Batch F1: the response's own StartDate/EndDate must reach the wire through
+		// StartDateDisplay/EndDateDisplay too, not just the per-period fields above.
+		if result.StartDateDisplay != "2024-03-01" {
+			t.Errorf("expected start_date_display 2024-03-01, got %q", result.StartDateDisplay)
+		}
+		if result.EndDateDisplay != "2024-03-03" {
+			t.Errorf("expected end_date_display 2024-03-03, got %q", result.EndDateDisplay)
 		}
 	})
 
