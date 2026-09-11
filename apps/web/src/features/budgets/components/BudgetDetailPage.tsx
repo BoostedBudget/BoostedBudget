@@ -27,6 +27,7 @@ import type {
   UpdateBudgetCategoryRequest,
   BudgetCategory,
 } from '../types';
+import { filterTopLevel } from '../types';
 import { BudgetCategoryManager } from './category-management/BudgetCategoryManager';
 import { BudgetIncomeSection } from './budget-detail/BudgetIncomeSection';
 import { UnallocatedFundsCard } from './budget-detail/UnallocatedFundsCard';
@@ -69,8 +70,10 @@ export function BudgetDetailPage() {
     // Issue #1048: Actual income is what was received — no fallback to amount.
     const actualIncome = budget.income_amount ?? 0;
 
-    // Calculate total allocated from categories
-    const totalAllocated = (budget.categories || []).reduce(
+    // Calculate total allocated from TOP-LEVEL categories only (#1203/#1630) — a
+    // sub-allocation's amount is already inside its parent's, so summing every row
+    // double-counts.
+    const totalAllocated = filterTopLevel(budget.categories || []).reduce(
       (sum, cat) => sum + cat.allocated_amount,
       0
     );

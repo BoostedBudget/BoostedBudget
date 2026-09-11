@@ -1667,8 +1667,10 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_PFCPrimaryRollsUpCus
 
 	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
 
-	// The PFC-primary clause must OR in custom categories whose parent_pfc_primary = $4.
-	mock.ExpectQuery(`custom_category_override_id IN \(SELECT id FROM custom_categories WHERE user_id = \$1 AND parent_pfc_primary = \$4\)`).
+	// The PFC-primary clause must OR in custom categories whose parent_pfc_primary = $4 (the
+	// direct child) AND, two hops down (Issue #1630 Task B2), a custom grandchild nested via
+	// parent_id under that direct child.
+	mock.ExpectQuery(`custom_category_override_id IN \(\s*SELECT id FROM custom_categories WHERE user_id = \$1 AND parent_pfc_primary = \$4\s*UNION\s*SELECT g\.id FROM custom_categories g\s*JOIN custom_categories c ON c\.id = g\.parent_id AND c\.user_id = g\.user_id\s*WHERE g\.user_id = \$1 AND c\.parent_pfc_primary = \$4\s*\)`).
 		WithArgs(userID, startDate, endDate, pfcPrimary).
 		WillReturnRows(rows)
 

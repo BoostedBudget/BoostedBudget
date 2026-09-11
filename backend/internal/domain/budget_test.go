@@ -363,6 +363,120 @@ func TestBudget_Totals_NoDoubleCountSubAllocations(t *testing.T) {
 			t.Errorf("TotalSpent() = %v, want 150", got)
 		}
 	})
+
+	// Issue #1630 Task B2: pfc X <- custom C (parent_pfc_primary = X, NOT itself budgeted here)
+	// <- custom G (parent_id = C, budgeted). Only X and G have budget rows; C has none at all.
+	// buildCategoryClause's widened "pfc" branch (Commit 1) now rolls X's SpentAmount up
+	// through BOTH hops, so X's own SpentAmount already reflects G's transactions. Without this
+	// test's fix (CustomGrandparentPFCPrimary), IsSubAllocationWithin has no way to recognize G
+	// as nested under X — it only ever checked G's DIRECT parent linkage, and C (the direct
+	// parent) is not itself a budgeted row — so G's own top-level SpentAmount would ALSO be
+	// summed, double-counting the same transactions.
+	t.Run("custom grandchild nested under budgeted PFC primary two hops through an unbudgeted parent", func(t *testing.T) {
+		grandchildID := "44444444-4444-4444-4444-444444444444"
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300, SpentAmount: 150},
+			{
+				CategoryKind:                "custom",
+				CustomCategoryID:            &grandchildID,
+				CustomParentID:              &customParentID, // G's direct parent is C (not budgeted)
+				CustomGrandparentPFCPrimary: &food,            // C's own parent is the pfc root X
+				AllocatedAmount:             50,
+				SpentAmount:                 20,
+			},
+		}}
+		if got := b.TotalAllocated(); got != 300 {
+			t.Errorf("TotalAllocated() = %v, want 300 (grandchild's allocation is already inside the root's)", got)
+		}
+		if got := b.TotalSpent(); got != 150 {
+			t.Errorf("TotalSpent() = %v, want 150 (grandchild's spend is already rolled into the root's — "+
+				"if this reads 170, the transitive sub-allocation classification regressed and the "+
+				"grandchild's spend is being double-counted)", got)
+		}
+	})
+
+	// Issue #1630: hierarchy alone is not sufficient — containment is gated on match_logic too.
+	t.Run("savings category is never excluded, even nested under a same-name parent", func(t *testing.T) {
+		goalID := "33333333-3333-3333-3333-333333333333"
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300, SpentAmount: 150},
+			{CategoryKind: "savings", SavingsGoalID: &goalID, AllocatedAmount: 50, SpentAmount: 20},
+		}}
+		// The switch in IsSubAllocationWithin has no "savings" case — this is deliberate
+		// (Issue #1203) and must not be "tidied up" away. Savings always counts in full.
+		if got := b.TotalAllocated(); got != 350 {
+			t.Errorf("TotalAllocated() = %v, want 350 (savings never excluded)", got)
+		}
+		if got := b.TotalSpent(); got != 170 {
+			t.Errorf("TotalSpent() = %v, want 170 (savings never excluded)", got)
+		}
+	})
+
+	t.Run("tag_only child escapes the parent's category clause and is NOT excluded", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300, SpentAmount: 150, MatchLogic: MatchLogicCategoryOnly},
+			// A tag_only child can match transactions with no relation to `food` at all, so
+			// its spend is NOT already inside the parent's roll-up — it must count separately.
+			{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, AllocatedAmount: 50, SpentAmount: 20, MatchLogic: MatchLogicTagOnly},
+		}}
+		if got := b.TotalAllocated(); got != 350 {
+			t.Errorf("TotalAllocated() = %v, want 350 (tag_only child counts standalone)", got)
+		}
+		if got := b.TotalSpent(); got != 170 {
+			t.Errorf("TotalSpent() = %v, want 170 (tag_only child counts standalone)", got)
+		}
+	})
+
+	t.Run("or child escapes the parent's category clause and is NOT excluded", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "custom", CustomCategoryID: &customParentID, AllocatedAmount: 300, SpentAmount: 150, MatchLogic: MatchLogicCategoryOnly},
+			{CategoryKind: "custom", CustomCategoryID: &customChildID, CustomParentID: &customParentID, AllocatedAmount: 50, SpentAmount: 20, MatchLogic: MatchLogicOr},
+		}}
+		if got := b.TotalAllocated(); got != 350 {
+			t.Errorf("TotalAllocated() = %v, want 350 (or child counts standalone)", got)
+		}
+		if got := b.TotalSpent(); got != 170 {
+			t.Errorf("TotalSpent() = %v, want 170 (or child counts standalone)", got)
+		}
+	})
+
+	t.Run("and or tag_only parent has no envelope, so an otherwise-nested child still counts", func(t *testing.T) {
+		b := Budget{Categories: []BudgetCategory{
+			// The parent's own match_logic is 'and': its matched set is category AND tags, a
+			// strict subset of "category only" — it has no envelope that a plain category_only
+			// child could fall inside, so the child must not be excluded from totals.
+			{CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300, SpentAmount: 150, MatchLogic: MatchLogicAnd, Tags: []string{"work"}},
+			{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, AllocatedAmount: 50, SpentAmount: 20, MatchLogic: MatchLogicCategoryOnly},
+		}}
+		if got := b.TotalAllocated(); got != 350 {
+			t.Errorf("TotalAllocated() = %v, want 350 (and-parent has no envelope)", got)
+		}
+		if got := b.TotalSpent(); got != 170 {
+			t.Errorf("TotalSpent() = %v, want 170 (and-parent has no envelope)", got)
+		}
+	})
+
+	// Issue #1630: BudgetCategory.Validate now rejects pfc_detailed: "" at write time, but
+	// this pins the READ-side behavior directly (bypassing Validate, as a row already
+	// persisted before the guard existed would) so a "" row can never make this Go total
+	// disagree with the frontend's isSubAllocationWithin, which already treats "" the same
+	// as absent/undefined.
+	t.Run("pfc_detailed empty string is treated as absent, not a child", func(t *testing.T) {
+		emptyDetailed := ""
+		b := Budget{Categories: []BudgetCategory{
+			{CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 300, SpentAmount: 150},
+			{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &emptyDetailed, AllocatedAmount: 50, SpentAmount: 20},
+		}}
+		// If "" were treated as a real detailed value, this row would be excluded as a
+		// sub-allocation of the row above and the totals would read 300/150. Because "" is
+		// absent, this is actually a DUPLICATE parent identity — both rows count in full.
+		if got := b.TotalAllocated(); got != 350 {
+			t.Errorf("TotalAllocated() = %v, want 350 (pfc_detailed: '' is not a child)", got)
+		}
+		if got := b.TotalSpent(); got != 170 {
+			t.Errorf("TotalSpent() = %v, want 170 (pfc_detailed: '' is not a child)", got)
+		}
+	})
 }
 
 // TestBudget_OverEarmarkedParentIDs verifies informational over-earmark detection (Issue #1203).
@@ -645,6 +759,21 @@ func TestBudgetCategory_Validate(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "spent_amount cannot be negative",
+		},
+		{
+			// Issue #1630: pfc_detailed: "" (present but empty) must be rejected at write
+			// time, not silently persisted — see hasPFCDetailed's doc comment for why a
+			// persisted "" would otherwise make the Go/SQL and TypeScript totals disagree.
+			name: "empty string pfc_detailed is rejected",
+			category: BudgetCategory{
+				BudgetID:        "budget-123",
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
+				PFCDetailed:     ptrStr(""),
+				AllocatedAmount: 100.00,
+			},
+			wantErr: true,
+			errMsg:  "pfc_detailed must not be an empty string",
 		},
 	}
 
@@ -1724,6 +1853,83 @@ func TestBuildCategoryEventData_KeysAndAllocated(t *testing.T) {
 	}
 }
 
+// TestBuildCategoryEventData_MarksSubAllocation proves that a category whose hierarchical
+// parent is also budgeted (and whose own match_logic keeps it inside the parent's category
+// clause — Issue #1630) is marked "is_sub_allocation": 1.0 in the emitted event data, while
+// the parent and any non-nested category are marked 0.0. This is the fix for Task 3.6: a
+// rollover boost consuming this data must be able to tell a sub-allocation row apart from a
+// top-level one, because the sub-allocation's dollars are already reflected in its parent's
+// remaining/spent — rolling both independently would roll the same dollars twice.
+//
+// RED (pre-fix): BuildCategoryEventData emits only percent_used/remaining/spent/allocated,
+// so "is_sub_allocation" is absent from every entry and this test fails on the `has` check.
+func TestBuildCategoryEventData_MarksSubAllocation(t *testing.T) {
+	parentID := "parent-cat"
+	childID := "child-cat"
+	standaloneID := "standalone-cat"
+	parentCustomID := "custom-parent-1"
+
+	categories := []BudgetCategory{
+		{
+			ID:               parentID,
+			BudgetID:         "budget-1",
+			CategoryKind:     "custom",
+			CustomCategoryID: &parentCustomID,
+			MatchLogic:       MatchLogicCategoryOnly,
+			AllocatedAmount:  500.0,
+			SpentAmount:      200.0,
+		},
+		{
+			ID:               childID,
+			BudgetID:         "budget-1",
+			CategoryKind:     "custom",
+			CustomCategoryID: strPtr("custom-child-1"),
+			CustomParentID:   &parentCustomID,
+			MatchLogic:       MatchLogicCategoryOnly,
+			AllocatedAmount:  100.0,
+			SpentAmount:      50.0,
+		},
+		{
+			ID:               standaloneID,
+			BudgetID:         "budget-1",
+			CategoryKind:     "custom",
+			CustomCategoryID: strPtr("custom-standalone-1"),
+			MatchLogic:       MatchLogicCategoryOnly,
+			AllocatedAmount:  75.0,
+			SpentAmount:      10.0,
+		},
+	}
+
+	result := BuildCategoryEventData(categories)
+
+	parent, ok := result[parentID]
+	if !ok {
+		t.Fatal("expected key for parent category")
+	}
+	if _, has := parent["is_sub_allocation"]; !has {
+		t.Fatal("expected 'is_sub_allocation' key in parent category map")
+	}
+	if parent["is_sub_allocation"] != 0.0 {
+		t.Errorf("parent is_sub_allocation: got %v, want 0.0 (not a sub-allocation)", parent["is_sub_allocation"])
+	}
+
+	child, ok := result[childID]
+	if !ok {
+		t.Fatal("expected key for child category")
+	}
+	if child["is_sub_allocation"] != 1.0 {
+		t.Errorf("child is_sub_allocation: got %v, want 1.0 (nested under a budgeted parent)", child["is_sub_allocation"])
+	}
+
+	standalone, ok := result[standaloneID]
+	if !ok {
+		t.Fatal("expected key for standalone category")
+	}
+	if standalone["is_sub_allocation"] != 0.0 {
+		t.Errorf("standalone is_sub_allocation: got %v, want 0.0 (no budgeted parent)", standalone["is_sub_allocation"])
+	}
+}
+
 // Note: contains helper is defined in linked_item_test.go
 
 // TestBudgetCategory_Validate_SavingsKind tests the savings category_kind branch (Issue #1300).
@@ -1815,3 +2021,306 @@ func TestBudgetCategory_Validate_SavingsKind(t *testing.T) {
 		})
 	}
 }
+
+// TestDuplicateParentIdentity pins Issue #1630 Task 4: two live rows sharing a parent
+// identity (same pfc_primary primary-only row, or same custom_category_id) leave the
+// budgetedParentSets/ChildrenAllocatedByParent map with an undefined "last one wins" entry.
+// DuplicateParentIdentity is the write-time guard that must catch this before it happens.
+func TestDuplicateParentIdentity(t *testing.T) {
+	food := "FOOD_AND_DRINK"
+	utilities := "RENT_AND_UTILITIES"
+	fastFood := "FOOD_AND_DRINK_FAST_FOOD"
+	customA := "11111111-1111-1111-1111-111111111111"
+	customB := "22222222-2222-2222-2222-222222222222"
+
+	tests := []struct {
+		name      string
+		existing  []BudgetCategory
+		candidate BudgetCategory
+		want      bool
+	}{
+		{
+			name: "two PFC primary-only rows with the same pfc_primary collide",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food},
+			want:      true,
+		},
+		{
+			name: "two PFC primary-only rows with different pfc_primary do not collide",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &utilities},
+			want:      false,
+		},
+		{
+			name: "a detailed child under the same primary is NOT a duplicate parent",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood},
+			want:      false,
+		},
+		{
+			name: "two detailed children under the same primary are NOT duplicate parents (legal siblings)",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood},
+			want:      false,
+		},
+		{
+			name: "two custom rows referencing the same custom_category_id collide",
+			existing: []BudgetCategory{
+				{CategoryKind: "custom", CustomCategoryID: &customA},
+			},
+			candidate: BudgetCategory{CategoryKind: "custom", CustomCategoryID: &customA},
+			want:      true,
+		},
+		{
+			name: "two custom rows referencing different custom_category_ids do not collide",
+			existing: []BudgetCategory{
+				{CategoryKind: "custom", CustomCategoryID: &customA},
+			},
+			candidate: BudgetCategory{CategoryKind: "custom", CustomCategoryID: &customB},
+			want:      false,
+		},
+		{
+			name: "different category kinds never collide even with overlapping identifiers",
+			existing: []BudgetCategory{
+				{CategoryKind: "custom", CustomCategoryID: &customA},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food},
+			want:      false,
+		},
+		{
+			name:      "empty existing set never collides",
+			existing:  nil,
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food},
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DuplicateParentIdentity(tt.existing, &tt.candidate); got != tt.want {
+				t.Errorf("DuplicateParentIdentity() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestEscapedNestedChild pins Issue #1630's HIGH-severity adversarial-review finding: a nested
+// child whose own match_logic escapes containment double-counts spend (surfaces as its own
+// top-level row AND is still rolled into the parent's SpentAmount by buildCategoryClause's
+// match_logic-blind hierarchical query). EscapedNestedChild is the write-time guard that must
+// reject that shape, in either add order.
+//
+// A SECOND independent adversarial review (fixwave 4) found this guard's first version was
+// itself incomplete: it only ever checked pairs where the PARENT was already "containing"
+// (category_only/or), silently assuming an 'and' or 'tag_only' parent's own SpentAmount could
+// never overlap a nested child's. False — see EscapedNestedChild's doc comment for the mechanism
+// (an 'and' parent's clause still rolls the child's category into its own category term before
+// applying its tag filter; a 'tag_only' parent's pure tag match can still catch a transaction
+// that sits in the child's category). The guard now refuses ANY hierarchically-nested pair that
+// is not CLEANLY CONTAINED (isContainingMatchLogic(parent) && isContainedMatchLogic(child)),
+// which strictly widens — never narrows — the original refusal.
+func TestEscapedNestedChild(t *testing.T) {
+	food := "FOOD_AND_DRINK"
+	utilities := "RENT_AND_UTILITIES"
+	fastFood := "FOOD_AND_DRINK_FAST_FOOD"
+	customParent := "11111111-1111-1111-1111-111111111111"
+	customChild := "22222222-2222-2222-2222-222222222222"
+
+	tests := []struct {
+		name      string
+		existing  []BudgetCategory
+		candidate BudgetCategory
+		want      bool
+	}{
+		{
+			name: "PFC: category_only parent + or detailed child escapes (child added after parent)",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicOr},
+			want:      true,
+		},
+		{
+			name: "PFC: or detailed child added BEFORE its category_only parent still escapes",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicOr},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			want:      true,
+		},
+		{
+			name: "PFC: category_only parent + category_only detailed child does NOT escape",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicCategoryOnly},
+			want:      false,
+		},
+		{
+			name: "PFC: and parent + or detailed child escapes too (neither side of a non-containing pair is safe)",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicAnd, Tags: []string{"x"}},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicOr},
+			want:      true,
+		},
+		{
+			name: "fixwave 4: PFC and parent + category_only (CONTAINED) detailed child now escapes — parent added after child",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicAnd, Tags: []string{"x"}},
+			want:      true,
+		},
+		{
+			name: "fixwave 4: PFC and parent + category_only (CONTAINED) detailed child now escapes — child added after parent",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicAnd, Tags: []string{"x"}},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicCategoryOnly},
+			want:      true,
+		},
+		{
+			name: "fixwave 4: PFC tag_only parent + and (CONTAINED) detailed child now escapes",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicTagOnly, Tags: []string{"splurge"}},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, PFCDetailed: &fastFood, MatchLogic: MatchLogicAnd, Tags: []string{"splurge"}},
+			want:      true,
+		},
+		{
+			name: "fixwave 4: two UNRELATED and-logic categories (no hierarchy) still never trip this guard",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &utilities, MatchLogic: MatchLogicAnd, Tags: []string{"x"}},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicAnd, Tags: []string{"x"}},
+			want:      false,
+		},
+		{
+			name: "PFC: unrelated primaries never trip this guard",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &utilities, MatchLogic: MatchLogicOr},
+			want:      false,
+		},
+		{
+			name: "custom: category_only parent + tag_only nested child (via custom_parent_id) escapes",
+			existing: []BudgetCategory{
+				{CategoryKind: "custom", CustomCategoryID: &customParent, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{
+				CategoryKind:     "custom",
+				CustomCategoryID: &customChild,
+				CustomParentID:   &customParent,
+				MatchLogic:       MatchLogicTagOnly,
+				Tags:             []string{"x"},
+			},
+			want: true,
+		},
+		{
+			name: "custom: or parent nested under a budgeted PFC primary escapes (parent added after child)",
+			existing: []BudgetCategory{
+				{
+					CategoryKind:           "custom",
+					CustomCategoryID:       &customChild,
+					CustomParentPFCPrimary: &food,
+					MatchLogic:             MatchLogicOr,
+				},
+			},
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			want:      true,
+		},
+		{
+			name: "custom: category_only parent + category_only nested child does NOT escape",
+			existing: []BudgetCategory{
+				{CategoryKind: "custom", CustomCategoryID: &customParent, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{
+				CategoryKind:     "custom",
+				CustomCategoryID: &customChild,
+				CustomParentID:   &customParent,
+				MatchLogic:       MatchLogicCategoryOnly,
+			},
+			want: false,
+		},
+		{
+			// Issue #1630 Task B2: G (candidate) nests under X two hops away — G's direct
+			// parent is C (CustomParentID), and C itself nests under X via parent_pfc_primary
+			// (CustomGrandparentPFCPrimary). buildCategoryClause's widened roll-up (Commit 1)
+			// now sums G's transactions into X's SpentAmount regardless of whether C is itself
+			// budgeted, so an 'or' G must be refused here exactly like a direct 'or' child is.
+			name: "custom: transitive grandchild via CustomGrandparentPFCPrimary escapes a category_only PFC root",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{
+				CategoryKind:                "custom",
+				CustomCategoryID:            &customChild,
+				CustomParentID:              &customParent,
+				CustomGrandparentPFCPrimary: &food,
+				MatchLogic:                  MatchLogicOr,
+			},
+			want: true,
+		},
+		{
+			name: "custom: transitive grandchild via CustomGrandparentPFCPrimary does NOT escape when cleanly contained",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			},
+			candidate: BudgetCategory{
+				CategoryKind:                "custom",
+				CustomCategoryID:            &customChild,
+				CustomParentID:              &customParent,
+				CustomGrandparentPFCPrimary: &food,
+				MatchLogic:                  MatchLogicCategoryOnly,
+			},
+			want: false,
+		},
+		{
+			name:      "empty existing set never escapes",
+			existing:  nil,
+			candidate: BudgetCategory{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicOr},
+			want:      false,
+		},
+		{
+			name: "nil candidate never escapes",
+			existing: []BudgetCategory{
+				{CategoryKind: "pfc", PFCPrimary: &food, MatchLogic: MatchLogicCategoryOnly},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := &tt.candidate
+			if tt.name == "nil candidate never escapes" {
+				candidate = nil
+			}
+			if got := EscapedNestedChild(tt.existing, candidate); got != tt.want {
+				t.Errorf("EscapedNestedChild() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// WouldOrphanContainedChildren (and its test, formerly here) was removed in fixwave 4:
+// EscapedNestedChild's widened check — refusing any hierarchically-nested pair that is not
+// cleanly contained, in both directions — subsumes it. A PARENT edit that stops "containing" at
+// all (the exact transition WouldOrphanContainedChildren tested) now trips EscapedNestedChild's
+// own "candidate as parent" branch directly: NOT(isContainingMatchLogic(candidate) &&
+// isContainedMatchLogic(other)) is true whenever candidate stops containing, for any nested
+// other. See TestEscapedNestedChild's "fixwave 4" cases above, and
+// TestBudgetService_UpdateCategory_RejectsParentOrphaningContainedChild (budget_service_test.go),
+// which still exercises this exact transition end-to-end through the service layer and still
+// passes unchanged — it asserts errors.Is(err, ErrEscapedNestedChild), the same sentinel both
+// guards always wrapped, so it does not care which of the two guards produced the refusal.

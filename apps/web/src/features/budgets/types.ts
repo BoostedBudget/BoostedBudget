@@ -21,6 +21,24 @@ export interface IncomeSource {
   value_display?: string; // Server-supplied humanized label for pfc_primary sources
 }
 
+/**
+ * Reason why a transaction matched a budget category (Issue #499). Relocated here from the
+ * now-deleted utils/transactionBudgetMatcher.ts (Issue #1630 task 3) — that module's matching
+ * function had zero production callers and its pfc branch did not roll up a custom-override
+ * child into its budgeted parent, so it was a third, dead, wrong copy of the match_logic rule.
+ * The type itself is still live: TransactionCard and TransactionBudgetBadge both import it.
+ */
+export type MatchReason = 'category' | 'tag' | 'both';
+
+/**
+ * Result of matching a transaction to a budget category (Issue #499). See MatchReason above
+ * for why this lives here now instead of in utils/transactionBudgetMatcher.ts.
+ */
+export interface BudgetCategoryMatch {
+  category: BudgetCategory;
+  matchReason: MatchReason;
+}
+
 export interface BudgetCategory {
   id: string;
   budget_id: string;
@@ -34,6 +52,16 @@ export interface BudgetCategory {
   // Used to detect sub-allocations so budget totals aren't double-counted.
   custom_parent_id?: string | null;
   custom_parent_pfc_primary?: string | null;
+  // custom_grandparent_pfc_primary is the PFC primary this category's PARENT
+  // (custom_parent_id) is itself nested under via parent_pfc_primary — i.e. this row is a
+  // GRANDCHILD of a PFC root two hops down: pfc root -> custom parent (whose OWN
+  // custom_parent_pfc_primary points at the root) -> this custom category (custom_parent_id).
+  // Mirrors backend BudgetCategory.CustomGrandparentPFCPrimary (Issue #1630 Task B2) — only
+  // ever set when custom_parent_id is also set. Needed because the backend's widened roll-up
+  // now reaches this row's transactions from that root two hops away regardless of whether the
+  // intermediate parent is itself budgeted; isSubAllocationWithin/isSubAllocationOfParent must
+  // recognize the same transitive pair or the frontend total disagrees with the backend's.
+  custom_grandparent_pfc_primary?: string | null;
   // Issue #1300: savings bucket linkage
   savings_goal_id?: string | null;
   savings_goal_name?: string | null; // Server-supplied display name for the linked goal
@@ -48,15 +76,47 @@ export interface BudgetCategory {
 }
 
 /**
+ * Reports whether a PARENT's match_logic still contains the plain category match — i.e.
+ * its matched-transaction set is a superset of "category only" (Issue #1630). '' / undefined
+ * is treated as 'category_only' (the domain/column default). Mirrors backend
+ * isContainingMatchLogic in domain/budget.go.
+ */
+function isContainingMatchLogic(ml: MatchLogic | undefined | ''): boolean {
+  return ml === undefined || ml === '' || ml === 'category_only' || ml === 'or';
+}
+
+/**
+ * Reports whether a CHILD's match_logic keeps it inside the plain category match — i.e. it
+ * cannot escape the category clause via tags (Issue #1630). '' / undefined is treated as
+ * 'category_only'. Mirrors backend isContainedMatchLogic in domain/budget.go.
+ */
+function isContainedMatchLogic(ml: MatchLogic | undefined | ''): boolean {
+  return ml === undefined || ml === '' || ml === 'category_only' || ml === 'and';
+}
+
+/**
  * Reports whether `cat` is a sub-allocation within a parent that is also budgeted
  * (#1203). Mirrors the backend Budget.IsSubAllocationWithin — such rows are excluded
  * from budget totals because their amount/spend is already inside the parent.
+ *
+ * Hierarchy alone is not sufficient (Issue #1630): exclusion is sound only when this
+ * CHILD's own matched-transaction set is contained within the PARENT's.
+ * budgetedPfcPrimaries/budgetedCustomIds already carry the parent-side containment test
+ * (see filterTopLevel/buildBudgetedParentSets), so this function only needs to additionally
+ * gate on the CHILD's own match_logic.
+ *
+ * `cat.pfc_detailed && ...` below treats a present-but-empty `pfc_detailed: ''` identically
+ * to absent/undefined (Issue #1630) — a `''` row is NOT treated as a detailed child here. The
+ * backend mirrors this with domain.hasPFCDetailed, and the analytics SQL's `IS NOT NULL AND
+ * <> ''` / `IS NULL OR = ''` predicates; without agreement here the backend and frontend
+ * totals disagreed on the exact same `''` row.
  */
 export function isSubAllocationWithin(
   cat: BudgetCategory,
   budgetedPfcPrimaries: Set<string>,
   budgetedCustomIds: Set<string>
 ): boolean {
+  if (!isContainedMatchLogic(cat.match_logic)) return false;
   if (cat.category_kind === 'pfc') {
     return !!(cat.pfc_detailed && cat.pfc_primary && budgetedPfcPrimaries.has(cat.pfc_primary));
   }
@@ -64,8 +124,183 @@ export function isSubAllocationWithin(
     if (cat.custom_parent_id && budgetedCustomIds.has(cat.custom_parent_id)) return true;
     if (cat.custom_parent_pfc_primary && budgetedPfcPrimaries.has(cat.custom_parent_pfc_primary))
       return true;
+    // Transitive case (Issue #1630 Task B2): cat is a GRANDCHILD of a PFC root — its own
+    // parent (custom_parent_id) is itself nested under custom_grandparent_pfc_primary via
+    // parent_pfc_primary. The backend's widened roll-up reaches cat from that root two hops
+    // away regardless of whether the intermediate parent is itself budgeted, so this must
+    // agree even when the intermediate parent has no budget row at all. Mirrors backend
+    // IsSubAllocationWithin's CustomGrandparentPFCPrimary branch.
+    if (
+      cat.custom_grandparent_pfc_primary &&
+      budgetedPfcPrimaries.has(cat.custom_grandparent_pfc_primary)
+    )
+      return true;
   }
   return false;
+}
+
+/**
+ * Builds lookup sets of the PFC primaries and custom category IDs that are budgeted as
+ * top-level rows AND eligible to adopt children — i.e. the row's own match_logic still
+ * contains the plain category match (Issue #1630). A 'tag_only' or 'and' parent has no
+ * envelope a plain-category child could fall inside, so it is deliberately excluded.
+ */
+function buildBudgetedParentSets(
+  categories: BudgetCategory[]
+): { budgetedPfcPrimaries: Set<string>; budgetedCustomIds: Set<string> } {
+  const budgetedPfcPrimaries = new Set<string>();
+  const budgetedCustomIds = new Set<string>();
+  for (const cat of categories) {
+    if (!isContainingMatchLogic(cat.match_logic)) continue;
+    if (cat.category_kind === 'pfc' && cat.pfc_primary && !cat.pfc_detailed) {
+      budgetedPfcPrimaries.add(cat.pfc_primary);
+    }
+    if (cat.category_kind === 'custom' && cat.custom_category_id) {
+      budgetedCustomIds.add(cat.custom_category_id);
+    }
+  }
+  return { budgetedPfcPrimaries, budgetedCustomIds };
+}
+
+/**
+ * Filters `categories` down to top-level rows only — excludes any row that is a
+ * sub-allocation within a budgeted parent (#1203, #1630). Every allocation/spend total
+ * in the budgets feature must be computed from this filtered list rather than the raw
+ * array, or a nested child double-counts dollars its parent's own amount already covers.
+ */
+export function filterTopLevel(categories: BudgetCategory[]): BudgetCategory[] {
+  const { budgetedPfcPrimaries, budgetedCustomIds } = buildBudgetedParentSets(categories);
+  return categories.filter(
+    (cat) => !isSubAllocationWithin(cat, budgetedPfcPrimaries, budgetedCustomIds)
+  );
+}
+
+/**
+ * Reports whether `child` is specifically the sub-allocation nested under `parent` (as opposed
+ * to merely "some" budgeted parent — see isSubAllocationWithin above). Mirrors backend
+ * DuplicateParentIdentity's shape test (Issue #1630 Task 4). Exported so every caller shares
+ * one relation: AllocationBreakdown, BudgetCategoryCard and BudgetCategoryManager all use it.
+ * AllocationBreakdown briefly had its own private copy (isNestedUnder); that was removed in the
+ * #1630 simplification pass, which is exactly what this export exists to prevent.
+ *
+ * `options.directOnly` (Issue #1630 delete-dialog fix): when true, the transitive/grandchild
+ * branch below is skipped, so this reports ONLY a true one-hop parent/child relation. A caller
+ * that needs to know what is promoted to top level when `parent` itself is deleted — as opposed
+ * to what merely rolls up into `parent`'s totals — must pass `directOnly: true`: deleting `parent`
+ * promotes only its DIRECT children; a grandchild stays nested under its own (still-existing)
+ * direct parent.
+ */
+export function isSubAllocationOfParent(
+  child: BudgetCategory,
+  parent: BudgetCategory,
+  options?: { directOnly?: boolean }
+): boolean {
+  if (!isContainingMatchLogic(parent.match_logic)) return false;
+  if (!isContainedMatchLogic(child.match_logic)) return false;
+  if (child.category_kind === 'pfc') {
+    return !!(
+      child.pfc_detailed &&
+      child.pfc_primary &&
+      parent.category_kind === 'pfc' &&
+      !parent.pfc_detailed &&
+      parent.pfc_primary === child.pfc_primary
+    );
+  }
+  if (child.category_kind === 'custom') {
+    if (child.custom_parent_id) {
+      if (parent.category_kind === 'custom' && parent.custom_category_id === child.custom_parent_id) {
+        return true;
+      }
+      if (options?.directOnly) return false;
+      // Transitive case (Issue #1630 Task B2): child's direct parent (custom_parent_id) is
+      // itself nested under `parent` via parent_pfc_primary — child is a GRANDCHILD of `parent`
+      // two hops away. Mirrors backend hierarchyHasNestedChild's CustomGrandparentPFCPrimary
+      // branch, so a grandchild is attributed to the right parent here just like there.
+      if (
+        child.custom_grandparent_pfc_primary &&
+        parent.category_kind === 'pfc' &&
+        !parent.pfc_detailed &&
+        parent.pfc_primary === child.custom_grandparent_pfc_primary
+      ) {
+        return true;
+      }
+      return false;
+    }
+    if (child.custom_parent_pfc_primary) {
+      return (
+        parent.category_kind === 'pfc' &&
+        !parent.pfc_detailed &&
+        parent.pfc_primary === child.custom_parent_pfc_primary
+      );
+    }
+  }
+  return false;
+}
+
+/**
+ * A parent's own unallocated ALLOCATION remainder (Issue #1630 Task 4): what is left of the
+ * parent's own allocated_amount after its sub-allocation children's allocations are carved out.
+ * Subtraction is valid here — allocated_amount is a number the user typed, and a sub-allocation
+ * child's amount is genuinely a piece of the parent's own. Can be NEGATIVE: over-allocation
+ * warns rather than blocks (see AllocationBreakdown's isOverAllocated for the budget-wide
+ * analogue), so "$600 of children under a $500 parent" is a legal, persistable state whose
+ * remainder is -$100. Only children `isSubAllocationOfParent` recognizes as this SPECIFIC
+ * parent's are subtracted — a hierarchy child whose own match_logic escapes containment was
+ * never carved out of the parent's allocation in the first place.
+ */
+export function computeParentAllocationRemainder(
+  parent: BudgetCategory,
+  children: BudgetCategory[]
+): number {
+  const childrenAllocated = children
+    .filter((c) => isSubAllocationOfParent(c, parent))
+    .reduce((sum, c) => sum + c.allocated_amount, 0);
+  return parent.allocated_amount - childrenAllocated;
+}
+
+/**
+ * A parent's own DIRECT spending (Issue #1630 Task 4), distinct from its children's — i.e. the
+ * portion of the parent's own spent_amount not attributable to a sub-allocation child.
+ *
+ * Unlike the allocation remainder above, spend is NOT generally subtractive (a child's matched
+ * spend need not be a subset of the parent's — see Task 0.5). This is safe here ONLY because it
+ * subtracts exclusively over `isSubAllocationOfParent` children: the Task 0.5 containment rule
+ * (isContainingMatchLogic(parent) && isContainedMatchLogic(child)) is exactly the condition that
+ * GUARANTEES a contained child's matched-transaction set is a subset of the parent's — the same
+ * guarantee the backend's GetBudgetVsActual dedup already relies on.
+ *
+ * A child that escapes containment (tag_only/or, or an 'and'-parent's child) is likewise never
+ * subtracted here — but NOT because its spend "was never rolled into the parent's own
+ * spent_amount to begin with". That claim was FALSE and is the HIGH-severity defect an
+ * adversarial review of Issue #1630 found: the backend's roll-up (buildCategoryClause,
+ * transaction_repository.go) is hierarchical and match_logic-BLIND, so an escaping child's
+ * transactions ARE still counted inside the parent's own spent_amount, in addition to
+ * surfacing as the child's own top-level row — a real double-count, not a safe omission. This
+ * function does not correct that double-count; it merely does not make it worse by also
+ * subtracting the escaping child's amount a second time. The actual fix is refusing to persist
+ * an escaping nested pair at write time (backend domain.EscapedNestedChild) — existing data
+ * shapes this frontend function may still see (there should be none) carry the double-count
+ * unfixed by anything client-side.
+ */
+export function computeParentDirectSpend(
+  parent: BudgetCategory,
+  children: BudgetCategory[]
+): number {
+  const childrenSpent = children
+    .filter((c) => isSubAllocationOfParent(c, parent))
+    .reduce((sum, c) => sum + c.spent_amount, 0);
+  return parent.spent_amount - childrenSpent;
+}
+
+/**
+ * Formats a number as USD currency for display. Shared utility to avoid duplication
+ * across budget UI components.
+ */
+export function formatCurrency(amount: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  }).format(amount);
 }
 
 export interface Budget {
@@ -150,19 +385,7 @@ export function computeBudgetMetrics(budget: Budget): BudgetWithMetrics {
   // Totals sum TOP-LEVEL categories only — a parent's spend already rolls up its
   // children, and a sub-allocation's amount is within its parent (#1203). This
   // mirrors the backend Budget.TotalAllocated/TotalSpent.
-  const budgetedPfcPrimaries = new Set<string>();
-  const budgetedCustomIds = new Set<string>();
-  for (const cat of categories) {
-    if (cat.category_kind === 'pfc' && cat.pfc_primary && !cat.pfc_detailed) {
-      budgetedPfcPrimaries.add(cat.pfc_primary);
-    }
-    if (cat.category_kind === 'custom' && cat.custom_category_id) {
-      budgetedCustomIds.add(cat.custom_category_id);
-    }
-  }
-  const topLevel = categories.filter(
-    (cat) => !isSubAllocationWithin(cat, budgetedPfcPrimaries, budgetedCustomIds)
-  );
+  const topLevel = filterTopLevel(categories);
   const total_allocated = topLevel.reduce((sum, cat) => sum + cat.allocated_amount, 0);
   const total_spent = topLevel.reduce((sum, cat) => sum + cat.spent_amount, 0);
   const spendingBasis = budget.expected_income ?? budget.amount;

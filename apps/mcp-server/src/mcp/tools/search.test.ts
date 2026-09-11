@@ -227,6 +227,27 @@ describe('buildSearchResult', () => {
     expect(text).not.toContain('unknown')
   })
 
+  // Issue #1630 Task 12a: search() must render `format` so a date field announces itself, and
+  // must render an anyOf-merged format (multiple branches) legibly rather than dropping it.
+  it('renders format on a body field, including a multi-branch anyOf format (#1630)', () => {
+    const result = buildSearchResult([
+      {
+        operationId: 'createBudget',
+        method: 'POST',
+        path: '/api/v1/budgets',
+        summary: 'Create a budget',
+        tags: ['Budgets'],
+        manifestClass: 'write',
+        excluded: false,
+        requestBody: [
+          { name: 'start_date', type: 'string', format: 'date|date-time', required: true },
+        ],
+      },
+    ])
+    const text = result.content[0]?.text ?? ''
+    expect(text).toContain('start_date (string, format: date|date-time, required)')
+  })
+
   it('omits the body: block entirely when there is no requestBody (byte-identical to today for GETs)', () => {
     const result = buildSearchResult([
       {
@@ -303,5 +324,79 @@ describe('buildSearchResult', () => {
     expect(bodyIdx).toBeGreaterThanOrEqual(0)
     expect(returnsIdx).toBeGreaterThan(bodyIdx)
     expect(tagsIdx).toBeGreaterThan(returnsIdx)
+  })
+
+  // #1630: `(read)` alone told an agent nothing about whether readExecute would actually admit
+  // the call — search() and readExecute read the SAME manifest field but search() surfaced only
+  // one of the three admission conditions. These pin the disclosure against the REAL manifest.
+  describe('readExecute admission disclosure (#1630)', () => {
+    it('an ordinary admitted GET still renders the plain "(read)" label', () => {
+      const result = buildSearchResult([
+        {
+          operationId: 'getTransactions',
+          method: 'GET',
+          path: '/api/v1/transactions',
+          summary: 'List transactions',
+          tags: ['Transactions'],
+          manifestClass: 'read',
+          excluded: false,
+        },
+      ])
+      expect(result.content[0]?.text).toContain('(read)')
+      expect(result.content[0]?.text).not.toContain('NOT admitted')
+    })
+
+    it('runMCPRecipe (class read, POST, refused by readExecute) discloses that it is NOT admitted', () => {
+      const result = buildSearchResult([
+        {
+          operationId: 'runMCPRecipe',
+          method: 'POST',
+          path: '/api/v1/mcp/recipes/{id}/run',
+          summary: 'Run an MCP recipe',
+          tags: ['MCP Recipes'],
+          manifestClass: 'read',
+          excluded: false,
+        },
+      ])
+      const text = result.content[0]?.text ?? ''
+      expect(text).toContain('runMCPRecipe')
+      expect(text).toContain('read, NOT admitted by readExecute')
+      expect(text).toContain('writeExecute')
+    })
+
+    it('previewCategoryMatches (class read, POST, acknowledged safe-POST) discloses plain "(read)" — it IS admitted', () => {
+      const result = buildSearchResult([
+        {
+          operationId: 'previewCategoryMatches',
+          method: 'POST',
+          path: '/api/v1/budgets/categories/preview',
+          summary: 'Preview category matches',
+          tags: ['Budget'],
+          manifestClass: 'read',
+          excluded: false,
+        },
+      ])
+      const text = result.content[0]?.text ?? ''
+      expect(text).toContain('previewCategoryMatches')
+      expect(text).toContain('(read)')
+      expect(text).not.toContain('NOT admitted')
+    })
+
+    it('a write-class operation is never decorated with an admission note (it is always refused, and saying so on every line is noise)', () => {
+      const result = buildSearchResult([
+        {
+          operationId: 'createBudget',
+          method: 'POST',
+          path: '/api/v1/budgets',
+          summary: 'Create a budget',
+          tags: ['Budgets'],
+          manifestClass: 'write',
+          excluded: false,
+        },
+      ])
+      const text = result.content[0]?.text ?? ''
+      expect(text).toContain('(write)')
+      expect(text).not.toContain('NOT admitted')
+    })
   })
 })

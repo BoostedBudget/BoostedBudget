@@ -313,6 +313,103 @@ describe('issue #1609 task 6: request body extraction', () => {
   })
 })
 
+// ── Issue #1630 Task 12a: format + anyOf extraction ───────────────────────────
+//
+// #1630's reporter could not discover that createBudget wanted a different date format from
+// every read endpoint. Half the cause: `format` was never read off the body schema at all, so
+// a plain `type: string, format: date` field rendered as bare `(string)` with no hint that it
+// was a date. The other, WORSE half: Task 9 (domain.FlexibleDate, commit 85edc1fe) changed
+// createBudget's start_date/end_date to publish `anyOf: [{type: string, format: date}, {type:
+// string, format: date-time}]` — and the flattener, reading only a top-level `prop.type` /
+// `prop.format`, drops BOTH for an anyOf field, rendering it with no type at all. These tests
+// pin the fix on the REAL committed artifact (createBudget), not just a synthetic fixture —
+// a synthetic-only test could pass while the real spec-index.json stayed broken.
+
+describe('issue #1630 task 12a: format + anyOf extraction', () => {
+  it('extracts format on a plain (non-anyOf) date field', () => {
+    const specWithFormat = {
+      paths: {
+        '/api/v1/auto-categorization': {
+          post: {
+            operationId: 'createRule',
+            summary: 'format test',
+            requestBody: {
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/HasDate' } } },
+            },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          HasDate: {
+            type: 'object',
+            properties: {
+              as_of: { type: 'string', format: 'date', description: 'A plain date field' },
+            },
+          },
+        },
+      },
+    }
+    const index = indexFromSpec(specWithFormat)
+    const entry = index.entries.find((e) => e.operationId === 'createRule')
+    const field = entry?.requestBody?.find((f) => f.name === 'as_of')
+    expect(field?.type).toBe('string')
+    expect(field?.format).toBe('date')
+  })
+
+  it('merges type and format across anyOf branches (the FlexibleDate shape)', () => {
+    const specWithAnyOf = {
+      paths: {
+        '/api/v1/auto-categorization': {
+          post: {
+            operationId: 'createRule',
+            summary: 'anyOf test',
+            requestBody: {
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/HasFlexibleDate' } } },
+            },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          HasFlexibleDate: {
+            type: 'object',
+            properties: {
+              start_date: {
+                anyOf: [
+                  { type: 'string', format: 'date' },
+                  { type: 'string', format: 'date-time' },
+                ],
+                description: 'Budget start date',
+              },
+            },
+          },
+        },
+      },
+    }
+    const index = indexFromSpec(specWithAnyOf)
+    const entry = index.entries.find((e) => e.operationId === 'createRule')
+    const field = entry?.requestBody?.find((f) => f.name === 'start_date')
+    // Must NOT drop type entirely (the regression) — both anyOf branches agree on 'string'.
+    expect(field?.type).toBe('string')
+    expect(field?.format).toBe('date|date-time')
+  })
+
+  it('the committed createBudget.start_date carries type "string" and both formats (real artifact, not synthetic)', () => {
+    const entry = entries.find((e) => e.operationId === 'createBudget')
+    expect(entry).toBeDefined()
+
+    const startDate = entry?.requestBody?.find((f) => f.name === 'start_date')
+    expect(startDate?.type).toBe('string')
+    expect(startDate?.format).toBe('date|date-time')
+    expect(startDate?.required).toBe(true)
+
+    const endDate = entry?.requestBody?.find((f) => f.name === 'end_date')
+    expect(endDate?.type).toBe('string')
+    expect(endDate?.format).toBe('date|date-time')
+  })
+})
+
 // ── Issue #1610a: response schema extraction ─────────────────────────────────
 //
 // search() exposed request-body schemas (#1609 Task 6) but nothing about what an operation
@@ -469,24 +566,24 @@ describe('issue #1610a: spec-index.json byte budget', () => {
   it('stays under a generous ceiling — regression guard against depth-2 response schemas, not a precision pin', () => {
     const raw = readFileSync(COMMITTED_INDEX_PATH, 'utf-8')
     const bytes = Buffer.byteLength(raw, 'utf-8')
-    // ~365 KB: headroom above today's measured size, comfortably below the ~467-487 KB a depth-2
-    // (with-or-without-descriptions) response schema would produce. This guard exists to catch a
-    // depth-2 explosion, not to pin the index to the byte, so the headroom is restored rather than
-    // the entry cut.
+    // ~395 KB: headroom above today's measured size, and still far below the ~467-487 KB a
+    // depth-2 (with-or-without-descriptions) response schema would produce. This guard exists to
+    // catch that depth-2 explosion, not to pin the index to the byte, so headroom is restored
+    // rather than the entry cut.
     //
-    // Raised 350 -> 365 KB by #1631, which took the index from 345,461 to 351,802 bytes (+6.3 KB,
-    // +1.8%). ⚠ The 350 KB ceiling was ALREADY at 98.7% on staging before this branch touched it,
-    // so this raise is not really about #1631's share: any feature adding a handful of response
-    // fields was going to trip it next. What #1631 added is proportionate and is all depth-1 field
-    // growth, not structural — currency_code/is_mixed_currency across the investment aggregates,
-    // date display siblings with format:date, day_change_as_of/_is_stale/_unavailable_reason,
-    // unknown_currency_count and excluded_by_currency_count, and the doc strings for the nine
-    // activity types.
+    // The arithmetic, because two feature branches landed on top of each other here:
+    //   345,461  before either  (#1630 and #1631 both branched from this)
+    //   375,602  after merging both        -> +30.1 KB, all depth-1 field growth
+    // #1630 raised the ceiling 350 -> 380 KB for its share; #1631 raised it 350 -> 365 KB for its
+    // own. Neither number accounts for BOTH, and 375,602 against 380,000 leaves 1.2% — which is
+    // the saturated state that makes the NEXT feature look like the culprit for a budget that had
+    // one field of room left. 395 KB is the same measured-plus-headroom treatment both raises
+    // intended, applied once to the combined total.
     //
-    // ⚠ If you are here because the ceiling tripped again, MEASURE BEFORE RAISING. Compare against
-    // the depth-2 figure above: growth of a few KB from new fields is what this budget is meant to
-    // absorb, and a jump toward ~467 KB is the regression it exists to catch. Those two need
-    // different answers, and only the byte count tells you which one you have.
-    expect(bytes).toBeLessThan(365_000)
+    // ⚠ If you are here because it tripped again, MEASURE BEFORE RAISING. Growth of a few KB from
+    // new response fields is what this budget absorbs; a jump toward ~467 KB is the regression it
+    // exists to catch. Those need opposite responses and only the byte count tells you which you
+    // have.
+    expect(bytes).toBeLessThan(395_000)
   })
 })
