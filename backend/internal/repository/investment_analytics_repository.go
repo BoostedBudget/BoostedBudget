@@ -805,6 +805,12 @@ func (r *investmentAnalyticsRepository) IncomeSummary(ctx context.Context, userI
 				     THEN 'dividend_reinvestment'
 				WHEN %[6]s = 'interest reinvestment'
 				     THEN 'interest_reinvestment'
+				-- #1631 CX4: the capital-gain reinvestments are income too, and were absent from
+				-- IncomeSubtypes entirely. They get their own label rather than folding into
+				-- 'capital_gain' so the distribution/reinvestment split stays symmetric with the
+				-- dividend and interest pairs above.
+				WHEN %[6]s IN ('long-term capital gain reinvestment', 'short-term capital gain reinvestment')
+				     THEN 'capital_gain_reinvestment'
 				-- A structural credit against a real security IS a dividend; the ETF distribution
 				-- this institution never labels.
 				WHEN %[5]s THEN 'dividend'

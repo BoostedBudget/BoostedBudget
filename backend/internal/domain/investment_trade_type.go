@@ -115,12 +115,18 @@ var corporateActionSubtypes = []string{
 // the joined security, not on the subtype. IncomeSummary applies both; see
 // investment_analytics_repository.go. Before #1631 this set was the whole universe, which is why
 // 211 dividend rows worth $6,249.43 were missing from reported portfolio income.
+// ⚠ #1631 CX4: the reinvestments are taken from reinvestSubtypes WHOLESALE, never re-listed here.
+// This set used to hand-list "dividend reinvestment" and "interest reinvestment" while
+// reinvestSubtypes also carried the two capital-gain reinvestments, so a capital-gain reinvestment
+// displayed as Reinvest and was unreachable from IncomeSummary -- with the capital-gain
+// DISTRIBUTION beside it counting, which is the asymmetry that gives the game away. Resolved by
+// WIDENING income rather than narrowing the display bucket: a reinvestment is income immediately
+// spent on shares, which is the stated reason the other two were here in the first place.
 var IncomeSubtypes = func() []string {
 	var s []string
 	s = append(s, dividendSubtypes...)
 	s = append(s, capitalGainSubtypes...)
-	s = append(s, "dividend reinvestment")
-	s = append(s, "interest reinvestment")
+	s = append(s, reinvestSubtypes...)
 	s = append(s, interestSubtypes...)
 	return s
 }()
