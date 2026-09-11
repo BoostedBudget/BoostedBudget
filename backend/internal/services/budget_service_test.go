@@ -231,8 +231,8 @@ func (m *MockBudgetRepository) BudgetIDsWithUnexaminedHierarchy(ctx context.Cont
 	return ids, args.Error(1)
 }
 
-func (m *MockBudgetRepository) ListBudgetHierarchyAuditFindings(ctx context.Context, outcome string, limit int) ([]domain.BudgetHierarchyAuditVerdict, error) {
-	args := m.Called(ctx, outcome, limit)
+func (m *MockBudgetRepository) ListBudgetHierarchyAuditFindings(ctx context.Context, outcomes []string, limit int) ([]domain.BudgetHierarchyAuditVerdict, error) {
+	args := m.Called(ctx, outcomes, limit)
 	findings, _ := args.Get(0).([]domain.BudgetHierarchyAuditVerdict)
 	return findings, args.Error(1)
 }

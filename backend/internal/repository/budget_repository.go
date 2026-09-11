@@ -142,17 +142,22 @@ type BudgetRepository interface {
 	// recomputes every live non-savings category's spent_amount against the budget's own stored
 	// period — Issue #1630 Task B7. See budget_hierarchy_audit.go's header comment for the full
 	// design (what is safe to repair, why the ledger write is atomic, why this is not one SQL
-	// statement). budget must already have Categories populated (as GetByID / GetActiveByUserID
-	// return them); periodStart/periodEnd must come from services.NarrowBudgetPeriodDates(budget).
+	// statement, why it re-reads budget.Categories itself rather than trusting the caller's copy).
+	// periodStart/periodEnd must come from services.NarrowBudgetPeriodDates(budget).
 	AuditBudgetHierarchy(ctx context.Context, budget *domain.Budget, periodStart, periodEnd time.Time, spentCalc BudgetHierarchySpentCalculator) (domain.BudgetHierarchyAuditVerdict, error)
 	// BudgetIDsWithUnexaminedHierarchy enumerates LIVE budgets AuditBudgetHierarchy has never
 	// examined, most-behind-first (oldest budget first), capped at limit. Issue #1630 Task B7.
 	BudgetIDsWithUnexaminedHierarchy(ctx context.Context, limit int) ([]string, error)
 	// ListBudgetHierarchyAuditFindings returns budget_hierarchy_audits rows, most-recently-examined
-	// first, optionally filtered to exactly one outcome (empty = every outcome). Backs the admin
-	// listing that is Task B7's human-facing surface — see budget_hierarchy_audit.go's header
-	// comment for "a reported finding that reaches nobody is not a fix".
-	ListBudgetHierarchyAuditFindings(ctx context.Context, outcome string, limit int) ([]domain.BudgetHierarchyAuditVerdict, error)
+	// first across the WHOLE result set (not per-outcome), capped at ONE honest limit, optionally
+	// filtered to any of `outcomes` (empty/nil = every outcome). Backs the admin listing that is
+	// Task B7's human-facing surface — see budget_hierarchy_audit.go's header comment for "a
+	// reported finding that reaches nobody is not a fix". Issue #1630 review fix (LOW): this used
+	// to take a single outcome string, which forced the admin handler's two-outcome default case
+	// into two independently `limit`-bound queries appended together — up to 2x the documented
+	// limit, grouped by outcome rather than globally ordered by examined_at. Taking a slice lets
+	// the handler express "any of these outcomes" as ONE query with ONE ORDER BY and ONE LIMIT.
+	ListBudgetHierarchyAuditFindings(ctx context.Context, outcomes []string, limit int) ([]domain.BudgetHierarchyAuditVerdict, error)
 }
 
 // budgetRepository implements BudgetRepository using PostgreSQL.

@@ -58,9 +58,13 @@ func waitUntilPIDBlockedOnLock(t *testing.T, pool *pgxpool.Pool, pid int32, time
 	ctx := context.Background()
 	deadline := time.Now().Add(timeout)
 	for {
+		// COALESCE(..., false): wait_event_type is NULL whenever pid is not currently waiting on
+		// anything (the common, non-blocked case this loop mostly observes while polling) — `NULL =
+		// 'Lock'` is NULL, not false, which a plain `bool` Scan cannot accept and would flake this
+		// loop's very first non-blocked poll instead of just looping again.
 		var blocked bool
 		err := pool.QueryRow(ctx, `
-			SELECT wait_event_type = 'Lock' FROM pg_stat_activity WHERE pid = $1
+			SELECT COALESCE(wait_event_type = 'Lock', false) FROM pg_stat_activity WHERE pid = $1
 		`, pid).Scan(&blocked)
 		require.NoError(t, err)
 		if blocked {

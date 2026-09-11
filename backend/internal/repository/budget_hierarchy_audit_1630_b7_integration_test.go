@@ -26,6 +26,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -280,7 +281,7 @@ func TestListBudgetHierarchyAuditFindings_1630B7(t *testing.T) {
 
 	// Filtered to the exact outcome: the row comes back with its flagged id decoded correctly,
 	// under the typed column matching the outcome it was seeded with.
-	findings, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, domain.BudgetHierarchyAuditOutcomeReportedEscapingPair, 10)
+	findings, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, []string{domain.BudgetHierarchyAuditOutcomeReportedEscapingPair}, 10)
 	require.NoError(t, err)
 	require.Len(t, findings, 1)
 	assert.Equal(t, budget.ID, findings[0].BudgetID)
@@ -288,12 +289,12 @@ func TestListBudgetHierarchyAuditFindings_1630B7(t *testing.T) {
 	assert.Empty(t, findings[0].FlaggedDuplicateIdentityCategoryIDs)
 
 	// Filtered to a DIFFERENT outcome: nothing comes back.
-	none, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, domain.BudgetHierarchyAuditOutcomeVerified, 10)
+	none, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, []string{domain.BudgetHierarchyAuditOutcomeVerified}, 10)
 	require.NoError(t, err)
 	assert.Empty(t, none)
 
-	// Unfiltered ("" outcome): the row is still returned.
-	all, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, "", 10)
+	// Unfiltered (nil outcomes): the row is still returned.
+	all, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, nil, 10)
 	require.NoError(t, err)
 	assert.Len(t, all, 1)
 }
@@ -399,9 +400,89 @@ func TestAuditBudgetHierarchy_1630Review_CombinedFindingPreservesBothTypedCatego
 			"duplicate-identity is the outcome that won")
 
 	// The same two arrays must round-trip through the ledger table, not just the in-memory verdict.
-	findings, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, "", 10)
+	findings, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, nil, 10)
 	require.NoError(t, err)
 	require.Len(t, findings, 1)
 	assert.ElementsMatch(t, []string{dupA.ID, dupB.ID}, findings[0].FlaggedDuplicateIdentityCategoryIDs)
 	assert.ElementsMatch(t, []string{escParent.ID, escChild.ID}, findings[0].FlaggedEscapingPairCategoryIDs)
+}
+
+// TestListBudgetHierarchyAuditFindings_1630Review_MultiOutcomeFilterIsOneGloballyOrderedHonestLimit
+// is the RED for the review's LOW finding: with outcome omitted, the admin handler used to run TWO
+// independently limit-bound queries (one per actionable outcome) and append the results, so
+// limit=N could return up to 2N rows, grouped by outcome rather than globally ordered by
+// examined_at. This seeds THREE reported_duplicate_identity rows and THREE reported_escaping_pair
+// rows with staggered examined_at timestamps, interleaved (not one outcome's block entirely before
+// the other's), and asserts that filtering to BOTH outcomes with limit=4 returns EXACTLY 4 rows —
+// not up to 6 — and that they are the 4 GLOBALLY most-recently-examined rows across both outcomes,
+// not e.g. the most recent from each outcome considered separately.
+func TestListBudgetHierarchyAuditFindings_1630Review_MultiOutcomeFilterIsOneGloballyOrderedHonestLimit(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "test|"+userID, "claim1630-review-multi-outcome-"+userID+"@example.com")
+	require.NoError(t, err, "seed user")
+
+	budgetRepo := NewBudgetRepository(tx)
+
+	// Six ledger rows, one budget each, examined_at staggered one hour apart and INTERLEAVED by
+	// outcome (dup, esc, dup, esc, dup, esc) — oldest first here, so "most recent" is the reverse.
+	// budgetIDs[5] is the newest (examined most recently), budgetIDs[0] the oldest.
+	base := time.Date(2026, time.March, 1, 12, 0, 0, 0, time.UTC)
+	outcomesInSeedOrder := []string{
+		domain.BudgetHierarchyAuditOutcomeReportedDuplicateIdentity,
+		domain.BudgetHierarchyAuditOutcomeReportedEscapingPair,
+		domain.BudgetHierarchyAuditOutcomeReportedDuplicateIdentity,
+		domain.BudgetHierarchyAuditOutcomeReportedEscapingPair,
+		domain.BudgetHierarchyAuditOutcomeReportedDuplicateIdentity,
+		domain.BudgetHierarchyAuditOutcomeReportedEscapingPair,
+	}
+	budgetIDs := make([]string, len(outcomesInSeedOrder))
+	for i, outcome := range outcomesInSeedOrder {
+		budget := &domain.Budget{
+			UserID:    userID,
+			Name:      fmt.Sprintf("Claim 1630 Review Multi-Outcome Budget %d", i),
+			Period:    domain.BudgetPeriodMonthly,
+			StartDate: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
+			Amount:    100,
+		}
+		require.NoError(t, budgetRepo.Create(ctx, budget))
+		budgetIDs[i] = budget.ID
+
+		examinedAt := base.Add(time.Duration(i) * time.Hour)
+		_, err = tx.Exec(ctx, `
+			INSERT INTO budget_hierarchy_audits (
+				budget_id, user_id, outcome, reason, categories_examined, categories_repaired, examined_at
+			) VALUES ($1, $2, $3, 'test seed', 1, 0, $4)
+		`, budget.ID, userID, outcome, examinedAt)
+		require.NoError(t, err, "seed ledger row %d", i)
+	}
+
+	const limit = 4
+	findings, err := budgetRepo.ListBudgetHierarchyAuditFindings(ctx, []string{
+		domain.BudgetHierarchyAuditOutcomeReportedDuplicateIdentity,
+		domain.BudgetHierarchyAuditOutcomeReportedEscapingPair,
+	}, limit)
+	require.NoError(t, err)
+
+	require.Len(t, findings, limit,
+		"filtering to BOTH actionable outcomes with limit=4 must return EXACTLY 4 rows total, "+
+			"not up to 2x the limit from two separately-bounded per-outcome queries")
+
+	gotIDs := make([]string, len(findings))
+	for i, f := range findings {
+		gotIDs[i] = f.BudgetID
+	}
+	// The 4 globally most-recently-examined rows are budgetIDs[5..2], newest first.
+	assert.Equal(t, []string{budgetIDs[5], budgetIDs[4], budgetIDs[3], budgetIDs[2]}, gotIDs,
+		"results must be the N most recent rows GLOBALLY across both outcomes, most-recent first — "+
+			"not grouped by outcome and independently truncated")
 }

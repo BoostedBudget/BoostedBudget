@@ -409,33 +409,46 @@ func (r *budgetRepository) BudgetIDsWithUnexaminedHierarchy(ctx context.Context,
 // internal/huma/operations/admin_budget_hierarchy_audits.go). It reads the SAME ledger table
 // AuditBudgetHierarchy writes, so there is no second source of truth to drift.
 
-// listBudgetHierarchyAuditFindingsSQL selects ledger rows, most-recently-examined first. The two
-// flagged_*_category_ids columns are cast to text[] because pgx's default type registry has no
-// built-in codec for scanning a uuid[] column into a Go []string — every category id here is
-// already a UUID stored as text everywhere else this codebase surfaces one
-// (domain.BudgetCategory.ID is a string), so the cast loses nothing. The deprecated untyped
-// flagged_category_ids column (migration 000197) is deliberately NOT selected here — see its own
-// column comment.
+// listBudgetHierarchyAuditFindingsSQL selects ledger rows GLOBALLY ordered most-recently-examined
+// first, with ONE honest LIMIT — Issue #1630 review fix (LOW). $1 is a varchar[]: an empty/nil
+// array matches every outcome (cardinality($1) = 0 short-circuits the OR before outcome = ANY($1)
+// is ever evaluated), a one-element array filters to exactly that outcome, and a multi-element
+// array (the admin handler's "no outcome given" default: the two reported_* outcomes) filters to
+// any of them — all as ONE query, so the caller's limit bounds the WHOLE result set instead of
+// each outcome independently. The two flagged_*_category_ids columns are cast to text[] because
+// pgx's default type registry has no built-in codec for scanning a uuid[] column into a Go
+// []string — every category id here is already a UUID stored as text everywhere else this
+// codebase surfaces one (domain.BudgetCategory.ID is a string), so the cast loses nothing. The
+// deprecated untyped flagged_category_ids column (migration 000197) is deliberately NOT selected
+// here — see its own column comment.
 const listBudgetHierarchyAuditFindingsSQL = `
 	SELECT budget_id::text, user_id::text, outcome, reason, categories_examined, categories_repaired,
 	       flagged_duplicate_identity_category_ids::text[], flagged_escaping_pair_category_ids::text[],
 	       examined_at
 	FROM budget_hierarchy_audits
-	WHERE ($1::varchar = '' OR outcome = $1)
+	WHERE (cardinality($1::varchar[]) = 0 OR outcome = ANY($1::varchar[]))
 	ORDER BY examined_at DESC
 	LIMIT $2::int
 `
 
-// ListBudgetHierarchyAuditFindings returns ledger rows, most-recently-examined first, capped at
-// limit. outcome filters to exactly that outcome when non-empty; an empty outcome returns every
-// verdict this audit has ever recorded (repaired and verified included, not only the reported
-// ones) — the admin handler is what defaults the query to the actionable subset, since "what does
-// this table contain at all" is a legitimate question this method should be able to answer too.
-func (r *budgetRepository) ListBudgetHierarchyAuditFindings(ctx context.Context, outcome string, limit int) ([]domain.BudgetHierarchyAuditVerdict, error) {
+// ListBudgetHierarchyAuditFindings returns ledger rows, most-recently-examined first ACROSS THE
+// WHOLE result set, capped at ONE honest limit. outcomes filters to any of the named outcomes when
+// non-empty; an empty/nil outcomes returns every verdict this audit has ever recorded (repaired and
+// verified included, not only the reported ones) — the admin handler is what defaults the query to
+// the actionable subset, since "what does this table contain at all" is a legitimate question this
+// method should be able to answer too.
+func (r *budgetRepository) ListBudgetHierarchyAuditFindings(ctx context.Context, outcomes []string, limit int) ([]domain.BudgetHierarchyAuditVerdict, error) {
 	if limit <= 0 {
 		return []domain.BudgetHierarchyAuditVerdict{}, nil
 	}
-	rows, err := r.db.Query(ctx, listBudgetHierarchyAuditFindingsSQL, outcome, limit)
+	// pgx encodes a nil Go slice as SQL NULL, not an empty array — cardinality(NULL) is NULL, which
+	// would make every row's WHERE clause evaluate to NULL (excluded) instead of "no filter". A
+	// non-nil, possibly-empty slice is what listBudgetHierarchyAuditFindingsSQL's cardinality($1)
+	// = 0 check actually needs.
+	if outcomes == nil {
+		outcomes = []string{}
+	}
+	rows, err := r.db.Query(ctx, listBudgetHierarchyAuditFindingsSQL, outcomes, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list budget hierarchy audit findings: %w", err)
 	}
