@@ -965,6 +965,11 @@ describe('AccountCustomizationModal', () => {
       // The de-duplication promise must survive too — it is the REASON the user reaches for the
       // toggle, and a warning with no stated benefit is not a usable control.
       expect(copy).toMatch(/twice/i)
+      // #1631 I2 — the retention ADR forbids promising a restore: clearing the flag re-fetches
+      // only what Plaid still has (its 2-year window), and an account excluded longer than that
+      // permanently loses its earliest excluded period. "restores" states a stronger guarantee
+      // than the backend keeps, so the copy must not use that word.
+      expect(copy).not.toMatch(/restores?\b/i)
     })
 
     // ⚠ #1618b review finding: these two MUST use a CHAINED account. exclude_investment_sync is a
