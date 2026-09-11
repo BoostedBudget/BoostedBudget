@@ -2169,19 +2169,25 @@ func (r *analyticsRepository) GetUnusualSpend(ctx context.Context, userID string
 //     category clause via tags — a 'tag_only'/'or' child can match transactions outside the
 //     parent's category clause entirely, so summing it separately is not a NEW double-count).
 //
-// ⚠ That "mirrors IsSubAllocationWithin exactly" claim is about match_logic containment, not
-// about hierarchy DEPTH — this query's sub.is_sub_allocation lateral, like
-// IsSubAllocationWithin, only ever looks ONE level up (bc's direct parent bc2). This is a real,
-// pre-existing limitation (dates to #1203's hierarchy-only exclusion; out of scope to fix here),
-// not a closed case: custom_category_service.go's validateParent rejects a parent only when
-// parent.ParentID != nil, not when parent.ParentPFCPrimary is set, so a three-level chain is
-// constructible (pfc X ← custom C with parent_pfc_primary = X ← custom G with parent_id = C).
-// C is excluded here as a sub-allocation of X; C's own bc.spent_amount rolls up G's transactions
-// (buildCategoryClause is hierarchical); but X's row has no bc2 whose parent linkage is G, and no
-// bc2 in this lateral ever walks past one hop to find X transitively. A transaction filed under
-// G is therefore rolled up by NEITHER C's row (excluded) NOR X's (no linkage to G) — it appears
-// in NO total this query returns. Name the shape when debugging a total that looks short: a
-// grandchild nested under a nested child, not merely a direct child under a direct parent.
+// ⚠ UPDATE (Issue #1630 Task B2, 029e15d3): the paragraph this replaces described a real,
+// then-open depth gap — this query's sub.is_sub_allocation lateral used to look only ONE level
+// up (bc's direct parent bc2), so a three-level chain (pfc X ← custom C with
+// parent_pfc_primary = X ← custom G with parent_id = C) rolled G's transactions up through X
+// (buildCategoryClause is hierarchical) but excluded G from NEITHER C's row (which the lateral
+// correctly excluded as X's sub-allocation) NOR its own top-level row, so G's spend appeared in
+// NO total this query returns. That gap is CLOSED: the lateral now also joins gp (cc's own
+// parent, resolved via gp.id = cc.parent_id) and carries a fourth predicate keyed on
+// gp.parent_pfc_primary, so a transitive grandchild like G is recognized as X's sub-allocation
+// exactly like a direct child is — mirroring domain.BudgetCategory.IsSubAllocationWithin's own
+// CustomGrandparentPFCPrimary check, which this comment's "mirrors IsSubAllocationWithin
+// exactly" claim now covers for hierarchy DEPTH as well as match_logic containment.
+//
+// The remaining depth limit is not a gap: custom_category_service.go's validateParent rejects a
+// parent only when parent.ParentID != nil, capping a custom-to-custom chain at ONE parent_id hop
+// (enforce_custom_category_two_levels), so the maximum nesting the schema allows from a PFC root
+// is exactly the two hops this lateral now walks (one parent_pfc_primary hop, then one parent_id
+// hop). There is no deeper (great-grandchild) shape left to reach, because the schema itself
+// cannot construct one.
 //
 // ⚠ That does NOT mean an escaping child's spend is absent from the parent's own sum. The
 // parent's roll-up (buildCategoryClause, transaction_repository.go) is hierarchical and
