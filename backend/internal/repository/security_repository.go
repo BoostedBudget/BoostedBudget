@@ -66,7 +66,7 @@ func (r *securityRepository) UpsertBatch(ctx context.Context, securities []domai
 				type = EXCLUDED.type,
 				isin = EXCLUDED.isin,
 				cusip = EXCLUDED.cusip,
-				is_cash_equivalent = EXCLUDED.is_cash_equivalent,
+				is_cash_equivalent = COALESCE(EXCLUDED.is_cash_equivalent, securities.is_cash_equivalent),
 				institution_security_id = EXCLUDED.institution_security_id,
 				proxy_security_id = EXCLUDED.proxy_security_id,
 				-- Issue #1569 Task 20 (S12). The prices are RETAINED when the incoming payload has
@@ -86,6 +86,19 @@ func (r *securityRepository) UpsertBatch(ctx context.Context, securities []domai
 				-- is pinned by
 				-- TestSecurityRepository_UpsertBatch_ANewPriceStillWins_Integration's ticker case
 				-- rather than left to this comment.
+				--
+				-- ⚠ #1631: is_cash_equivalent moved to the RETAINED side of that same line, below,
+				-- rather than staying a bare overwrite. It is a Plaid NullableBool
+				-- (mapPlaidSecuritiesToDomain, investment_sync_service.go), so a payload that omits
+				-- it decodes as nil — and a bare overwrite (= EXCLUDED.is_cash_equivalent) would
+				-- write NULL over an existing FALSE on every such sync. Unlike ticker/type/isin/cusip, this
+				-- flag is no longer inert metadata: NormalizeTradeType's and
+				-- TradeTypeToSQLPredicate's structural rule (see investment_trade_type.go) key the
+				-- dividend/reinvest/cash partition on it being affirmatively FALSE, and
+				-- IncomeSummary's dollar total depends on that same partition. A NULLed flag would
+				-- silently revert every reinvest/dividend row for that security back to Cash and
+				-- erase it from reported income for EVERY user holding it, and nothing would detect
+				-- the reversion — it would look identical to a security nobody has classified yet.
 				--
 				-- ⚠ Each price and its as_of are coalesced as a PAIR, on the price's nullness. Doing
 				-- it per column would let a payload with no price but a fresh timestamp stamp
