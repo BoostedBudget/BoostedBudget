@@ -107,6 +107,13 @@ const mockHealthData = {
     most_recent_at: null,
     available: true,
   },
+  // #1631 M8b: forked-security-identity groups (a Plaid corporate action reissuing
+  // plaid_security_id). `available: true` with a zero count is a VERIFIED "no forks detected",
+  // not an unknown — the failed-read and absent-section cases are exercised separately below.
+  forked_security_identities: {
+    group_count: 0,
+    available: true,
+  },
 }
 
 const renderWithQueryClient = (component: React.ReactElement) => {
@@ -927,6 +934,109 @@ describe('HealthDashboardPage', () => {
       // The Paddle Status section's own card keeps its own, unrelated number.
       const failedWebhooksCard = screen.getByText('Failed Webhooks (24h)').closest('[data-slot="card"]')
       expect(failedWebhooksCard?.querySelector('[data-slot="stat-value"]')?.textContent).toBe('2')
+    })
+  })
+
+  // #1631 M8b: forked-security-identity detection. Per-group member detail is not yet in the
+  // generated API client (backend-only as of this change), so only the group count is asserted
+  // here — see the component's own comment on `forkedSecurityIdentitiesAvailable`.
+  describe('Forked Security Identities section', () => {
+    const FORK_CARD = 'Fork Groups Detected'
+
+    const forkCardValue = (title: string) => {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${title}"`)
+      return card.querySelector('[data-slot="stat-value"]')?.textContent ?? ''
+    }
+
+    // THE RED TEST: a seeded fork group reaches an operator, where before this task nothing
+    // anywhere counted them.
+    it('surfaces a seeded fork-group count', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          forked_security_identities: { group_count: 2, available: true },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Forked Security Identities/i)).toBeInTheDocument()
+      })
+
+      expect(forkCardValue(FORK_CARD)).toBe('2')
+    })
+
+    // THE MANDATORY SIBLING: without it, the seeded test above could pass against a hardcoded
+    // constant. No forks detected must read as a verified zero.
+    it('reports a verified zero when no forks are detected', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: mockHealthData, // forked_security_identities: group_count 0, available true
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(FORK_CARD)).toBeInTheDocument()
+      })
+
+      expect(forkCardValue(FORK_CARD)).toBe('0')
+    })
+
+    // ⚠ Unknown is not zero — a failed query must never render as a confident "0 forks".
+    it('renders "Unavailable", not a green zero, when the query failed', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          forked_security_identities: { group_count: 0, available: false },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(FORK_CARD)).toBeInTheDocument()
+      })
+
+      expect(forkCardValue(FORK_CARD)).toBe('Unavailable')
+      const card = screen.getByText(FORK_CARD).closest('[data-slot="card"]')
+      expect(card?.className ?? '').not.toMatch(/success/i)
+    })
+
+    // A rolling deploy or an older cached response can omit `forked_security_identities` entirely;
+    // an unguarded read must not throw and blank the whole dashboard.
+    it('degrades to "Unavailable" (not a crash) when `forked_security_identities` is entirely absent', async () => {
+      const withoutForks: Record<string, unknown> = { ...mockHealthData }
+      delete withoutForks.forked_security_identities
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: withoutForks,
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/System Health/i)).toBeInTheDocument()
+      })
+      await waitFor(() => {
+        expect(screen.getByText(FORK_CARD)).toBeInTheDocument()
+      })
+
+      expect(forkCardValue(FORK_CARD)).toBe('Unavailable')
     })
   })
 

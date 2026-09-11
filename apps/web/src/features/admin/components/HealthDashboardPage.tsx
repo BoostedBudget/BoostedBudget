@@ -3,7 +3,7 @@ import { useGetSystemHealth } from '@boostedbudget/api-client/endpoints/admin/ad
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent';
 import { ANALYTICS_EVENTS } from '../../../shared/analytics';
 import { SummaryCard } from '@/features/admin';
-import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle, Users, Timer, UserCheck, UserX, History } from 'lucide-react';
+import { AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle, Users, Timer, UserCheck, UserX, History, GitFork } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 
@@ -143,6 +143,20 @@ export function HealthDashboardPage() {
   const rejectedWebhookAttemptsByProvider = rejectedWebhookAttemptsAvailable
     ? data.rejected_webhook_attempts_24h.by_provider
     : {};
+
+  // #1631 M8b I5. Same fail-closed shape and the same optional-chaining guard as every gauge
+  // above: a FAILED derivation and a genuine zero fork count both arrive as identical zero-valued
+  // fields, and `forked_security_identities` itself can be absent entirely on an older cached
+  // response or mid-rolling-deploy. See domain.ForkedSecurityIdentityMetrics (backend) — a group is
+  // two or more `securities` rows sharing one institution_security_id under different
+  // plaid_security_id values, the shape a Plaid corporate action can fork one instrument's
+  // identity into. Detection only: nothing here (or on the backend) merges anything.
+  //
+  // ⚠ Per-group member detail (`.groups`) is not yet in the generated API client as of this
+  // change — the backend added it in the same round as this frontend update, and generation is
+  // controller-owned. Only the count renders here; the member listing is a follow-up once the
+  // client is regenerated.
+  const forkedSecurityIdentitiesAvailable = data.forked_security_identities?.available;
 
   return (
     <div className="p-8 max-w-[1400px] mx-auto max-md:p-4">
@@ -489,6 +503,30 @@ export function HealthDashboardPage() {
                 status={count > 0 ? 'warning' : 'success'}
               />
             ))}
+        </div>
+      </section>
+
+      {/* Forked Security Identities Section (#1631 M8b) — a Plaid corporate action can reissue
+          plaid_security_id, silently forking one real instrument's identity into multiple
+          `securities` rows with separate transaction/holding histories. Detection only: nothing
+          here (or on the backend) merges anything.
+
+          ⚠ Per-group member detail (which securities forked) is not yet exposed by the generated
+          API client — see the comment above where forkedSecurityIdentitiesAvailable is derived.
+          Only the group count renders for now.
+
+          Scope discipline, matching every other gauge section on this page: this only makes the
+          count VISIBLE. Whether a non-zero count should degrade `data.status` is a product
+          decision this task never asked for, so `data.status` is untouched. */}
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Forked Security Identities</h2>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
+          <SummaryCard
+            title="Fork Groups Detected"
+            value={forkedSecurityIdentitiesAvailable ? data.forked_security_identities.group_count.toString() : 'Unavailable'}
+            icon={<GitFork size={24} />}
+            status={!forkedSecurityIdentitiesAvailable ? 'warning' : (data.forked_security_identities.group_count > 0 ? 'warning' : 'success')}
+          />
         </div>
       </section>
 

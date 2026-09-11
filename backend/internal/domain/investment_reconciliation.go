@@ -15,36 +15,57 @@ package domain
 // convention), and a reinvestment (type='cash', a real Plaid subtype like "dividend
 // reinvestment", or this brokerage's structural cash/withdrawal-against-a-security pattern — see
 // domain.NormalizeTradeType) carries a POSITIVE quantity for the shares it purchased. So
-// SUM(quantity) over exactly the rows domain.NormalizeTradeType would label buy/sell/reinvest is
-// a valid net share delta — domain.TradeTypeToSQLPredicate already defines that partition and is
+// SUM(quantity) over the rows domain.NormalizeTradeType would label buy/sell/reinvest is A START
+// on a net share delta — domain.TradeTypeToSQLPredicate already defines that partition and is
 // reused verbatim rather than re-derived, for the same reason IncomeSummary and the transaction
 // feed share it: two independent copies of "which rows count" is how #1631 happened in the first
-// place.
+// place. It is not the WHOLE delta: type='transfer' rows also modify a position — Plaid's own
+// docs call type='transfer' "activity that modifies a position, but not through buy/sell
+// activity", covering both a stock split (subtype='split', which NormalizeTradeType displays as
+// "Other" for UX reasons — display and reconciliation are different questions) and an in-kind/
+// ACATS transfer of shares between accounts. Both change holdings.quantity with no corresponding
+// buy/sell/reinvest row, so the repository's PositionReconciliation query sums ALL type='transfer'
+// rows into the ledger net regardless of subtype, in addition to the buy/sell/reinvest partition.
+// Options assignment/exercise is a known further gap: Plaid does not expose a distinct subtype
+// set for it in this codebase today, so it is NOT covered and would still misreport as a drift if
+// it occurred against a held security.
 //
-// THE 2-YEAR LOOKBACK DECISION, WRITTEN DOWN. Plaid's investments endpoints only return two years
-// of investment_transactions. A position opened before that window has real shares the ledger
-// simply never received, so Σ(buy+sell+reinvest quantity) for that security will fall short of
-// the holding's actual quantity through NO fault of the sync — the ledger is complete FOR THE
-// WINDOW, not complete for the position's whole life. A diagnostic that flagged every such
-// position would flag most long-held holdings in the product, which is noise, not signal, and
-// would train an operator to ignore the report entirely.
+// ⚠ Drifts IS NOT YET FULLY ACTIONABLE — READ THIS BEFORE TREATING A NON-EMPTY Drifts LIST AS A
+// CONFIRMED PROBLEM LIST. There are two distinct sources of expected, non-actionable drift, and
+// only the first is currently addressed:
 //
-// The chosen proxy for "the ledger can plausibly speak to this position's origin" is: DOES THE
-// LEDGER CONTAIN AT LEAST ONE type='buy' ROW FOR THIS (account, security) PAIR? A position with
-// zero buys in the ledger — only sells, only reinvestments, or no rows at all — could not have
-// been opened inside the visible window (you cannot sell or reinvest into a position you never
-// bought), so its whole opening trade predates the lookback and a quantity mismatch there is
-// exactly what the window's edge predicts, not evidence of anything wrong. Those pairs are
-// reported separately, as SuppressedPreWindowCount, rather than folded into Drifts — the report
-// stays honest about how many positions it could not evaluate instead of silently going quiet
-// about them.
+//  1. THE 2-YEAR LOOKBACK, ADDRESSED (partially) via SuppressedPreWindowCount. Plaid's investments
+//     endpoints only return two years of investment_transactions. A position opened before that
+//     window has real shares the ledger simply never received, so the ledger net for that
+//     security will fall short of the holding's actual quantity through NO fault of the sync.
+//     The chosen proxy for "the ledger can plausibly speak to this position's origin" is: DOES
+//     THE LEDGER CONTAIN AT LEAST ONE type='buy' ROW FOR THIS (account, security) PAIR? A position
+//     with zero buys in the ledger — only sells, only reinvestments/transfers, or no rows at all
+//     — could not have been opened inside the visible window (you cannot sell, reinvest into, or
+//     receive a transfer TO a position you never bought without Plaid also reporting that buy),
+//     so a quantity mismatch there is exactly what the window's edge predicts. Those pairs are
+//     reported separately, as SuppressedPreWindowCount, rather than folded into Drifts.
 //
-// This is a proxy, not a proof: a position can have a qualifying buy AND still predate the window
-// (an old position topped up with a recent purchase), which would still surface as a Drift. That
-// residual false-positive rate is accepted deliberately — the alternative (also requiring the
-// ledger's earliest row to precede the account's overall earliest row by some margin) trades one
-// unproven heuristic for a second, no more defensible one, on a feature that is diagnostic-only
-// and has no write path to protect against overreacting to.
+//  2. PRE-WINDOW BASE PLUS IN-WINDOW CONTRIBUTIONS — NOT ADDRESSED, AND LIKELY THE DOMINANT
+//     POPULATION OF Drifts, NOT A RESIDUAL. The has-a-buy proxy above only excludes a position
+//     with ZERO buys. A position opened years ago and topped up ever since by recurring buys —
+//     dollar-cost averaging, an auto-invest schedule, a payroll-deferral retirement contribution —
+//     has plenty of buys in the visible window, so it PASSES the proxy, and is then reported
+//     forever with a Delta equal to its entire pre-window base (everything bought before the
+//     window's start, never captured). This is precisely the modal long-held, regularly-
+//     contributed-to position — the shape this issue's reinvesting-accounts framing exists to
+//     serve — so it is not a rare edge case sitting alongside real drifts; on real portfolios it
+//     is expected to be most of what Drifts contains. Treat a non-empty Drifts entry as "worth
+//     investigating whether this is (a) a genuine ledger/position disagreement, (b) an
+//     uncaptured corporate action/transfer this file doesn't yet enumerate, or (c) simply a
+//     position older than two years with ongoing contributions" — NOT as a pre-filtered list of
+//     confirmed problems. Closing this gap needs the position anchored to a WINDOW rather than
+//     compared against the position's whole lifetime: reconcile holdings.quantity minus the
+//     earliest available holding_snapshots row at or after the ledger's own starting point
+//     against the ledger sum over that SAME interval, so the reconciliation never depends on
+//     history older than what both sides can see. holding_snapshots (migration 000160) already
+//     has the shape (account_id, security_id, as_of_date, quantity) this would need. Left for a
+//     follow-up round rather than done here.
 //
 // WHY QUANTITY, NOT MONEY, AND WHY THE CURRENCY HELPERS DO NOT APPLY. domain.ResolveCurrencyCodes/
 // CurrenciesConflict exist because a MONEY total summed across mixed currencies is meaningless
@@ -73,14 +94,18 @@ type PositionReconciliationMember struct {
 	Delta           float64 `json:"delta"`
 }
 
-// PositionReconciliationReport is GetPositionReconciliation's result: the drifts worth an
-// operator's attention, plus a count of positions the 2-year lookback made unevaluable (see the
-// file-level comment for exactly what that means and why it is a separate bucket rather than
-// silence).
+// PositionReconciliationReport is GetPositionReconciliation's result: candidate drifts worth an
+// operator's attention, plus a count of positions the 2-year lookback made unevaluable. See the
+// file-level "NOT YET FULLY ACTIONABLE" comment above before treating Drifts as a pre-filtered
+// problem list — a large share of it is expected to be ordinary long-held, regularly-contributed-
+// to positions, not confirmed defects.
 type PositionReconciliationReport struct {
 	// Drifts are (account, security) pairs where the ledger contains at least one buy for the
 	// pair (the "plausibly-in-window" proxy) AND the ledger-implied quantity disagrees with the
-	// Plaid snapshot by more than positionReconciliationQuantityTolerance.
+	// Plaid snapshot by more than positionReconciliationQuantityTolerance. ⚠ See the file-level
+	// comment: this proxy only catches source 1 (zero-buy pre-window positions), not source 2
+	// (a pre-window base with in-window contributions) — Drifts is expected to contain real
+	// noise from source 2 today, not just genuine problems.
 	Drifts []PositionReconciliationMember `json:"drifts"`
 	// SuppressedPreWindowCount is the number of positions with a non-zero delta that were NOT
 	// added to Drifts because the ledger held no buy for the pair — the signature of a position
@@ -90,6 +115,23 @@ type PositionReconciliationReport struct {
 	// TotalPositionsChecked is every (account, security) pair with a non-zero holding quantity
 	// that this report evaluated, drifting or not — the denominator for the two counts above.
 	TotalPositionsChecked int `json:"total_positions_checked"`
+}
+
+// PositionReconciliationSummary is the /admin/health gauge (#1631 M8b I1): the SAME
+// classification as PositionReconciliationReport, aggregated as counts across EVERY user's active
+// holdings rather than materializing the per-user Drifts list. Global, not per-user, matching
+// ForkedSecurityIdentityMetrics's convention — an operator gauge needs "how many", not one user's
+// detail. See PositionReconciliationReport's doc comment for what DriftCount does and does not
+// mean; the "not yet fully actionable" caveat applies here identically.
+//
+// Available follows the same "unknown is not zero" convention as every other optional gauge on
+// domain.SystemHealthResponse: an unwired repository or a failed query reports Available=false,
+// never a confident zero.
+type PositionReconciliationSummary struct {
+	DriftCount               int64 `json:"drift_count"`
+	SuppressedPreWindowCount int64 `json:"suppressed_pre_window_count"`
+	TotalPositionsChecked    int64 `json:"total_positions_checked"`
+	Available                bool  `json:"available"`
 }
 
 // ClassifyPositionReconciliationMember reports whether a candidate (holding vs. ledger) pair

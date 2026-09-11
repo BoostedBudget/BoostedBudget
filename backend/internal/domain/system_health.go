@@ -54,6 +54,14 @@ type SystemHealthResponse struct {
 	// count should degrade overall health is a product decision this task never asked for — see
 	// ForkedSecurityIdentityMetrics for the "unknown is not zero" convention it follows.
 	ForkedSecurityIdentities ForkedSecurityIdentityMetrics `json:"forked_security_identities"`
+	// PositionReconciliation is the trade-vs-position diagnostic's own admin gauge (#1631 M8b I1):
+	// a global count, across every user's active holdings, of positions whose ledger-implied
+	// quantity disagrees with Plaid's holdings snapshot. See
+	// domain.PositionReconciliationSummary and domain.PositionReconciliationReport's
+	// "NOT YET FULLY ACTIONABLE" section for why DriftCount is not yet a confirmed-problem count.
+	// Whether this should degrade overall health is out of scope for the same reason as the two
+	// gauges above.
+	PositionReconciliation PositionReconciliationSummary `json:"position_reconciliation"`
 	// CacheEnabled reports whether the analytics-namespace cache (cache.NamespaceAnalytics) is
 	// currently active for this deployment — Issue #1531 Task 11e. It is false whenever
 	// CACHE_ENABLED=false, no cache Redis client could be constructed at startup, the namespace is
@@ -353,9 +361,9 @@ type RedisHealth struct {
 // convention (see observability.RedisPoolStats's doc comment) — this domain package must never
 // import internal/redisclient just to describe a wire shape.
 type RedisPoolStats struct {
-	Hits       uint32 `json:"hits"`       // cumulative since client construction
-	Misses     uint32 `json:"misses"`     // cumulative since client construction
-	Timeouts   uint32 `json:"timeouts"`   // cumulative since client construction
+	Hits       uint32 `json:"hits"`     // cumulative since client construction
+	Misses     uint32 `json:"misses"`   // cumulative since client construction
+	Timeouts   uint32 `json:"timeouts"` // cumulative since client construction
 	TotalConns uint32 `json:"total_conns"`
 	IdleConns  uint32 `json:"idle_conns"`
 	StaleConns uint32 `json:"stale_conns"`

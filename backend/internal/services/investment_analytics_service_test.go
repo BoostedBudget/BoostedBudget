@@ -61,6 +61,14 @@ func (m *MockInvestmentAnalyticsRepository) PositionReconciliation(ctx context.C
 	return args.Get(0).(*domain.PositionReconciliationReport), args.Error(1)
 }
 
+func (m *MockInvestmentAnalyticsRepository) PositionReconciliationSummary(ctx context.Context) (*domain.PositionReconciliationSummary, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.PositionReconciliationSummary), args.Error(1)
+}
+
 // ============================================================================
 // GetAllocationBreakdown
 // ============================================================================

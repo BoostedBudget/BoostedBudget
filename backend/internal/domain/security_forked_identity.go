@@ -47,5 +47,10 @@ type ForkedSecurityIdentity struct {
 // the same underlying Plaid identity-reissue affecting every user who holds that security.
 type ForkedSecurityIdentityMetrics struct {
 	GroupCount int64 `json:"group_count"`
-	Available  bool  `json:"available"`
+	// Groups is the full member listing behind GroupCount (#1631 M8b I2) — without it, an operator
+	// seeing a non-zero GroupCount has no way to find out WHICH securities forked. Fork groups are
+	// expected to be rare (a handful at most; they only form from a corporate-action reissue of
+	// plaid_security_id), so shipping the full detail alongside the count is cheap.
+	Groups    []ForkedSecurityIdentity `json:"groups"`
+	Available bool                     `json:"available"`
 }
