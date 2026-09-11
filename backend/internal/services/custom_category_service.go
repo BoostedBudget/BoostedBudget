@@ -92,6 +92,16 @@ type BudgetCategoryRepository interface {
 	// see checkReparentDoesNotEscape for why that must be overlaid with the PROPOSED parent
 	// before domain.EscapedNestedChild runs.
 	GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
+	// GetCategoriesByBudgetIDLocked is GetCategoriesByBudgetID's TOCTOU-closing counterpart
+	// (Issue #1630 B3): it locks budgetID's row (SELECT ... FOR UPDATE) inside a transaction it
+	// opens and commits internally, re-reads the budget's live categories while that lock is
+	// held, then releases it and returns the snapshot. checkReparentDoesNotEscape uses this
+	// instead of the plain read so its containment check runs against the SAME
+	// re-read-under-lock protocol AddCategoryChecked / UpdateCategoryChecked use for a single
+	// add/edit — closing the identical race for the reparent path: a reparent and a concurrent
+	// AddCategory/UpdateCategory on the same budget can no longer both observe a stale snapshot
+	// of each other's write and jointly violate domain.EscapedNestedChild.
+	GetCategoriesByBudgetIDLocked(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
 }
 
 type customCategoryService struct {
@@ -405,7 +415,9 @@ func (s *customCategoryService) checkReparentDoesNotEscape(ctx context.Context, 
 	}
 
 	for _, budget := range budgets {
-		cats, err := s.budgetCategoryRepo.GetCategoriesByBudgetID(ctx, budget.ID)
+		// Issue #1630 B3: locked, not plain — closes the TOCTOU window against a concurrent
+		// AddCategory/UpdateCategory on this same budget for the duration of this budget's check.
+		cats, err := s.budgetCategoryRepo.GetCategoriesByBudgetIDLocked(ctx, budget.ID)
 		if err != nil {
 			return err
 		}

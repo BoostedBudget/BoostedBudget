@@ -40,6 +40,45 @@ type BudgetRepository interface {
 	// BudgetCategory operations
 	CreateCategory(ctx context.Context, category *domain.BudgetCategory) error
 	GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
+	// GetCategoriesByBudgetIDLocked locks budgetID's row (SELECT ... FOR UPDATE) inside a
+	// transaction it opens and commits internally, re-reads that budget's live categories while
+	// the lock is held, then releases it and returns the snapshot. Gives a caller composing a
+	// cross-budget hierarchy check (e.g. custom_category_service's reparent-containment guard) the
+	// same re-read-under-lock protocol AddCategoryChecked / UpdateCategoryChecked use for a single
+	// add/edit, so it serializes against a concurrent AddCategory/UpdateCategory on THIS budget for
+	// as long as this call takes (Issue #1630 B3). Returns domain.ErrBudgetNotFound if budgetID
+	// does not exist or is tombstoned.
+	//
+	// ⚠ The lock is released when this call returns, not held across a subsequent unrelated write
+	// (e.g. the custom_categories parent-linkage write a reparent persists afterward) — narrower
+	// than AddCategoryChecked/UpdateCategoryChecked's single-transaction guarantee, but it closes
+	// the same window for every budget individually while the multi-budget check runs, which is
+	// what that check needs.
+	GetCategoriesByBudgetIDLocked(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error)
+	// AddCategoryChecked atomically locks budgetID's row (SELECT ... FOR UPDATE), re-reads its
+	// LIVE categories inside that lock, evaluates domain.DuplicateParentIdentity and
+	// domain.EscapedNestedChild against that fresh snapshot, and only then inserts candidate — all
+	// in one transaction. Closes the TOCTOU window between two concurrent adds that AddCategory's
+	// old read(outside tx)-check(in memory)-write left open (Issue #1630 B3): two goroutines
+	// racing to add categories that are individually fine but jointly violate one of the two
+	// guards can no longer both succeed. Returns domain.ErrBudgetNotFound if budgetID does not
+	// exist or is tombstoned, domain.ErrDuplicateParentCategory / domain.ErrEscapedNestedChild if
+	// the locked snapshot trips a guard — both already map to a 4xx via
+	// huma/errors.LoggingMapError, so the losing goroutine of a genuine race sees the same refusal
+	// it would have seen sequentially, never a raw serialization failure surfacing as a 500.
+	AddCategoryChecked(ctx context.Context, budgetID string, candidate *domain.BudgetCategory) (*domain.BudgetCategory, error)
+	// UpdateCategoryChecked is AddCategoryChecked's counterpart for edits: it locks budgetID's row,
+	// re-reads its live categories, locates categoryID among them, hands mutate a pointer to apply
+	// request-specific field mutations (mutate should call category.Validate() itself if it wants
+	// field-level validation), re-runs domain.EscapedNestedChild against the mutated row and its
+	// FRESH siblings, and persists — all inside the same lock. mutate receives only the domain
+	// object, never the transaction, so business logic stays in the service layer while
+	// lock/lifecycle management stays in the repository (Issue #1630 B3 — deliberately narrower
+	// than exposing a generic transaction callback). Returns domain.ErrBudgetNotFound /
+	// domain.ErrBudgetCategoryNotFound when the budget or category is missing, whatever mutate
+	// itself returns, or domain.ErrEscapedNestedChild if the mutated row escapes containment
+	// against the locked snapshot.
+	UpdateCategoryChecked(ctx context.Context, budgetID, categoryID string, mutate func(category *domain.BudgetCategory) error) (*domain.BudgetCategory, error)
 	// GetCategoriesByBudgetIDs batch-loads categories for multiple budgets in a single query.
 	// Returns a map from budget ID to its categories. Returns an empty map (not nil) when
 	// budgetIDs is empty. Used by the period-close scanner for batched page loading (Issue #1271).
@@ -524,6 +563,12 @@ func (r *budgetRepository) CountByUserID(ctx context.Context, userID string) (in
 
 // CreateCategory creates a new budget category.
 func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.BudgetCategory) error {
+	return r.createCategoryQuerier(ctx, r.db, category)
+}
+
+// createCategoryQuerier is CreateCategory's body, parameterized over Querier so AddCategoryChecked
+// (Issue #1630 B3) can run the identical insert inside its own locked transaction.
+func (r *budgetRepository) createCategoryQuerier(ctx context.Context, q Querier, category *domain.BudgetCategory) error {
 	if category.ID == "" {
 		category.ID = uuid.New().String()
 	}
@@ -557,7 +602,7 @@ func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`
 
-	_, err = r.db.Exec(ctx, query,
+	_, err = q.Exec(ctx, query,
 		category.ID,
 		category.BudgetID,
 		category.CategoryKind,
@@ -578,8 +623,148 @@ func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.
 	return err
 }
 
+// lockBudgetRowInTx locks budgetID's row (SELECT ... FOR UPDATE) inside tx, blocking until any
+// other transaction holding the same lock (AddCategoryChecked, UpdateCategoryChecked, or another
+// call composing several of these) commits or rolls back. Returns domain.ErrBudgetNotFound if
+// budgetID does not exist or is already tombstoned. Issue #1630 B3.
+func (r *budgetRepository) lockBudgetRowInTx(ctx context.Context, tx pgx.Tx, budgetID string) error {
+	var locked string
+	err := tx.QueryRow(ctx, `SELECT id FROM budgets WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, budgetID).Scan(&locked)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrBudgetNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+// GetCategoriesByBudgetIDLocked implements BudgetRepository.GetCategoriesByBudgetIDLocked — see
+// that method's doc comment.
+func (r *budgetRepository) GetCategoriesByBudgetIDLocked(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op
+
+	if err := r.lockBudgetRowInTx(ctx, tx, budgetID); err != nil {
+		return nil, err
+	}
+
+	categories, err := r.getCategoriesByBudgetIDQuerier(ctx, tx, budgetID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return categories, nil
+}
+
+// AddCategoryChecked implements BudgetRepository.AddCategoryChecked — see that method's doc
+// comment.
+func (r *budgetRepository) AddCategoryChecked(ctx context.Context, budgetID string, candidate *domain.BudgetCategory) (*domain.BudgetCategory, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op
+
+	if err := r.lockBudgetRowInTx(ctx, tx, budgetID); err != nil {
+		return nil, err
+	}
+
+	categories, err := r.getCategoriesByBudgetIDQuerier(ctx, tx, budgetID)
+	if err != nil {
+		return nil, err
+	}
+
+	if domain.DuplicateParentIdentity(categories, candidate) {
+		return nil, domain.ErrDuplicateParentCategory
+	}
+	if domain.EscapedNestedChild(categories, candidate) {
+		return nil, fmt.Errorf("%w: match_logic %q on this category escapes its hierarchical parent's containment envelope — a parent whose own match_logic is category_only/or only fully rolls up children whose match_logic is category_only/and; use a top-level (non-nested) category instead if this one must match tag_only or or", domain.ErrEscapedNestedChild, candidate.MatchLogic)
+	}
+
+	if err := r.createCategoryQuerier(ctx, tx, candidate); err != nil {
+		// Defense-in-depth: unique_budget_category_discriminated (migration 000083) backstops the
+		// identity half of this guard at the DB level too. The FOR UPDATE lock above should make
+		// this branch unreachable in practice, but a losing writer must still surface a 4xx, not a
+		// raw constraint-violation 500, if it is ever reached.
+		if strings.Contains(err.Error(), "unique_budget_category_discriminated") || strings.Contains(err.Error(), "duplicate key") {
+			return nil, domain.ErrDuplicateParentCategory
+		}
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return candidate, nil
+}
+
+// UpdateCategoryChecked implements BudgetRepository.UpdateCategoryChecked — see that method's doc
+// comment.
+func (r *budgetRepository) UpdateCategoryChecked(ctx context.Context, budgetID, categoryID string, mutate func(category *domain.BudgetCategory) error) (*domain.BudgetCategory, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op
+
+	if err := r.lockBudgetRowInTx(ctx, tx, budgetID); err != nil {
+		return nil, err
+	}
+
+	categories, err := r.getCategoriesByBudgetIDQuerier(ctx, tx, budgetID)
+	if err != nil {
+		return nil, err
+	}
+
+	var category *domain.BudgetCategory
+	siblings := make([]domain.BudgetCategory, 0, len(categories))
+	for i := range categories {
+		if categories[i].ID == categoryID {
+			c := categories[i]
+			category = &c
+		} else {
+			siblings = append(siblings, categories[i])
+		}
+	}
+	if category == nil {
+		return nil, domain.ErrBudgetCategoryNotFound
+	}
+
+	if err := mutate(category); err != nil {
+		return nil, err
+	}
+
+	if domain.EscapedNestedChild(siblings, category) {
+		return nil, fmt.Errorf("%w: match_logic %q on this category escapes its hierarchical parent's containment envelope — a parent whose own match_logic is category_only/or only fully rolls up children whose match_logic is category_only/and; use a top-level (non-nested) category instead if this one must match tag_only or or", domain.ErrEscapedNestedChild, category.MatchLogic)
+	}
+
+	if err := r.updateCategoryQuerier(ctx, tx, category); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return category, nil
+}
+
 // GetCategoriesByBudgetID retrieves all categories for a budget.
 func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
+	return r.getCategoriesByBudgetIDQuerier(ctx, r.db, budgetID)
+}
+
+// getCategoriesByBudgetIDQuerier is GetCategoriesByBudgetID's body, parameterized over Querier so
+// AddCategoryChecked / UpdateCategoryChecked / GetCategoriesByBudgetIDLocked (Issue #1630 B3) can
+// run the identical read INSIDE an open transaction, against a budget row they hold locked, rather
+// than duplicating this query.
+func (r *budgetRepository) getCategoriesByBudgetIDQuerier(ctx context.Context, q Querier, budgetID string) ([]domain.BudgetCategory, error) {
 	// Issue #1203: join custom_categories for parent linkage (sub-allocation detection).
 	// Issue #1300: join savings_goals for display name so the API returns savings_goal_name
 	// and the frontend never shows a raw UUID as the category label.
@@ -611,7 +796,7 @@ func (r *budgetRepository) GetCategoriesByBudgetID(ctx context.Context, budgetID
 		ORDER BY bc.created_at ASC
 	`
 
-	rows, err := r.db.Query(ctx, query, budgetID)
+	rows, err := q.Query(ctx, query, budgetID)
 	if err != nil {
 		return nil, err
 	}
@@ -742,6 +927,13 @@ func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetI
 
 // UpdateCategory updates an existing budget category.
 func (r *budgetRepository) UpdateCategory(ctx context.Context, category *domain.BudgetCategory) error {
+	return r.updateCategoryQuerier(ctx, r.db, category)
+}
+
+// updateCategoryQuerier is UpdateCategory's body, parameterized over Querier so
+// UpdateCategoryChecked (Issue #1630 B3) can run the identical update inside its own locked
+// transaction.
+func (r *budgetRepository) updateCategoryQuerier(ctx context.Context, q Querier, category *domain.BudgetCategory) error {
 	category.UpdatedAt = time.Now()
 
 	// Marshal tags to JSON (Issue #491)
@@ -768,7 +960,7 @@ func (r *budgetRepository) UpdateCategory(ctx context.Context, category *domain.
 		WHERE id = $10 AND budget_id = $11 AND deleted_at IS NULL
 	`
 
-	ct, err := r.db.Exec(ctx, query,
+	ct, err := q.Exec(ctx, query,
 		category.CategoryKind,
 		category.PFCPrimary,
 		category.PFCDetailed,

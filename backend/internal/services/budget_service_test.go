@@ -93,9 +93,54 @@ func (m *MockBudgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, bud
 	return args.Get(0).(map[string][]domain.BudgetCategory), args.Error(1)
 }
 
+// GetCategoriesByBudgetIDLocked is a mock implementation (Issue #1630 B3).
+func (m *MockBudgetRepository) GetCategoriesByBudgetIDLocked(ctx context.Context, budgetID string) ([]domain.BudgetCategory, error) {
+	args := m.Called(ctx, budgetID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]domain.BudgetCategory), args.Error(1)
+}
+
+// AddCategoryChecked is a mock implementation (Issue #1630 B3). Unlike the real repository, the
+// mock does NOT run domain.DuplicateParentIdentity / domain.EscapedNestedChild itself — tests
+// stub the return value directly, since AddCategory's own in-memory pre-check already exercises
+// those guards against the initial GetByID snapshot and the repository's dedicated tests
+// (budget_repository_test.go / the B3 concurrency integration test) exercise the locked re-check.
+// On a stubbed nil error, echoes candidate back (mirroring the real repository, which returns the
+// same row it inserted) unless the stub supplied an explicit replacement category.
+func (m *MockBudgetRepository) AddCategoryChecked(ctx context.Context, budgetID string, candidate *domain.BudgetCategory) (*domain.BudgetCategory, error) {
+	args := m.Called(ctx, budgetID, candidate)
+	if err := args.Error(1); err != nil {
+		return nil, err
+	}
+	if args.Get(0) != nil {
+		return args.Get(0).(*domain.BudgetCategory), nil
+	}
+	return candidate, nil
+}
+
 func (m *MockBudgetRepository) UpdateCategory(ctx context.Context, category *domain.BudgetCategory) error {
 	args := m.Called(ctx, category)
 	return args.Error(0)
+}
+
+// UpdateCategoryChecked is a mock implementation (Issue #1630 B3). It does NOT run
+// domain.EscapedNestedChild itself (the same rationale as AddCategoryChecked's mock above), but it
+// DOES invoke mutate against the stubbed return object before returning it — mirroring
+// production's mutate-then-persist order — so a test stubbing a baseline category and asserting on
+// the field mutations req applied (e.g. a new AllocatedAmount) sees them reflected in the result,
+// the same way it did against the old plain UpdateCategory mock's pass-through.
+func (m *MockBudgetRepository) UpdateCategoryChecked(ctx context.Context, budgetID, categoryID string, mutate func(category *domain.BudgetCategory) error) (*domain.BudgetCategory, error) {
+	args := m.Called(ctx, budgetID, categoryID, mutate)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	result := args.Get(0).(*domain.BudgetCategory)
+	if err := mutate(result); err != nil {
+		return nil, err
+	}
+	return result, args.Error(1)
 }
 
 func (m *MockBudgetRepository) UpdateCategorySpentAmount(ctx context.Context, categoryID string, spentAmount float64) error {
@@ -629,9 +674,11 @@ func TestBudgetService_AddCategory_Success(t *testing.T) {
 		AllocatedAmount: 300.00,
 	}
 
-	// Setup mocks — category validation is deferred to domain so only GetByID and CreateCategory are called.
+	// Setup mocks — category validation is deferred to domain so only GetByID and
+	// AddCategoryChecked are called (Issue #1630 B3: AddCategoryChecked replaces CreateCategory
+	// as the atomic locked insert).
 	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-	mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+	mockBudgetRepo.On("AddCategoryChecked", ctx, budgetID, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil, nil)
 
 	// Execute
 	category, err := service.AddCategory(ctx, userID, budgetID, req)
@@ -672,9 +719,12 @@ func TestBudgetService_UpdateCategory_Success(t *testing.T) {
 		AllocatedAmount: &newAmount,
 	}
 
-	// Setup mocks
+	// Setup mocks. UpdateCategoryChecked replaces UpdateCategory as the atomic locked
+	// re-read-and-persist (Issue #1630 B3); the mock invokes the service's mutate closure against
+	// the fresh snapshot below, mirroring the real repository re-reading the row under lock.
 	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-	mockBudgetRepo.On("UpdateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+	freshSnapshot := existingBudget.Categories[0]
+	mockBudgetRepo.On("UpdateCategoryChecked", ctx, budgetID, categoryID, mock.Anything).Return(&freshSnapshot, nil)
 
 	// Execute
 	category, err := service.UpdateCategory(ctx, userID, budgetID, categoryID, req)
@@ -738,7 +788,7 @@ func TestBudgetService_UpdateCategory_RejectsChildEscapingContainment(t *testing
 	assert.ErrorIs(t, err, domain.ErrInvalidBudget)
 	assert.Contains(t, err.Error(), "match_logic")
 	assert.Nil(t, category)
-	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "UpdateCategory")
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "UpdateCategoryChecked")
 	mockBudgetRepo.AssertExpectations(t)
 }
 
@@ -799,7 +849,7 @@ func TestBudgetService_UpdateCategory_RejectsParentOrphaningContainedChild(t *te
 	assert.ErrorIs(t, err, domain.ErrInvalidBudget)
 	assert.Contains(t, err.Error(), "match_logic")
 	assert.Nil(t, category)
-	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "UpdateCategory")
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "UpdateCategoryChecked")
 	mockBudgetRepo.AssertExpectations(t)
 }
 
@@ -837,7 +887,8 @@ func TestBudgetService_UpdateCategory_AllowsUnrelatedMatchLogicChange(t *testing
 	}
 
 	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-	mockBudgetRepo.On("UpdateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+	freshSnapshot := existingBudget.Categories[0]
+	mockBudgetRepo.On("UpdateCategoryChecked", ctx, budgetID, categoryID, mock.Anything).Return(&freshSnapshot, nil)
 
 	category, err := service.UpdateCategory(ctx, userID, budgetID, categoryID, req)
 
@@ -1326,7 +1377,7 @@ func TestBudgetService_AddCategory_PopulatesPFCDisplay(t *testing.T) {
 	}
 
 	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-	mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+	mockBudgetRepo.On("AddCategoryChecked", ctx, budgetID, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil, nil)
 
 	category, err := service.AddCategory(ctx, userID, budgetID, req)
 
@@ -1884,7 +1935,7 @@ func TestBudgetService_AddCategory_SavingsKind(t *testing.T) {
 		svc.SetGoalOwnershipChecker(mockChecker)
 
 		mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-		mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+		mockBudgetRepo.On("AddCategoryChecked", ctx, budgetID, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil, nil)
 
 		category, err := svc.AddCategory(ctx, userID, budgetID, req)
 
@@ -1912,7 +1963,7 @@ func TestBudgetService_AddCategory_SavingsKind(t *testing.T) {
 		svc.SetGoalOwnershipChecker(mockChecker)
 
 		mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-		// CreateCategory must NOT be called
+		// AddCategoryChecked must NOT be called
 
 		_, err := svc.AddCategory(ctx, userID, budgetID, req)
 
@@ -1938,7 +1989,7 @@ func TestBudgetService_AddCategory_SavingsKind(t *testing.T) {
 		svc.SetGoalOwnershipChecker(mockChecker)
 
 		mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-		mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+		mockBudgetRepo.On("AddCategoryChecked", ctx, budgetID, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil, nil)
 
 		category, err := svc.AddCategory(ctx, userID, budgetID, req)
 
@@ -1971,8 +2022,8 @@ func TestBudgetService_AddCategory_SavingsKind(t *testing.T) {
 		require.Error(t, err, "AddCategory with nil checker and a savings category must return an error (fail-closed)")
 		assert.Nil(t, category)
 		assert.Contains(t, err.Error(), "ownership checker not configured")
-		// CreateCategory must NOT be called — the IDOR check blocks the write.
-		mockBudgetRepo.AssertNotCalled(t, "CreateCategory")
+		// AddCategoryChecked must NOT be called — the IDOR check blocks the write.
+		mockBudgetRepo.AssertNotCalled(t, "AddCategoryChecked")
 	})
 }
 
@@ -2205,7 +2256,7 @@ func TestBudgetService_AddCategory_RejectsCrossUserCustomCategory(t *testing.T) 
 
 	assert.ErrorIs(t, err, domain.ErrCategoryNotFound)
 	assert.Nil(t, category)
-	mockBudgetRepo.AssertNotCalled(t, "CreateCategory")
+	mockBudgetRepo.AssertNotCalled(t, "AddCategoryChecked")
 	mockBudgetRepo.AssertExpectations(t)
 	mockCategoryRepo.AssertExpectations(t)
 }
@@ -2248,7 +2299,7 @@ func TestBudgetService_AddCategory_RejectsDuplicateParentIdentity_PFC(t *testing
 
 	assert.ErrorIs(t, err, domain.ErrDuplicateParentCategory)
 	assert.Nil(t, category)
-	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "CreateCategory")
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "AddCategoryChecked")
 	mockBudgetRepo.AssertExpectations(t)
 }
 
@@ -2293,7 +2344,7 @@ func TestBudgetService_AddCategory_RejectsDuplicateParentIdentity_Custom(t *test
 
 	assert.ErrorIs(t, err, domain.ErrDuplicateParentCategory)
 	assert.Nil(t, category)
-	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "CreateCategory")
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "AddCategoryChecked")
 	mockBudgetRepo.AssertExpectations(t)
 	mockCategoryRepo.AssertExpectations(t)
 }
@@ -2339,7 +2390,7 @@ func TestBudgetService_AddCategory_AllowsSecondChildUnderSamePrimary(t *testing.
 	}
 
 	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-	mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+	mockBudgetRepo.On("AddCategoryChecked", ctx, budgetID, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil, nil)
 
 	category, err := service.AddCategory(ctx, userID, budgetID, req)
 
@@ -2420,7 +2471,7 @@ func TestBudgetService_AddCategory_RejectsEscapedNestedChild_PFC(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrInvalidBudget)
 	assert.Contains(t, err.Error(), "match_logic")
 	assert.Nil(t, category)
-	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "CreateCategory")
+	mockassert.NoCallTo(t, &mockBudgetRepo.Mock, "AddCategoryChecked")
 	mockBudgetRepo.AssertExpectations(t)
 }
 
@@ -2459,7 +2510,7 @@ func TestBudgetService_AddCategory_AllowsProperlyContainedNestedChild(t *testing
 	}
 
 	mockBudgetRepo.On("GetByID", ctx, budgetID).Return(existingBudget, nil)
-	mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil)
+	mockBudgetRepo.On("AddCategoryChecked", ctx, budgetID, mock.AnythingOfType("*domain.BudgetCategory")).Return(nil, nil)
 
 	category, err := service.AddCategory(ctx, userID, budgetID, req)
 
