@@ -485,6 +485,75 @@ describe('AllocationBreakdown', () => {
     });
   });
 
+  describe('Three-level nesting (#1630 review defect: grandchild sized against wrong parent)', () => {
+    it("sizes a grandchild's segment against its DIRECT parent's allocation, not the root's, and nests it inside that parent's div", () => {
+      // Chain: root (pfc, primary-only) -> child (custom, direct child of root via
+      // custom_parent_pfc_primary) -> grandchild (custom, direct child of `child` via
+      // custom_parent_id, and recognized as a transitive descendant of root via
+      // custom_grandparent_pfc_primary — the exact "widening" shape Task B2 introduced).
+      const root: BudgetCategory = {
+        id: 'root',
+        budget_id: 'budget-1',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+        spent_amount: 0,
+        tags: [],
+        match_logic: 'category_only',
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-01T00:00:00Z',
+      };
+      const child: BudgetCategory = {
+        id: 'child',
+        budget_id: 'budget-1',
+        category_kind: 'custom',
+        custom_category_id: 'child-uuid',
+        custom_parent_pfc_primary: 'FOOD_AND_DRINK',
+        allocated_amount: 200,
+        spent_amount: 0,
+        tags: [],
+        match_logic: 'category_only',
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-01T00:00:00Z',
+      };
+      const grandchild: BudgetCategory = {
+        id: 'grandchild',
+        budget_id: 'budget-1',
+        category_kind: 'custom',
+        custom_category_id: 'grandchild-uuid',
+        custom_parent_id: 'child-uuid',
+        custom_grandparent_pfc_primary: 'FOOD_AND_DRINK',
+        allocated_amount: 50,
+        spent_amount: 0,
+        tags: [],
+        match_logic: 'category_only',
+        created_at: '2024-01-01T00:00:00Z',
+        updated_at: '2024-01-01T00:00:00Z',
+      };
+
+      render(
+        <AllocationBreakdown
+          categories={[root, child, grandchild]}
+          totalIncome={1000}
+          unallocated={500}
+        />
+      );
+
+      const rootSegment = screen.getByTestId('segment-root');
+      const childSegment = within(rootSegment).getByTestId('segment-child');
+      // The grandchild must be nested INSIDE its direct parent's div, not as a sibling
+      // directly under root.
+      const grandchildSegment = within(childSegment).getByTestId('segment-grandchild');
+      expect(grandchildSegment).toBeInTheDocument();
+
+      // 50 / 200 (grandchild's direct parent `child`'s own allocation) = 25%, NOT
+      // 50 / 500 (root's allocation) = 10% — the arithmetic the pre-fix code produced.
+      expect(grandchildSegment).toHaveAttribute('aria-label', '25% of parent allocation');
+      expect(grandchildSegment.style.width).toBe('25%');
+    });
+  });
+
   describe('Custom category label resolution (Codex gap fix)', () => {
     const makeCustomCategory = (id: string, customCategoryId: string): BudgetCategory => ({
       id,
