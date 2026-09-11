@@ -7,6 +7,7 @@ import { describe, it, expect, afterEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { PortfolioSummaryCard } from './PortfolioSummaryCard'
 import type { PortfolioSummary } from '@boostedbudget/api-client/models/portfolioSummary'
+import { PortfolioSummaryDayChangeUnavailableReason } from '@boostedbudget/api-client/models/portfolioSummaryDayChangeUnavailableReason'
 
 const mockSummary: PortfolioSummary = {
   total_value: 52340.50,
@@ -50,6 +51,17 @@ const foreignCurrencySummary: PortfolioSummary = {
   ...mockSummary,
   currency_code: 'GBP',
   is_mixed_currency: false,
+}
+
+// #1631 Gap B: the backend REFUSED to compute day_change (prior snapshot and today's total
+// disagree on currency, or either is a currency-blind sum) rather than lacking the data for it.
+// day_change/day_change_pct are null on this shape, same as nullDaySummary, but the reason field
+// distinguishes "we do not know yet" from "we will never compute this from these two totals".
+const currencyMismatchSummary: PortfolioSummary = {
+  ...mockSummary,
+  day_change: null,
+  day_change_pct: null,
+  day_change_unavailable_reason: 'currency_mismatch',
 }
 
 describe('PortfolioSummaryCard', () => {
@@ -106,6 +118,26 @@ describe('PortfolioSummaryCard', () => {
     const noChangeSummary: PortfolioSummary = { ...mockSummary, day_change: null, day_change_pct: 1.2 }
     render(<PortfolioSummaryCard summary={noChangeSummary} />)
     expect(screen.getAllByText('--').length).toBeGreaterThan(0)
+  })
+
+  // #1631 Gap B: a REFUSAL is not the same claim as missing data, and both must not collapse into
+  // the same bare "--". Mirrors HoldingsTable's renderDayChange treatment of the same reason.
+  describe('day_change_unavailable_reason (#1631 Gap B)', () => {
+    it('explains the refusal instead of showing a bare "--"', () => {
+      render(<PortfolioSummaryCard summary={currencyMismatchSummary} />)
+      expect(screen.getByText(/currency/i)).toBeDefined()
+      expect(screen.queryAllByText('--').length).toBe(0)
+    })
+
+    it('does not render a ChangeIndicator for a refused day change', () => {
+      render(<PortfolioSummaryCard summary={currencyMismatchSummary} />)
+      expect(screen.queryByLabelText(/day change.*versus previous period/i)).toBeNull()
+    })
+
+    it('still shows the plain "--" when day_change is merely missing (no refusal reason)', () => {
+      render(<PortfolioSummaryCard summary={nullDaySummary} />)
+      expect(screen.queryByText(/currency/i)).toBeNull()
+    })
   })
 
   // G15-1: StatCard renders `value` inside <p data-slot="stat-value"> (phrasing-only context).
@@ -200,5 +232,19 @@ describe('PortfolioSummaryCard change indicators (#1631 Codex r2)', () => {
     expect(screen.queryByText(/\$4,340/)).toBeNull()
     expect(screen.queryByText(/\$230/)).toBeNull()
     expect(screen.queryByText(/\u00a3/)).toBeNull()
+  })
+})
+
+// #1631 Gap B follow-up, mirroring HoldingsTable.test.tsx's own exhaustiveness pin. The card
+// handles exactly one value of day_change_unavailable_reason today, which is correct only because
+// the generated enum carries exactly one. Asserted in a TEST rather than a runtime map on purpose
+// -- the investments chunk has almost no headroom (see HoldingsTable.test.tsx for the measured
+// figure) -- so a second backend reason fails THIS test instead of silently falling through to a
+// bare "--" that reads as missing data rather than a refusal.
+describe('day-change unavailable reasons are handled exhaustively (#1631 Gap B)', () => {
+  it('handles every value the generated enum can carry', () => {
+    const backendReasons = Object.values(PortfolioSummaryDayChangeUnavailableReason)
+    const handledByCard: PortfolioSummaryDayChangeUnavailableReason[] = ['currency_mismatch']
+    expect([...backendReasons].sort()).toEqual([...handledByCard].sort())
   })
 })
