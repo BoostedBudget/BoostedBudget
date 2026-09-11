@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 
 import {
   mockUseBudgetDetail,
@@ -742,6 +742,50 @@ describe('BudgetDetailPage', () => {
 
       expect(screen.getByText('Dates')).toBeInTheDocument()
       expect(screen.getByText(/Jan 1\d, 2025/)).toBeInTheDocument()
+    })
+  })
+
+  // #1631 Batch F2: budgets.start_date/end_date are Postgres DATE columns serialized on the wire
+  // as "2026-09-01T00:00:00Z". This page used to parse that with a bare `new Date(dateString)`,
+  // which JS interprets as a UTC INSTANT — then format it in the LOCAL timezone. For any negative
+  // UTC offset (west of UTC) that renders one calendar day EARLY: a budget starting "2026-09-01"
+  // showed "Aug 31, 2026". Fixed by routing through the shared, component-wise-parsing
+  // `formatDate` (shared/transactions/dates.ts) instead of a private copy.
+  describe('date rendering under a negative UTC offset', () => {
+    const originalTZ = globalThis.process.env.TZ
+
+    beforeEach(() => {
+      globalThis.process.env.TZ = 'America/New_York'
+    })
+
+    afterEach(() => {
+      globalThis.process.env.TZ = originalTZ
+    })
+
+    it('renders start_date/end_date as the actual calendar day, not the day before', () => {
+      // Cast needed: mockUseBudgetDetail's inferred return type is pinned to `budget: null` by
+      // its initial mock() factory (src/test/mocks/budget-detail-hooks.ts) — the same pre-existing
+      // gap every other mockReturnValue call in this file hits (see the tsc-ratchet-friendly note
+      // in typecheck-tests.sh: "a mock factory returning a loosely-typed object gets assigned to a
+      // precise API type at every call site"). Casting here, rather than leaving it unassigned
+      // like the pre-existing call sites, keeps this NEW test from adding to that already-tracked
+      // count.
+      mockUseBudgetDetail.mockReturnValue({
+        budget: createMockBudget({
+          start_date: '2026-09-01',
+          end_date: '2026-09-30',
+        }),
+        loading: false,
+        error: null,
+        refetch: mockBudgetDetailRefetch,
+      } as unknown as ReturnType<typeof mockUseBudgetDetail>)
+
+      const { container } = renderWithRouter()
+
+      expect(container.textContent).not.toContain('Aug 31')
+      expect(container.textContent).not.toContain('Sep 29, 2026')
+      expect(container.textContent).toContain('Sep 1, 2026')
+      expect(container.textContent).toContain('Sep 30, 2026')
     })
   })
 })

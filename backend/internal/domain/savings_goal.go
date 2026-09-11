@@ -23,17 +23,23 @@ const (
 //   - "balance":            mirrors Account.CurrentBalance (dedicated 1:1 account)
 //   - "account_percentage": Account.CurrentBalance × account_percentage (shared account, multi-bucket)
 type SavingsGoal struct {
-	ID            string     `json:"id" db:"id"`
-	UserID        string     `json:"user_id" db:"user_id"`
-	Name          string     `json:"name" db:"name"`
-	Description   *string    `json:"description,omitempty" db:"description"`
-	TargetAmount  float64    `json:"target_amount" db:"target_amount"`
-	CurrentAmount float64    `json:"current_amount" db:"current_amount"` // Computed per ProgressBasis; stored for fast reads
-	CurrencyCode  string     `json:"currency_code" db:"currency_code"`
-	AccountID     string     `json:"account_id" db:"account_id"`                     // Required linked account
-	UserAccountID *string    `json:"user_account_id,omitempty" db:"user_account_id"` // Stable reference surviving re-links (Issue #1109)
-	Deadline      *time.Time `json:"deadline,omitempty" db:"deadline"`
-	IsCompleted   bool       `json:"is_completed" db:"is_completed"`
+	ID            string  `json:"id" db:"id"`
+	UserID        string  `json:"user_id" db:"user_id"`
+	Name          string  `json:"name" db:"name"`
+	Description   *string `json:"description,omitempty" db:"description"`
+	TargetAmount  float64 `json:"target_amount" db:"target_amount"`
+	CurrentAmount float64 `json:"current_amount" db:"current_amount"` // Computed per ProgressBasis; stored for fast reads
+	CurrencyCode  string  `json:"currency_code" db:"currency_code"`
+	AccountID     string  `json:"account_id" db:"account_id"`                     // Required linked account
+	UserAccountID *string `json:"user_account_id,omitempty" db:"user_account_id"` // Stable reference surviving re-links (Issue #1109)
+	// Deadline stays *time.Time — NOT serialized — since savings_goals.deadline is a Postgres
+	// DATE column and Deadline is still a SQL bind param/scan target; DeadlineDisplay is what
+	// actually reaches clients (#1631 Batch F2, same sibling-display pattern as
+	// domain/activity_item.go). *string, not string: an empty string is a PRESENT key, and NULL
+	// must stay an omitted one.
+	Deadline        *time.Time `json:"-" db:"deadline"`
+	DeadlineDisplay *string    `json:"deadline,omitempty" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this goal's deadline; omitted when no deadline is set"`
+	IsCompleted     bool       `json:"is_completed" db:"is_completed"`
 	// CompletedAt is sticky once set — never cleared by a later computed drop (Issue #1300 Codex C5).
 	CompletedAt *time.Time `json:"completed_at,omitempty" db:"completed_at"`
 	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
@@ -59,6 +65,13 @@ type SavingsGoal struct {
 
 	// Associated data (populated on demand, not stored in DB)
 	Account *Account `json:"account,omitempty" db:"-"`
+}
+
+// PopulateDateDisplay fills DeadlineDisplay from Deadline (#1631 Batch F2). Idempotent, so calling
+// it again after mutating Deadline (e.g. in UpdateGoal) is the correct way to keep the two in
+// sync — there is no dependency tracking; DeadlineDisplay is only as fresh as the last call.
+func (sg *SavingsGoal) PopulateDateDisplay() {
+	sg.DeadlineDisplay = formatNullableDateOnly(sg.Deadline)
 }
 
 // Validate checks that the SavingsGoal has all required fields and valid values.
@@ -311,7 +324,13 @@ type SavingsGoalProgressItem struct {
 	AccountPercentage *float64 `json:"account_percentage,omitempty"` // non-nil when basis=account_percentage
 	// Completion
 	CompletedAt *time.Time `json:"completed_at,omitempty"` // sticky; nil until first completion
-	Deadline    *time.Time `json:"deadline,omitempty"`
+	// Deadline stays *time.Time — NOT serialized — mirroring SavingsGoal.Deadline above;
+	// DeadlineDisplay is what actually reaches clients (#1631 Batch F2). This item isn't itself a
+	// DB scan target (it's assembled in savings_progress_service.go from an already-populated
+	// SavingsGoal), so DeadlineDisplay is set directly from goal.DeadlineDisplay at construction
+	// rather than via its own PopulateDateDisplay call.
+	Deadline        *time.Time `json:"-"`
+	DeadlineDisplay *string    `json:"deadline,omitempty" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this goal's deadline; omitted when no deadline is set"`
 }
 
 // SavingsProgressSummary wraps per-goal progress with portfolio-level totals.
@@ -401,10 +420,15 @@ type CreateSavingsGoalRequest struct {
 	// a transaction-local service with none, so there the seed PERSISTS until the next sync.
 	// (An earlier version of this comment claimed every non-manual basis recomputed the value
 	// away "immediately", which was not true of that path.)
-	CurrentAmount float64    `json:"current_amount,omitempty" validate:"gte=0"`
-	CurrencyCode  string     `json:"currency_code,omitempty"`
-	AccountID     string     `json:"account_id" validate:"required,uuid"`
-	Deadline      *time.Time `json:"deadline,omitempty"`
+	CurrentAmount float64 `json:"current_amount,omitempty" validate:"gte=0"`
+	CurrencyCode  string  `json:"currency_code,omitempty"`
+	AccountID     string  `json:"account_id" validate:"required,uuid"`
+	// Deadline accepts EITHER a bare "YYYY-MM-DD" date-only string OR a full RFC3339 timestamp
+	// (#1631 Batch F2) — today's frontend sends the RFC3339 form
+	// (`new Date(dateOnly).toISOString()` in CreateSavingsGoalDialog.tsx), so that form must keep
+	// working. Deliberately no `format:"..."` tag: see domain/flexible_date.go and the identical
+	// note on CreateBudgetRequest.StartDate for why one would defeat this type's whole purpose.
+	Deadline *FlexibleDate `json:"deadline,omitempty" doc:"Goal deadline. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp."`
 	// ProgressBasis controls how current_amount is derived (Issue #1300).
 	// Defaults to "contributions" for NEW goals when empty (#1625 — the documented #1300 intent,
 	// which the code had never implemented; it defaulted to "manual", so contributions could not
@@ -428,9 +452,11 @@ type UpdateSavingsGoalRequest struct {
 	// flagged that making this a 400 without saying so in the published schema left the only
 	// documentation an agent has steering it straight into the error — which is the same
 	// undiscoverable-contract failure this whole ticket is about.
-	CurrentAmount *float64   `json:"current_amount,omitempty" validate:"omitempty,gte=0" doc:"Only settable when progress_basis is 'manual'. Contributions-based goals derive this from their contribution ledger (POST /savings-goals/{goalID}/contributions); balance-based goals track their account. Sending this for any non-manual basis returns 400."`
-	AccountID     *string    `json:"account_id,omitempty" validate:"omitempty,uuid"`
-	Deadline      *time.Time `json:"deadline,omitempty"`
+	CurrentAmount *float64 `json:"current_amount,omitempty" validate:"omitempty,gte=0" doc:"Only settable when progress_basis is 'manual'. Contributions-based goals derive this from their contribution ledger (POST /savings-goals/{goalID}/contributions); balance-based goals track their account. Sending this for any non-manual basis returns 400."`
+	AccountID     *string  `json:"account_id,omitempty" validate:"omitempty,uuid"`
+	// Deadline: same FlexibleDate acceptance (bare date OR RFC3339) as CreateSavingsGoalRequest
+	// above, and the same reason for omitting a `format` tag — see there.
+	Deadline *FlexibleDate `json:"deadline,omitempty" doc:"Goal deadline. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp."`
 	// ProgressBasis changes the derivation mode for current_amount (Issue #1300).
 	// When nil, the existing basis is preserved.
 	ProgressBasis *string `json:"progress_basis,omitempty"`

@@ -469,6 +469,7 @@ func (s *savingsProgressService) GetProgressSummary(ctx context.Context, userID 
 			ConfirmedContributionsTotal: roundToCents(confirmedTotal),
 			CompletedAt:                 goal.CompletedAt,
 			Deadline:                    goal.Deadline,
+			DeadlineDisplay:             goal.DeadlineDisplay, // #1631 Batch F2 — carried from the already-populated goal
 			AccountPercentage:           goal.AccountPercentage,
 			BalanceAsOf:                 goal.BalanceAsOf,
 		}

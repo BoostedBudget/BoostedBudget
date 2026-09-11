@@ -296,7 +296,7 @@ func (m *mockCustomCategoryRepoForBudget) DeleteWithReassignment(ctx context.Con
 func createTestBudget() *domain.Budget {
 	now := time.Now()
 	endDate := now.AddDate(0, 1, 0)
-	return &domain.Budget{
+	b := &domain.Budget{
 		ID:           "budget-123",
 		UserID:       "user-123",
 		Name:         "Monthly Budget",
@@ -319,6 +319,8 @@ func createTestBudget() *domain.Budget {
 			},
 		},
 	}
+	b.PopulateDateDisplay()
+	return b
 }
 
 // TestCreateBudget_Success tests successful budget creation.
@@ -337,7 +339,7 @@ func TestCreateBudget_Success(t *testing.T) {
 	input.Body = domain.CreateBudgetRequest{
 		Name:         "Monthly Budget",
 		Period:       domain.BudgetPeriodMonthly,
-		StartDate:    time.Now(),
+		StartDate:    domain.FlexibleDate(time.Now()),
 		Amount:       2000.00,
 		CurrencyCode: "USD",
 	}
@@ -841,7 +843,7 @@ func TestCreateBudget_WithExpectedIncome(t *testing.T) {
 	input.Body = domain.CreateBudgetRequest{
 		Name:           "Monthly Budget",
 		Period:         domain.BudgetPeriodMonthly,
-		StartDate:      time.Now(),
+		StartDate:      domain.FlexibleDate(time.Now()),
 		Amount:         5000.00,
 		CurrencyCode:   "USD",
 		ExpectedIncome: &expectedIncome,
@@ -869,7 +871,7 @@ func TestCreateBudget_BackCompatAmountOnly(t *testing.T) {
 	input.Body = domain.CreateBudgetRequest{
 		Name:         "Monthly Budget",
 		Period:       domain.BudgetPeriodMonthly,
-		StartDate:    time.Now(),
+		StartDate:    domain.FlexibleDate(time.Now()),
 		Amount:       3000.00,
 		CurrencyCode: "USD",
 		// ExpectedIncome intentionally omitted — back-compat path
@@ -905,7 +907,7 @@ func TestCreateBudget_BothFieldsProvided_ExpectedIncomeWins(t *testing.T) {
 	input.Body = domain.CreateBudgetRequest{
 		Name:           "Monthly Budget",
 		Period:         domain.BudgetPeriodMonthly,
-		StartDate:      time.Now(),
+		StartDate:      domain.FlexibleDate(time.Now()),
 		Amount:         100.00, // lower value
 		CurrencyCode:   "USD",
 		ExpectedIncome: &expectedIncome, // higher value — should win
@@ -1122,7 +1124,7 @@ func TestCreateBudget_MCPOrigin_AuditFailureRollsBack(t *testing.T) {
 			Name:      "Fail Budget",
 			Period:    domain.BudgetPeriodMonthly,
 			Amount:    100,
-			StartDate: time.Now(),
+			StartDate: domain.FlexibleDate(time.Now()),
 		},
 	}
 
@@ -1197,7 +1199,7 @@ func TestCreateBudget_MCPOrigin_SavingsGoalIDOR(t *testing.T) {
 			Body: domain.CreateBudgetRequest{
 				Name:         "IDOR Budget",
 				Period:       domain.BudgetPeriodMonthly,
-				StartDate:    time.Now(),
+				StartDate:    domain.FlexibleDate(time.Now()),
 				Amount:       1000.00,
 				CurrencyCode: "USD",
 				Categories: []domain.CreateBudgetCategoryRequest{
@@ -1231,7 +1233,7 @@ func TestCreateBudget_MCPOrigin_SavingsGoalIDOR(t *testing.T) {
 			Body: domain.CreateBudgetRequest{
 				Name:         "Own-Goal Budget",
 				Period:       domain.BudgetPeriodMonthly,
-				StartDate:    time.Now(),
+				StartDate:    domain.FlexibleDate(time.Now()),
 				Amount:       1500.00,
 				CurrencyCode: "USD",
 				Categories: []domain.CreateBudgetCategoryRequest{

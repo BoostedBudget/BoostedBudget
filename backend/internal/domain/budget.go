@@ -105,18 +105,27 @@ func (ml MatchLogic) IsValid() bool {
 // Budget represents a user-defined budget for expense tracking.
 // Budgets are FREE for all subscription tiers (Issue #27).
 type Budget struct {
-	ID           string       `json:"id" db:"id"`
-	UserID       string       `json:"user_id" db:"user_id"`
-	Name         string       `json:"name" db:"name"`
-	Description  *string      `json:"description,omitempty" db:"description"`
-	Period       BudgetPeriod `json:"period" db:"period"`
-	StartDate    time.Time    `json:"start_date" db:"start_date"`
-	EndDate      *time.Time   `json:"end_date,omitempty" db:"end_date"`
-	Amount       float64      `json:"amount" db:"amount"`
-	CurrencyCode string       `json:"currency_code" db:"currency_code"`
-	IsActive     bool         `json:"is_active" db:"is_active"`
-	CreatedAt    time.Time    `json:"created_at" db:"created_at"`
-	UpdatedAt    time.Time    `json:"updated_at" db:"updated_at"`
+	ID          string       `json:"id" db:"id"`
+	UserID      string       `json:"user_id" db:"user_id"`
+	Name        string       `json:"name" db:"name"`
+	Description *string      `json:"description,omitempty" db:"description"`
+	Period      BudgetPeriod `json:"period" db:"period"`
+	// StartDate/EndDate stay time.Time — NOT serialized — since start_date/end_date are Postgres
+	// DATE columns (migration 000004) and both fields are still SQL bind params/scan targets;
+	// StartDateDisplay/EndDateDisplay are what actually reach clients (#1631 Batch F2, same
+	// sibling-display pattern as domain/activity_item.go and the analytics/dashboard fix in
+	// 49f08d5a). EndDateDisplay is a *string, not string: an empty string is a PRESENT key, and
+	// here it is worse than that — an empty end_date renders as a literal " - Invalid Date" range
+	// suffix at BudgetCard.tsx:102.
+	StartDate        time.Time  `json:"-" db:"start_date"`
+	StartDateDisplay string     `json:"start_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this budget period starts on"`
+	EndDate          *time.Time `json:"-" db:"end_date"`
+	EndDateDisplay   *string    `json:"end_date,omitempty" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this budget period ends on; omitted for open-ended budgets"`
+	Amount           float64    `json:"amount" db:"amount"`
+	CurrencyCode     string     `json:"currency_code" db:"currency_code"`
+	IsActive         bool       `json:"is_active" db:"is_active"`
+	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
 
 	// Envelope budgeting fields (Issue #491)
 	IncomeAmount  float64        `json:"income_amount" db:"income_amount"`
@@ -135,6 +144,15 @@ type Budget struct {
 
 	// Associated data (populated on demand, not stored in DB)
 	Categories []BudgetCategory `json:"categories,omitempty" db:"-"`
+}
+
+// PopulateDateDisplay fills StartDateDisplay/EndDateDisplay from StartDate/EndDate (#1631 Batch
+// F2). Idempotent, so calling it again after mutating StartDate/EndDate (e.g. in UpdateBudget) is
+// the correct way to keep the two in sync — there is no dependency tracking; the display fields
+// are only ever as fresh as the last populate call.
+func (b *Budget) PopulateDateDisplay() {
+	b.StartDateDisplay = formatDateOnly(b.StartDate)
+	b.EndDateDisplay = formatNullableDateOnly(b.EndDate)
 }
 
 // Validate checks that the Budget has all required fields and valid values.
@@ -347,22 +365,22 @@ func (b *Budget) ExceedsExpectedIncome() bool {
 // category_kind='custom' (custom_category_id required), or
 // category_kind='savings' (savings_goal_id required — Issue #1300).
 type BudgetCategory struct {
-	ID               string    `json:"id" db:"id"`
-	BudgetID         string    `json:"budget_id" db:"budget_id"`
-	CategoryKind     string    `json:"category_kind" db:"category_kind"` // "pfc", "custom", or "savings"
-	PFCPrimary       *string   `json:"pfc_primary,omitempty" db:"pfc_primary"`
-	PFCDetailed      *string   `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
-	CustomCategoryID *string   `json:"custom_category_id,omitempty" db:"custom_category_id"`
+	ID               string  `json:"id" db:"id"`
+	BudgetID         string  `json:"budget_id" db:"budget_id"`
+	CategoryKind     string  `json:"category_kind" db:"category_kind"` // "pfc", "custom", or "savings"
+	PFCPrimary       *string `json:"pfc_primary,omitempty" db:"pfc_primary"`
+	PFCDetailed      *string `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
+	CustomCategoryID *string `json:"custom_category_id,omitempty" db:"custom_category_id"`
 	// SavingsGoalID links this category to a SavingsGoal (required when kind=savings — Issue #1300).
 	SavingsGoalID *string `json:"savings_goal_id,omitempty" db:"savings_goal_id"`
 	// AutoCreated marks categories automatically created when a savings goal was created.
 	AutoCreated bool `json:"auto_created" db:"auto_created"`
 	// ManagedByGoalID is the goal ID that auto-created this category (populated when AutoCreated=true).
 	ManagedByGoalID *string   `json:"managed_by_goal_id,omitempty" db:"managed_by_goal_id"`
-	AllocatedAmount  float64   `json:"allocated_amount" db:"allocated_amount"`
-	SpentAmount      float64   `json:"spent_amount" db:"spent_amount"`
-	CreatedAt        time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at" db:"updated_at"`
+	AllocatedAmount float64   `json:"allocated_amount" db:"allocated_amount"`
+	SpentAmount     float64   `json:"spent_amount" db:"spent_amount"`
+	CreatedAt       time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at" db:"updated_at"`
 
 	// PFC display names (populated by PopulatePFCDisplay, not stored in DB)
 	PFCPrimaryDisplay  *string `json:"pfc_primary_display,omitempty" db:"-"`
@@ -511,11 +529,22 @@ func BuildCategoryEventData(categories []BudgetCategory) map[string]map[string]f
 
 // CreateBudgetRequest represents the request to create a new budget.
 type CreateBudgetRequest struct {
-	Name         string                        `json:"name" validate:"required,max=100"`
-	Description  *string                       `json:"description,omitempty"`
-	Period       BudgetPeriod                  `json:"period" validate:"required"`
-	StartDate    time.Time                     `json:"start_date" validate:"required"`
-	EndDate      *time.Time                    `json:"end_date,omitempty"`
+	Name        string       `json:"name" validate:"required,max=100"`
+	Description *string      `json:"description,omitempty"`
+	Period      BudgetPeriod `json:"period" validate:"required"`
+	// StartDate/EndDate accept EITHER a bare "YYYY-MM-DD" date-only string OR a full RFC3339
+	// timestamp (#1631 Batch F2). Today's frontend sends the RFC3339 form
+	// (`new Date(dateOnly).toISOString()` in CreateBudgetDialog.tsx), so that form must keep
+	// working; FlexibleDate widens acceptance rather than narrowing it. See
+	// domain/flexible_date.go for why this can't just stay time.Time.
+	// ⚠ Deliberately NO `format:"..."` tag here. huma applies an explicit `format` struct tag as
+	// an override on TOP of the type-driven schema, which would defeat the whole point of
+	// FlexibleDate: schemaFromType only skips huma's strict format validator (validateFormat) when
+	// the type is detected via the encoding.TextUnmarshaler carve-out AND no format is set. Adding
+	// `format:"date-time"` here would put the RFC3339-only check right back and 422 every bare
+	// date request FlexibleDate exists to accept. See domain/flexible_date.go.
+	StartDate    FlexibleDate                  `json:"start_date" validate:"required" doc:"Budget period start. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp."`
+	EndDate      *FlexibleDate                 `json:"end_date,omitempty" doc:"Budget period end (open-ended if omitted). Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp."`
 	Amount       float64                       `json:"amount" validate:"required,gt=0"`
 	CurrencyCode string                        `json:"currency_code,omitempty"`
 	Categories   []CreateBudgetCategoryRequest `json:"categories,omitempty"`
@@ -540,8 +569,8 @@ type CreateBudgetCategoryRequest struct {
 	PFCDetailed      *string `json:"pfc_detailed,omitempty"`
 	CustomCategoryID *string `json:"custom_category_id,omitempty" validate:"omitempty,uuid"`
 	// SavingsGoalID is required when CategoryKind = "savings" (Issue #1300).
-	SavingsGoalID *string `json:"savings_goal_id,omitempty" validate:"omitempty,uuid"`
-	AllocatedAmount  float64 `json:"allocated_amount" validate:"required,gte=0"`
+	SavingsGoalID   *string `json:"savings_goal_id,omitempty" validate:"omitempty,uuid"`
+	AllocatedAmount float64 `json:"allocated_amount" validate:"required,gte=0"`
 
 	// Flexible matching fields (Issue #491)
 	Tags       []string   `json:"tags,omitempty"`
@@ -553,10 +582,12 @@ type UpdateBudgetRequest struct {
 	Name        *string       `json:"name,omitempty" validate:"omitempty,max=100"`
 	Description *string       `json:"description,omitempty"`
 	Period      *BudgetPeriod `json:"period,omitempty"`
-	StartDate   *time.Time    `json:"start_date,omitempty"`
-	EndDate     *time.Time    `json:"end_date,omitempty"`
-	Amount      *float64      `json:"amount,omitempty" validate:"omitempty,gt=0"`
-	IsActive    *bool         `json:"is_active,omitempty"`
+	// StartDate/EndDate: same FlexibleDate acceptance (bare date OR RFC3339) as
+	// CreateBudgetRequest above, and the same reason for omitting a `format` tag — see there.
+	StartDate *FlexibleDate `json:"start_date,omitempty" doc:"Budget period start. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp."`
+	EndDate   *FlexibleDate `json:"end_date,omitempty" doc:"Budget period end. Accepts a bare YYYY-MM-DD date or a full RFC3339 timestamp."`
+	Amount    *float64      `json:"amount,omitempty" validate:"omitempty,gt=0"`
+	IsActive  *bool         `json:"is_active,omitempty"`
 
 	// Envelope budgeting fields (Issue #491)
 	IncomeAmount  *float64        `json:"income_amount,omitempty" validate:"omitempty,gte=0"`
