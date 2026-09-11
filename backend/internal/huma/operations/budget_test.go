@@ -223,8 +223,8 @@ func (m *mockTransactionRepoForBudget) GetMatchingTransactionStats(ctx context.C
 	return 0, 0, nil
 }
 
-func (m *mockTransactionRepoForBudget) GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, startDate, endDate time.Time) ([]domain.CategoryPreviewBreakdownItem, int, float64, error) {
-	return nil, 0, 0, nil
+func (m *mockTransactionRepoForBudget) GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) ([]domain.CategoryPreviewBreakdownItem, int, float64, int, float64, error) {
+	return nil, 0, 0, 0, 0, nil
 }
 
 // GetByUserAccountID retrieves all transactions for a user_account.

@@ -194,14 +194,23 @@ type TransactionRepository interface {
 	// Used for previewing how many transactions would match a budget category configuration.
 	GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (count int, totalAmount float64, err error)
 
-	// GetCategoryMatchBreakdown returns the same rolled-up total's split by nested child
-	// (Issue #1630 Task 5) — a pfc_primary's nested custom categories, or a parent custom
-	// category's custom children — versus transactions filed directly under the targeted
-	// category. Returns (nil, 0, 0, nil) for a leaf category (pfc_detailed set) or an
-	// unsupported kind, since there is no rollup to disclose. Tag matching is deliberately
-	// NOT applied here: the breakdown explains the CATEGORY clause's contribution
-	// independent of any tag constraint layered on top by and/or match logic.
-	GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, startDate, endDate time.Time) (children []domain.CategoryPreviewBreakdownItem, directCount int, directAmount float64, err error)
+	// GetCategoryMatchBreakdown returns a REAL partition of GetMatchingTransactionStats'
+	// total for the same inputs (Issue #1630 Task B5) — three mutually exclusive buckets
+	// that always sum to it exactly:
+	//   1. category-direct  (directCount/directAmount): matched by the category clause at
+	//      this node itself.
+	//   2. nested-descendant (children): matched via a nested custom child/grandchild — a
+	//      pfc_primary's nested custom categories, or a parent custom category's custom
+	//      children (both hops, Issue #1630 Task B2).
+	//   3. tag-only-outside-category (tagOnlyCount/tagOnlyAmount): pulled into the total by
+	//      the tag clause (or/tag_only) but NOT matched by the category clause at all.
+	// tags/matchLogic mirror GetMatchingTransactionStats' own so the same match_logic-
+	// composed predicate is used for both — this is what makes the buckets a partition
+	// instead of an independent, potentially-mismatched query. category_only and and
+	// leave bucket 3 always zero (every included row satisfies the category clause). A
+	// leaf category (pfc_detailed set) or an unsupported kind has no nested-descendant
+	// concept, so every category-clause match lands in bucket 1 and children is always nil.
+	GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (children []domain.CategoryPreviewBreakdownItem, directCount int, directAmount float64, tagOnlyCount int, tagOnlyAmount float64, err error)
 
 	// Issue #499: Transaction-Budget Linking UI
 
@@ -2498,20 +2507,58 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 	return count, sum, nil
 }
 
-// GetCategoryMatchBreakdown returns the rolled-up total's per-child breakdown. Issue #1630
-// Task 5. See the interface doc comment for the leaf/unsupported no-op cases.
-func (r *transactionRepository) GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, startDate, endDate time.Time) ([]domain.CategoryPreviewBreakdownItem, int, float64, error) {
-	var catClause string
-	var catArgs []interface{}
+// GetCategoryMatchBreakdown returns a real partition of the rolled-up total (category-
+// direct + nested-descendant + tag-only-outside-category, see the interface doc comment).
+// Issue #1630 Task B5.
+func (r *transactionRepository) GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) ([]domain.CategoryPreviewBreakdownItem, int, float64, int, float64, error) {
+	if matchLogic == "" {
+		matchLogic = domain.MatchLogicCategoryOnly
+	}
 
-	switch {
-	case categoryKind == "pfc" && pfcDetailed == nil && pfcPrimary != nil:
-		catClause, catArgs = buildCategoryClause("pfc", pfcPrimary, nil, nil, 4)
-	case categoryKind == "custom" && customCategoryID != nil:
-		catClause, catArgs = buildCategoryClause("custom", nil, nil, customCategoryID, 4)
+	// A pfc_primary or a parent custom category can roll up nested custom children; a leaf
+	// pfc_detailed category or an unsupported kind cannot, so it never has a
+	// nested-descendant bucket.
+	isRollupEligible := (categoryKind == "pfc" && pfcPrimary != nil && (pfcDetailed == nil || *pfcDetailed == "")) ||
+		(categoryKind == "custom" && customCategoryID != nil)
+
+	// category_only against a non-rollup-eligible target has nothing to disclose: no tag
+	// clause is in play to pull in anything outside the category, and the total already
+	// equals what would be reported as "direct" — this preserves the pre-Task-B5 no-op
+	// contract for that specific combination exactly.
+	if !isRollupEligible && matchLogic == domain.MatchLogicCategoryOnly {
+		return nil, 0, 0, 0, 0, nil
+	}
+
+	catClause, catArgs := buildCategoryClause(categoryKind, pfcPrimary, pfcDetailed, customCategoryID, 4)
+	nextArg := 4 + len(catArgs)
+
+	baseArgs := []interface{}{userID, startDate, endDate}
+	var predicate string
+	var args []interface{}
+
+	// The predicate mirrors GetMatchingTransactionStats' own per-match_logic composition
+	// exactly, so this query's row set is the SAME set the total was computed over —
+	// the property that makes category-direct + nested-descendant + tag-only-outside a
+	// real partition of total_amount rather than an independently-computed number that
+	// happens to usually agree.
+	switch matchLogic {
+	case domain.MatchLogicCategoryOnly:
+		predicate = catClause
+		args = append(baseArgs, catArgs...)
+	case domain.MatchLogicTagOnly:
+		predicate = fmt.Sprintf("tags ?| $%d", nextArg)
+		args = append(baseArgs, catArgs...)
+		args = append(args, pq.Array(tags))
+	case domain.MatchLogicAnd:
+		predicate = fmt.Sprintf("(%s) AND tags ?| $%d", catClause, nextArg)
+		args = append(baseArgs, catArgs...)
+		args = append(args, pq.Array(tags))
+	case domain.MatchLogicOr:
+		predicate = fmt.Sprintf("((%s) OR tags ?| $%d)", catClause, nextArg)
+		args = append(baseArgs, catArgs...)
+		args = append(args, pq.Array(tags))
 	default:
-		// Leaf category (pfc_detailed set) or unsupported kind: no rollup, nothing to disclose.
-		return nil, 0, 0, nil
+		return nil, 0, 0, 0, 0, fmt.Errorf("unsupported match logic: %s", matchLogic)
 	}
 
 	query := fmt.Sprintf(`
@@ -2519,38 +2566,55 @@ func (r *transactionRepository) GetCategoryMatchBreakdown(ctx context.Context, u
 			CASE WHEN t.category_override_kind = 'custom' THEN t.custom_category_override_id::text ELSE NULL END AS child_id,
 			cc.name AS child_name,
 			COUNT(*) AS cnt,
-			COALESCE(ABS(SUM(t.amount)), 0) AS total
+			COALESCE(ABS(SUM(t.amount)), 0) AS total,
+			COALESCE((%s), false) AS in_category
 		FROM transactions t
 		LEFT JOIN custom_categories cc ON cc.id = t.custom_category_override_id /* tombstone-exempt(custom_categories cc): HISTORY FILTER (#1569 Task 9) — this join only resolves a display NAME for a transaction that already matched via buildCategoryClause's own exempted custom-category subquery; a since-deleted child category's own transactions must keep a legible label in the breakdown, the same reason that subquery admits them into the total in the first place. */
 		WHERE t.user_id = $1 AND t.amount > 0
 		  AND t.deleted_at IS NULL
 		  AND t.date BETWEEN $2 AND $3
 		  AND (%s)
-		GROUP BY child_id, child_name
-	`, catClause)
-
-	args := append([]interface{}{userID, startDate, endDate}, catArgs...)
+		GROUP BY child_id, child_name, in_category
+	`, catClause, predicate)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("failed to get category match breakdown: %w", err)
+		return nil, 0, 0, 0, 0, fmt.Errorf("failed to get category match breakdown: %w", err)
 	}
 	defer rows.Close()
 
-	var directCount int
-	var directAmount float64
+	var directCount, tagOnlyCount int
+	var directAmount, tagOnlyAmount float64
 	var children []domain.CategoryPreviewBreakdownItem
 
 	for rows.Next() {
 		var childID, childName *string
 		var cnt int
 		var total float64
-		if err := rows.Scan(&childID, &childName, &cnt, &total); err != nil {
-			return nil, 0, 0, fmt.Errorf("failed to scan category match breakdown row: %w", err)
+		var inCategory bool
+		if err := rows.Scan(&childID, &childName, &cnt, &total, &inCategory); err != nil {
+			return nil, 0, 0, 0, 0, fmt.Errorf("failed to scan category match breakdown row: %w", err)
 		}
+
+		// Bucket 3: the tag clause pulled this row in, but the category clause never
+		// matched it at all — not the target itself, not any nested descendant.
+		if !inCategory {
+			tagOnlyCount += cnt
+			tagOnlyAmount += total
+			continue
+		}
+
+		// No rollup concept for a leaf/unsupported target: every category-clause match is
+		// "direct" and there is never a nested-descendant bucket.
+		if !isRollupEligible {
+			directCount += cnt
+			directAmount += total
+			continue
+		}
+
 		if childID == nil {
-			directCount = cnt
-			directAmount = total
+			directCount += cnt
+			directAmount += total
 			continue
 		}
 		// For the "custom" kind, a matched row can be the targeted parent category
@@ -2574,10 +2638,10 @@ func (r *transactionRepository) GetCategoryMatchBreakdown(ctx context.Context, u
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, 0, fmt.Errorf("failed to iterate category match breakdown rows: %w", err)
+		return nil, 0, 0, 0, 0, fmt.Errorf("failed to iterate category match breakdown rows: %w", err)
 	}
 
-	return children, directCount, directAmount, nil
+	return children, directCount, directAmount, tagOnlyCount, tagOnlyAmount, nil
 }
 
 // =============================================================================

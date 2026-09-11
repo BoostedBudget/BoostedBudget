@@ -731,29 +731,41 @@ type CategoryPreviewRequest struct {
 // CategoryPreviewResponse represents the response with matching transaction stats.
 // Issue #497: Transaction preview feature
 //
-// Issue #1630 Task 5: a `pfc_primary` (or parent `custom`) category rolls up its nested
+// Issue #1630 Task B5: a `pfc_primary` (or parent `custom`) category rolls up its nested
 // children (Issue #1203) — a correct total that nonetheless surprised a reporter who had
-// no way to see it. DirectTransactionCount/DirectAmount and Children disclose the split:
-// Direct* covers transactions filed straight under the targeted category itself, and each
-// Children entry is one nested custom category (a PFC-primary's nested custom categories,
-// or a parent custom category's custom children) with its own share of the total. Both are
-// populated ONLY when the category kind can roll up AND at least one child actually
-// matched — a leaf category (pfc_detailed set, or a custom category with no children)
-// leaves them zero-valued/nil because there is nothing to disclose. TransactionCount and
-// TotalAmount remain the single rolled-up figure every existing caller already relies on;
-// this is additive.
+// no way to see it. direct_amount, children, and tag_only_amount disclose a REAL PARTITION
+// of total_amount — the three always sum to it exactly:
+//  1. category-direct (DirectTransactionCount/DirectAmount): filed straight under the
+//     targeted category itself.
+//  2. nested-descendant (Children): one nested custom category (a pfc_primary's nested
+//     custom categories, or a parent custom category's custom children, both hops) with
+//     its own share of the total.
+//  3. tag-only-outside-category (TagOnlyTransactionCount/TagOnlyAmount): pulled into the
+//     total by the tag clause (match_logic or/tag_only) but not matched by the category
+//     clause at all — not the target, not any nested descendant.
+//
+// All three are zero-valued/nil together when there is nothing to disclose (a leaf
+// category with match_logic category_only and no tags — the total is already
+// self-explanatory). TransactionCount and TotalAmount remain the single rolled-up figure
+// every existing caller already relies on; this is additive.
 type CategoryPreviewResponse struct {
-	TransactionCount int     `json:"transaction_count" doc:"Total matching transaction count. When the targeted category is a pfc_primary or parent custom category, this INCLUDES transactions filed under its nested custom categories — see direct_transaction_count and children to break the total down."`
-	TotalAmount      float64 `json:"total_amount" doc:"Total matching transaction amount. When the targeted category is a pfc_primary or parent custom category, this INCLUDES transactions filed under its nested custom categories — see direct_amount and children to break the total down."`
+	TransactionCount int     `json:"transaction_count" doc:"Total matching transaction count. When the targeted category is a pfc_primary or parent custom category, this INCLUDES transactions filed under its nested custom categories — see direct_transaction_count, children, and tag_only_transaction_count to break the total down."`
+	TotalAmount      float64 `json:"total_amount" doc:"Total matching transaction amount. direct_amount + every children[].total_amount + tag_only_amount always sum to exactly this value when any of them is populated — see those fields to break the total down."`
 
 	// DirectTransactionCount/DirectAmount cover only transactions filed directly under the
-	// targeted category (not a nested child). Populated only when Children is non-empty.
-	DirectTransactionCount int     `json:"direct_transaction_count,omitempty" doc:"Count of matching transactions filed directly under the targeted category itself, excluding any nested custom category. Populated only when children is non-empty; zero-valued for a leaf category with nothing to disclose."`
-	DirectAmount           float64 `json:"direct_amount,omitempty" doc:"Amount of matching transactions filed directly under the targeted category itself, excluding any nested custom category. Populated only when children is non-empty; zero-valued for a leaf category with nothing to disclose."`
+	// targeted category (not a nested child, and not pulled in by a tag alone).
+	DirectTransactionCount int     `json:"direct_transaction_count,omitempty" doc:"Count of matching transactions filed directly under the targeted category itself, excluding any nested custom category and excluding tag-only-outside-category matches. Zero-valued when there is nothing to disclose."`
+	DirectAmount           float64 `json:"direct_amount,omitempty" doc:"Amount of matching transactions filed directly under the targeted category itself, excluding any nested custom category and excluding tag-only-outside-category matches. Zero-valued when there is nothing to disclose."`
 
 	// Children breaks the rolled-up total down by nested custom category. Empty/nil when
-	// the category kind cannot roll up, or no nested child actually matched.
+	// the category kind cannot roll up (a leaf category), or no nested child actually matched.
 	Children []CategoryPreviewBreakdownItem `json:"children,omitempty" doc:"Breaks the rolled-up transaction_count/total_amount down by each nested custom category that actually matched. Empty/nil when the targeted category cannot roll up (a leaf category), or no nested child matched anything."`
+
+	// TagOnlyTransactionCount/TagOnlyAmount are the third partition bucket: transactions
+	// the tag clause pulled into the total (match_logic or/tag_only) that the category
+	// clause never matched at all.
+	TagOnlyTransactionCount int     `json:"tag_only_transaction_count,omitempty" doc:"Count of matching transactions pulled into the total by the tag clause (match_logic or/tag_only) that the category clause did not match at all — not the targeted category itself, and not any nested custom category. Always zero for match_logic category_only or and, since every included row there is required to satisfy the category clause."`
+	TagOnlyAmount           float64 `json:"tag_only_amount,omitempty" doc:"Amount of matching transactions pulled into the total by the tag clause (match_logic or/tag_only) that the category clause did not match at all — not the targeted category itself, and not any nested custom category. Always zero for match_logic category_only or and, since every included row there is required to satisfy the category clause."`
 }
 
 // CategoryPreviewBreakdownItem is one nested child's contribution to a rolled-up

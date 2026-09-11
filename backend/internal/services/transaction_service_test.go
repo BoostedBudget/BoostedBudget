@@ -155,13 +155,13 @@ func (m *MockTransactionRepository) GetMatchingTransactionStats(ctx context.Cont
 	return args.Int(0), args.Get(1).(float64), args.Error(2)
 }
 
-func (m *MockTransactionRepository) GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, startDate, endDate time.Time) ([]domain.CategoryPreviewBreakdownItem, int, float64, error) {
-	args := m.Called(ctx, userID, categoryKind, pfcPrimary, pfcDetailed, customCategoryID, startDate, endDate)
+func (m *MockTransactionRepository) GetCategoryMatchBreakdown(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) ([]domain.CategoryPreviewBreakdownItem, int, float64, int, float64, error) {
+	args := m.Called(ctx, userID, categoryKind, pfcPrimary, pfcDetailed, customCategoryID, tags, matchLogic, startDate, endDate)
 	var children []domain.CategoryPreviewBreakdownItem
 	if v := args.Get(0); v != nil {
 		children = v.([]domain.CategoryPreviewBreakdownItem)
 	}
-	return children, args.Int(1), args.Get(2).(float64), args.Error(3)
+	return children, args.Int(1), args.Get(2).(float64), args.Int(3), args.Get(4).(float64), args.Error(5)
 }
 
 func (m *MockTransactionRepository) GetTransactionsForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
