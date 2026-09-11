@@ -195,7 +195,7 @@ type HoldingView struct {
 	// date-only value rendered through a timestamp shifts back a day for every user west of UTC.
 	// The staleness verdict is served rather than left to the client because the threshold is
 	// policy, not presentation.
-	DayChangeAsOf    *string `json:"day_change_as_of,omitempty"`
+	DayChangeAsOf    *string `json:"day_change_as_of,omitempty" format:"date"`
 	DayChangeIsStale *bool   `json:"day_change_is_stale,omitempty"`
 
 	// CurrencyCode is the currency this POSITION is priced in (holdings.currency_code), or nil

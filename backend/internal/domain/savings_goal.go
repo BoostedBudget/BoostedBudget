@@ -166,7 +166,7 @@ type SavingsGoalContribution struct {
 	ManagedByReconciliation bool `json:"managed_by_reconciliation" db:"managed_by_reconciliation"`
 	// ConfirmedByUser records whether a human explicitly confirmed this contribution.
 	ConfirmedByUser bool      `json:"confirmed_by_user" db:"confirmed_by_user"`
-	OccurredOn      string    `json:"occurred_on" db:"occurred_on"` // date string YYYY-MM-DD
+	OccurredOn      string    `json:"occurred_on" db:"occurred_on" format:"date"` // date string YYYY-MM-DD
 	CreatedAt       time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at" db:"updated_at"`
 	// ArchivedAt marks a row as belonging to a CLOSED contributions period — set when the goal
