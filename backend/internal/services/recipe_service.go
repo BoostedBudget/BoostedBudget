@@ -53,6 +53,9 @@ func validateSpec(spec []domain.MCPRecipeCall) error {
 		return fmt.Errorf("recipe spec must contain at least one call")
 	}
 	for _, call := range spec {
+		if call.Detail != nil && *call.Detail != "compact" && *call.Detail != "full" {
+			return fmt.Errorf("operation %q detail must be compact or full", call.OperationID)
+		}
 		if !domain.MCPOperationAllowed(call.OperationID) {
 			return fmt.Errorf("operation %q is not available via MCP", call.OperationID)
 		}
@@ -119,10 +122,10 @@ func (s *recipeService) Update(ctx context.Context, id string, userID string, re
 		recipe.Description = *req.Description
 	}
 	if req.Spec != nil {
-		if err := validateSpec(req.Spec); err != nil {
-			return nil, fmt.Errorf("invalid recipe spec: %w", err)
-		}
 		recipe.Spec = req.Spec
+	}
+	if err := validateSpec(recipe.Spec); err != nil {
+		return nil, fmt.Errorf("invalid recipe spec: %w", err)
 	}
 	if req.Schedule != nil && *req.Schedule != "" {
 		// R4-4: reject schedule updates (v1 constraint)

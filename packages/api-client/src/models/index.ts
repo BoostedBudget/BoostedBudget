@@ -296,6 +296,7 @@ export * from './markNotificationReadOutputBody';
 export * from './mCPRecipe';
 export * from './mCPRecipeCall';
 export * from './mCPRecipeCallBody';
+export * from './mCPRecipeCallDetail';
 export * from './mCPRecipeCallParams';
 export * from './mCPRecipeCallPathParams';
 export * from './mCPRecipeRunResult';
