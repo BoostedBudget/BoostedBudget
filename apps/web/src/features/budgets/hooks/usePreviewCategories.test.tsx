@@ -39,7 +39,7 @@ describe('usePreviewCategories', () => {
   })
 
   const defaultParams = {
-    categoryKind: 'pfc',
+    categoryKind: 'pfc' as const,
     pfcPrimary: 'FOOD_AND_DRINK' as const,
     pfcDetailed: undefined as string | undefined,
     customCategoryId: undefined as string | undefined,

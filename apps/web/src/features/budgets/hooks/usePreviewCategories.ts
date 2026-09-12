@@ -32,7 +32,7 @@ const EMPTY_STATE: UsePreviewCategoriesResult = {
 };
 
 function hasPreviewCategory(
-  categoryKind: string,
+  categoryKind: CategoryPreviewRequest['category_kind'],
   pfcPrimary: string | undefined,
   customCategoryId: string | undefined,
   context: BudgetPreviewContext | undefined
@@ -63,7 +63,7 @@ function hasPreviewCategory(
  * @param enabled - Whether to enable preview fetching
  */
 export function usePreviewCategories(
-  categoryKind: string,
+  categoryKind: CategoryPreviewRequest['category_kind'],
   pfcPrimary: string | undefined,
   pfcDetailed: string | undefined,
   customCategoryId: string | undefined,
@@ -121,7 +121,7 @@ export function usePreviewCategories(
         const result = await mutation.mutateAsync({
           data: {
             ...context,
-            category_kind: capturedKind as CategoryPreviewRequest['category_kind'],
+            category_kind: capturedKind,
             pfc_primary: capturedPfcPrimary,
             pfc_detailed: capturedPfcDetailed,
             custom_category_id: capturedCustomId,

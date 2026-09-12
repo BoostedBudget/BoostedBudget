@@ -1,6 +1,10 @@
 import { formatPFCEnum } from '@/shared/categories/formatPfc';
 import type { Transaction } from '../transactions/types';
 import type { MatchLogic } from '@boostedbudget/shared-types/matching';
+import type {
+  BudgetCategoryCategoryKind,
+  CreateBudgetCategoryRequestCategoryKind,
+} from '@boostedbudget/api-client/models';
 export type { MatchLogic } from '@boostedbudget/shared-types/matching';
 
 export type BudgetPeriod = 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'custom';
@@ -49,7 +53,7 @@ export interface BudgetGroupMember {
 export interface BudgetCategory {
   id: string;
   budget_id: string;
-  category_kind: string; // 'pfc' | 'custom' | 'savings' | 'group' | 'remainder'
+  category_kind: BudgetCategoryCategoryKind;
   group_name?: string;
   members?: BudgetGroupMember[];
   pfc_primary?: string;
@@ -372,7 +376,7 @@ export interface UpdateBudgetRequest {
 }
 
 export interface CreateBudgetCategoryRequest {
-  category_kind: string;
+  category_kind: CreateBudgetCategoryRequestCategoryKind;
   group_name?: string;
   members?: BudgetGroupMember[];
   pfc_primary?: string;

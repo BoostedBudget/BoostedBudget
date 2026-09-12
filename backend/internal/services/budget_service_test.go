@@ -2087,8 +2087,8 @@ func TestBudgetService_CreateBudget_ValidatesCategories(t *testing.T) {
 			CurrencyCode: "USD",
 			Categories: []domain.CreateBudgetCategoryRequest{
 				{
-					// "unknown_kind" is not pfc/custom/savings and MatchLogic is not tag_only
-					// → Validate() returns "category_kind must be pfc, custom, or savings"
+					// "unknown_kind" is not pfc/custom/savings/group/remainder and MatchLogic
+					// is not tag_only, so Validate() returns the complete legal-kinds list.
 					CategoryKind:    "unknown_kind",
 					AllocatedAmount: 200.00,
 				},
@@ -2098,7 +2098,7 @@ func TestBudgetService_CreateBudget_ValidatesCategories(t *testing.T) {
 		_, err := svc.CreateBudget(ctx, "user-abc", req)
 
 		require.Error(t, err, "invalid category kind must cause CreateBudget to return an error")
-		assert.Contains(t, err.Error(), "category_kind must be pfc, custom, or savings")
+		assert.Contains(t, err.Error(), "category_kind must be pfc, custom, savings, group, or remainder")
 		// R5-2/R5-3: no DB write must occur when validation fails
 		mockBudgetRepo.AssertNotCalled(t, "CreateWithCategories", mock.Anything, mock.Anything, mock.Anything)
 	})
