@@ -274,13 +274,17 @@ func TestInvestmentTransaction_Validate(t *testing.T) {
 // TestHoldingSyncResult_Counts verifies result struct is correctly populated
 func TestHoldingSyncResult_Counts(t *testing.T) {
 	result := HoldingSyncResult{
-		SecuritiesUpserted: 5,
-		HoldingsReplaced:   12,
-		AccountsProcessed:  2,
+		SecuritiesUpserted:           5,
+		HoldingsReplaced:             12,
+		AccountsProcessed:            2,
+		AccountsSkippedNonInvestment: 3,
+		HoldingsSkippedNonInvestment: 4,
 	}
 	assert.Equal(t, 5, result.SecuritiesUpserted)
 	assert.Equal(t, 12, result.HoldingsReplaced)
 	assert.Equal(t, 2, result.AccountsProcessed)
+	assert.Equal(t, 3, result.AccountsSkippedNonInvestment)
+	assert.Equal(t, 4, result.HoldingsSkippedNonInvestment)
 }
 
 // TestInvestmentTransactionSyncResult_Counts verifies result struct

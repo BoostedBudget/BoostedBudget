@@ -160,3 +160,100 @@ func TestSyncHoldings_PermanentlyAbsentAccount_StillWritesSnapshot(t *testing.T)
 	assert.InDelta(t, preservedValue, snap.TotalValue, 0.001,
 		"the snapshot total must include the preserved holding — it is exactly what should be summed")
 }
+
+// TestSyncHoldings_NonInvestmentHoldingIsSkippedWithoutRewritingHistory pins the #1640/#1616
+// retention decision against real Postgres. A Plaid holding attached to a depository account is
+// outside the investment universe, but the provider reporting it is not evidence that a retained
+// legacy row was liquidated. The sync therefore ignores the new payload without replacing the live
+// row, recording a false empty observation, or creating a discontinuity in the legacy aggregate.
+func TestSyncHoldings_NonInvestmentHoldingIsSkippedWithoutRewritingHistory(t *testing.T) {
+	pool := connectIntegrationDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	userID := uuid.New().String()
+	linkedItemID := uuid.New().String()
+	accountID := uuid.New().String()
+	securityID := uuid.New().String()
+	plaidAccountID := "plaid-depository-" + accountID
+	plaidSecurityID := "plaid-security-" + securityID
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')
+	`, userID, "int-type-gate|"+userID, "int-type-gate-"+userID+"@example.com")
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted)
+		VALUES ($1, $2, $3, 'enc-type-gate-token')
+	`, linkedItemID, userID, "type-gate-item-"+linkedItemID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO accounts (id, linked_item_id, user_id, plaid_account_id, name, type, status)
+		VALUES ($1, $2, $3, $4, 'Cash Management', 'depository', 'active')
+	`, accountID, linkedItemID, userID, plaidAccountID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO securities (id, plaid_security_id, name, ticker_symbol)
+		VALUES ($1, $2, 'Legacy Cash Position', 'CASH')
+	`, securityID, plaidSecurityID)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO holdings (id, user_id, account_id, security_id, quantity, cost_basis, institution_value)
+		VALUES ($1, $2, $3, $4, 100, 100.00, 100.00)
+	`, uuid.New().String(), userID, accountID, securityID)
+	require.NoError(t, err)
+
+	enc, err := appcrypto.NewFieldEncryptor(nil, []byte("12345678901234567890123456789012"))
+	require.NoError(t, err)
+	accountRepo := repository.NewAccountRepository(tx, enc)
+	holdingRepo := repository.NewHoldingRepository(tx)
+	securityRepo := repository.NewSecurityRepository(tx)
+	snapshotRepo := repository.NewPortfolioSnapshotRepository(tx)
+
+	mockPlaid := new(MockPlaidService)
+	response := plaid.NewInvestmentsHoldingsGetResponse(
+		[]plaid.AccountBase{{AccountId: plaidAccountID}},
+		[]plaid.Holding{makePlaidHolding(plaidAccountID, plaidSecurityID, 999, 1, 999, 999)},
+		[]plaid.Security{makePlaidSecurity(plaidSecurityID, "Provider Cash Position", "CASH")},
+		makeMinimalPlaidItem(),
+		"req-non-investment-skip",
+	)
+	mockPlaid.On("InvestmentsHoldingsGet", ctx, "tok").Return(response, nil)
+
+	svc := NewInvestmentSyncService(
+		nil, nil, accountRepo, securityRepo, holdingRepo, nil, snapshotRepo, nil, mockPlaid, nil,
+	)
+	result, err := svc.SyncHoldings(ctx, &domain.LinkedItem{ID: linkedItemID, UserID: userID, AccessToken: "tok"})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, result.AccountsSkippedNonInvestment)
+	assert.Equal(t, 1, result.HoldingsSkippedNonInvestment)
+	assert.Zero(t, result.AccountsProcessed)
+	assert.Empty(t, result.Errors)
+	assert.Empty(t, result.SkippedIncomplete)
+
+	retained, err := holdingRepo.GetByAccountID(ctx, accountID)
+	require.NoError(t, err)
+	require.Len(t, retained, 1)
+	assert.InDelta(t, 100, retained[0].Quantity, 0.001)
+	require.NotNil(t, retained[0].InstitutionValue)
+	assert.InDelta(t, 100, *retained[0].InstitutionValue, 0.001)
+
+	var observations int
+	require.NoError(t, tx.QueryRow(ctx,
+		`SELECT count(*) FROM holding_observations WHERE user_id = $1 AND account_id = $2`,
+		userID, accountID,
+	).Scan(&observations))
+	assert.Zero(t, observations, "a type-policy skip must not claim Plaid observed an empty account")
+
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	snapshot, err := snapshotRepo.GetLatestBefore(ctx, userID, today.AddDate(0, 0, 1))
+	require.NoError(t, err)
+	require.NotNil(t, snapshot)
+	assert.InDelta(t, 100, snapshot.TotalValue, 0.001,
+		"the legacy ungated series retains its prior universe instead of stepping down at deployment")
+}

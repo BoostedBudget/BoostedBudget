@@ -472,7 +472,7 @@ func TestInvestmentSyncService_SyncHoldings_HappyPath(t *testing.T) {
 	}, nil)
 
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID, Type: "investment"},
 	}, nil)
 
 	deps.holdingRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, mock.Anything).Return(nil)
@@ -517,7 +517,7 @@ func TestInvestmentSyncService_SyncHoldings_SecurityMappingCorrect(t *testing.T)
 	}, nil)
 
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID, Type: "investment"},
 	}, nil)
 
 	// Critical assertion: holding must have the correct internal SecurityID
@@ -561,7 +561,7 @@ func TestInvestmentSyncService_SyncHoldings_EmptyHoldings(t *testing.T) {
 	deps.securityRepo.On("UpsertBatch", ctx, []domain.Security{}).Return(map[string]string{}, nil)
 
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID, Type: "investment"},
 	}, nil)
 
 	// ReplaceForAccount must be called with empty slice (clears the account)
@@ -609,7 +609,7 @@ func TestInvestmentSyncService_SyncHoldings_PartialResponse_PreservesHoldings(t 
 	deps.securityRepo.On("UpsertBatch", ctx, []domain.Security{}).Return(map[string]string{}, nil)
 
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID, Type: "investment"},
 	}, nil)
 
 	result, err := svc.SyncHoldings(ctx, linkedItem)
@@ -710,7 +710,7 @@ func TestInvestmentSyncService_SyncHoldings_SnapshotUpsertedOnSuccess(t *testing
 		plaidSecurityID: internalSecurityID,
 	}, nil)
 	baseDeps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID, Type: "investment"},
 	}, nil)
 	baseDeps.holdingRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, mock.Anything).Return(nil)
 
@@ -766,7 +766,7 @@ func TestInvestmentSyncService_SyncHoldings_SnapshotSkippedOnPartialError(t *tes
 	// UpsertBatch returns empty map → the security lookup fails
 	baseDeps.securityRepo.On("UpsertBatch", ctx, mock.Anything).Return(map[string]string{}, nil)
 	baseDeps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID, Type: "investment"},
 	}, nil)
 
 	// Snapshot repo must NOT be called when accounts are skipped.
@@ -1485,7 +1485,7 @@ func TestInvestmentSyncService_SyncHoldings_UnmappedSecurity_SkipsAccountReplace
 	}, nil)
 
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID, Type: "investment"},
 	}, nil)
 
 	result, err := svc.SyncHoldings(ctx, linkedItem)
@@ -1545,7 +1545,7 @@ func TestInvestmentSyncService_ProcessWebhook_HoldingsPartialFailure(t *testing.
 		// unknownSecurityID absent — will trigger skip
 	}, nil)
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID, Type: "investment"},
 	}, nil)
 
 	err := svc.ProcessWebhook(ctx, webhook)
@@ -1595,7 +1595,7 @@ func TestInvestmentSyncService_ProcessWebhook_HoldingsSkippedIncomplete(t *testi
 	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, linkedItem.AccessToken).Return(holdingsResp, nil)
 	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).Return(map[string]string{}, nil)
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID, Type: "investment"},
 	}, nil)
 
 	err := svc.ProcessWebhook(ctx, webhook)
@@ -1760,7 +1760,7 @@ func TestInvestmentSyncService_SyncHoldings_FilesTheAggregateUnderTheCapturedDay
 	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).
 		Return(map[string]string{plaidSecurityID: internalSecurityID}, nil)
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID, Type: "investment"},
 	}, nil)
 	deps.holdingRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, mock.Anything).
 		Return(capturedDay, nil)
@@ -1805,8 +1805,8 @@ func TestInvestmentSyncService_SyncHoldings_StraddlingUTCMidnight_FilesUnderTheL
 	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).
 		Return(map[string]string{plaidSecurityID: internalSecurityID}, nil)
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: internalA, PlaidAccountID: acctA, UserID: userID},
-		{ID: internalB, PlaidAccountID: acctB, UserID: userID},
+		{ID: internalA, PlaidAccountID: acctA, UserID: userID, Type: "investment"},
+		{ID: internalB, PlaidAccountID: acctB, UserID: userID, Type: "investment"},
 	}, nil)
 	// The map iteration order over accountMap is not defined, so the days are attached per
 	// account rather than per call order: whichever runs first, the LATER day must win.
