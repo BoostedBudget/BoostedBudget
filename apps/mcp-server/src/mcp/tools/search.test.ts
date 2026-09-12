@@ -1,7 +1,31 @@
 import { describe, expect, it } from 'bun:test'
-import { buildSearchResult, parseSearchInput } from './search'
+import { buildSearchResult, parseSearchInput, handleSearch } from './search'
+import generatedIndex from '../../spec/generated/spec-index.json'
+import type { SpecIndex } from '../../spec/search-runtime'
+
+describe('#1634 selected response view', () => {
+  it('shows compact by default and exposes full-only execution diagnostics on request', () => {
+    const index = generatedIndex as SpecIndex
+    const compact = handleSearch({ query: 'getUserBoostExecutions' }, index).content[0]!.text
+    const full = handleSearch({ query: 'getUserBoostExecutions', detail: 'full' }, index).content[0]!.text
+    expect(compact).toContain('Response detail: compact')
+    expect(compact).toContain('top-level detail: "full" on search')
+    expect(compact).toContain('FULL API CONTRACT:')
+    expect(compact).toContain('executions[].output_data')
+    expect(compact).not.toContain('executions[].definition_snapshot')
+    expect(full).toContain('Response detail: full')
+    expect(full).toContain('executions[].definition_snapshot')
+    expect(full).toContain('executions[].input_data')
+    expect(full).not.toContain('executions[].definition_snapshot.')
+  })
+})
 
 describe('parseSearchInput', () => {
+  it('defaults to compact and rejects unsupported detail, including null', () => {
+    expect(parseSearchInput({}).detail).toBe('compact')
+    expect(parseSearchInput({ detail: 'full' }).detail).toBe('full')
+    for (const detail of [null, '', 'verbose', 1]) expect(() => parseSearchInput({ detail })).toThrow()
+  })
   it('accepts a plain query string', () => {
     const input = parseSearchInput({ query: 'spending by category' })
     expect(input.query).toBe('spending by category')

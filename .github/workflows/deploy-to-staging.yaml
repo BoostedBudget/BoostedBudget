@@ -680,8 +680,10 @@ jobs:
   # =============================================================================
   deploy-mcp-worker:
     name: Deploy MCP Worker (Staging)
-    needs: detect-changes
-    if: ${{ needs.detect-changes.outputs.mcp_changed == 'true' }}
+    # #1634: recipe call `detail` requires backend support before the new worker is released.
+    # The backend deploy reuses its prior image when the build is skipped on MCP-only changes.
+    needs: [detect-changes, deploy-backend]
+    if: ${{ always() && !cancelled() && needs.detect-changes.result == 'success' && needs.deploy-backend.result == 'success' && needs.detect-changes.outputs.mcp_changed == 'true' }}
     runs-on: [self-hosted, macOS, mac-mini]
     environment:
       name: staging

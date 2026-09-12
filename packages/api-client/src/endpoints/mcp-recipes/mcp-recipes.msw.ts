@@ -51,7 +51,7 @@ import type {
 
 export const getListMCPRecipesResponseMock = (): MCPRecipe[] | null => (Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', description: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), enabled: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), name: faker.string.alpha({length: {min: 10, max: 20}}), schedule: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), spec: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({body: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: {}
-      }, undefined]), operation_id: faker.string.alpha({length: {min: 10, max: 20}}), params: faker.helpers.arrayElement([{
+      }, undefined]), detail: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.helpers.arrayElement(['compact','full'] as const), null]), undefined]), operation_id: faker.string.alpha({length: {min: 10, max: 20}}), params: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: {}
       }, undefined]), path_params: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: faker.string.alpha({length: {min: 10, max: 20}})
@@ -59,7 +59,7 @@ export const getListMCPRecipesResponseMock = (): MCPRecipe[] | null => (Array.fr
 
 export const getCreateMCPRecipeResponseMock = (overrideResponse: Partial<Extract<MCPRecipe, object>> = {}): MCPRecipe => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', description: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), enabled: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), name: faker.string.alpha({length: {min: 10, max: 20}}), schedule: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), spec: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({body: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: {}
-      }, undefined]), operation_id: faker.string.alpha({length: {min: 10, max: 20}}), params: faker.helpers.arrayElement([{
+      }, undefined]), detail: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.helpers.arrayElement(['compact','full'] as const), null]), undefined]), operation_id: faker.string.alpha({length: {min: 10, max: 20}}), params: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: {}
       }, undefined]), path_params: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: faker.string.alpha({length: {min: 10, max: 20}})
@@ -67,7 +67,7 @@ export const getCreateMCPRecipeResponseMock = (overrideResponse: Partial<Extract
 
 export const getGetMCPRecipeResponseMock = (overrideResponse: Partial<Extract<MCPRecipe, object>> = {}): MCPRecipe => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', description: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), enabled: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), name: faker.string.alpha({length: {min: 10, max: 20}}), schedule: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), spec: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({body: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: {}
-      }, undefined]), operation_id: faker.string.alpha({length: {min: 10, max: 20}}), params: faker.helpers.arrayElement([{
+      }, undefined]), detail: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.helpers.arrayElement(['compact','full'] as const), null]), undefined]), operation_id: faker.string.alpha({length: {min: 10, max: 20}}), params: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: {}
       }, undefined]), path_params: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: faker.string.alpha({length: {min: 10, max: 20}})
@@ -75,7 +75,7 @@ export const getGetMCPRecipeResponseMock = (overrideResponse: Partial<Extract<MC
 
 export const getUpdateMCPRecipeResponseMock = (overrideResponse: Partial<Extract<MCPRecipe, object>> = {}): MCPRecipe => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', description: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), enabled: faker.datatype.boolean(), id: faker.string.alpha({length: {min: 10, max: 20}}), name: faker.string.alpha({length: {min: 10, max: 20}}), schedule: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), spec: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({body: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: {}
-      }, undefined]), operation_id: faker.string.alpha({length: {min: 10, max: 20}}), params: faker.helpers.arrayElement([{
+      }, undefined]), detail: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.helpers.arrayElement(['compact','full'] as const), null]), undefined]), operation_id: faker.string.alpha({length: {min: 10, max: 20}}), params: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: {}
       }, undefined]), path_params: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: faker.string.alpha({length: {min: 10, max: 20}})
@@ -83,7 +83,7 @@ export const getUpdateMCPRecipeResponseMock = (overrideResponse: Partial<Extract
 
 export const getRunMCPRecipeResponseMock = (overrideResponse: Partial<Extract<MCPRecipeRunResult, object>> = {}): MCPRecipeRunResult => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), calls: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({body: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: {}
-      }, undefined]), operation_id: faker.string.alpha({length: {min: 10, max: 20}}), params: faker.helpers.arrayElement([{
+      }, undefined]), detail: faker.helpers.arrayElement([faker.helpers.arrayElement([faker.helpers.arrayElement(['compact','full'] as const), null]), undefined]), operation_id: faker.string.alpha({length: {min: 10, max: 20}}), params: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: {}
       }, undefined]), path_params: faker.helpers.arrayElement([{
         [faker.string.alphanumeric(5)]: faker.string.alpha({length: {min: 10, max: 20}})
