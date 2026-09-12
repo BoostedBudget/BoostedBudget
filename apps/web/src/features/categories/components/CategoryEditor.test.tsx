@@ -5,12 +5,12 @@
  */
 
 import { describe, it, expect, beforeEach, mock } from 'bun:test'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { CategoryEditor } from './CategoryEditor'
 import type { CustomCategory } from '../types'
-import { mockCreateCategoryMutateAsync } from '@/test/mocks/categories-api'
+import { mockCreateCategoryMutateAsync, mockUseGetPlaidDetailedCategories, mockUseGetUserCategories, mockUseGetPlaidPrimaryCategories } from '@/test/mocks/categories-api'
 
 // Helper to create wrapper with QueryClient
 function createWrapper() {
@@ -32,10 +32,7 @@ async function openCreationForm() {
   const button = screen.getByRole('button', { name: /change category/i })
   fireEvent.click(button)
 
-  await waitFor(() => {
-    const createOption = screen.getByText(/create new category/i)
-    fireEvent.click(createOption)
-  })
+  fireEvent.click(screen.getByRole('button', { name: /create new category/i }))
 }
 
 describe('CategoryEditor', () => {
@@ -71,13 +68,16 @@ describe('CategoryEditor', () => {
 
   const mockOnChange = mock(() => {})
   const defaultProps = {
-    selectedCategory: ['Food & Dining'],
+    selectedCategory: { kind: 'custom' as const, custom_category_id: 'cat-1' },
     availableCategories: mockCategories,
     onChange: mockOnChange,
     disabled: false,
   }
 
   beforeEach(() => {
+    mockUseGetPlaidDetailedCategories.mockReturnValue({ data: [], isLoading: false, error: null })
+    mockUseGetUserCategories.mockReturnValue({ data: undefined, isLoading: false, error: null, refetch: mock(async () => {}) })
+    mockUseGetPlaidPrimaryCategories.mockReturnValue({ data: [], isLoading: false, error: null })
     mockCreateCategoryMutateAsync.mockClear()
     mockOnChange.mockClear()
     // Mock createCategory to return the new category with an id
@@ -93,6 +93,135 @@ describe('CategoryEditor', () => {
   })
 
   describe('Rendering', () => {
+    it('selects same-name bank and custom categories by distinct identities', () => {
+      const onChange = mock(() => {})
+      render(<CategoryEditor {...defaultProps} availableCategories={[{ ...mockCategories[0], id: 'custom-income', name: 'Income' }]} plaidPrimaries={[{ enum: 'INCOME', display: 'Income' }]} onChange={onChange} />, { wrapper: createWrapper() })
+      fireEvent.click(screen.getByRole('button', { name: /change category/i }))
+      fireEvent.click(screen.getByRole('option', { name: 'Income Custom' }))
+      expect(onChange).toHaveBeenLastCalledWith({ kind: 'custom', custom_category_id: 'custom-income' })
+      fireEvent.click(screen.getByRole('button', { name: /change category/i }))
+      fireEvent.click(screen.getByRole('option', { name: 'Income' }))
+      expect(onChange).toHaveBeenLastCalledWith({ kind: 'pfc', pfc_primary: 'INCOME' })
+    })
+
+    it('shows loading without clearing saved custom identity or its fallback label', () => {
+      mockUseGetPlaidDetailedCategories.mockReturnValue({ data: [], isLoading: true, error: null })
+      const onChange = mock(() => {})
+      render(<CategoryEditor {...defaultProps} availableCategories={[]} selectedCategory={{ kind: 'custom', custom_category_id: 'saved' }} currentCategory={{ kind: 'custom', custom_category_id: 'saved', custom_category_display: 'Saved custom' }} onChange={onChange} />, { wrapper: createWrapper() })
+      fireEvent.click(screen.getByRole('button', { name: /change category/i }))
+      expect(screen.getByRole('status')).toHaveTextContent('Loading categories')
+      expect(screen.getByText('Saved custom')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Reset category override' })).toBeEnabled()
+      expect(onChange).not.toHaveBeenCalled()
+    })
+    it('shows the retained bank category after explicitly resetting an override', () => {
+      render(<CategoryEditor {...defaultProps} selectedCategory={{ kind: 'clear' }} bankCategory={{ kind: 'pfc', pfc_primary: 'INCOME', pfc_detailed: 'INCOME_WAGES' }} />, { wrapper: createWrapper() })
+      expect(screen.getByText('Income › Wages')).toBeInTheDocument()
+      expect(screen.queryByText('Uncategorized')).not.toBeInTheDocument()
+      expect(screen.getByText('Uses the bank category when available.')).toBeInTheDocument()
+    })
+    it('Enter selects a directly matching detail instead of its contextual parent', () => {
+      mockUseGetPlaidDetailedCategories.mockReturnValue({ data: [{ enum: 'RENT_AND_UTILITIES_TELEPHONE', primary_enum: 'RENT_AND_UTILITIES', primary_display: 'Rent & Utilities', display: 'Telephone' }], isLoading: false, error: null })
+      const onChange = mock(() => {})
+      render(<CategoryEditor {...defaultProps} onChange={onChange} />, { wrapper: createWrapper() })
+      fireEvent.click(screen.getByRole('button', { name: /change category/i }))
+      fireEvent.change(screen.getByRole('combobox'), { target: { value: 'telephone' } })
+      fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' })
+      expect(onChange).toHaveBeenCalledWith({ kind: 'pfc', pfc_primary: 'RENT_AND_UTILITIES', pfc_detailed: 'RENT_AND_UTILITIES_TELEPHONE' })
+    })
+    it('searches ancestry and keeps a three-level bank/custom/custom path selectable', () => {
+      const nested = [
+        { ...mockCategories[0], id: 'parent', name: 'Family', parent_pfc_primary: 'FOOD_AND_DRINK' },
+        { ...mockCategories[1], id: 'leaf', name: 'Birthday', parent_id: 'parent' },
+      ]
+      const onChange = mock(() => {})
+      render(<CategoryEditor {...defaultProps} selectedCategory={{ kind: 'custom', custom_category_id: 'leaf' }} availableCategories={nested} plaidPrimaries={[{ enum: 'FOOD_AND_DRINK', display: 'Food & Drink' }]} onChange={onChange} />, { wrapper: createWrapper() })
+      expect(screen.getByText('Food & Drink › Family › Birthday')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /change category/i }))
+      const search = screen.getByRole('combobox')
+      fireEvent.change(search, { target: { value: 'FAMILY BIRTHDAY' } })
+      expect(screen.getByRole('option', { name: 'Food & Drink' })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('option', { name: 'Birthday Custom' }))
+      expect(onChange).toHaveBeenCalledWith({ kind: 'custom', custom_category_id: 'leaf' })
+    })
+
+    it('keeps descendants for parent search and ancestors for leaf search', () => {
+      mockUseGetPlaidDetailedCategories.mockReturnValue({ data: [{ enum: 'FOOD_AND_DRINK_VENDING_MACHINES', primary_enum: 'FOOD_AND_DRINK', primary_display: 'Food & Drink', display: 'Vending Machines' }], isLoading: false, error: null })
+      render(<CategoryEditor {...defaultProps} />, { wrapper: createWrapper() })
+      fireEvent.click(screen.getByRole('button', { name: /change category/i }))
+      for (const query of ['food & drink', 'VENDING']) {
+        fireEvent.change(screen.getByRole('combobox'), { target: { value: query } })
+        expect(screen.getByRole('option', { name: 'Food & Drink' })).toBeInTheDocument()
+        expect(screen.getByRole('option', { name: 'Vending Machines' })).toBeInTheDocument()
+      }
+    })
+
+    it('supports arrows, Enter, Escape, visible active focus and return to Change', () => {
+      const onChange = mock(() => {})
+      render(<CategoryEditor {...defaultProps} availableCategories={[]} plaidPrimaries={[{ enum: 'A', display: 'Alpha' }, { enum: 'B', display: 'Beta' }]} onChange={onChange} />, { wrapper: createWrapper() })
+      const change = screen.getByRole('button', { name: /change category/i })
+      fireEvent.click(change)
+      const search = screen.getByRole('combobox')
+      expect(search).toHaveFocus()
+      fireEvent.keyDown(search, { key: 'ArrowDown' })
+      const beta = screen.getByRole('option', { name: 'Beta' })
+      expect(search).toHaveAttribute('aria-activedescendant', beta.id)
+      expect(beta).toHaveClass('ring-2')
+      fireEvent.keyDown(search, { key: 'Enter' })
+      expect(onChange).toHaveBeenCalledWith({ kind: 'pfc', pfc_primary: 'B' })
+      expect(change).toHaveFocus()
+      fireEvent.click(change)
+      fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' })
+      expect(change).toHaveFocus()
+      expect(onChange).toHaveBeenCalledTimes(1)
+    })
+
+    it('preserves unknown saved override during metadata errors and retries without changing it', () => {
+      const retry = mock(async () => {})
+      mockUseGetPlaidDetailedCategories.mockReturnValue({ data: [], isLoading: false, error: new Error('offline'), refetch: retry })
+      mockUseGetPlaidPrimaryCategories.mockReturnValue({ data: [], isLoading: false, error: null, refetch: retry })
+      const onChange = mock(() => {})
+      render(<CategoryEditor {...defaultProps} selectedCategory={{ kind: 'custom', custom_category_id: 'missing' }} currentCategory={{ kind: 'custom', custom_category_id: 'missing', custom_category_display: 'Saved private name' }} onChange={onChange} />, { wrapper: createWrapper() })
+      fireEvent.click(screen.getByRole('button', { name: /change category/i }))
+      expect(screen.getByText('Saved private name')).toBeInTheDocument()
+      expect(screen.getByRole('alert')).toHaveTextContent('could not be loaded')
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+      expect(retry).toHaveBeenCalled()
+      fireEvent.change(screen.getByRole('combobox'), { target: { value: 'no match' } })
+      expect(screen.getByText('No categories found.')).toBeInTheDocument()
+      expect(onChange).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: 'Reset category override' }))
+      expect(onChange).toHaveBeenCalledWith({ kind: 'clear' })
+    })
+
+    it('keeps create failures inline with the draft name', async () => {
+      mockCreateCategoryMutateAsync.mockRejectedValueOnce(new Error('offline'))
+      render(<CategoryEditor {...defaultProps} />, { wrapper: createWrapper() })
+      await openCreationForm()
+      fireEvent.change(screen.getByLabelText('Category name'), { target: { value: 'Private budget' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not create category'))
+      expect(screen.getByLabelText('Category name')).toHaveValue('Private budget')
+      expect(mockOnChange).not.toHaveBeenCalled()
+    })
+
+    it('keeps custom labels masked and out of option attributes', () => {
+      render(<CategoryEditor {...defaultProps} />, { wrapper: createWrapper() })
+      fireEvent.click(screen.getByRole('button', { name: /change category/i }))
+      const option = screen.getByRole('option', { name: 'Shopping Custom' })
+      expect(option.querySelector('[data-ph-mask]')).toHaveTextContent('Shopping')
+      for (const attribute of option.attributes) expect(attribute.value).not.toContain('Shopping')
+      expect(screen.getByRole('combobox')).toHaveAttribute('data-ph-mask')
+    })
+    it('searches the complete detailed bank taxonomy and selects its enum', () => {
+      mockUseGetPlaidDetailedCategories.mockReturnValue({ data: [{ enum: 'FOOD_AND_DRINK_COFFEE', primary_enum: 'FOOD_AND_DRINK', primary_display: 'Food & Drink', display: 'Coffee' }], isLoading: false, error: null })
+      const onChange = mock(() => {})
+      render(<CategoryEditor {...defaultProps} onChange={onChange} plaidPrimaries={[{ enum: 'FOOD_AND_DRINK', display: 'Food & Drink' }]} />, { wrapper: createWrapper() })
+      fireEvent.click(screen.getByRole('button', { name: /change category/i }))
+      fireEvent.change(screen.getByRole('combobox', { name: /search categories/i }), { target: { value: 'coffee' } })
+      fireEvent.click(screen.getByRole('option', { name: /coffee/i }))
+      expect(onChange).toHaveBeenCalledWith({ kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_COFFEE' })
+    })
     it('should render selected category and dropdown button', () => {
       const Wrapper = createWrapper()
       render(<CategoryEditor {...defaultProps} />, { wrapper: Wrapper })
@@ -103,9 +232,9 @@ describe('CategoryEditor', () => {
 
     it('should show empty state when no category selected', () => {
       const Wrapper = createWrapper()
-      render(<CategoryEditor {...defaultProps} selectedCategory={[]} />, { wrapper: Wrapper })
+      render(<CategoryEditor {...defaultProps} selectedCategory={{ kind: 'clear' }} />, { wrapper: Wrapper })
 
-      expect(screen.getByText(/uncategorized/i)).toBeInTheDocument()
+      expect(screen.getByText('Bank category')).toBeInTheDocument()
     })
   })
 
@@ -118,9 +247,9 @@ describe('CategoryEditor', () => {
       fireEvent.click(button)
 
       await waitFor(() => {
-        expect(screen.getByRole('option', { name: 'Food & Dining' })).toBeInTheDocument()
-        expect(screen.getByRole('option', { name: 'Shopping' })).toBeInTheDocument()
-        expect(screen.getByRole('option', { name: 'Entertainment' })).toBeInTheDocument()
+        expect(screen.getByRole('option', { name: 'Food & Dining Custom' })).toBeInTheDocument()
+        expect(screen.getByRole('option', { name: 'Shopping Custom' })).toBeInTheDocument()
+        expect(screen.getByRole('option', { name: 'Entertainment Custom' })).toBeInTheDocument()
       })
     })
 
@@ -133,11 +262,11 @@ describe('CategoryEditor', () => {
       fireEvent.click(button)
 
       await waitFor(() => {
-        const option = screen.getByRole('option', { name: 'Shopping' })
+        const option = screen.getByRole('option', { name: 'Shopping Custom' })
         fireEvent.click(option)
       })
 
-      expect(onChange).toHaveBeenCalledWith(['Shopping'])
+      expect(onChange).toHaveBeenCalledWith({ kind: 'custom', custom_category_id: 'cat-2' })
     })
 
     it('should close dropdown after selection', async () => {
@@ -148,7 +277,7 @@ describe('CategoryEditor', () => {
       fireEvent.click(button)
 
       await waitFor(() => {
-        const option = screen.getByRole('option', { name: 'Shopping' })
+        const option = screen.getByRole('option', { name: 'Shopping Custom' })
         fireEvent.click(option)
       })
 
@@ -165,7 +294,7 @@ describe('CategoryEditor', () => {
       fireEvent.click(button)
 
       await waitFor(() => {
-        const selectedOption = screen.getByRole('option', { name: 'Food & Dining' })
+        const selectedOption = screen.getByRole('option', { name: 'Food & Dining Custom' })
         expect(selectedOption).toHaveClass('bg-primary/5')
       })
     })
@@ -176,7 +305,7 @@ describe('CategoryEditor', () => {
       const Wrapper = createWrapper()
       render(<CategoryEditor {...defaultProps} />, { wrapper: Wrapper })
 
-      expect(screen.getByRole('button', { name: /clear category/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /reset category override/i })).toBeInTheDocument()
     })
 
     it('should call onChange with empty array when clear button clicked', () => {
@@ -184,17 +313,17 @@ describe('CategoryEditor', () => {
       const Wrapper = createWrapper()
       render(<CategoryEditor {...defaultProps} onChange={onChange} />, { wrapper: Wrapper })
 
-      const clearButton = screen.getByRole('button', { name: /clear category/i })
+      const clearButton = screen.getByRole('button', { name: /reset category override/i })
       fireEvent.click(clearButton)
 
-      expect(onChange).toHaveBeenCalledWith([])
+      expect(onChange).toHaveBeenCalledWith({ kind: 'clear' })
     })
 
     it('should not show clear button when no category selected', () => {
       const Wrapper = createWrapper()
-      render(<CategoryEditor {...defaultProps} selectedCategory={[]} />, { wrapper: Wrapper })
+      render(<CategoryEditor {...defaultProps} selectedCategory={{ kind: 'clear' }} />, { wrapper: Wrapper })
 
-      expect(screen.queryByRole('button', { name: /clear category/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /reset category override/i })).not.toBeInTheDocument()
     })
   })
 
@@ -204,7 +333,7 @@ describe('CategoryEditor', () => {
       render(<CategoryEditor {...defaultProps} disabled={true} />, { wrapper: Wrapper })
 
       expect(screen.getByRole('button', { name: /change category/i })).toBeDisabled()
-      expect(screen.getByRole('button', { name: /clear category/i })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /reset category override/i })).toBeDisabled()
     })
   })
 
@@ -222,7 +351,7 @@ describe('CategoryEditor', () => {
       // so the editor must match the option by key (id), not only by pfc/name.
       const Wrapper = createWrapper()
       render(
-        <CategoryEditor {...defaultProps} selectedCategory={['cat-1']} />,
+        <CategoryEditor {...defaultProps} selectedCategory={{ kind: 'custom', custom_category_id: 'cat-1' }} />,
         { wrapper: Wrapper }
       )
 
@@ -264,7 +393,7 @@ describe('CategoryEditor', () => {
 
       await waitFor(() => {
         expect(screen.getByText(/create new category/i)).toBeInTheDocument()
-        expect(screen.getByRole('option', { name: 'Shopping' })).toBeInTheDocument()
+        expect(screen.getByRole('option', { name: 'Shopping Custom' })).toBeInTheDocument()
       })
     })
 
@@ -304,7 +433,7 @@ describe('CategoryEditor', () => {
         expect(onCategoryCreated).toHaveBeenCalledWith(expect.objectContaining({
           name: 'New Category',
         }))
-        expect(onChange).toHaveBeenCalledWith(['New Category'])
+        expect(onChange).toHaveBeenCalledWith({ kind: 'custom', custom_category_id: 'new-cat-id' })
       })
     })
 
@@ -319,7 +448,7 @@ describe('CategoryEditor', () => {
       fireEvent.change(nameInput, { target: { value: 'New Category' } })
 
       const createButton = screen.getByRole('button', { name: /create$/i })
-      fireEvent.click(createButton)
+      await act(async () => { fireEvent.click(createButton) })
 
       await waitFor(() => {
         expect(screen.queryByPlaceholderText(/category name/i)).not.toBeInTheDocument()
@@ -387,7 +516,7 @@ describe('CategoryEditor', () => {
       render(
         <CategoryEditor
           {...defaultProps}
-          selectedCategory={['Unknown Category']}
+          selectedCategory={{ kind: 'custom', custom_category_id: 'Unknown Category' }}
         />,
         { wrapper: Wrapper }
       )
@@ -412,7 +541,7 @@ describe('CategoryEditor', () => {
           {...defaultProps}
           availableCategories={[mockCategories[0]]} // only Food & Dining
           plaidPrimaries={plaidPrimaries}
-          selectedCategory={[]}
+          selectedCategory={{ kind: 'clear' }}
         />,
         { wrapper: Wrapper }
       )
@@ -421,13 +550,13 @@ describe('CategoryEditor', () => {
       fireEvent.click(button)
 
       await waitFor(() => {
-        expect(screen.getByRole('option', { name: 'Food & Dining' })).toBeInTheDocument()
+        expect(screen.getByRole('option', { name: 'Food & Dining Custom' })).toBeInTheDocument()
         expect(screen.getByRole('option', { name: 'Transportation' })).toBeInTheDocument()
         expect(screen.getByRole('option', { name: 'Income' })).toBeInTheDocument()
       })
     })
 
-    it('dedupes_case_insensitive_custom_wins', async () => {
+    it('keeps_same_name_custom_and_bank_options_distinct', async () => {
       const customEntertainment: CustomCategory = {
         id: 'ent-custom',
         user_id: 'user-1',
@@ -444,7 +573,7 @@ describe('CategoryEditor', () => {
           {...defaultProps}
           availableCategories={[customEntertainment]}
           plaidPrimaries={[{ enum: 'ENTERTAINMENT', display: 'Entertainment' }]}
-          selectedCategory={[]}
+          selectedCategory={{ kind: 'clear' }}
         />,
         { wrapper: Wrapper }
       )
@@ -456,13 +585,13 @@ describe('CategoryEditor', () => {
         // Exactly one entry matching "entertainment" (custom wins, keeps custom casing)
         const options = screen.getAllByRole('option')
         const entOptions = options.filter(opt =>
-          opt.textContent?.trim().toLowerCase() === 'entertainment'
+          opt.textContent?.trim().toLowerCase().startsWith('entertainment')
         )
-        expect(entOptions).toHaveLength(1)
+        expect(entOptions).toHaveLength(2)
       })
     })
 
-    it('reserves_uncategorized_sentinel', async () => {
+    it('offers_explicit_reset_without_hiding_categories_named_uncategorized', async () => {
       const uncatCustom: CustomCategory = {
         id: 'uncat-custom',
         user_id: 'user-1',
@@ -479,7 +608,7 @@ describe('CategoryEditor', () => {
           {...defaultProps}
           availableCategories={[uncatCustom]}
           plaidPrimaries={[{ enum: 'OTHER', display: 'Uncategorized' }]}
-          selectedCategory={[]}
+          selectedCategory={{ kind: 'clear' }}
         />,
         { wrapper: Wrapper }
       )
@@ -489,13 +618,8 @@ describe('CategoryEditor', () => {
 
       await waitFor(() => {
         const options = screen.getAllByRole('option')
-        // The merged list should NOT include any custom/PFC entry named Uncategorized
-        // (the hardcoded sentinel at the top is rendered separately with aria-label="Uncategorized")
-        const uncatOptions = options.filter(opt =>
-          opt.getAttribute('aria-label') === 'Uncategorized'
-        )
-        // Only the hardcoded sentinel should appear (1 occurrence)
-        expect(uncatOptions).toHaveLength(1)
+        expect(options.filter(option => option.textContent?.startsWith('Uncategorized'))).toHaveLength(2)
+        expect(screen.getByRole('button', { name: 'Reset category override' })).toBeInTheDocument()
       })
     })
 
@@ -510,7 +634,7 @@ describe('CategoryEditor', () => {
             { enum: 'FOOD_AND_DRINK', display: 'Food And Drink' },
             { enum: 'INCOME', display: 'Income' },
           ]}
-          selectedCategory={[]}
+          selectedCategory={{ kind: 'clear' }}
         />,
         { wrapper: Wrapper }
       )
@@ -534,7 +658,7 @@ describe('CategoryEditor', () => {
         <CategoryEditor
           {...defaultProps}
           plaidPrimaries={undefined}
-          selectedCategory={[]}
+          selectedCategory={{ kind: 'clear' }}
         />,
         { wrapper: Wrapper }
       )
@@ -544,8 +668,8 @@ describe('CategoryEditor', () => {
 
       await waitFor(() => {
         // Original custom categories still shown
-        expect(screen.getByRole('option', { name: 'Food & Dining' })).toBeInTheDocument()
-        expect(screen.getByRole('option', { name: 'Shopping' })).toBeInTheDocument()
+        expect(screen.getByRole('option', { name: 'Food & Dining Custom' })).toBeInTheDocument()
+        expect(screen.getByRole('option', { name: 'Shopping Custom' })).toBeInTheDocument()
       })
     })
 
@@ -555,7 +679,7 @@ describe('CategoryEditor', () => {
         <CategoryEditor
           {...defaultProps}
           plaidPrimaries={plaidPrimaries}
-          selectedCategory={[]}
+          selectedCategory={{ kind: 'clear' }}
         />,
         { wrapper: Wrapper }
       )

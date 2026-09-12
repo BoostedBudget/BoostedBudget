@@ -4,8 +4,8 @@
  * Issue #1193: Bug fix — Date Range + Status filters overlap at narrow viewports
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { TransactionFilterPanel } from './TransactionFilterPanel'
 import type { TransactionFilters } from '../types'
 
@@ -20,6 +20,7 @@ const defaultProps = {
   onDatePresetChange: () => {},
   onCustomDateChange: () => {},
   onStatusFilterChange: () => {},
+  onReviewedChange: (_value: boolean | undefined) => {},
   onIncludeInvestmentActivityChange: () => {},
   onActivityTypesChange: () => {},
 }
@@ -28,6 +29,48 @@ function setViewportWidth(width: number) {
   Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: width })
   window.dispatchEvent(new Event('resize'))
 }
+
+describe.each([1280, 375])('Review status at width %i (#1638)', (width) => {
+  beforeEach(() => setViewportWidth(width))
+  afterEach(() => setViewportWidth(0))
+
+  it('offers three distinct states with boolean callbacks', () => {
+    const onReviewedChange = mock((_value: boolean | undefined) => {})
+    render(<TransactionFilterPanel {...defaultProps} onReviewedChange={onReviewedChange} />)
+    fireEvent.click(screen.getByRole('button', { name: /^Filters/ }))
+    const group = within(screen.getByRole('group', { name: 'Review status' }))
+    expect(group.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true')
+    for (const [label, value] of [['Unreviewed', false], ['Reviewed', true], ['All', undefined]] as const) {
+      fireEvent.click(group.getByRole('button', { name: label }))
+      expect(onReviewedChange).toHaveBeenLastCalledWith(value)
+    }
+  })
+
+  it.each([false, true])('counts and clears reviewed=%s independently', (reviewed) => {
+    const onReviewedChange = mock((_value: boolean | undefined) => {})
+    render(<TransactionFilterPanel {...defaultProps} filters={{ reviewed }} onReviewedChange={onReviewedChange} />)
+    expect(screen.getByRole('button', { name: /^Filters/ })).toHaveTextContent('1')
+    expect(screen.getByText(reviewed ? 'Reviewed' : 'Unreviewed')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Review status filter' }))
+    expect(onReviewedChange).toHaveBeenCalledWith(undefined)
+  })
+
+  it('clears review in the fallback clear-all path', () => {
+    const onReviewedChange = mock((_value: boolean | undefined) => {})
+    render(<TransactionFilterPanel {...defaultProps} filters={{ reviewed: false }} onReviewedChange={onReviewedChange} />)
+    if (width < 640) fireEvent.click(screen.getByRole('button', { name: /^Filters/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Clear all/i }))
+    expect(onReviewedChange).toHaveBeenCalledWith(undefined)
+  })
+
+  it('disables every review control when the panel is disabled', () => {
+    render(<TransactionFilterPanel {...defaultProps} disabled />)
+    fireEvent.click(screen.getByRole('button', { name: /^Filters/ }))
+    for (const button of within(screen.getByRole('group', { name: 'Review status' })).getAllByRole('button')) {
+      expect(button).toBeDisabled()
+    }
+  })
+})
 
 describe('TransactionFilterPanel — mobile label consistency (F4)', () => {
   beforeEach(() => setViewportWidth(375))

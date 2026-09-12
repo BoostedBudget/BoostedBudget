@@ -4,7 +4,8 @@ import { ReadOnlyGuard, useReadOnly } from '@/auth'
 import { TransactionBudgetBadge } from '../../budgets/components/transaction-link'
 import type { BudgetCategoryMatch } from '../../budgets/types'
 import { getCategoryColor } from '@/shared/categories/pfcColors'
-import { getEffectiveCategory, getEffectiveCategoryLabel } from '@/shared/categories/getEffectiveCategory'
+import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
+import { getCategoryPresentation, type CategoryMetadata } from '@/shared/categories/getCategoryPresentation'
 import { formatTransactionAmount } from '@/shared/transactions/amount'
 import { getMerchantDisplayName } from '@/shared/transactions/merchant'
 import { ArrowUpRight, ArrowDownRight, Clock, Pencil, Tag } from 'lucide-react'
@@ -15,6 +16,7 @@ import { reviewBadgeVariantFromTransaction } from '@/shared/components/ReviewBad
 
 interface TransactionCardProps {
   transaction: Transaction
+  customCategories?: readonly CategoryMetadata[]
   /** Account this transaction belongs to (for context display) */
   account?: Account | null
   onEdit?: (transaction: Transaction) => void
@@ -59,7 +61,7 @@ function formatDate(dateStr: string | null | undefined): string {
   }).format(transactionDate)
 }
 
-export function TransactionCard({ transaction, account, onEdit, onCategorize, budgetMatch }: TransactionCardProps) {
+export function TransactionCard({ transaction, customCategories, account, onEdit, onCategorize, budgetMatch }: TransactionCardProps) {
   const { isReadOnly } = useReadOnly()
   const { id, amount, date, authorized_date, tags, pending } = transaction
 
@@ -71,11 +73,11 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
   const displayDate = formatDate(authorized_date || date)
   const displayName = getMerchantDisplayName(transaction)
   const effective = getEffectiveCategory(transaction)
-  const categoryLabel = getEffectiveCategoryLabel(effective)
+  const { breadcrumb: categoryLabel } = getCategoryPresentation(effective, customCategories)
   const showUncategorizedWarning = categoryLabel === 'Uncategorized'
   const { text: amountFormatted, signClass: amountClass, arrow, testId: arrowTestId } = formatTransactionAmount(amount)
   const ariaLabel = `Transaction, ${displayDate}${pending ? ', pending' : ''}`
-  const categoryColor = getCategoryColor(categoryLabel)
+  const categoryColor = getCategoryColor(effective?.kind === 'pfc' ? effective.pfc_primary : categoryLabel)
   const accountDisplayName = account ? (account.nickname || account.name) : null
   const accountBackgroundColor = account?.custom_color || '#E5E7EB'
 
@@ -132,7 +134,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
           <div className="transaction-card__meta flex gap-3 text-sm text-muted-foreground mt-1 flex-wrap">
             <ReviewBadge variant={reviewBadgeVariantFromTransaction(transaction)} className="text-xs" />
             <TransactionBudgetBadge match={budgetMatch} />
-            <span className="transaction-card__category inline-flex items-center gap-1">
+            <span data-ph-mask className="transaction-card__category inline-flex items-center gap-1">
               {transaction.pfc_category_icon_url ? (
                 <img
                   src={transaction.pfc_category_icon_url}

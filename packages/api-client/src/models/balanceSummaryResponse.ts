@@ -38,7 +38,10 @@ export interface BalanceSummaryResponse {
   readonly $schema?: string;
   /** UTC calendar day (YYYY-MM-DD) this balance summary is as of */
   as_of_date: string;
+  /** Account type totals and individual balances use the same signed contributions as total_balance */
   by_type: BalanceSummaryResponseByType;
+  /** Comparison with the signed balance 30 days earlier; change_amount is current minus previous, and change_percent divides by the absolute previous balance (zero when previous is zero) */
   period_comparison?: PeriodComparisonData;
+  /** Signed sum of snapshot balances: raw credit and loan balances are negated (negative raw debt is an overpayment); other account types retain their raw sign */
   total_balance: number;
 }

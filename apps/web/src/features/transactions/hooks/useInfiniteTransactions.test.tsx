@@ -16,6 +16,7 @@ import { mockGetTransactions, makeInvestmentActivityFixture } from '@/test/mocks
 import type { GetTransactionsOutputBody } from '@boostedbudget/api-client/models/getTransactionsOutputBody'
 import type { ActivityItem } from '@boostedbudget/api-client/models/activityItem'
 import type { Transaction, InvestmentActivity } from '../types'
+import { invalidateTransactionEdit } from './transactionEditCache'
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -68,6 +69,75 @@ const defaultOpts = {
 }
 
 describe('useInfiniteTransactions', () => {
+  for (const filters of [{ reviewed: false }, { pfc_primaries: ['FOOD_AND_DRINK'] }]) {
+    it(`refreshes inactive ${JSON.stringify(filters)} membership after an edit elsewhere and remount`, async () => {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      const options = { ...defaultOpts, filters }
+      mockGetTransactions.mockResolvedValue({ transactions: [makeTxn('edited')], limit: 50 })
+      const initial = renderHook(() => useInfiniteTransactions(options), { wrapper })
+      await waitFor(() => expect(initial.result.current.transactions).toHaveLength(1))
+      initial.unmount()
+      mockGetTransactions.mockClear()
+      mockGetTransactions.mockResolvedValue({ transactions: [], limit: 50 })
+      await invalidateTransactionEdit(client, 'edited')
+      expect(mockGetTransactions).not.toHaveBeenCalled()
+      const returned = renderHook(() => useInfiniteTransactions(options), { wrapper })
+      await waitFor(() => expect(returned.result.current.transactions).toHaveLength(0))
+      expect(mockGetTransactions).toHaveBeenCalledTimes(1)
+      returned.unmount()
+      client.clear()
+    })
+  }
+
+  it('reuses untouched fresh cached pages on remount and can continue pagination', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    mockGetTransactions.mockResolvedValue(page1Response)
+    const initial = renderHook(() => useInfiniteTransactions(defaultOpts), { wrapper })
+    await waitFor(() => expect(initial.result.current.transactions).toHaveLength(2))
+    initial.unmount()
+    mockGetTransactions.mockClear()
+    const returned = renderHook(() => useInfiniteTransactions(defaultOpts), { wrapper })
+    expect(returned.result.current.transactions).toHaveLength(2)
+    expect(returned.result.current.isFetching).toBe(false)
+    expect(mockGetTransactions).not.toHaveBeenCalled()
+    mockGetTransactions.mockResolvedValue(lastPageResponse)
+    await act(async () => { await returned.result.current.fetchNextPage() })
+    await waitFor(() => expect(returned.result.current.transactions.map(row => row.id)).toEqual(['txn-1', 'txn-2', 'txn-5']))
+    expect(returned.result.current.hasNextPage).toBe(false)
+    expect(mockGetTransactions).toHaveBeenCalledTimes(1)
+    returned.unmount()
+    client.clear()
+  })
+
+  it('starts a fresh first page when review changes and omits review for All', async () => {
+    const firstParams = () => (mockGetTransactions.mock.calls as unknown as [Record<string, unknown>][])[0][0]
+    mockGetTransactions.mockResolvedValue(page1Response)
+    const { result, rerender } = renderHook(
+      ({ reviewed }: { reviewed: boolean | undefined }) => useInfiniteTransactions({ ...defaultOpts, filters: { reviewed, include_investment_activity: false } }),
+      { initialProps: { reviewed: undefined as boolean | undefined }, wrapper: createWrapper() },
+    )
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    mockGetTransactions.mockResolvedValueOnce(page2Response)
+    await act(async () => { await result.current.fetchNextPage() })
+    await waitFor(() => expect(result.current.transactions).toHaveLength(4))
+    for (const reviewed of [false, true]) {
+      mockGetTransactions.mockClear()
+      rerender({ reviewed })
+      await waitFor(() => expect(mockGetTransactions).toHaveBeenCalled())
+      expect(firstParams()).toMatchObject({ reviewed: String(reviewed), include_investment_activity: 'false' })
+      expect(firstParams().cursor).toBeUndefined()
+      await waitFor(() => expect(result.current.transactions).toHaveLength(2))
+    }
+    mockGetTransactions.mockClear()
+    rerender({ reviewed: undefined })
+    // The All query is still fresh in cache; explicitly refresh to inspect its wire payload.
+    await act(async () => { await result.current.refetch() })
+    await waitFor(() => expect(mockGetTransactions).toHaveBeenCalled())
+    expect(firstParams()).not.toHaveProperty('reviewed')
+  })
+
   beforeEach(() => {
     mockGetTransactions.mockClear()
   })

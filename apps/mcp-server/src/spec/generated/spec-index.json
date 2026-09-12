@@ -8354,7 +8354,7 @@
       ],
       "manifestClass": "read",
       "excluded": false,
-      "description": "Returns current balance overview with breakdown by account type and period comparison.",
+      "description": "Returns a signed balance overview as of the requested day, with account type and account breakdowns. Raw credit and loan balances are negated, including overpayments; other account types retain their sign. The 30-day comparison uses the same signed contributions and divides change by the absolute previous balance (zero percent when previous is zero).",
       "parameters": [
         {
           "name": "account_types",
@@ -8390,17 +8390,20 @@
         {
           "name": "by_type",
           "type": "object",
-          "required": true
+          "required": true,
+          "description": "Account type totals and individual balances use the same signed contributions as total_balance"
         },
         {
           "name": "period_comparison",
-          "type": "object"
+          "type": "object",
+          "description": "Comparison with the signed balance 30 days earlier; change_amount is current minus previous, and change_percent divides by the absolute previous balance (zero when previous is zero)"
         },
         {
           "name": "total_balance",
           "type": "number",
           "format": "double",
-          "required": true
+          "required": true,
+          "description": "Signed sum of snapshot balances: raw credit and loan balances are negated (negative raw debt is an overpayment); other account types retain their raw sign"
         }
       ]
     },

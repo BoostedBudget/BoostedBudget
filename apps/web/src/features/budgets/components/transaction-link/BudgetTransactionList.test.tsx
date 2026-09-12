@@ -2,8 +2,19 @@ import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { BrowserRouter } from 'react-router'
 import type { Transaction } from '../../../transactions/types'
+import { mockUseGetUserCategories } from '@/test/mocks/categories-api'
 
-const createMockHookState = (overrides?: Partial<ReturnType<typeof mock>>) => ({
+const createMockHookState = (overrides?: Partial<{
+  transactions: Transaction[]
+  totalCount: number
+  totalAmount: number
+  loading: boolean
+  loadingMore: boolean
+  error: Error | null
+  hasMore: boolean
+  loadMore: () => void
+  refetch: () => void
+}>) => ({
   transactions: [],
   totalCount: 0,
   totalAmount: 0,
@@ -112,6 +123,19 @@ describe('BudgetTransactionList', () => {
   })
 
   describe('transaction list', () => {
+    it('passes loaded custom ancestry to the production transaction cards', () => {
+      mockUseGetUserCategories.mockReturnValue({ data: [
+        { id: 'parent', name: 'Family phones', parent_pfc_primary: 'RENT_AND_UTILITIES' },
+        { id: 'child', name: 'Kids phones', parent_id: 'parent' },
+      ], isLoading: false, error: null } as unknown as ReturnType<typeof mockUseGetUserCategories>)
+      mockUseBudgetTransactions.mockReturnValue(createMockHookState({
+        transactions: [{ ...mockTransaction, category_override_kind: 'custom', custom_category_override_id: 'child', custom_category_override_display: 'Kids phones' }],
+        totalCount: 1,
+      }))
+      renderWithRouter(<BudgetTransactionList budgetId="budget-1" categoryId="category-1" />)
+      expect(screen.getByText('Rent & Utilities › Family phones › Kids phones').closest('[data-ph-mask]')).not.toBeNull()
+    })
+
     it('should render transaction list with count and total', () => {
       mockUseBudgetTransactions.mockReturnValue(
         createMockHookState({

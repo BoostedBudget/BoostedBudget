@@ -1069,10 +1069,13 @@ components:
         by_type:
           additionalProperties:
             $ref: "#/components/schemas/AccountTypeBalance"
+          description: Account type totals and individual balances use the same signed contributions as total_balance
           type: object
         period_comparison:
           $ref: "#/components/schemas/PeriodComparisonData"
+          description: Comparison with the signed balance 30 days earlier; change_amount is current minus previous, and change_percent divides by the absolute previous balance (zero when previous is zero)
         total_balance:
+          description: "Signed sum of snapshot balances: raw credit and loan balances are negated (negative raw debt is an overpayment); other account types retain their raw sign"
           format: double
           type: number
       required:
@@ -12814,7 +12817,7 @@ paths:
         - Dashboard
   /api/v1/dashboard/balance-summary:
     get:
-      description: Returns current balance overview with breakdown by account type and period comparison.
+      description: Returns a signed balance overview as of the requested day, with account type and account breakdowns. Raw credit and loan balances are negated, including overpayments; other account types retain their sign. The 30-day comparison uses the same signed contributions and divides change by the absolute previous balance (zero percent when previous is zero).
       operationId: getBalanceSummary
       parameters:
         - description: Comma-separated account types to filter (investment, checking, savings, credit, loan)
