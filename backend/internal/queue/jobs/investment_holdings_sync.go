@@ -183,6 +183,8 @@ func (w *InvestmentHoldingsSyncWorker) Work(ctx context.Context, job *river.Job[
 
 	observability.InvestmentHoldingsSyncDuration.Observe(time.Since(startTime).Seconds())
 	observability.InvestmentHoldingsSynced.WithLabelValues("replaced").Add(float64(result.HoldingsReplaced))
+	observability.InvestmentHoldingsSynced.WithLabelValues("skipped_non_investment").
+		Add(float64(result.HoldingsSkippedNonInvestment))
 
 	w.logger.Info("investment holdings sync completed",
 		"job_id", job.ID,
@@ -190,6 +192,8 @@ func (w *InvestmentHoldingsSyncWorker) Work(ctx context.Context, job *river.Job[
 		"securities_upserted", result.SecuritiesUpserted,
 		"holdings_replaced", result.HoldingsReplaced,
 		"accounts_processed", result.AccountsProcessed,
+		"accounts_skipped_non_investment", result.AccountsSkippedNonInvestment,
+		"holdings_skipped_non_investment", result.HoldingsSkippedNonInvestment,
 		"duration_ms", time.Since(startTime).Milliseconds(),
 	)
 

@@ -377,9 +377,10 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
           {advancedOpen && (
             <div id="account-customization-advanced" className="mt-2">
               {/* Exclude investment activity toggle — Issue #1609 Item 5 / #1618b. Some accounts
-                  sync through both banking sync and investment sync, so their activity can appear
-                  twice in the feed (once from each source). This is the user-facing control for
-                  that: it maps straight onto exclude_investment_sync.
+                  sync through both banking sync and investment sync, so their transactions can
+                  appear twice in the feed (once from each source). This is the user-facing control
+                  for that: it maps straight onto exclude_investment_sync. Issues #1640/#1616 pin
+                  the boundary: this flag never governs holdings; accounts.type does.
 
                   ⚠ #1631 M4 — the copy below MUST keep its second sentence. The flag is no longer
                   a read filter: while it is on, the backend stops STORING this account's
@@ -407,7 +408,7 @@ function ModalContent({ account, onSave, onCancel, isSaving }: ModalContentProps
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {account.user_account_id
-                      ? "Stops this account's activity from showing up twice — once from bank sync, once from investment sync. While this is on we stop saving its investment activity, and turning it back off re-fetches only the last 2 years from your bank — anything older that went unsaved during exclusion can't be recovered."
+                      ? "Stops this account's investment transactions from showing up twice — once from bank sync and once from investment sync. Holdings follow the account type, not this setting. While this is on we stop saving its investment transactions, and turning it back off re-fetches only the last 2 years from your bank — anything older that went unsaved during exclusion can't be recovered."
                       : 'Not available for this account yet — it has no stable account record to store the setting on.'}
                   </p>
                 </div>

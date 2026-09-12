@@ -255,7 +255,7 @@ func TestInvestmentSyncService_SyncHoldings_ThreadsTheHoldingCurrency(t *testing
 	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).
 		Return(map[string]string{plaidSecurityID: internalSecurityID}, nil)
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID, Type: "investment"},
 	}, nil)
 
 	var captured []domain.Holding
