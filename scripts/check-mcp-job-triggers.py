@@ -70,7 +70,10 @@ reading the workflow, the wiring that makes that surface decisive:
      MCP_CHANGED=true always implies mcp_changed=true and MCP_CHANGED=false implies mcp_changed=false
      whenever force_rebuild and bootstrap are false — that implication is exactly what licenses
      checking the filter surface alone, so it is ASSERTED against the file, not assumed;
-  5. detect-changes exports mcp_changed from steps.compute, and the deploy job's `if:` reads it.
+  5. detect-changes exports mcp_changed from steps.compute;
+  6. the worker needs the environment's backend deploy and detect-changes, with the canonical
+     conjunction requiring both to succeed, a non-cancelled run, and mcp_changed=true (#1634).
+     Path rows assume successful prerequisites; force/bootstrap never bypass backend ordering.
 
 What --deploy deliberately does NOT model: force_rebuild=true and bootstrap_mcp=true. Both only ever
 WIDEN the decision to "deploy", which is the safe direction, and (4) is what proves they are ORs.
@@ -439,12 +442,35 @@ def check_deploy_wiring(steps, jobs, path):
 
     if MCP_DEPLOY_JOB not in jobs:
         raise ValueError("%s defines no %s job" % (path, MCP_DEPLOY_JOB))
-    condition = " ".join(str(jobs[MCP_DEPLOY_JOB].get("if", "")).split())
-    if "needs.detect-changes.outputs.mcp_changed == 'true'" not in condition:
+    backends = [name for name in ("deploy-backend", "deploy-to-fly") if name in jobs]
+    if len(backends) != 1:
+        raise ValueError("expected exactly one environment backend deploy job, found %r" % backends)
+    backend = backends[0]
+    needs = jobs[MCP_DEPLOY_JOB].get("needs")
+    if not isinstance(needs, list) or sorted(needs) != sorted(["detect-changes", backend]):
+        raise ValueError("%s needs must be exactly [detect-changes, %s], got %r"
+                         % (MCP_DEPLOY_JOB, backend, needs))
+
+    # A restricted canonical expression deliberately fails closed on unknown syntax, reordered
+    # gates, inversions and OR bypasses. Only formatting and the optional Actions wrapper vary.
+    condition = str(jobs[MCP_DEPLOY_JOB].get("if", "")).strip()
+    if condition.startswith("${{") and condition.endswith("}}"):
+        condition = condition[3:-2].strip()
+    expected = ("always() && !cancelled() && needs.detect-changes.result == 'success' && "
+                "needs.%s.result == 'success' && "
+                "needs.detect-changes.outputs.mcp_changed == 'true'" % backend)
+    # Whitespace inside a quoted literal changes its value and must not be normalised away.
+    def normalize(value):
+        return re.sub(r"'[^']*'|\s+", preserve_literal, value)
+
+    def preserve_literal(match):
+        token = match[0]
+        return token if token.startswith("'") else ""
+
+    if normalize(condition) != normalize(expected):
         raise ValueError(
-            "%s's if: is %r, which does not gate on "
-            "needs.detect-changes.outputs.mcp_changed == 'true' — this guard cannot tell what "
-            "triggers the deploy" % (MCP_DEPLOY_JOB, condition))
+            "%s's if: is %r, expected canonical backend-success conjunction %r — this guard "
+            "cannot tell what triggers the deploy" % (MCP_DEPLOY_JOB, condition, expected))
 
 
 def main_deploy(path):

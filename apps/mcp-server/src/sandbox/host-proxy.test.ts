@@ -8,6 +8,43 @@ const ALLOWED_WRITE_OP = 'updateTransactionCategory'
 const EXCLUDED_OP = 'checkRole'
 const UNKNOWN_OP = 'totallyFakeOperation'
 
+describe('presentation confirmation binding', () => {
+  const presentations = [undefined, { detail: 'compact' as const }, { detail: 'full' as const }]
+  for (const initial of presentations) {
+    for (const changed of presentations.filter((value) => value !== initial)) {
+      it(`rejects direct and batch detail tamper ${initial?.detail ?? 'absent'} -> ${changed?.detail ?? 'absent'}`, async () => {
+        const mutator = makeMutator()
+        const proxy = createHostProxy({ mutator })
+        const call = { operationId: ALLOWED_WRITE_OP, args: {} }
+        const challenge = await proxy.invoke(call.operationId, call.args, { presentation: initial }).catch((e) => e) as HostProxyError
+        const token = challenge.confirmationToken!
+        await expect(proxy.confirmBatch([{ ...call, presentation: changed }], token)).rejects.toMatchObject({ code: 'invalid_confirmation' })
+        await expect(proxy.invoke(call.operationId, call.args, { confirmationToken: token, presentation: changed })).rejects.toMatchObject({ code: 'invalid_confirmation' })
+        expect(mutator).not.toHaveBeenCalled()
+        await proxy.confirmBatch([{ ...call, presentation: initial }], token)
+        await proxy.invoke(call.operationId, call.args, { confirmationToken: token, presentation: initial })
+        expect(mutator).toHaveBeenCalledTimes(1)
+      })
+    }
+  }
+
+  it('accepts identical API requests with differing details and shares only API idempotency', async () => {
+    const mutator = makeMutator()
+    const proxy = createHostProxy({ mutator })
+    const calls = presentations.map((presentation) => ({ operationId: ALLOWED_WRITE_OP, args: { url: '/transaction', method: 'PATCH' }, presentation }))
+    const decision = await proxy.confirmBatch(calls)
+    await proxy.confirmBatch(calls, decision.token)
+    for (const call of calls) await proxy.invoke(call.operationId, call.args, { confirmationToken: decision.token, presentation: call.presentation })
+    const forwarded = (mutator as ReturnType<typeof mock>).mock.calls
+    expect(forwarded).toHaveLength(3)
+    expect(forwarded[0]![0]).not.toHaveProperty('presentation')
+    expect(forwarded[0]![0]).not.toHaveProperty('detail')
+    expect(forwarded[0]![0]).toEqual(forwarded[1]![0])
+    expect(forwarded[1]![0]).toEqual(forwarded[2]![0])
+    await expect(proxy.confirmBatch(calls, decision.token)).rejects.toMatchObject({ code: 'invalid_confirmation' })
+  })
+})
+
 function makeMutator(resolveWith: unknown = { transactions: [] }): FetchMutator {
   return mock(() => Promise.resolve(resolveWith)) as unknown as FetchMutator
 }

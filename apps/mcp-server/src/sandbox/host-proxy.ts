@@ -39,6 +39,14 @@ export interface InvokeOptions {
   confirmationToken?: string
   /** Optional idempotency key */
   idempotencyKey?: string
+  /** MCP presentation only; never forwarded to the API or included in idempotency keys. */
+  presentation?: { detail: 'compact' | 'full' }
+}
+
+export interface ConfirmationCall {
+  operationId: string
+  args: Record<string, unknown>
+  presentation?: InvokeOptions['presentation']
 }
 
 export interface HostProxyConfig {
@@ -86,7 +94,7 @@ const pendingConfirmations = new Map<
      * A Map (not a Set) because two identical calls in one batch are legitimate, so the
      * value carries a per-slot use count.
      */
-    slots: Map<string, { idempotencyKey: string; uses: number }>
+    slots: Map<string, { idempotencyKey: string; uses: number; presentations: Map<string, number> }>
   }
 >()
 
@@ -140,19 +148,23 @@ async function slotKey(operationId: string, args: Record<string, unknown>): Prom
  * could therefore be swapped, added or removed and the token still validated. The promise was
  * wider than the guarantee; now the guarantee matches the promise.
  */
-async function hashBatch(calls: Array<{ operationId: string; args: Record<string, unknown> }>): Promise<string> {
+async function hashBatch(calls: ConfirmationCall[]): Promise<string> {
   const keys: string[] = []
-  for (const c of calls) keys.push(await slotKey(c.operationId, c.args))
+  for (const c of calls) keys.push(`${await slotKey(c.operationId, c.args)}:${presentationKey(c.presentation)}`)
   const bytes = new TextEncoder().encode(keys.join('|'))
   const digest = await crypto.subtle.digest('SHA-256', bytes)
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+function presentationKey(presentation: InvokeOptions['presentation']): string {
+  return presentation === undefined ? 'absent' : stableStringify(presentation)
+}
+
 async function issueBatchConfirmationToken(
   userId: string,
   grantId: string,
-  calls: Array<{ operationId: string; args: Record<string, unknown> }>,
-  gated: Array<{ operationId: string; args: Record<string, unknown> }>,
+  calls: ConfirmationCall[],
+  gated: ConfirmationCall[],
   getNow: () => number,
 ): Promise<string> {
   // Opportunistic sweep: evict expired entries before inserting a new one.
@@ -164,16 +176,18 @@ async function issueBatchConfirmationToken(
     }
   }
 
-  const slots = new Map<string, { idempotencyKey: string; uses: number }>()
+  const slots = new Map<string, { idempotencyKey: string; uses: number; presentations: Map<string, number> }>()
   for (const g of gated) {
     const key = await slotKey(g.operationId, g.args)
     const existing = slots.get(key)
+    const presentation = presentationKey(g.presentation)
     if (existing) {
       existing.uses += 1
+      existing.presentations.set(presentation, (existing.presentations.get(presentation) ?? 0) + 1)
     } else {
       // idempotencyKey is minted at challenge time and forwarded on the confirmed write so the
       // backend can deduplicate network retries of the same logical MCP write.
-      slots.set(key, { idempotencyKey: crypto.randomUUID(), uses: 1 })
+      slots.set(key, { idempotencyKey: crypto.randomUUID(), uses: 1, presentations: new Map([[presentation, 1]]) })
     }
   }
 
@@ -213,7 +227,7 @@ async function validateBatchConfirmation(
   token: string,
   userId: string,
   grantId: string,
-  calls: Array<{ operationId: string; args: Record<string, unknown> }>,
+  calls: ConfirmationCall[],
   getNow: () => number,
 ): Promise<boolean> {
   const entry = pendingConfirmations.get(token)
@@ -236,6 +250,7 @@ async function consumeConfirmationSlot(
   operationId: string,
   args: Record<string, unknown>,
   getNow: () => number,
+  presentation?: InvokeOptions['presentation'],
 ): Promise<{ idempotencyKey: string } | null> {
   const entry = pendingConfirmations.get(token)
   if (!isTokenEntryValid(entry, userId, grantId, getNow)) return null
@@ -243,7 +258,11 @@ async function consumeConfirmationSlot(
   const key = await slotKey(operationId, args)
   const slot = entry!.slots.get(key)
   if (!slot || slot.uses <= 0) return null
+  const detailKey = presentationKey(presentation)
+  const detailUses = slot.presentations.get(detailKey) ?? 0
+  if (detailUses <= 0) return null
 
+  slot.presentations.set(detailKey, detailUses - 1)
   slot.uses -= 1
   if (slot.uses === 0) entry!.slots.delete(key)
   if (entry!.slots.size === 0) pendingConfirmations.delete(token)
@@ -272,7 +291,7 @@ export function createHostProxy(config: HostProxyConfig) {
      * Returns `needsConfirmation: false` when the batch contains no gated call at all.
      */
     async confirmBatch(
-      calls: Array<{ operationId: string; args: Record<string, unknown> }>,
+      calls: ConfirmationCall[],
       token?: string,
     ): Promise<{ needsConfirmation: boolean; token?: string; count: number }> {
       // `calls` is the WHOLE batch. Which of them are gated is decided HERE, from the capability
@@ -322,7 +341,7 @@ export function createHostProxy(config: HostProxyConfig) {
           // hash spaces coincide and a self-issued token stays redeemable through confirmBatch
           // for that exact one-call array (and, correctly, not as part of a larger one).
           const token = await issueBatchConfirmationToken(
-            userId, grantId, [{ operationId, args }], [{ operationId, args }], getNow,
+            userId, grantId, [{ operationId, args, presentation: opts.presentation }], [{ operationId, args, presentation: opts.presentation }], getNow,
           )
           throw new HostProxyError(
             'confirmation_required',
@@ -338,6 +357,7 @@ export function createHostProxy(config: HostProxyConfig) {
           operationId,
           args,
           getNow,
+          opts.presentation,
         )
         if (!consumed) {
           throw new HostProxyError('invalid_confirmation', INVALID_CONFIRMATION_MESSAGE)

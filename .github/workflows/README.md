@@ -75,7 +75,7 @@ Builds and deploys the current `main` to Fly.io (backend) and Cloudflare Pages (
 3. `push-to-fly-registry` — pushes image to Fly.io registry
 4. `deploy-to-fly` — deploys backend to Fly.io
 5. `deploy-frontend` — deploys to Cloudflare Pages (only if frontend changed)
-6. `deploy-mcp-worker` — deploys MCP Cloudflare Worker (only if mcp changed)
+6. `deploy-mcp-worker` — deploys MCP Cloudflare Worker only if mcp changed and the backend deploy succeeded (`deploy-backend` in staging, `deploy-to-fly` in production). This orders backend support for recipe call `detail` before the worker release. MCP-only changes can skip the image build: the backend job deploys the prior image and must still succeed. Failed, cancelled, or skipped backend jobs block the worker, including force/bootstrap releases.
 7. `smoke-tests` — runs `scripts/smoke-test.sh production`
 8. `update-release-tags` — tags GHCR images with `backend-prod-latest` / `frontend-prod-latest`
 

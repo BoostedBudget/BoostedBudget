@@ -25,6 +25,9 @@
  */
 
 import { HostProxyError } from '../../sandbox/host-proxy'
+import { z } from 'zod'
+import { executeCallSchema } from './call-schema'
+import { MAX_RESULT_CHARS } from './execute'
 import type { McpToolResult } from './search'
 import type { HostProxy } from './execute'
 
@@ -33,6 +36,7 @@ export interface RecipeCall {
   params?: Record<string, unknown>
   body?: Record<string, unknown>
   pathParams?: Record<string, string>
+  detail?: 'compact' | 'full'
 }
 
 export interface RecipeTemplate {
@@ -167,7 +171,7 @@ export function buildRecipeTools(proxy: HostProxy): RecipeTools {
         const lines = recipes.map((r: Record<string, unknown>) =>
           `• ${r['name']} (id: ${r['id']}, enabled: ${r['enabled']})`,
         )
-        return { content: [{ type: 'text', text: `Saved recipes:\n${lines.join('\n')}` }] }
+        return { content: [{ type: 'text', text: `Saved recipes:\n${lines.join('\n')}\nFull recipe: readExecute({ calls: [{ operationId: "getMCPRecipe", pathParams: { id: "<recipe id>" }, detail: "full" }] }).` }] }
       } catch (err) {
         const msg = err instanceof HostProxyError ? err.message : 'Failed to list recipes'
         return { content: [{ type: 'text', text: `Error: ${msg}` }] }
@@ -176,20 +180,26 @@ export function buildRecipeTools(proxy: HostProxy): RecipeTools {
 
     async save(input: SaveRecipeInput): Promise<SaveRecipeResult> {
       try {
-        const spec = input.calls.map((c) => ({
+        const parsed = z.array(executeCallSchema).safeParse(input.calls)
+        if (!parsed.success) {
+          return { toolResult: { content: [{ type: 'text', text: 'Error: Invalid recipe calls; detail must be compact or full when provided.' }], isError: true }, auditResult: 'error' }
+        }
+        const spec = parsed.data.map((c) => ({
           operation_id: c.operationId,
           ...(c.params && { params: c.params }),
           ...(c.body && { body: c.body }),
           ...(c.pathParams && { path_params: c.pathParams }),
+          ...(c.detail !== undefined && { detail: c.detail }),
         }))
 
-        await proxy.invoke(
+        const saved = await proxy.invoke(
           'createMCPRecipe',
           { url: '/api/v1/mcp/recipes', method: 'POST', data: { name: input.name, description: input.description, spec } },
           { confirmationToken: input.confirmationToken },
         )
+        const id = typeof saved === 'object' && saved !== null && 'id' in saved && typeof saved.id === 'string' ? saved.id : '<recipe id>'
         return {
-          toolResult: { content: [{ type: 'text', text: `Recipe "${input.name}" saved successfully.` }] },
+          toolResult: { content: [{ type: 'text', text: `Recipe "${input.name}" saved successfully.\nFull recipe: readExecute({ calls: [{ operationId: "getMCPRecipe", pathParams: { id: ${JSON.stringify(id)} }, detail: "full" }] }).` }] },
           auditResult: 'success',
         }
       } catch (err) {
@@ -226,15 +236,33 @@ export function buildRecipeTools(proxy: HostProxy): RecipeTools {
           typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
 
         const rawCalls = result['calls']
-        const calls = Array.isArray(rawCalls) ? (rawCalls as { operation_id: string }[]) : []
-        if (calls.length === 0) {
-          return { content: [{ type: 'text', text: 'Recipe has no calls.' }] }
+        if (!Array.isArray(rawCalls) || rawCalls.length === 0) {
+          return { content: [{ type: 'text', text: 'Error: Recipe resolution has no calls or an invalid calls array.' }], isError: true }
         }
-
+        const mapped = rawCalls.map((call: unknown) => {
+          if (typeof call !== 'object' || call === null || Array.isArray(call)) return null
+          const c = call as Record<string, unknown>
+          if (Object.keys(c).some(key => !['operation_id', 'params', 'body', 'path_params', 'detail'].includes(key))) return null
+          return {
+            operationId: c['operation_id'],
+            ...(c['params'] !== undefined && { params: c['params'] }),
+            ...(c['body'] !== undefined && { body: c['body'] }),
+            ...(c['path_params'] !== undefined && { pathParams: c['path_params'] }),
+            ...(c['detail'] != null && { detail: c['detail'] }),
+          }
+        })
+        const parsed = z.array(executeCallSchema.extend({ operationId: z.string().min(1) })).safeParse(mapped)
+        if (!parsed.success || typeof result['name'] !== 'string') {
+          return { content: [{ type: 'text', text: 'Error: Invalid recipe resolution; no executable calls returned.' }], isError: true }
+        }
+        const calls = parsed.data
         const text =
           `Recipe "${result['name']}" resolved to ${calls.length} call(s):\n` +
-          calls.map((c, i) => `  ${i + 1}. ${c.operation_id}`).join('\n') +
-          '\n\nPass these to readExecute() (if all read-only) or writeExecute() to run the recipe.'
+          'Use readExecute() where admitted, or writeExecute() otherwise, preserving order in batches of at most 25. No calls have been executed.\n' +
+          JSON.stringify({ calls })
+        if (text.length > MAX_RESULT_CHARS) {
+          return { content: [{ type: 'text', text: 'Error: Recipe resolution is too large; no executable calls returned. Save smaller recipes and resolve them separately.' }], isError: true }
+        }
 
         return { content: [{ type: 'text', text }] }
       } catch (err) {

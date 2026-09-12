@@ -10,14 +10,16 @@
 
 import { z } from 'zod'
 import { getCapability } from '../../manifest/capability-manifest'
-import { searchSpec, listSpecEntries } from '../../spec/search-runtime'
+import { searchSpec, listSpecEntries, responseFields } from '../../spec/search-runtime'
 import type { SpecEntry, SpecIndex } from '../../spec/search-runtime'
 import { isReadExecuteAdmitted } from './read-execute-admission'
+import type { ResponseDetail } from '../../responses/projection'
 
 // ── Input schema ────────────────────────────────────────────────────────────
 
 const SearchInputSchema = z.object({
   query: z.string().default(''),
+  detail: z.enum(['compact', 'full']).default('compact'),
   // #1569 Task 16: 'destructive' is the third capability class — operations that permanently
   // destroy stored data. Agents must be able to filter FOR it (to ask before calling) and
   // AGAINST it, so it belongs in the discoverable enum.
@@ -55,7 +57,7 @@ export type McpToolResult = {
  * Format search results into an MCP text content block.
  * Excluded operations are filtered out before rendering.
  */
-export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
+export function buildSearchResult(entries: SpecEntry[], detail: ResponseDetail = 'compact'): McpToolResult {
   const allowed = entries.filter((e) => !e.excluded)
 
   if (allowed.length === 0) {
@@ -85,7 +87,7 @@ export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
       `  summary: ${e.summary}`,
     ]
     if (e.description) {
-      parts.push(`  description: ${e.description}`)
+      parts.push(`  description: FULL API CONTRACT: ${e.description}`)
     }
     if (e.parameters?.length) {
       const paramLines = e.parameters.map(
@@ -112,8 +114,9 @@ export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
     // Issue #1610a: render the response shape so an MCP client can discover what an operation
     // RETURNS without having to call it first. See the `f.type ?? 'any'` note above — the same
     // ambiguity applies here.
-    if (e.responseBody?.length) {
-      const returnLines = e.responseBody.map(
+    const responseBody = responseFields(e, detail)
+    if (responseBody?.length) {
+      const returnLines = responseBody.map(
         (f) =>
           `    ${f.name} (${f.type ?? 'any'}${f.format ? `, format: ${f.format}` : ''}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
       )
@@ -127,7 +130,7 @@ export function buildSearchResult(entries: SpecEntry[]): McpToolResult {
     content: [
       {
         type: 'text',
-        text: `Found ${allowed.length} operation(s):\n\n${lines.join('\n\n')}`,
+        text: `Response detail: ${detail}. Set top-level detail: "${detail === 'compact' ? 'full' : 'compact'}" on search to describe the other view; set detail on each readExecute/writeExecute call to request it. Discovery omits tooling $schema fields in both views. Compact may fall back to full with a warning if response shape changes.\nFound ${allowed.length} operation(s):\n\n${lines.join('\n\n')}`,
       },
     ],
   }
@@ -161,5 +164,5 @@ export function handleSearch(rawInput: unknown, specIndex: SpecIndex): McpToolRe
     }).slice(0, input.limit)
   }
 
-  return buildSearchResult(entries)
+  return buildSearchResult(entries, input.detail)
 }
