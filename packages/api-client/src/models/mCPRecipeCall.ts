@@ -31,11 +31,17 @@
  * OpenAPI spec version: 1.0.0
  */
 import type { MCPRecipeCallBody } from './mCPRecipeCallBody';
+import type { MCPRecipeCallDetail } from './mCPRecipeCallDetail';
 import type { MCPRecipeCallParams } from './mCPRecipeCallParams';
 import type { MCPRecipeCallPathParams } from './mCPRecipeCallPathParams';
 
 export interface MCPRecipeCall {
   body?: MCPRecipeCallBody;
+  /**
+     * Response detail; omission preserves the default compact presentation. JSON null is treated as omission, not the string null.
+     * @nullable
+     */
+  detail?: MCPRecipeCallDetail;
   operation_id: string;
   params?: MCPRecipeCallParams;
   path_params?: MCPRecipeCallPathParams;
