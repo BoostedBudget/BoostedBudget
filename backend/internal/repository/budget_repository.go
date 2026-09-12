@@ -19,6 +19,7 @@ type BudgetRepository interface {
 	Create(ctx context.Context, budget *domain.Budget) error
 	GetByID(ctx context.Context, id string) (*domain.Budget, error)
 	GetByUserID(ctx context.Context, userID string) ([]*domain.Budget, error)
+	GetByUserIDInTx(ctx context.Context, tx Transaction, userID string) ([]*domain.Budget, error)
 	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.Budget, error)
 	GetByName(ctx context.Context, userID, name string) (*domain.Budget, error)
 	Update(ctx context.Context, budget *domain.Budget) error
@@ -312,6 +313,12 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 
 // GetByUserID retrieves all budgets for a specific user.
 func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.Budget, error) {
+	return r.getByUserIDQuerier(ctx, r.db, userID)
+}
+func (r *budgetRepository) GetByUserIDInTx(ctx context.Context, tx Transaction, userID string) ([]*domain.Budget, error) {
+	return r.getByUserIDQuerier(ctx, tx, userID)
+}
+func (r *budgetRepository) getByUserIDQuerier(ctx context.Context, q Querier, userID string) ([]*domain.Budget, error) {
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
@@ -321,7 +328,7 @@ func (r *budgetRepository) GetByUserID(ctx context.Context, userID string) ([]*d
 		ORDER BY created_at DESC
 	`
 
-	rows, err := r.db.Query(ctx, query, userID)
+	rows, err := q.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -594,6 +601,10 @@ func (r *budgetRepository) CountByUserID(ctx context.Context, userID string) (in
 
 // CreateCategory creates a new budget category.
 func (r *budgetRepository) CreateCategory(ctx context.Context, category *domain.BudgetCategory) error {
+	if category.CategoryKind == "group" || category.CategoryKind == "remainder" {
+		_, err := r.AddCategoryChecked(ctx, category.BudgetID, category)
+		return err
+	}
 	return r.createCategoryQuerier(ctx, r.db, category)
 }
 
@@ -633,7 +644,7 @@ func (r *budgetRepository) createCategoryQuerier(ctx context.Context, q Querier,
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`
 
-	_, err = q.Exec(ctx, query,
+	args := []any{
 		category.ID,
 		category.BudgetID,
 		category.CategoryKind,
@@ -649,7 +660,16 @@ func (r *budgetRepository) createCategoryQuerier(ctx context.Context, q Querier,
 		category.SavingsGoalID,   // $13: nullable FK to savings_goals (Issue #1300)
 		category.AutoCreated,     // $14: bool — auto-created by savings goal linkage
 		category.ManagedByGoalID, // $15: nullable FK — which goal manages this category
-	)
+	}
+	if category.CategoryKind == "group" {
+		query = strings.Replace(query, "managed_by_goal_id\n", "managed_by_goal_id, group_name\n", 1)
+		query = strings.Replace(query, "$15)", "$15, $16)", 1)
+		args = append(args, category.GroupName)
+	}
+	_, err = q.Exec(ctx, query, args...)
+	if err == nil && category.CategoryKind == "group" {
+		return r.replaceGroupMembers(ctx, q, category)
+	}
 
 	return err
 }
@@ -659,6 +679,16 @@ func (r *budgetRepository) createCategoryQuerier(ctx context.Context, q Querier,
 // call composing several of these) commits or rolls back. Returns domain.ErrBudgetNotFound if
 // budgetID does not exist or is already tombstoned. Issue #1630 B3.
 func (r *budgetRepository) lockBudgetRowInTx(ctx context.Context, tx Querier, budgetID string) error {
+	var userID string
+	if err := tx.QueryRow(ctx, `SELECT user_id FROM budgets WHERE id=$1 AND deleted_at IS NULL`, budgetID).Scan(&userID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrBudgetNotFound
+		}
+		return err
+	}
+	if err := LockBudgetConfiguration(ctx, tx, userID); err != nil {
+		return err
+	}
 	var locked string
 	err := tx.QueryRow(ctx, `SELECT id FROM budgets WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, budgetID).Scan(&locked)
 	if err != nil {
@@ -672,7 +702,7 @@ func (r *budgetRepository) lockBudgetRowInTx(ctx context.Context, tx Querier, bu
 
 // BeginTx implements BudgetRepository.BeginTx — see that method's doc comment.
 func (r *budgetRepository) BeginTx(ctx context.Context) (Transaction, error) {
-	return r.db.Begin(ctx)
+	return beginBudgetAccountingTx(ctx, r.db)
 }
 
 // GetCategoriesByBudgetIDLockedInTx implements BudgetRepository.GetCategoriesByBudgetIDLockedInTx
@@ -727,7 +757,12 @@ func (r *budgetRepository) resolveCandidateCustomHierarchyInTx(ctx context.Conte
 // AddCategoryChecked implements BudgetRepository.AddCategoryChecked — see that method's doc
 // comment.
 func (r *budgetRepository) AddCategoryChecked(ctx context.Context, budgetID string, candidate *domain.BudgetCategory) (*domain.BudgetCategory, error) {
-	tx, err := r.db.Begin(ctx)
+	if candidate.CategoryKind == "group" {
+		if err := candidate.ValidateForCreate(); err != nil {
+			return nil, err
+		}
+	}
+	tx, err := beginBudgetAccountingTx(ctx, r.db)
 	if err != nil {
 		return nil, err
 	}
@@ -754,6 +789,12 @@ func (r *budgetRepository) AddCategoryChecked(ctx context.Context, budgetID stri
 		return nil, err
 	}
 
+	if err := r.prepareGroup(ctx, tx, candidate); err != nil {
+		return nil, err
+	}
+	if err := domain.ValidateBudgetGroupCoverage(append(categories, *candidate)); err != nil {
+		return nil, err
+	}
 	if domain.DuplicateParentIdentity(categories, candidate) {
 		return nil, domain.ErrDuplicateParentCategory
 	}
@@ -772,6 +813,15 @@ func (r *budgetRepository) AddCategoryChecked(ctx context.Context, budgetID stri
 		return nil, err
 	}
 
+	updated, err := r.refreshBudgetActualsInTx(ctx, tx, budgetID)
+	if err != nil {
+		return nil, err
+	}
+	for _, actual := range updated {
+		if actual.ID == candidate.ID {
+			candidate.SpentAmount = actual.SpentAmount
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -781,7 +831,7 @@ func (r *budgetRepository) AddCategoryChecked(ctx context.Context, budgetID stri
 // UpdateCategoryChecked implements BudgetRepository.UpdateCategoryChecked — see that method's doc
 // comment.
 func (r *budgetRepository) UpdateCategoryChecked(ctx context.Context, budgetID, categoryID string, mutate func(category *domain.BudgetCategory) error) (*domain.BudgetCategory, error) {
-	tx, err := r.db.Begin(ctx)
+	tx, err := beginBudgetAccountingTx(ctx, r.db)
 	if err != nil {
 		return nil, err
 	}
@@ -813,6 +863,12 @@ func (r *budgetRepository) UpdateCategoryChecked(ctx context.Context, budgetID, 
 	if err := mutate(category); err != nil {
 		return nil, err
 	}
+	if err := r.prepareGroup(ctx, tx, category); err != nil {
+		return nil, err
+	}
+	if err := domain.ValidateBudgetGroupCoverage(append(siblings, *category)); err != nil {
+		return nil, err
+	}
 
 	if domain.EscapedNestedChild(siblings, category) {
 		return nil, fmt.Errorf("%w: match_logic %q on this category escapes its hierarchical parent's containment envelope — a parent whose own match_logic is category_only/or only fully rolls up children whose match_logic is category_only/and; use a top-level (non-nested) category instead if this one must match tag_only or or", domain.ErrEscapedNestedChild, category.MatchLogic)
@@ -822,6 +878,15 @@ func (r *budgetRepository) UpdateCategoryChecked(ctx context.Context, budgetID, 
 		return nil, err
 	}
 
+	updated, err := r.refreshBudgetActualsInTx(ctx, tx, budgetID)
+	if err != nil {
+		return nil, err
+	}
+	for _, actual := range updated {
+		if actual.ID == category.ID {
+			category.SpentAmount = actual.SpentAmount
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -916,7 +981,13 @@ func (r *budgetRepository) getCategoriesByBudgetIDQuerier(ctx context.Context, q
 	if categories == nil {
 		categories = []domain.BudgetCategory{}
 	}
-
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if err := r.loadGroupMembers(ctx, q, categories); err != nil {
+		return nil, err
+	}
 	return categories, nil
 }
 
@@ -995,11 +1066,29 @@ func (r *budgetRepository) GetCategoriesByBudgetIDs(ctx context.Context, budgetI
 		return nil, err
 	}
 
+	rows.Close()
+	var allCategories []domain.BudgetCategory
+	for _, categories := range result {
+		allCategories = append(allCategories, categories...)
+	}
+	if err := r.loadGroupMembers(ctx, r.db, allCategories); err != nil {
+		return nil, err
+	}
+	for id := range result {
+		result[id] = nil
+	}
+	for _, category := range allCategories {
+		result[category.BudgetID] = append(result[category.BudgetID], category)
+	}
 	return result, nil
 }
 
 // UpdateCategory updates an existing budget category.
 func (r *budgetRepository) UpdateCategory(ctx context.Context, category *domain.BudgetCategory) error {
+	if category.CategoryKind == "group" || category.CategoryKind == "remainder" {
+		_, err := r.UpdateCategoryChecked(ctx, category.BudgetID, category.ID, func(c *domain.BudgetCategory) error { *c = *category; return c.Validate() })
+		return err
+	}
 	return r.updateCategoryQuerier(ctx, r.db, category)
 }
 
@@ -1054,7 +1143,9 @@ func (r *budgetRepository) updateCategoryQuerier(ctx context.Context, q Querier,
 	if ct.RowsAffected() == 0 {
 		return domain.ErrBudgetCategoryNotFound
 	}
-
+	if category.CategoryKind == "group" {
+		return r.replaceGroupMembers(ctx, q, category)
+	}
 	return nil
 }
 
@@ -1082,12 +1173,15 @@ func (r *budgetRepository) UpdateCategorySpentAmount(ctx context.Context, catego
 // DeleteCategory implements BudgetRepository.DeleteCategory — see that method's doc comment for
 // why this is a tombstone rather than a DELETE.
 func (r *budgetRepository) DeleteCategory(ctx context.Context, id, budgetID string, auditLog AuditLogRepository) error {
-	tx, err := r.db.Begin(ctx)
+	tx, err := beginBudgetAccountingTx(ctx, r.db)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
 
+	if err := r.lockBudgetRowInTx(ctx, tx, budgetID); err != nil {
+		return err
+	}
 	ct, err := tx.Exec(ctx, `
 		UPDATE budget_categories
 		SET deleted_at = NOW(), deleted_reason = $3, deleted_by = $4, updated_at = NOW()
@@ -1106,6 +1200,9 @@ func (r *budgetRepository) DeleteCategory(ctx context.Context, id, budgetID stri
 		}
 	}
 
+	if _, err := r.refreshBudgetActualsInTx(ctx, tx, budgetID); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -1263,6 +1360,13 @@ func (r *budgetRepository) GetCategoryByIDAndUser(ctx context.Context, categoryI
 		}
 		return nil, err
 	}
+	if bc.CategoryKind == "group" {
+		categories := []domain.BudgetCategory{bc}
+		if err := r.loadGroupMembers(ctx, r.db, categories); err != nil {
+			return nil, err
+		}
+		bc = categories[0]
+	}
 	return &bc, nil
 }
 
@@ -1340,12 +1444,15 @@ func (r *budgetRepository) GetDetachedGoalIDsForSeries(ctx context.Context, seri
 // When r.db is already a pgx.Tx (e.g. the MCP transactional path in budget.go), db.Begin()
 // opens a savepoint so this call composes safely with an outer transaction.
 func (r *budgetRepository) CreateWithCategories(ctx context.Context, budget *domain.Budget, categories []*domain.BudgetCategory) error {
-	tx, err := r.db.Begin(ctx)
+	tx, err := beginBudgetAccountingTx(ctx, r.db)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	if err := LockBudgetConfiguration(ctx, tx, budget.UserID); err != nil {
+		return err
+	}
 	txRepo := &budgetRepository{db: tx}
 
 	if err := txRepo.Create(ctx, budget); err != nil {
@@ -1353,10 +1460,38 @@ func (r *budgetRepository) CreateWithCategories(ctx context.Context, budget *dom
 	}
 
 	for _, cat := range categories {
+		if cat.CategoryKind == "group" {
+			if err := cat.ValidateForCreate(); err != nil {
+				return err
+			}
+		}
+		if err := r.prepareGroup(ctx, tx, cat); err != nil {
+			return err
+		}
+	}
+	values := make([]domain.BudgetCategory, 0, len(categories))
+	for _, cat := range categories {
+		values = append(values, *cat)
+	}
+	if err := domain.ValidateBudgetGroupCoverage(values); err != nil {
+		return err
+	}
+	for _, cat := range categories {
 		if err := txRepo.CreateCategory(ctx, cat); err != nil {
 			return err
 		}
 	}
 
+	updated, err := r.refreshBudgetActualsInTx(ctx, tx, budget.ID)
+	if err != nil {
+		return err
+	}
+	for _, actual := range updated {
+		for _, c := range categories {
+			if c.ID == actual.ID {
+				c.SpentAmount = actual.SpentAmount
+			}
+		}
+	}
 	return tx.Commit(ctx)
 }

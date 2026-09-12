@@ -11,6 +11,7 @@ import { MemoryRouter, Routes, Route } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createLocationHarness } from '@/test/utils/locationProbe'
 import { BudgetDetailPage } from './BudgetDetailPage'
+import { mockUseGetBudgetPlanVsActual, mockRefetchBudgetPlan } from '@/test/mocks/budgets-api'
 
 function createMockBudget(overrides: Record<string, unknown> = {}) {
   return {
@@ -20,7 +21,7 @@ function createMockBudget(overrides: Record<string, unknown> = {}) {
     description: 'Monthly household budget',
     amount: 5000,
     income_amount: 6000,
-    period: 'monthly',
+    period: 'monthly' as const,
     start_date: '2025-01-01',
     end_date: '2025-01-31',
     is_active: true,
@@ -29,29 +30,31 @@ function createMockBudget(overrides: Record<string, unknown> = {}) {
       {
         id: 'cat-1',
         budget_id: 'budget-1',
+        category_kind: 'pfc',
         category: ['Food and Drink', 'Groceries'],
         allocated_amount: 500,
         spent_amount: 250,
         tags: [],
-        match_logic: 'category_only',
+        match_logic: 'category_only' as const,
         created_at: '2025-01-01T00:00:00Z',
         updated_at: '2025-01-01T00:00:00Z',
       },
       {
         id: 'cat-2',
         budget_id: 'budget-1',
+        category_kind: 'pfc',
         category: ['Bills and Utilities', 'Utilities'],
         allocated_amount: 300,
         spent_amount: 280,
         tags: [],
-        match_logic: 'category_only',
+        match_logic: 'category_only' as const,
         created_at: '2025-01-01T00:00:00Z',
         updated_at: '2025-01-01T00:00:00Z',
       },
     ],
     income_sources: [
-      { type: 'manual', description: 'Salary', value: '5000' },
-      { type: 'manual', description: 'Side gig', value: '500' },
+      { type: 'manual' as const, description: 'Salary', value: '5000' },
+      { type: 'manual' as const, description: 'Side gig', value: '500' },
     ],
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
@@ -83,6 +86,7 @@ function renderWithRouter(budgetId = 'budget-1') {
 
 describe('BudgetDetailPage', () => {
   beforeEach(() => {
+    mockUseGetBudgetPlanVsActual.mockReturnValue({ data: undefined, isLoading: false, error: null, refetch: mockRefetchBudgetPlan })
     mockBudgetDetailRefetch.mockClear()
     mockUseBudgetDetail.mockClear()
     mockUseAvailableCategories.mockClear()
@@ -97,6 +101,17 @@ describe('BudgetDetailPage', () => {
     })
     mockUseAvailableCategories.mockReturnValue({ categories: [] })
     mockUseTags.mockReturnValue({ tags: [] })
+  })
+
+  it('loads the separate budget activity report and offers a retry on failure', async () => {
+    mockUseBudgetDetail.mockReturnValue({ budget: createMockBudget(), loading: false, error: null, refetch: mockBudgetDetailRefetch })
+    mockUseGetBudgetPlanVsActual.mockReturnValue({ data: undefined, isLoading: true, error: null, refetch: mockRefetchBudgetPlan })
+    const { rerender } = renderWithRouter()
+    expect(screen.getByText('Loading budget plan and activity...')).toBeInTheDocument()
+    mockUseGetBudgetPlanVsActual.mockReturnValue({ data: undefined, isLoading: false, error: new Error('offline'), refetch: mockRefetchBudgetPlan })
+    rerender(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/budgets/budget-1']}><Routes><Route path="/budgets/:budgetId" element={<BudgetDetailPage />} /></Routes></MemoryRouter></QueryClientProvider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Retry budget activity' }))
+    expect(mockRefetchBudgetPlan).toHaveBeenCalled()
   })
 
   describe('Loading State', () => {
@@ -308,7 +323,7 @@ describe('BudgetDetailPage', () => {
       expect(screen.getAllByText('$5,000.00').length).toBeGreaterThan(0)
     })
 
-    it('should render income when greater than zero', () => {
+    it('does not present stored declared income as received income', () => {
       mockUseBudgetDetail.mockReturnValue({
         budget: createMockBudget({ income_amount: 6000 }),
         loading: false,
@@ -319,7 +334,7 @@ describe('BudgetDetailPage', () => {
       renderWithRouter()
 
       // Issue #575: Real component shows income in header AND BudgetIncomeSection
-      expect(screen.getAllByText('$6,000.00').length).toBeGreaterThan(0)
+      expect(screen.queryByText('$6,000.00')).toBeNull()
     })
   })
 
@@ -345,7 +360,7 @@ describe('BudgetDetailPage', () => {
       expect(screen.getAllByText('$5,000.00').length).toBeGreaterThan(0)
     })
 
-    it('should use income_amount as actual income', () => {
+    it('keeps observed income unavailable until the report verifies it', () => {
       mockUseBudgetDetail.mockReturnValue({
         budget: createMockBudget({ income_amount: 7500 }),
         loading: false,
@@ -356,9 +371,9 @@ describe('BudgetDetailPage', () => {
       renderWithRouter()
 
       // Issue #575: Real component shows "Actual" label with amount
-      expect(screen.getByText('Actual')).toBeInTheDocument()
+      expect(screen.getByText('Observed income')).toBeInTheDocument()
       // $7,500.00 may appear multiple times (header + income section)
-      expect(screen.getAllByText('$7,500.00').length).toBeGreaterThan(0)
+      expect(screen.queryByText('$7,500.00')).toBeNull()
     })
 
     it('uses expected_income as expectedIncome when set', () => {
@@ -380,7 +395,7 @@ describe('BudgetDetailPage', () => {
       expect(screen.getAllByText('$3,000.00').length).toBeGreaterThan(0)
     })
 
-    it('actualIncome uses income_amount without amount fallback', () => {
+    it('does not substitute declared or planned amounts for unknown observed income', () => {
       mockUseBudgetDetail.mockReturnValue({
         budget: createMockBudget({
           income_amount: 1500,
@@ -395,8 +410,8 @@ describe('BudgetDetailPage', () => {
       renderWithRouter()
 
       // actualIncome = budget.income_amount = 1500 (NOT 9999 from amount)
-      expect(screen.getByText('Actual')).toBeInTheDocument()
-      expect(screen.getAllByText('$1,500.00').length).toBeGreaterThan(0)
+      expect(screen.getByText('Observed income')).toBeInTheDocument()
+      expect(screen.queryByText('$1,500.00')).toBeNull()
       // $9,999.00 should NOT appear as an income value
       // (it may appear in header as "Budget Amount" stat, but not in income section)
     })

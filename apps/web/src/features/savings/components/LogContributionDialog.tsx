@@ -21,6 +21,7 @@ import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 
 export interface LogContributionDialogProps {
+  currencyCode?: string
   goalId: string
   isOpen: boolean
   onClose: () => void
@@ -32,7 +33,7 @@ function todayLocalDate(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-export function LogContributionDialog({ goalId, isOpen, onClose, onLogged }: LogContributionDialogProps) {
+export function LogContributionDialog({ goalId, isOpen, onClose, onLogged, currencyCode }: LogContributionDialogProps) {
   const trackEvent = useTrackEvent()
   const { mutateAsync, isPending } = useLogSavingsGoalContribution()
 
@@ -84,14 +85,14 @@ export function LogContributionDialog({ goalId, isOpen, onClose, onLogged }: Log
         <div className="flex flex-col gap-4">
           <NumberField
             name="amount"
-            label="Amount"
+            label={currencyCode ? `Amount (${currencyCode})` : 'Amount'}
             value={amount}
             onChange={(e) => { setAmount(e.target.value); setAmountError(undefined) }}
             error={amountError}
             placeholder="0.00"
             min="0.01"
             step="0.01"
-            prefix="$"
+            prefix={new Intl.NumberFormat('en-US', { style: 'currency', currency: currencyCode ?? 'USD' }).formatToParts(0).find((part) => part.type === 'currency')?.value}
           />
 
           <DateField

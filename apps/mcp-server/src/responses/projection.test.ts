@@ -9,6 +9,15 @@ const spec = parse(readFileSync(new URL('../../../../api/openapi.yaml', import.m
 const exposed = specIndex.entries.filter((entry) => !entry.excluded).map((entry) => entry.operationId)
 
 describe('response contract', () => {
+  test('compact retains grouped selectors and the budget-counted transaction amount', () => {
+    const group = { id: 'group', category_kind: 'group', group_name: 'Everyday', members: [{ category_kind: 'uncategorized' }] }
+    expect(projectResponse('getBudget', { id: 'budget', categories: [{ ...group, created_at: 'noise' }] }).value).toEqual({ id: 'budget', categories: [group] })
+    const transaction = { id: 'transaction', amount: 100, budget_expense_amount: 70 }
+    const result = projectResponse('getCategoryTransactions', { total_amount: 70, transactions: [{ ...transaction, created_at: 'noise' }] })
+    expect(result.value).toMatchObject({ total_amount: 70, transactions: [transaction] })
+    expect((result.value as { transactions: Record<string, unknown>[] }).transactions[0]).not.toHaveProperty('created_at')
+  })
+
   test('all exposed operations have a deliberate policy and schema fields are exhaustively classified', () => {
     expect(validateResponseCatalog(spec, exposed)).toEqual([])
     expect(Object.values(responseCatalog).filter((entry) => entry.kind === 'project')).toHaveLength(71)

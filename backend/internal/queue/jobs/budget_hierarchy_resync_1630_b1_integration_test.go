@@ -122,7 +122,7 @@ func TestBudgetHierarchyResync_1630_B1_CorrectsStaleTotalsAfterLegitimateReparen
 	_, err = tx.Exec(ctx, `
 		INSERT INTO budgets (id, user_id, name, period, start_date, amount, is_active, series_id)
 		VALUES ($1, $2, 'Monthly Budget', 'monthly', $3, 1000.00, true, $1)
-	`, budgetID, userID, today.Format("2006-01-02"))
+	`, budgetID, userID, today.AddDate(0, -1, 0).Format("2006-01-02"))
 	require.NoError(t, err, "seed budget")
 
 	// Both budget lines seeded with obviously-wrong spent_amount, standing in for "whatever a

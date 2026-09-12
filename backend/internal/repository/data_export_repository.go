@@ -175,6 +175,11 @@ var DataExportTables = []DataExportTable{
 
 	// --- Budgets -------------------------------------------------------------------------------
 	{
+		Table:              "budget_group_members",
+		OwnershipPredicate: "t.budget_category_id IN (SELECT bc.id FROM budget_categories bc JOIN budgets b ON b.id=bc.budget_id WHERE b.user_id=$1)\n-- tombstone-exempt(budget_categories bc, budgets b): export includes retained allocation and selector history through the owning budget, including tombstoned parents.",
+		OrderBy:            "t.created_at, t.id",
+	},
+	{
 		Table:              "budgets",
 		OwnershipPredicate: "t.user_id = $1",
 		OrderBy:            "t.created_at, t.id",

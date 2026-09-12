@@ -39,10 +39,19 @@ export interface BudgetCategoryMatch {
   matchReason: MatchReason;
 }
 
+export interface BudgetGroupMember {
+  category_kind: 'pfc' | 'custom' | 'uncategorized';
+  pfc_primary?: string;
+  pfc_detailed?: string;
+  custom_category_id?: string;
+}
+
 export interface BudgetCategory {
   id: string;
   budget_id: string;
-  category_kind: string; // 'pfc' | 'custom' | 'savings'
+  category_kind: string; // 'pfc' | 'custom' | 'savings' | 'group' | 'remainder'
+  group_name?: string;
+  members?: BudgetGroupMember[];
   pfc_primary?: string;
   pfc_detailed?: string;
   pfc_primary_display?: string;
@@ -293,13 +302,13 @@ export function computeParentDirectSpend(
 }
 
 /**
- * Formats a number as USD currency for display. Shared utility to avoid duplication
+ * Formats a number in the budget currency (USD by default). Shared utility to avoid duplication
  * across budget UI components.
  */
-export function formatCurrency(amount: number): string {
+export function formatCurrency(amount: number, currencyCode = 'USD'): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'USD',
+    currency: currencyCode,
   }).format(amount);
 }
 
@@ -363,7 +372,9 @@ export interface UpdateBudgetRequest {
 }
 
 export interface CreateBudgetCategoryRequest {
-  category_kind: string; // 'pfc' | 'custom' | 'savings'
+  category_kind: string;
+  group_name?: string;
+  members?: BudgetGroupMember[];
   pfc_primary?: string;
   pfc_detailed?: string;
   custom_category_id?: string;
@@ -374,6 +385,8 @@ export interface CreateBudgetCategoryRequest {
 }
 
 export interface UpdateBudgetCategoryRequest {
+  group_name?: string;
+  members?: BudgetGroupMember[];
   allocated_amount?: number;
   tags?: string[];
   match_logic?: MatchLogic;
@@ -393,9 +406,8 @@ export function computeBudgetMetrics(budget: Budget): BudgetWithMetrics {
   const percent_used = spendingBasis > 0 ? (total_spent / spendingBasis) * 100 : 0;
   const is_over_budget = total_spent > spendingBasis;
 
-  const income_amount = budget.income_amount || 0;
-  const unallocated_funds = income_amount - total_allocated;
-  const is_fully_allocated = total_allocated >= income_amount;
+  const unallocated_funds = spendingBasis - total_allocated;
+  const is_fully_allocated = total_allocated >= spendingBasis;
 
   return {
     ...budget,
@@ -414,7 +426,9 @@ export function formatCategoryPath(category: string[]): string {
   return category.join(' > ');
 }
 
-export function formatBudgetCategoryLabel(cat: Pick<BudgetCategory, 'category_kind' | 'pfc_primary' | 'pfc_detailed' | 'pfc_primary_display' | 'pfc_detailed_display' | 'custom_category_id' | 'savings_goal_name'>): string {
+export function formatBudgetCategoryLabel(cat: Pick<BudgetCategory, 'category_kind' | 'pfc_primary' | 'pfc_detailed' | 'pfc_primary_display' | 'pfc_detailed_display' | 'custom_category_id' | 'savings_goal_name' | 'group_name'>): string {
+  if (cat.category_kind === 'group') return cat.group_name ?? 'Budget group';
+  if (cat.category_kind === 'remainder') return 'Other';
   if (cat.category_kind === 'savings') {
     return cat.savings_goal_name ?? 'Savings Goal';
   }

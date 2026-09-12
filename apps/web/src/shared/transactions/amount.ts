@@ -15,11 +15,11 @@ export function isInflow(amount: number): boolean {
   return amount < 0
 }
 
-export function formatTransactionAmount(amount: number): TransactionAmountFormat {
+export function formatTransactionAmount(amount: number, currencyCode = 'USD'): TransactionAmountFormat {
   const absAmount = Math.abs(amount)
   const formatted = new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'USD',
+    currency: currencyCode,
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(absAmount)

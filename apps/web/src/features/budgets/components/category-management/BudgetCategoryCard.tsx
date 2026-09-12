@@ -47,6 +47,7 @@ export interface BudgetCategoryCardProps extends VariantProps<typeof budgetCateg
   category: BudgetCategory;
   /** Budget ID for fetching transactions (enables collapsible transactions when provided) */
   budgetId?: string;
+  currencyCode?: string;
   /** Callback when edit button is clicked */
   onEdit?: () => void;
   /** Callback when delete button is clicked */
@@ -106,6 +107,7 @@ function stripPrimaryPrefix(label: string): string {
 export function BudgetCategoryCard({
   category,
   budgetId,
+  currencyCode = 'USD',
   onEdit,
   onDelete,
   disabled = false,
@@ -168,7 +170,7 @@ export function BudgetCategoryCard({
             ? 'bg-success/10 text-success'
             : 'text-primary bg-primary/10'
         )}>
-          {category.category_kind === 'savings' ? 'Savings Bucket' : matchLogicLabel}
+          {category.category_kind === 'savings' ? 'Savings Bucket' : category.category_kind === 'group' ? 'Shared limit' : category.category_kind === 'remainder' ? 'Automatic remainder' : matchLogicLabel}
         </span>
       </div>
 
@@ -177,7 +179,7 @@ export function BudgetCategoryCard({
         <div className="budget-category-card__amount-row flex justify-between items-center">
           <span className="budget-category-card__label text-[0.8125rem] text-muted-foreground">Allocated:</span>
           <span className="budget-category-card__value text-sm font-semibold text-foreground" data-ph-mask>
-            {formatCurrency(category.allocated_amount)}
+            {formatCurrency(category.allocated_amount, currencyCode)}
           </span>
         </div>
         <div className="budget-category-card__amount-row flex justify-between items-center">
@@ -189,7 +191,7 @@ export function BudgetCategoryCard({
             )}
             data-ph-mask
           >
-            {formatCurrency(category.spent_amount)}
+            {formatCurrency(category.spent_amount, currencyCode)}
           </span>
         </div>
       </div>
@@ -226,7 +228,7 @@ export function BudgetCategoryCard({
               )}
               data-ph-mask
             >
-              {formatCurrency(allocationRemainder)}
+              {formatCurrency(allocationRemainder, currencyCode)}
             </span>
           </div>
           <div className="budget-category-card__amount-row flex justify-between items-center">
@@ -234,7 +236,7 @@ export function BudgetCategoryCard({
               Direct spending:
             </span>
             <span className="budget-category-card__value text-sm font-semibold text-foreground" data-ph-mask>
-              {formatCurrency(directSpend)}
+              {formatCurrency(directSpend, currencyCode)}
             </span>
           </div>
           {isOverAllocated && (
@@ -245,9 +247,9 @@ export function BudgetCategoryCard({
               <AlertTriangleIcon className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
               <span>
                 Children allocate{' '}
-                <span data-ph-mask>{formatCurrency(Math.abs(allocationRemainder))}</span> more
+                <span data-ph-mask>{formatCurrency(Math.abs(allocationRemainder), currencyCode)}</span> more
                 than this category&apos;s own{' '}
-                <span data-ph-mask>{formatCurrency(category.allocated_amount)}</span> budget. This
+                <span data-ph-mask>{formatCurrency(category.allocated_amount, currencyCode)}</span> budget. This
                 still saves — you can leave it as an intentional over-earmark.
               </span>
             </p>
@@ -260,6 +262,7 @@ export function BudgetCategoryCard({
         <BudgetProgressBar
           spent={category.spent_amount}
           total={category.allocated_amount}
+          currencyCode={currencyCode}
           size="small"
         />
       </div>
@@ -336,7 +339,7 @@ export function BudgetCategoryCard({
       {/* Collapsible Transactions List */}
       {budgetId && isTransactionsExpanded && (
         <div className="budget-category-card__transactions mt-3 pt-3 border-t border-border">
-          <BudgetTransactionList budgetId={budgetId} categoryId={category.id} />
+          <BudgetTransactionList budgetId={budgetId} categoryId={category.id} currencyCode={currencyCode} />
         </div>
       )}
     </article>

@@ -244,7 +244,7 @@ describe('useBudgetDetail', () => {
       expect(result.current.metrics?.total_spent).toBe(0)
     })
 
-    it('should handle budget without income amount', async () => {
+    it('keeps unallocated plans independent of income received so far', async () => {
       const budgetNoIncome: Budget = {
         ...mockBudget,
         income_amount: 0,
@@ -260,7 +260,7 @@ describe('useBudgetDetail', () => {
         expect(result.current.loading).toBe(false)
       })
 
-      expect(result.current.metrics?.unallocated_funds).toBe(-800)
+      expect(result.current.metrics?.unallocated_funds).toBe(2200)
     })
   })
 })

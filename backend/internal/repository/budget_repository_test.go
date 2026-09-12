@@ -694,9 +694,13 @@ func TestBudgetRepository_DeleteCategory(t *testing.T) {
 	budgetID := uuid.New().String()
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT user_id FROM budgets WHERE id=$1 AND deleted_at IS NULL")).WithArgs(budgetID).WillReturnRows(pgxmock.NewRows([]string{"user_id"}).AddRow("owner"))
+	mock.ExpectExec(regexp.QuoteMeta(lockHierarchySQL)).WithArgs("owner").WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM budgets WHERE id = $1 AND deleted_at IS NULL FOR UPDATE")).WithArgs(budgetID).WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow(budgetID))
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
 		WithArgs(categoryID, budgetID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT user_id,period,start_date,end_date,is_active,income_amount FROM budgets WHERE id=$1 AND deleted_at IS NULL")).WithArgs(budgetID).WillReturnRows(pgxmock.NewRows([]string{"user_id", "period", "start_date", "end_date", "is_active", "income_amount"}).AddRow("owner", "monthly", time.Now(), nil, false, 0.0))
 	mock.ExpectCommit()
 
 	err := repo.DeleteCategory(ctx, categoryID, budgetID, nil)
@@ -715,6 +719,9 @@ func TestBudgetRepository_DeleteCategory_NotFound(t *testing.T) {
 	budgetID := uuid.New().String()
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT user_id FROM budgets WHERE id=$1 AND deleted_at IS NULL")).WithArgs(budgetID).WillReturnRows(pgxmock.NewRows([]string{"user_id"}).AddRow("owner"))
+	mock.ExpectExec(regexp.QuoteMeta(lockHierarchySQL)).WithArgs("owner").WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM budgets WHERE id = $1 AND deleted_at IS NULL FOR UPDATE")).WithArgs(budgetID).WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow(budgetID))
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE budget_categories`)).
 		WithArgs(categoryID, budgetID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))

@@ -2,13 +2,14 @@
 // Do NOT add mock.module() for those here — it leaks across test files in bun:test.
 // Issue #1323: Use centralized mockUseGetUserCategories from categories-api preload.
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
-import type { BudgetCategory } from '../../types'
+import type { BudgetCategory, CreateBudgetCategoryRequest, UpdateBudgetCategoryRequest } from '../../types'
 import type { UserTag } from '@/features/tags/types'
 import type { CustomCategory } from '@boostedbudget/api-client/models'
 import { mockUseGetSavingsGoals } from '@/test/mocks/savings-goals-api'
 import { mockUseGetUserCategories } from '@/test/mocks/categories-api'
+import type { UsePreviewCategoriesResult } from '../../hooks/usePreviewCategories'
 
-const mockUsePreviewCategories = mock(() => ({
+const mockUsePreviewCategories = mock((): UsePreviewCategoriesResult => ({
   preview: null,
   loading: false,
   error: null,
@@ -53,7 +54,7 @@ const defaultUserCategories: CustomCategory[] = [
 
 describe('BudgetCategoryForm', () => {
   const mockOnClose = mock(() => {})
-  const mockOnSubmit = mock(() => Promise.resolve())
+  const mockOnSubmit = mock((_request: CreateBudgetCategoryRequest | UpdateBudgetCategoryRequest) => Promise.resolve())
 
   // PFC enum-style categories (used only for the PFC tree picker path)
   const mockAvailableCategories: string[][] = [
@@ -140,6 +141,72 @@ describe('BudgetCategoryForm', () => {
   }
 
   describe('Create Mode', () => {
+    it('shows preview amounts in their verified currency', () => {
+      mockUsePreviewCategories.mockReturnValue({ preview: { transaction_count: 1, total_amount: 120, currency_code: 'CAD' }, loading: false, error: null })
+      render(<BudgetCategoryForm isOpen onClose={mockOnClose} onSubmit={mockOnSubmit} mode="edit" availableTags={[]} initialData={createMockCategory()} budgetStartDate="2026-09-01" budgetEndDate="2026-09-12" />)
+      expect(screen.getByText('CA$120.00')).toBeInTheDocument()
+    })
+    it('previews edited groups against saved siblings for the actual current period', () => {
+      const members = [{ category_kind: 'uncategorized' as const }]
+      render(<BudgetCategoryForm isOpen onClose={mockOnClose} onSubmit={mockOnSubmit} mode="edit" availableTags={[]} budgetId="budget-1" budgetStartDate="2026-09-01" budgetEndDate="2026-09-12" initialData={createMockCategory({ category_kind: 'group', group_name: 'Daily life', members, tags: [], pfc_primary: undefined, pfc_detailed: undefined })} />)
+      expect(mockUsePreviewCategories).toHaveBeenLastCalledWith('group', undefined, undefined, undefined, [], 'category_only', '2026-09-01', '2026-09-12', true, expect.objectContaining({ budget_id: 'budget-1', replace_category_id: 'cat-1', group_name: 'Daily life', members }))
+    })
+
+    it('allows amount edits on a retained group emptied by category deletion', async () => {
+      const user = userEvent.setup({ delay: null })
+      render(<BudgetCategoryForm isOpen onClose={mockOnClose} onSubmit={mockOnSubmit} mode="edit" availableTags={[]} initialData={createMockCategory({ category_kind: 'group', group_name: 'Retained group', members: [], pfc_primary: undefined, pfc_detailed: undefined, tags: [] })} />)
+      expect(screen.getByText('This group has no categories and currently matches no spending.')).toBeInTheDocument()
+      await user.clear(screen.getByRole('spinbutton', { name: /amount/i }))
+      await user.type(screen.getByRole('spinbutton', { name: /amount/i }), '400')
+      fireEvent.submit(screen.getByRole('button', { name: 'Save' }).closest('form')!)
+      await waitFor(() => expect(mockOnSubmit).toHaveBeenCalledWith(expect.objectContaining({ group_name: 'Retained group', allocated_amount: 400 })))
+      expect(mockOnSubmit.mock.calls[0]?.[0]).not.toHaveProperty('members')
+    })
+
+    it('preserves mixed group members when editing its shared limit', async () => {
+      const user = userEvent.setup({ delay: null })
+      const members = [{ category_kind: 'pfc' as const, pfc_primary: 'FOOD_AND_DRINK' }, { category_kind: 'custom' as const, custom_category_id: 'cat-uuid-3' }]
+      render(<BudgetCategoryForm isOpen onClose={mockOnClose} onSubmit={mockOnSubmit} mode="edit" availableTags={[]} initialData={createMockCategory({ category_kind: 'group', group_name: 'Daily life', members, pfc_primary: undefined, pfc_detailed: undefined, tags: [] })} />)
+      expect(screen.getByRole('button', { name: 'Shared group' })).toBeDisabled()
+      await user.clear(screen.getByRole('spinbutton', { name: /amount/i }))
+      await user.type(screen.getByRole('spinbutton', { name: /amount/i }), '400')
+      fireEvent.submit(screen.getByRole('button', { name: 'Save' }).closest('form')!)
+      await waitFor(() => expect(mockOnSubmit).toHaveBeenCalledWith(expect.objectContaining({ group_name: 'Daily life', members, allocated_amount: 400 })))
+    })
+
+    it('creates a named shared limit with an Uncategorized member and no tags', async () => {
+      const user = userEvent.setup({ delay: null })
+      render(<BudgetCategoryForm isOpen onClose={mockOnClose} onSubmit={mockOnSubmit} mode="create" availableTags={mockAvailableTags} />)
+      fireEvent.click(screen.getByRole('button', { name: 'Shared group' }))
+      await user.type(screen.getByLabelText('Group name'), 'Daily life')
+      await user.click(screen.getByRole('checkbox', { name: 'Include Uncategorized' }))
+      await user.type(screen.getByRole('spinbutton', { name: /amount/i }), '300')
+      fireEvent.submit(screen.getByRole('button', { name: /^add$/i }).closest('form')!)
+      await waitFor(() => expect(mockOnSubmit).toHaveBeenCalledWith(expect.objectContaining({
+        category_kind: 'group', group_name: 'Daily life', members: [{ category_kind: 'uncategorized' }], allocated_amount: 300, match_logic: 'category_only',
+      })))
+    })
+
+    it('requires a name and members for shared groups', async () => {
+      const user = userEvent.setup({ delay: null })
+      render(<BudgetCategoryForm isOpen onClose={mockOnClose} onSubmit={mockOnSubmit} mode="create" availableTags={[]} />)
+      fireEvent.click(screen.getByRole('button', { name: 'Shared group' }))
+      await user.type(screen.getByRole('spinbutton', { name: /amount/i }), '300')
+      fireEvent.submit(screen.getByRole('button', { name: /^add$/i }).closest('form')!)
+      expect(screen.getByText('Enter a group name and select at least one category.')).toBeInTheDocument()
+      expect(mockOnSubmit).not.toHaveBeenCalled()
+    })
+
+    it('creates automatic Other without a category or tag selector', async () => {
+      const user = userEvent.setup({ delay: null })
+      render(<BudgetCategoryForm isOpen onClose={mockOnClose} onSubmit={mockOnSubmit} mode="create" availableTags={mockAvailableTags} />)
+      fireEvent.click(screen.getByRole('button', { name: 'Other' }))
+      expect(screen.getByText(/not matched by individual lines or shared groups/i)).toBeInTheDocument()
+      await user.type(screen.getByRole('spinbutton', { name: /amount/i }), '100')
+      fireEvent.submit(screen.getByRole('button', { name: /^add$/i }).closest('form')!)
+      await waitFor(() => expect(mockOnSubmit).toHaveBeenCalledWith(expect.objectContaining({ category_kind: 'remainder', allocated_amount: 100, match_logic: 'category_only' })))
+    })
+
     it('should render with empty fields in create mode', () => {
       render(
         <BudgetCategoryForm

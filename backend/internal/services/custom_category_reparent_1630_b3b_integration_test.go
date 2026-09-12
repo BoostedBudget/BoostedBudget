@@ -24,12 +24,9 @@ package services
 //
 // The test makes the interleaving deterministic (not a hope-it-races coin flip) the same way
 // budget_category_hierarchy_lock_1630_b3_integration_test.go's second test does: hold the
-// budget row's FOR UPDATE lock on a raw connection, launch BOTH racers in order, and confirm --
-// via polling pg_stat_activity, never a sleep -- that BOTH are genuinely queued behind it before
-// releasing. (Postgres's row-lock wait queue is a CHAIN: the second waiter for an
-// already-contended tuple waits on the FIRST waiter's transaction, not directly on the original
-// holder, so pg_blocking_pids only chases the head of the chain -- see
-// b3bCountWaitingOnBudgetRowLock for how this test observes both waiters anyway.) Postgres wakes
+// user hierarchy lock on a raw connection, launch BOTH racers in order, and confirm
+// through pg_locks that BOTH are genuinely queued on that exact lock before
+// releasing. This is now the shared lock acquired before budget row locks. Postgres wakes
 // queued waiters in the order they started waiting, so launching the reparent first and
 // confirming its own block before launching the match_logic change second pins the reparent to
 // win the row lock first once released -- deterministic, not timing-luck.
@@ -128,22 +125,18 @@ func b3bWaitUntilBlockedBy(t *testing.T, pool *pgxpool.Pool, blockerPID int32, t
 	}
 }
 
-// b3bCountWaitingOnBudgetRowLock counts backends currently waiting to acquire the SAME
-// "SELECT ... FOR UPDATE" row lock lockBudgetRowInTx takes. Postgres's row-lock wait queue is a
-// CHAIN, not a star: a SECOND waiter for an already-contended tuple waits on the FIRST waiter's
-// transaction id (wait_event=transactionid), not directly on the original lock holder
-// (wait_event=tuple) -- so pg_blocking_pids(secondWaiter) returns the first waiter's PID, not the
-// holder's. Counting by query text + wait_event_type='Lock' sidesteps that chain and just asks
-// "how many backends are queued for this exact row lock right now", regardless of who each one is
-// directly waiting on.
-func b3bCountWaitingOnBudgetRowLock(t *testing.T, pool *pgxpool.Pool) int {
+// Count waiters on the holder's exact advisory key, regardless of wait-queue chains.
+func b3bCountWaitingOnConfigurationLock(t *testing.T, pool *pgxpool.Pool, holderPID int32) int {
 	t.Helper()
 	var n int
 	require.NoError(t, pool.QueryRow(context.Background(), `
-		SELECT COUNT(*) FROM pg_stat_activity
-		WHERE wait_event_type = 'Lock'
-		  AND query ILIKE 'SELECT id FROM budgets WHERE id = $1 AND deleted_at IS NULL FOR UPDATE%'
-	`).Scan(&n))
+		SELECT COUNT(*) FROM pg_locks waiter JOIN pg_locks holder
+		  ON waiter.locktype=holder.locktype AND waiter.database=holder.database
+		  AND waiter.classid=holder.classid AND waiter.objid=holder.objid
+		  AND waiter.objsubid=holder.objsubid
+		WHERE holder.pid=$1 AND holder.locktype='advisory' AND holder.granted
+		  AND NOT waiter.granted
+	`, holderPID).Scan(&n))
 	return n
 }
 
@@ -211,8 +204,8 @@ func TestCustomCategoryReparent_1630_B3b_RacesConcurrentMatchLogicChange_OnlyOne
 	svc.SetBudgetCategoryRepository(budgetRepo)
 	svc.SetJobQueue(b3bAlwaysSucceedsJobQueue{})
 
-	// Step 1: hold the budget row's FOR UPDATE lock on a raw connection so BOTH racers below are
-	// forced to queue behind it in launch order (Postgres grants a released row lock to waiters
+	// Step 1: hold the user hierarchy lock before the budget row so BOTH racers below are
+	// forced to queue behind it in launch order (Postgres grants a released lock to waiters
 	// FIFO), making the interleaving deterministic.
 	holder, err := pool.Begin(ctx)
 	require.NoError(t, err)
@@ -220,6 +213,7 @@ func TestCustomCategoryReparent_1630_B3b_RacesConcurrentMatchLogicChange_OnlyOne
 
 	var holderPID int32
 	require.NoError(t, holder.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID))
+	require.NoError(t, repository.LockBudgetConfiguration(ctx, holder, userID))
 	var locked string
 	require.NoError(t, holder.QueryRow(ctx,
 		`SELECT id FROM budgets WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, budgetID).Scan(&locked))
@@ -251,7 +245,7 @@ func TestCustomCategoryReparent_1630_B3b_RacesConcurrentMatchLogicChange_OnlyOne
 	case <-time.After(2 * time.Second):
 	}
 	require.Eventually(t, func() bool {
-		return b3bCountWaitingOnBudgetRowLock(t, pool) == 2
+		return b3bCountWaitingOnConfigurationLock(t, pool, holderPID) == 2
 	}, 5*time.Second, 10*time.Millisecond, "expected BOTH the reparent and the match_logic change to be queued behind the held lock")
 
 	// Step 4: release. FIFO grants the reparent the lock first.
