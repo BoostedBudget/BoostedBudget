@@ -40,6 +40,8 @@ export interface CategoryPreviewResponse {
      * @nullable
      */
   children?: CategoryPreviewBreakdownItem[] | null;
+  /** Currency of matching activity; no conversion or mixed-currency summation is performed. */
+  currency_code?: string;
   /** Amount of matching transactions filed directly under the targeted category itself, excluding any nested custom category and excluding tag-only-outside-category matches. Zero-valued when there is nothing to disclose. */
   direct_amount?: number;
   /** Count of matching transactions filed directly under the targeted category itself, excluding any nested custom category and excluding tag-only-outside-category matches. Zero-valued when there is nothing to disclose. */

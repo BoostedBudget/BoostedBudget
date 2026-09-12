@@ -917,9 +917,9 @@ func (m *MockGoalAutoCreateBudgetRepo) GetActiveByUserID(ctx context.Context, us
 	return args.Get(0).([]*domain.Budget), args.Error(1)
 }
 
-func (m *MockGoalAutoCreateBudgetRepo) CreateCategory(ctx context.Context, category *domain.BudgetCategory) error {
-	args := m.Called(ctx, category)
-	return args.Error(0)
+func (m *MockGoalAutoCreateBudgetRepo) AddCategoryChecked(ctx context.Context, budgetID string, category *domain.BudgetCategory) (*domain.BudgetCategory, error) {
+	args := m.Called(ctx, budgetID, category)
+	return category, args.Error(0)
 }
 
 func (m *MockGoalAutoCreateBudgetRepo) IsGoalDetachedForSeries(ctx context.Context, seriesID, goalID string) (bool, error) {
@@ -958,7 +958,7 @@ func TestSavingsGoalService_CreateGoal_AutoCreatesSavingsCategories(t *testing.T
 		// No tombstone for the new goal (keyed on series_id = budgetID for standalone budgets).
 		mockBudgetRepo.On("IsGoalDetachedForSeries", ctx, budgetID, mock.AnythingOfType("string")).Return(false, nil)
 		// CreateCategory called with savings kind + auto_created
-		mockBudgetRepo.On("CreateCategory", ctx, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
+		mockBudgetRepo.On("AddCategoryChecked", ctx, budgetID, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
 			return c.CategoryKind == "savings" && c.AutoCreated && c.BudgetID == budgetID
 		})).Return(nil)
 
@@ -1017,7 +1017,7 @@ func TestSavingsGoalService_CreateGoal_AutoCreatesSavingsCategories(t *testing.T
 		mockBudgetRepo.On("GetActiveByUserID", ctx, userID).Return(activeBudgets, nil)
 		mockBudgetRepo.On("IsGoalDetachedForSeries", ctx, budgetID, mock.AnythingOfType("string")).Return(false, nil)
 		// CreateCategory fails — goal creation must still succeed
-		mockBudgetRepo.On("CreateCategory", ctx, mock.AnythingOfType("*domain.BudgetCategory")).Return(
+		mockBudgetRepo.On("AddCategoryChecked", ctx, budgetID, mock.AnythingOfType("*domain.BudgetCategory")).Return(
 			errors.New("db: unique constraint violation"),
 		)
 
@@ -1208,6 +1208,7 @@ func TestUpdateGoal_ManualToContributions_SeedsContribution(t *testing.T) {
 		return c.SavingsGoalID == goalID &&
 			c.Amount == priorAmount &&
 			c.Source == "manual" &&
+			c.FlowKind == "opening_balance" &&
 			c.Status == "confirmed" &&
 			!c.ManagedByReconciliation &&
 			c.ConfirmedByUser

@@ -121,11 +121,12 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
     // #1630 B7 added listAdminBudgetHierarchyAudits — a GET, but EXCLUDED under the blanket admin
     // policy, so it moves total and excluded only: 211 -> 212 and 69 -> 70. allowed/read/write are
     // deliberately unchanged, which is what distinguishes an excluded addition from an allowed one.
-    expect(fresh.totalOperations).toBe(212)
+    // #1637 adds one excluded frontend-only report; exposed capabilities stay unchanged.
+    expect(fresh.totalOperations).toBe(213)
     expect(fresh.allowedOperations).toBe(142)
     expect(fresh.readOperations).toBe(97)
     expect(fresh.writeOperations).toBe(45)
-    expect(fresh.excludedOperations).toBe(70)
+    expect(fresh.excludedOperations).toBe(71)
     expect(fresh.destructiveWriteOperations).toBe(4)
     expect(fresh.allowedOperations).toBe(fresh.readOperations + fresh.writeOperations)
     expect(fresh.totalOperations).toBe(fresh.allowedOperations + fresh.excludedOperations)

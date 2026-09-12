@@ -19,6 +19,8 @@ type CustomCategoryRepository interface {
 
 	// GetByID retrieves a category by its ID
 	GetByID(ctx context.Context, id string) (*domain.CustomCategory, error)
+	GetByIDInTx(ctx context.Context, tx Transaction, id string) (*domain.CustomCategory, error)
+	GetChildrenInTx(ctx context.Context, tx Transaction, parentID string) ([]*domain.CustomCategory, error)
 
 	// GetByUserID retrieves all categories for a specific user
 	GetByUserID(ctx context.Context, userID string) ([]*domain.CustomCategory, error)
@@ -26,11 +28,10 @@ type CustomCategoryRepository interface {
 	// GetByName retrieves a category by user ID and name
 	GetByName(ctx context.Context, userID, name string) (*domain.CustomCategory, error)
 
-	// Update updates an existing category
+	// Update changes metadata only; hierarchy changes require the validated UpdateInTx path.
 	Update(ctx context.Context, category *domain.CustomCategory) error
 
-	// UpdateInTx is Update's counterpart for a caller-owned transaction (Issue #1630 B3b): it
-	// applies the identical write query INSIDE tx instead of opening and committing its own, so a
+	// UpdateInTx writes metadata AND hierarchy inside a caller-owned transaction, so a
 	// caller composing a check against a DIFFERENT repository's locked rows (e.g.
 	// customCategoryService's reparent-containment guard, which locks every affected budget via
 	// BudgetRepository.GetCategoriesByBudgetIDLockedInTx) can persist both the guard's outcome and
@@ -170,6 +171,12 @@ func mapCategoryWriteError(err error) error {
 
 // GetByID retrieves a category by its ID
 func (r *customCategoryRepository) GetByID(ctx context.Context, id string) (*domain.CustomCategory, error) {
+	return r.getByIDQuerier(ctx, r.db, id)
+}
+func (r *customCategoryRepository) GetByIDInTx(ctx context.Context, tx Transaction, id string) (*domain.CustomCategory, error) {
+	return r.getByIDQuerier(ctx, tx, id)
+}
+func (r *customCategoryRepository) getByIDQuerier(ctx context.Context, q Querier, id string) (*domain.CustomCategory, error) {
 	query := `
 		SELECT id, user_id, name, parent_pfc_primary, parent_id, icon, color, usage_count, created_at, updated_at
 		FROM custom_categories
@@ -177,7 +184,7 @@ func (r *customCategoryRepository) GetByID(ctx context.Context, id string) (*dom
 	`
 
 	category := &domain.CustomCategory{}
-	err := r.db.QueryRow(ctx, query, id).Scan(
+	err := q.QueryRow(ctx, query, id).Scan(
 		&category.ID,
 		&category.UserID,
 		&category.Name,
@@ -283,8 +290,19 @@ func (r *customCategoryRepository) Update(ctx context.Context, category *domain.
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if err := r.updateQuerier(ctx, tx, category); err != nil {
+	if err := LockBudgetConfiguration(ctx, tx, category.UserID); err != nil {
 		return err
+	}
+	category.UpdatedAt = time.Now()
+	err = tx.QueryRow(ctx, `UPDATE custom_categories
+	 SET name=$1,icon=$2,color=$3,usage_count=$4,updated_at=$5
+	 WHERE id=$6 AND user_id=$7 AND deleted_at IS NULL
+	 RETURNING parent_pfc_primary,parent_id`, category.Name, category.Icon, category.Color, category.UsageCount, category.UpdatedAt, category.ID, category.UserID).Scan(&category.ParentPFCPrimary, &category.ParentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrCategoryNotFound
+	}
+	if err != nil {
+		return mapCategoryWriteError(err)
 	}
 
 	return tx.Commit(ctx)
@@ -295,9 +313,9 @@ func (r *customCategoryRepository) UpdateInTx(ctx context.Context, tx Transactio
 	return r.updateQuerier(ctx, tx, category)
 }
 
-// updateQuerier is Update / UpdateInTx's shared body, parameterized over Querier so UpdateInTx can
-// run the identical write INSIDE a caller's transaction instead of duplicating this query
-// (Issue #1630 B3b, mirrors budget_repository.go's createCategoryQuerier pattern).
+// updateQuerier persists a hierarchy change after its caller has validated the
+// complete configuration under LockBudgetConfiguration. Metadata-only Update
+// deliberately does not use this writer, so a stale rename cannot undo a reparent.
 func (r *customCategoryRepository) updateQuerier(ctx context.Context, q Querier, category *domain.CustomCategory) error {
 	category.UpdatedAt = time.Now()
 
@@ -426,6 +444,12 @@ func (r *customCategoryRepository) namesByIDs(ctx context.Context, userID string
 
 // GetChildren returns the direct children of the given parent category.
 func (r *customCategoryRepository) GetChildren(ctx context.Context, parentID string) ([]*domain.CustomCategory, error) {
+	return r.getChildrenQuerier(ctx, r.db, parentID)
+}
+func (r *customCategoryRepository) GetChildrenInTx(ctx context.Context, tx Transaction, parentID string) ([]*domain.CustomCategory, error) {
+	return r.getChildrenQuerier(ctx, tx, parentID)
+}
+func (r *customCategoryRepository) getChildrenQuerier(ctx context.Context, q Querier, parentID string) ([]*domain.CustomCategory, error) {
 	query := `
 		SELECT id, user_id, name, parent_pfc_primary, parent_id, icon, color, usage_count, created_at, updated_at
 		FROM custom_categories
@@ -433,7 +457,7 @@ func (r *customCategoryRepository) GetChildren(ctx context.Context, parentID str
 		ORDER BY name ASC
 	`
 
-	rows, err := r.db.Query(ctx, query, parentID)
+	rows, err := q.Query(ctx, query, parentID)
 	if err != nil {
 		return nil, err
 	}
@@ -612,11 +636,14 @@ func (r *customCategoryRepository) GetCategoryUsage(ctx context.Context, userID,
 //
 //  5. Audit. LogInTx so the entry and the state change commit or roll back together (#1507).
 func (r *customCategoryRepository) DeleteWithReassignment(ctx context.Context, userID, categoryID string, auditLog AuditLogRepository) error {
-	tx, err := r.db.Begin(ctx)
+	tx, err := beginBudgetAccountingTx(ctx, r.db)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := LockBudgetConfiguration(ctx, tx, userID); err != nil {
+		return err
+	}
 
 	// 1. Tombstone the category itself. `deleted_at IS NULL` makes a second delete a no-op that
 	//    reports not-found rather than re-stamping the timestamp and re-writing an audit entry.
@@ -696,6 +723,33 @@ func (r *customCategoryRepository) DeleteWithReassignment(ctx context.Context, u
 	if auditLog != nil {
 		if err := auditLog.LogInTx(ctx, tx, "custom_category.deleted", "custom_category", categoryID); err != nil {
 			return fmt.Errorf("failed to audit category delete: %w", err)
+		}
+	}
+	// Membership retirement and child reparenting change group/Other precedence.
+	// Publish every affected budget's sibling amounts before the deletion commits.
+	rows, err := tx.Query(ctx, `SELECT b.id FROM budgets b WHERE b.user_id=$1 AND b.deleted_at IS NULL
+		AND b.is_active=true AND EXISTS (SELECT 1 FROM budget_categories bc WHERE bc.budget_id=b.id
+		AND bc.deleted_at IS NULL AND bc.category_kind IN ('group','remainder')) ORDER BY b.id FOR UPDATE`, userID)
+	if err != nil {
+		return err
+	}
+	var budgetIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		budgetIDs = append(budgetIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	budgetRepo := &budgetRepository{db: tx}
+	for _, id := range budgetIDs {
+		if _, err := budgetRepo.refreshBudgetActualsInTx(ctx, tx, id); err != nil {
+			return err
 		}
 	}
 

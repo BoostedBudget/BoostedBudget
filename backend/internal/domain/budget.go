@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -229,13 +230,13 @@ func hasPFCDetailed(pfcDetailed *string) bool {
 
 // isContainingMatchLogic reports whether a PARENT's match_logic still contains the plain
 // category match — i.e. its matched-transaction set is a superset of "category only"
-// (Issue #1630). '' is treated as 'category_only' (the domain/column default).
+// (Issue #1630). An empty value is treated as 'category_only' (the domain/column default).
 func isContainingMatchLogic(ml MatchLogic) bool {
 	return ml == "" || ml == MatchLogicCategoryOnly || ml == MatchLogicOr
 }
 
 // isContainedMatchLogic reports whether a CHILD's match_logic keeps it inside the plain
-// category match — i.e. it cannot escape the category clause via tags (Issue #1630). ''
+// category match — i.e. it cannot escape the category clause via tags (Issue #1630). An empty value
 // is treated as 'category_only' (the domain/column default).
 func isContainedMatchLogic(ml MatchLogic) bool {
 	return ml == "" || ml == MatchLogicCategoryOnly || ml == MatchLogicAnd
@@ -417,12 +418,14 @@ func (b *Budget) ExceedsExpectedIncome() bool {
 // category_kind='custom' (custom_category_id required), or
 // category_kind='savings' (savings_goal_id required — Issue #1300).
 type BudgetCategory struct {
-	ID               string  `json:"id" db:"id"`
-	BudgetID         string  `json:"budget_id" db:"budget_id"`
-	CategoryKind     string  `json:"category_kind" db:"category_kind"` // "pfc", "custom", or "savings"
-	PFCPrimary       *string `json:"pfc_primary,omitempty" db:"pfc_primary"`
-	PFCDetailed      *string `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
-	CustomCategoryID *string `json:"custom_category_id,omitempty" db:"custom_category_id"`
+	GroupName        *string             `json:"group_name,omitempty" db:"group_name"`
+	Members          []BudgetGroupMember `json:"members,omitempty" db:"-"`
+	ID               string              `json:"id" db:"id"`
+	BudgetID         string              `json:"budget_id" db:"budget_id"`
+	CategoryKind     string              `json:"category_kind" db:"category_kind"` // "pfc", "custom", or "savings"
+	PFCPrimary       *string             `json:"pfc_primary,omitempty" db:"pfc_primary"`
+	PFCDetailed      *string             `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
+	CustomCategoryID *string             `json:"custom_category_id,omitempty" db:"custom_category_id"`
 	// SavingsGoalID links this category to a SavingsGoal (required when kind=savings — Issue #1300).
 	SavingsGoalID *string `json:"savings_goal_id,omitempty" db:"savings_goal_id"`
 	// AutoCreated marks categories automatically created when a savings goal was created.
@@ -537,7 +540,27 @@ func (bc *BudgetCategory) Validate() error {
 		}
 	}
 
+	if bc.CategoryKind != "group" && (bc.GroupName != nil || len(bc.Members) > 0) {
+		return fmt.Errorf("%w: group_name and members require category_kind group", ErrInvalidBudget)
+	}
 	switch bc.CategoryKind {
+	case "group", "remainder":
+		if bc.PFCPrimary != nil || bc.PFCDetailed != nil || bc.CustomCategoryID != nil || bc.SavingsGoalID != nil {
+			return fmt.Errorf("%w: group and remainder must not carry individual category selectors", ErrInvalidBudget)
+		}
+		if len(bc.Tags) > 0 || (bc.MatchLogic != "" && bc.MatchLogic != MatchLogicCategoryOnly) {
+			return fmt.Errorf("%w: group and remainder require category_only without tags", ErrInvalidBudget)
+		}
+		if bc.CategoryKind == "group" {
+			if bc.GroupName == nil || strings.TrimSpace(*bc.GroupName) == "" || len(*bc.GroupName) > 100 || (len(bc.Members) == 0 && bc.ID == "") {
+				return fmt.Errorf("%w: group requires a name of at most 100 characters and at least one member", ErrInvalidBudget)
+			}
+			for _, member := range bc.Members {
+				if err := member.Validate(); err != nil {
+					return err
+				}
+			}
+		}
 	case "pfc":
 		if bc.PFCPrimary == nil || *bc.PFCPrimary == "" {
 			return fmt.Errorf("%w: pfc_primary is required when category_kind is pfc", ErrInvalidBudget)
@@ -703,7 +726,9 @@ type CreateBudgetRequest struct {
 
 // CreateBudgetCategoryRequest represents a category allocation in a budget creation request.
 type CreateBudgetCategoryRequest struct {
-	CategoryKind string `json:"category_kind" validate:"required,oneof=pfc custom savings"`
+	CategoryKind string              `json:"category_kind" validate:"required,oneof=pfc custom savings group remainder"`
+	GroupName    *string             `json:"group_name,omitempty"`
+	Members      []BudgetGroupMember `json:"members,omitempty"`
 	// PFCPrimary set with PFCDetailed omitted makes this a pfc_primary category. A pfc_primary
 	// category's own spend total ROLLS UP every transaction filed under a custom category
 	// nested under it (parent_pfc_primary), in addition to its own directly-matched
@@ -750,7 +775,9 @@ type UpdateBudgetRequest struct {
 
 // UpdateBudgetCategoryRequest represents the request to update a budget category.
 type UpdateBudgetCategoryRequest struct {
-	AllocatedAmount *float64 `json:"allocated_amount,omitempty" validate:"omitempty,gte=0"`
+	GroupName       *string              `json:"group_name,omitempty"`
+	Members         *[]BudgetGroupMember `json:"members,omitempty"`
+	AllocatedAmount *float64             `json:"allocated_amount,omitempty" validate:"omitempty,gte=0"`
 
 	// Flexible matching fields (Issue #491)
 	Tags       *[]string   `json:"tags,omitempty"`
@@ -764,14 +791,19 @@ type UpdateBudgetCategoryRequest struct {
 // YYYY-MM-DD and RFC3339, matching createBudget/updateBudget (Issue #1630 Task 9). This was the
 // last write-shaped operation still carrying P3's original YYYY-MM-DD-only inconsistency.
 type CategoryPreviewRequest struct {
-	CategoryKind     string       `json:"category_kind"`
-	PFCPrimary       *string      `json:"pfc_primary,omitempty"`
-	PFCDetailed      *string      `json:"pfc_detailed,omitempty"`
-	CustomCategoryID *string      `json:"custom_category_id,omitempty"`
-	Tags             []string     `json:"tags,omitempty"`
-	MatchLogic       MatchLogic   `json:"match_logic" validate:"required,oneof=category_only tag_only and or" enum:"category_only,tag_only,and,or" doc:"How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array."`
-	StartDate        FlexibleDate `json:"start_date" validate:"required" doc:"Start of the date range to preview. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp."`
-	EndDate          FlexibleDate `json:"end_date" validate:"required" doc:"End of the date range to preview (inclusive; the service extends it to end-of-day). Must not be before start_date. Accepts YYYY-MM-DD or a full RFC3339 timestamp."`
+	BudgetID          string              `json:"budget_id,omitempty" doc:"Existing budget whose complete sibling configuration participates in matching."`
+	ReplaceCategoryID string              `json:"replace_category_id,omitempty" doc:"Existing allocation being edited, omitted when adding a new line."`
+	DraftCategories   []BudgetCategory    `json:"draft_categories,omitempty" doc:"Complete unsaved sibling configuration for a new budget preview."`
+	GroupName         *string             `json:"group_name,omitempty"`
+	Members           []BudgetGroupMember `json:"members,omitempty"`
+	CategoryKind      string              `json:"category_kind"`
+	PFCPrimary        *string             `json:"pfc_primary,omitempty"`
+	PFCDetailed       *string             `json:"pfc_detailed,omitempty"`
+	CustomCategoryID  *string             `json:"custom_category_id,omitempty"`
+	Tags              []string            `json:"tags,omitempty"`
+	MatchLogic        MatchLogic          `json:"match_logic" validate:"required,oneof=category_only tag_only and or" enum:"category_only,tag_only,and,or" doc:"How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array."`
+	StartDate         FlexibleDate        `json:"start_date" validate:"required" doc:"Start of the date range to preview. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp."`
+	EndDate           FlexibleDate        `json:"end_date" validate:"required" doc:"End of the date range to preview (inclusive; the service extends it to end-of-day). Must not be before start_date. Accepts YYYY-MM-DD or a full RFC3339 timestamp."`
 }
 
 // CategoryPreviewResponse represents the response with matching transaction stats.
@@ -795,6 +827,7 @@ type CategoryPreviewRequest struct {
 // self-explanatory). TransactionCount and TotalAmount remain the single rolled-up figure
 // every existing caller already relies on; this is additive.
 type CategoryPreviewResponse struct {
+	CurrencyCode     string  `json:"currency_code,omitempty" doc:"Currency of matching activity; no conversion or mixed-currency summation is performed."`
 	TransactionCount int     `json:"transaction_count" doc:"Total matching transaction count. When the targeted category is a pfc_primary or parent custom category, this INCLUDES transactions filed under its nested custom categories — see direct_transaction_count, children, and tag_only_transaction_count to break the total down."`
 	TotalAmount      float64 `json:"total_amount" doc:"Total matching transaction amount. direct_amount + every children[].total_amount + tag_only_amount always sum to exactly this value when any of them is populated — see those fields to break the total down."`
 

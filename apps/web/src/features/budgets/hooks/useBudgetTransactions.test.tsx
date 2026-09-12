@@ -11,10 +11,9 @@ import {
 } from '@/test/mocks/budgets-api'
 import { useBudgetTransactions } from './useBudgetTransactions'
 
-function createWrapper() {
-  const queryClient = new QueryClient({
+function createWrapper(queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
-  })
+  })) {
   return ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   )
@@ -156,6 +155,35 @@ describe('useBudgetTransactions', () => {
   })
 
   describe('load more', () => {
+    it('discards a pending page immediately on central cache invalidation even with unchanged first-page data', async () => {
+      const initial = { transactions: [mockTransaction], total_count: 2, total_amount: 100, has_more: true }
+      mockQueryState(initial)
+      const client = new QueryClient()
+      const key = mockGetCategoryTransactionsQueryKey('budget-1', 'category-1', { limit: 20, offset: 0 })
+      client.setQueryData(key, initial)
+      let resolvePage!: (value: typeof initial) => void
+      mockGetCategoryTransactions.mockImplementationOnce(() => new Promise((resolve) => { resolvePage = resolve }))
+      const { result } = renderHook(() => useBudgetTransactions('budget-1', 'category-1'), { wrapper: createWrapper(client) })
+      let pending!: Promise<void>
+      act(() => { pending = result.current.loadMore() })
+      await act(async () => { await client.invalidateQueries({ queryKey: key }); resolvePage(initial); await pending })
+      expect(result.current.transactions).toEqual([mockTransaction])
+    })
+    it('discards an in-flight page when the first page is refreshed', async () => {
+      const initial = { transactions: [mockTransaction], total_count: 2, total_amount: 100, has_more: true }
+      mockQueryState(initial)
+      let resolvePage!: (value: typeof initial) => void
+      mockGetCategoryTransactions.mockImplementationOnce(() => new Promise((resolve) => { resolvePage = resolve }))
+      const { result, rerender } = renderHook(() => useBudgetTransactions('budget-1', 'category-1'), { wrapper: createWrapper() })
+      let pending!: Promise<void>
+      act(() => { pending = result.current.loadMore() })
+      mockQueryState({ ...initial, transactions: [{ ...mockTransaction, id: 'fresh' }], has_more: false })
+      rerender()
+      await act(async () => { resolvePage(initial); await pending })
+      expect(result.current.transactions.map((transaction) => transaction.id)).toEqual(['fresh'])
+      expect(result.current.hasMore).toBe(false)
+    })
+
     it('should load more transactions when loadMore is called', async () => {
       mockQueryState({
         transactions: [mockTransaction],

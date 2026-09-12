@@ -1393,6 +1393,8 @@ components:
           type: string
         custom_parent_pfc_primary:
           type: string
+        group_name:
+          type: string
         id:
           type: string
         managed_by_goal_id:
@@ -1404,6 +1406,12 @@ components:
             - and
             - or
           type: string
+        members:
+          items:
+            $ref: "#/components/schemas/BudgetGroupMember"
+          type:
+            - array
+            - "null"
         pfc_detailed:
           type: string
         pfc_detailed_display:
@@ -1439,6 +1447,207 @@ components:
         - updated_at
         - tags
         - match_logic
+      type: object
+    BudgetGroupMember:
+      additionalProperties: false
+      properties:
+        category_kind:
+          enum:
+            - pfc
+            - custom
+            - uncategorized
+          type: string
+        custom_category_id:
+          type: string
+        pfc_detailed:
+          type: string
+        pfc_primary:
+          type: string
+      required:
+        - category_kind
+      type: object
+    BudgetPlanIncome:
+      additionalProperties: false
+      properties:
+        expected:
+          format: double
+          type: number
+        manual_declared:
+          format: double
+          type: number
+        observed:
+          format: double
+          type:
+            - number
+            - "null"
+        reasons:
+          items:
+            type: string
+          type: array
+      required:
+        - expected
+        - observed
+        - manual_declared
+        - reasons
+      type: object
+    BudgetPlanLine:
+      additionalProperties: false
+      properties:
+        actual:
+          format: double
+          type:
+            - number
+            - "null"
+        budget_category_id:
+          type:
+            - string
+            - "null"
+        completeness:
+          enum:
+            - complete
+            - partial
+            - unavailable
+          type: string
+        id:
+          type: string
+        kind:
+          enum:
+            - expense
+            - savings
+            - unbudgeted
+          type: string
+        label:
+          type: string
+        planned:
+          format: double
+          type: number
+        reasons:
+          items:
+            type: string
+          type: array
+        savings_goal_id:
+          type:
+            - string
+            - "null"
+        variance:
+          format: double
+          type:
+            - number
+            - "null"
+      required:
+        - id
+        - budget_category_id
+        - savings_goal_id
+        - kind
+        - label
+        - planned
+        - actual
+        - variance
+        - completeness
+        - reasons
+      type: object
+    BudgetPlanTotals:
+      additionalProperties: false
+      properties:
+        actual:
+          format: double
+          type:
+            - number
+            - "null"
+        allocated:
+          format: double
+          type: number
+        overallocated:
+          format: double
+          type: number
+        unallocated:
+          format: double
+          type: number
+        unbudgeted:
+          format: double
+          type:
+            - number
+            - "null"
+      required:
+        - allocated
+        - unallocated
+        - overallocated
+        - actual
+        - unbudgeted
+      type: object
+    BudgetPlanVsActualResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/BudgetPlanVsActualResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        actual_through:
+          format: date
+          type:
+            - string
+            - "null"
+        as_of:
+          format: date-time
+          type: string
+        budget_id:
+          type: string
+        completeness:
+          enum:
+            - complete
+            - partial
+            - unavailable
+          type: string
+        currency_code:
+          type: string
+        eligibility:
+          enum:
+            - eligible
+            - future
+            - ended
+            - inactive
+          type: string
+        income:
+          $ref: "#/components/schemas/BudgetPlanIncome"
+        lines:
+          items:
+            $ref: "#/components/schemas/BudgetPlanLine"
+          type: array
+        period:
+          type: string
+        period_end:
+          format: date
+          type:
+            - string
+            - "null"
+        period_start:
+          format: date
+          type:
+            - string
+            - "null"
+        reasons:
+          items:
+            type: string
+          type: array
+        totals:
+          $ref: "#/components/schemas/BudgetPlanTotals"
+      required:
+        - budget_id
+        - currency_code
+        - period
+        - period_start
+        - period_end
+        - actual_through
+        - as_of
+        - eligibility
+        - completeness
+        - reasons
+        - income
+        - lines
+        - totals
       type: object
     BudgetVsActualItem:
       additionalProperties: false
@@ -2092,10 +2301,20 @@ components:
           format: uri
           readOnly: true
           type: string
+        budget_id:
+          description: Existing budget whose complete sibling configuration participates in matching.
+          type: string
         category_kind:
           type: string
         custom_category_id:
           type: string
+        draft_categories:
+          description: Complete unsaved sibling configuration for a new budget preview.
+          items:
+            $ref: "#/components/schemas/BudgetCategory"
+          type:
+            - array
+            - "null"
         end_date:
           anyOf:
             - format: date
@@ -2103,6 +2322,8 @@ components:
             - format: date-time
               type: string
           description: End of the date range to preview (inclusive; the service extends it to end-of-day). Must not be before start_date. Accepts YYYY-MM-DD or a full RFC3339 timestamp.
+        group_name:
+          type: string
         match_logic:
           description: How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array.
           enum:
@@ -2111,9 +2332,18 @@ components:
             - and
             - or
           type: string
+        members:
+          items:
+            $ref: "#/components/schemas/BudgetGroupMember"
+          type:
+            - array
+            - "null"
         pfc_detailed:
           type: string
         pfc_primary:
+          type: string
+        replace_category_id:
+          description: Existing allocation being edited, omitted when adding a new line.
           type: string
         start_date:
           anyOf:
@@ -2151,6 +2381,9 @@ components:
           type:
             - array
             - "null"
+        currency_code:
+          description: Currency of matching activity; no conversion or mixed-currency summation is performed.
+          type: string
         direct_amount:
           description: Amount of matching transactions filed directly under the targeted category itself, excluding any nested custom category and excluding tag-only-outside-category matches. Zero-valued when there is nothing to disclose.
           format: double
@@ -2538,6 +2771,8 @@ components:
           type: string
         custom_category_id:
           type: string
+        group_name:
+          type: string
         match_logic:
           description: How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400).
           enum:
@@ -2546,6 +2781,12 @@ components:
             - and
             - or
           type: string
+        members:
+          items:
+            $ref: "#/components/schemas/BudgetGroupMember"
+          type:
+            - array
+            - "null"
         pfc_detailed:
           type: string
         pfc_primary:
@@ -7501,6 +7742,10 @@ components:
           description: UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted when the provider gave none
           format: date
           type: string
+        budget_expense_amount:
+          description: Net expense amount counted in this budget drilldown; omitted outside budget drilldowns.
+          format: double
+          type: number
         category_override_date:
           format: date-time
           type: string
@@ -8021,6 +8266,8 @@ components:
         allocated_amount:
           format: double
           type: number
+        group_name:
+          type: string
         match_logic:
           description: How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400).
           enum:
@@ -8029,6 +8276,10 @@ components:
             - and
             - or
           type: string
+        members:
+          items:
+            $ref: "#/components/schemas/BudgetGroupMember"
+          type: array
         tags:
           items:
             type: string
@@ -12426,6 +12677,36 @@ paths:
       security:
         - clerk: []
       summary: Get category transactions
+      tags:
+        - Budgets
+  /api/v1/budgets/{id}/plan-vs-actual:
+    get:
+      description: Compare the current budget plan with posted activity in its eligible current period. Unknown actuals remain null. This read does not synchronize or run automation.
+      operationId: getBudgetPlanVsActual
+      parameters:
+        - description: Budget ID
+          in: path
+          name: id
+          required: true
+          schema:
+            description: Budget ID
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetPlanVsActualResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get budget plan and activity
       tags:
         - Budgets
   /api/v1/budgets/{id}/sync:

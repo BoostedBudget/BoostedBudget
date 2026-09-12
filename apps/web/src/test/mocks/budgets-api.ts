@@ -6,6 +6,7 @@
 // This ensures actual implementation files still work correctly.
 
 import { mock } from 'bun:test'
+import type { BudgetPlanVsActualResponse } from '@boostedbudget/api-client/models'
 
 // Import ALL exports from the real module
 import * as RealBudgetsModule from '@boostedbudget/api-client/endpoints/budgets/budgets'
@@ -109,6 +110,11 @@ export const mockUseGetBudget = mock(() => ({
 }))
 export const mockGetBudgetQueryKey = mock((id: string) => ['budgets', id])
 
+export const mockRefetchBudgetPlan = mock(() => Promise.resolve({}))
+export const mockUseGetBudgetPlanVsActual = mock((): {
+  data: BudgetPlanVsActualResponse | undefined; isLoading: boolean; error: Error | null; refetch: typeof mockRefetchBudgetPlan
+} => ({ data: undefined, isLoading: false, error: null, refetch: mockRefetchBudgetPlan }))
+
 // === useGetSavingsGoals ===
 export const mockUseGetSavingsGoals = mock(() => ({
   data: [],
@@ -138,6 +144,7 @@ mock.module('@boostedbudget/api-client/endpoints/budgets/budgets', () => ({
   useDeleteBudgetCategory: mockUseDeleteBudgetCategory,
   getAvailableCategories: mockGetAvailableCategoriesFn,
   useGetBudget: mockUseGetBudget,
+  useGetBudgetPlanVsActual: mockUseGetBudgetPlanVsActual,
   getGetBudgetQueryKey: mockGetBudgetQueryKey,
   useGetSavingsGoals: mockUseGetSavingsGoals,
 }))

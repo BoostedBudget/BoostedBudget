@@ -13,7 +13,9 @@ import type { MatchLogic } from '@boostedbudget/shared-types/matching';
 import {
   usePreviewCategoryMatches,
 } from '@boostedbudget/api-client/endpoints/budget/budget';
-import type { CategoryPreviewResponse } from '@boostedbudget/api-client/models';
+import type { CategoryPreviewRequest, CategoryPreviewResponse } from '@boostedbudget/api-client/models';
+
+export type BudgetPreviewContext = Pick<CategoryPreviewRequest, 'budget_id' | 'replace_category_id' | 'draft_categories' | 'group_name' | 'members'>;
 
 export interface UsePreviewCategoriesResult {
   preview: CategoryPreviewResponse | null;
@@ -28,6 +30,24 @@ const EMPTY_STATE: UsePreviewCategoriesResult = {
   loading: false,
   error: null,
 };
+
+function hasPreviewCategory(
+  categoryKind: string,
+  pfcPrimary: string | undefined,
+  customCategoryId: string | undefined,
+  context: BudgetPreviewContext | undefined
+): boolean {
+  switch (categoryKind) {
+    case 'remainder':
+      return true;
+    case 'group':
+      return !!context?.group_name && !!context.members?.length;
+    case 'pfc':
+      return !!pfcPrimary;
+    default:
+      return !!customCategoryId;
+  }
+}
 
 /**
  * Hook to fetch category preview with debouncing.
@@ -51,7 +71,8 @@ export function usePreviewCategories(
   matchLogic: MatchLogic,
   startDate: string,
   endDate: string,
-  enabled: boolean
+  enabled: boolean,
+  context?: BudgetPreviewContext
 ): UsePreviewCategoriesResult {
   const [preview, setPreview] = useState<CategoryPreviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -62,7 +83,8 @@ export function usePreviewCategories(
   const requestIdRef = useRef(0);
   const debounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const hasCategory = categoryKind === 'pfc' ? !!pfcPrimary : !!customCategoryId;
+  const hasCategory = hasPreviewCategory(categoryKind, pfcPrimary, customCategoryId, context);
+  const contextKey = JSON.stringify(context);
 
   const shouldSkip = useMemo(
     () => !enabled || !categoryKind || !hasCategory,
@@ -98,6 +120,7 @@ export function usePreviewCategories(
       try {
         const result = await mutation.mutateAsync({
           data: {
+            ...context,
             category_kind: capturedKind,
             pfc_primary: capturedPfcPrimary,
             pfc_detailed: capturedPfcDetailed,
@@ -130,7 +153,7 @@ export function usePreviewCategories(
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [categoryKind, pfcPrimary, pfcDetailed, customCategoryId, tags, matchLogic, startDate, endDate, shouldSkip]);
+  }, [categoryKind, pfcPrimary, pfcDetailed, customCategoryId, tags, matchLogic, startDate, endDate, shouldSkip, contextKey]);
 
   if (shouldSkip) {
     return EMPTY_STATE;

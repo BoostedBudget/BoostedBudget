@@ -52,6 +52,7 @@ import type {
 import type {
   Budget,
   BudgetCategory,
+  BudgetPlanVsActualResponse,
   CategoryTransactionsResponse,
   CreateBudgetCategoryRequest,
   CreateBudgetRequest,
@@ -971,6 +972,99 @@ export function useGetCategoryTransactions<TData = Awaited<ReturnType<typeof get
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
   const queryOptions = getGetCategoryTransactionsQueryOptions(id,categoryId,params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Compare the current budget plan with posted activity in its eligible current period. Unknown actuals remain null. This read does not synchronize or run automation.
+ * @summary Get budget plan and activity
+ */
+export const getBudgetPlanVsActual = (
+    id: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<BudgetPlanVsActualResponse>(
+      {url: `/api/v1/budgets/${id}/plan-vs-actual`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetBudgetPlanVsActualQueryKey = (id: string,) => {
+    return [
+    `/api/v1/budgets/${id}/plan-vs-actual`
+    ] as const;
+    }
+
+
+export const getGetBudgetPlanVsActualQueryOptions = <TData = Awaited<ReturnType<typeof getBudgetPlanVsActual>>, TError = ErrorType<ErrorModel>>(id: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBudgetPlanVsActual>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetBudgetPlanVsActualQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getBudgetPlanVsActual>>> = ({ signal }) => getBudgetPlanVsActual(id, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getBudgetPlanVsActual>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetBudgetPlanVsActualQueryResult = NonNullable<Awaited<ReturnType<typeof getBudgetPlanVsActual>>>
+export type GetBudgetPlanVsActualQueryError = ErrorType<ErrorModel>
+
+
+export function useGetBudgetPlanVsActual<TData = Awaited<ReturnType<typeof getBudgetPlanVsActual>>, TError = ErrorType<ErrorModel>>(
+ id: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBudgetPlanVsActual>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getBudgetPlanVsActual>>,
+          TError,
+          Awaited<ReturnType<typeof getBudgetPlanVsActual>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetBudgetPlanVsActual<TData = Awaited<ReturnType<typeof getBudgetPlanVsActual>>, TError = ErrorType<ErrorModel>>(
+ id: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBudgetPlanVsActual>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getBudgetPlanVsActual>>,
+          TError,
+          Awaited<ReturnType<typeof getBudgetPlanVsActual>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetBudgetPlanVsActual<TData = Awaited<ReturnType<typeof getBudgetPlanVsActual>>, TError = ErrorType<ErrorModel>>(
+ id: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBudgetPlanVsActual>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get budget plan and activity
+ */
+
+export function useGetBudgetPlanVsActual<TData = Awaited<ReturnType<typeof getBudgetPlanVsActual>>, TError = ErrorType<ErrorModel>>(
+ id: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getBudgetPlanVsActual>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetBudgetPlanVsActualQueryOptions(id,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

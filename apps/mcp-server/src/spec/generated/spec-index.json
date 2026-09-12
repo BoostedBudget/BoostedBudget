@@ -4947,6 +4947,10 @@
           "type": "string"
         },
         {
+          "name": "categories[].group_name",
+          "type": "string"
+        },
+        {
           "name": "categories[].id",
           "type": "string",
           "required": true
@@ -4965,6 +4969,10 @@
             "and",
             "or"
           ]
+        },
+        {
+          "name": "categories[].members",
+          "type": "array of object"
         },
         {
           "name": "categories[].pfc_detailed",
@@ -5100,9 +5108,11 @@
         "categories[].custom_grandparent_pfc_primary",
         "categories[].custom_parent_id",
         "categories[].custom_parent_pfc_primary",
+        "categories[].group_name",
         "categories[].id",
         "categories[].managed_by_goal_id",
         "categories[].match_logic",
+        "categories[].members",
         "categories[].pfc_detailed",
         "categories[].pfc_detailed_display",
         "categories[].pfc_primary",
@@ -5164,6 +5174,10 @@
           "type": "string"
         },
         {
+          "name": "categories[].group_name",
+          "type": "string"
+        },
+        {
           "name": "categories[].match_logic",
           "type": "string",
           "enum": [
@@ -5173,6 +5187,10 @@
             "or"
           ],
           "description": "How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400)."
+        },
+        {
+          "name": "categories[].members",
+          "type": "array of object"
         },
         {
           "name": "categories[].pfc_detailed",
@@ -5321,6 +5339,10 @@
           "type": "string"
         },
         {
+          "name": "categories[].group_name",
+          "type": "string"
+        },
+        {
           "name": "categories[].id",
           "type": "string",
           "required": true
@@ -5339,6 +5361,10 @@
             "and",
             "or"
           ]
+        },
+        {
+          "name": "categories[].members",
+          "type": "array of object"
         },
         {
           "name": "categories[].pfc_detailed",
@@ -5474,9 +5500,11 @@
         "categories[].custom_grandparent_pfc_primary",
         "categories[].custom_parent_id",
         "categories[].custom_parent_pfc_primary",
+        "categories[].group_name",
         "categories[].id",
         "categories[].managed_by_goal_id",
         "categories[].match_logic",
+        "categories[].members",
         "categories[].pfc_detailed",
         "categories[].pfc_detailed_display",
         "categories[].pfc_primary",
@@ -5524,6 +5552,11 @@
       "description": "Returns the count and total amount of transactions matching the given category configuration within the date range. When the targeted category is a pfc_primary (a pfc category with pfc_primary set and pfc_detailed omitted) or a parent custom category, transaction_count/total_amount INCLUDE transactions filed under custom categories nested under it — direct_transaction_count/direct_amount report only what was filed directly under the targeted category itself, and children breaks the rolled-up total down by each nested custom category.",
       "requestBody": [
         {
+          "name": "budget_id",
+          "type": "string",
+          "description": "Existing budget whose complete sibling configuration participates in matching."
+        },
+        {
           "name": "category_kind",
           "type": "string",
           "required": true
@@ -5533,11 +5566,132 @@
           "type": "string"
         },
         {
+          "name": "draft_categories",
+          "type": "array of object",
+          "description": "Complete unsaved sibling configuration for a new budget preview."
+        },
+        {
+          "name": "draft_categories[].allocated_amount",
+          "type": "number",
+          "format": "double",
+          "required": true
+        },
+        {
+          "name": "draft_categories[].auto_created",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "name": "draft_categories[].budget_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "draft_categories[].category_kind",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "draft_categories[].created_at",
+          "type": "string",
+          "format": "date-time",
+          "required": true
+        },
+        {
+          "name": "draft_categories[].custom_category_id",
+          "type": "string"
+        },
+        {
+          "name": "draft_categories[].custom_grandparent_pfc_primary",
+          "type": "string"
+        },
+        {
+          "name": "draft_categories[].custom_parent_id",
+          "type": "string"
+        },
+        {
+          "name": "draft_categories[].custom_parent_pfc_primary",
+          "type": "string"
+        },
+        {
+          "name": "draft_categories[].group_name",
+          "type": "string"
+        },
+        {
+          "name": "draft_categories[].id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "draft_categories[].managed_by_goal_id",
+          "type": "string"
+        },
+        {
+          "name": "draft_categories[].match_logic",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "category_only",
+            "tag_only",
+            "and",
+            "or"
+          ]
+        },
+        {
+          "name": "draft_categories[].members",
+          "type": "array of object"
+        },
+        {
+          "name": "draft_categories[].pfc_detailed",
+          "type": "string"
+        },
+        {
+          "name": "draft_categories[].pfc_detailed_display",
+          "type": "string"
+        },
+        {
+          "name": "draft_categories[].pfc_primary",
+          "type": "string"
+        },
+        {
+          "name": "draft_categories[].pfc_primary_display",
+          "type": "string"
+        },
+        {
+          "name": "draft_categories[].savings_goal_id",
+          "type": "string"
+        },
+        {
+          "name": "draft_categories[].savings_goal_name",
+          "type": "string"
+        },
+        {
+          "name": "draft_categories[].spent_amount",
+          "type": "number",
+          "format": "double",
+          "required": true
+        },
+        {
+          "name": "draft_categories[].tags",
+          "type": "array of string",
+          "required": true
+        },
+        {
+          "name": "draft_categories[].updated_at",
+          "type": "string",
+          "format": "date-time",
+          "required": true
+        },
+        {
           "name": "end_date",
           "type": "string",
           "format": "date|date-time",
           "required": true,
           "description": "End of the date range to preview (inclusive; the service extends it to end-of-day). Must not be before start_date. Accepts YYYY-MM-DD or a full RFC3339 timestamp."
+        },
+        {
+          "name": "group_name",
+          "type": "string"
         },
         {
           "name": "match_logic",
@@ -5552,12 +5706,43 @@
           "description": "How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array."
         },
         {
+          "name": "members",
+          "type": "array of object"
+        },
+        {
+          "name": "members[].category_kind",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "uncategorized"
+          ]
+        },
+        {
+          "name": "members[].custom_category_id",
+          "type": "string"
+        },
+        {
+          "name": "members[].pfc_detailed",
+          "type": "string"
+        },
+        {
+          "name": "members[].pfc_primary",
+          "type": "string"
+        },
+        {
           "name": "pfc_detailed",
           "type": "string"
         },
         {
           "name": "pfc_primary",
           "type": "string"
+        },
+        {
+          "name": "replace_category_id",
+          "type": "string",
+          "description": "Existing allocation being edited, omitted when adding a new line."
         },
         {
           "name": "start_date",
@@ -5576,6 +5761,11 @@
           "name": "children",
           "type": "array of object",
           "description": "Breaks the rolled-up transaction_count/total_amount down by each nested custom category that actually matched. Empty/nil when the targeted category cannot roll up (a leaf category), or no nested child matched anything."
+        },
+        {
+          "name": "currency_code",
+          "type": "string",
+          "description": "Currency of matching activity; no conversion or mixed-currency summation is performed."
         },
         {
           "name": "direct_amount",
@@ -5683,6 +5873,10 @@
           "type": "string"
         },
         {
+          "name": "categories[].group_name",
+          "type": "string"
+        },
+        {
           "name": "categories[].id",
           "type": "string",
           "required": true
@@ -5701,6 +5895,10 @@
             "and",
             "or"
           ]
+        },
+        {
+          "name": "categories[].members",
+          "type": "array of object"
         },
         {
           "name": "categories[].pfc_detailed",
@@ -5836,9 +6034,11 @@
         "categories[].custom_grandparent_pfc_primary",
         "categories[].custom_parent_id",
         "categories[].custom_parent_pfc_primary",
+        "categories[].group_name",
         "categories[].id",
         "categories[].managed_by_goal_id",
         "categories[].match_logic",
+        "categories[].members",
         "categories[].pfc_detailed",
         "categories[].pfc_detailed_display",
         "categories[].pfc_primary",
@@ -5936,6 +6136,10 @@
           "type": "string"
         },
         {
+          "name": "categories[].group_name",
+          "type": "string"
+        },
+        {
           "name": "categories[].id",
           "type": "string",
           "required": true
@@ -5954,6 +6158,10 @@
             "and",
             "or"
           ]
+        },
+        {
+          "name": "categories[].members",
+          "type": "array of object"
         },
         {
           "name": "categories[].pfc_detailed",
@@ -6089,9 +6297,11 @@
         "categories[].custom_grandparent_pfc_primary",
         "categories[].custom_parent_id",
         "categories[].custom_parent_pfc_primary",
+        "categories[].group_name",
         "categories[].id",
         "categories[].managed_by_goal_id",
         "categories[].match_logic",
+        "categories[].members",
         "categories[].pfc_detailed",
         "categories[].pfc_detailed_display",
         "categories[].pfc_primary",
@@ -6264,6 +6474,10 @@
           "type": "string"
         },
         {
+          "name": "categories[].group_name",
+          "type": "string"
+        },
+        {
           "name": "categories[].id",
           "type": "string",
           "required": true
@@ -6282,6 +6496,10 @@
             "and",
             "or"
           ]
+        },
+        {
+          "name": "categories[].members",
+          "type": "array of object"
         },
         {
           "name": "categories[].pfc_detailed",
@@ -6417,9 +6635,11 @@
         "categories[].custom_grandparent_pfc_primary",
         "categories[].custom_parent_id",
         "categories[].custom_parent_pfc_primary",
+        "categories[].group_name",
         "categories[].id",
         "categories[].managed_by_goal_id",
         "categories[].match_logic",
+        "categories[].members",
         "categories[].pfc_detailed",
         "categories[].pfc_detailed_display",
         "categories[].pfc_primary",
@@ -6500,6 +6720,10 @@
           "type": "string"
         },
         {
+          "name": "group_name",
+          "type": "string"
+        },
+        {
           "name": "match_logic",
           "type": "string",
           "enum": [
@@ -6509,6 +6733,32 @@
             "or"
           ],
           "description": "How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400)."
+        },
+        {
+          "name": "members",
+          "type": "array of object"
+        },
+        {
+          "name": "members[].category_kind",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "uncategorized"
+          ]
+        },
+        {
+          "name": "members[].custom_category_id",
+          "type": "string"
+        },
+        {
+          "name": "members[].pfc_detailed",
+          "type": "string"
+        },
+        {
+          "name": "members[].pfc_primary",
+          "type": "string"
         },
         {
           "name": "pfc_detailed",
@@ -6573,6 +6823,10 @@
           "type": "string"
         },
         {
+          "name": "group_name",
+          "type": "string"
+        },
+        {
           "name": "id",
           "type": "string",
           "required": true
@@ -6591,6 +6845,10 @@
             "and",
             "or"
           ]
+        },
+        {
+          "name": "members",
+          "type": "array of object"
         },
         {
           "name": "pfc_detailed",
@@ -6643,9 +6901,11 @@
         "custom_grandparent_pfc_primary",
         "custom_parent_id",
         "custom_parent_pfc_primary",
+        "group_name",
         "id",
         "managed_by_goal_id",
         "match_logic",
+        "members",
         "pfc_detailed",
         "pfc_detailed_display",
         "pfc_primary",
@@ -6690,6 +6950,10 @@
           "format": "double"
         },
         {
+          "name": "group_name",
+          "type": "string"
+        },
+        {
           "name": "match_logic",
           "type": "string",
           "enum": [
@@ -6699,6 +6963,32 @@
             "or"
           ],
           "description": "How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400)."
+        },
+        {
+          "name": "members",
+          "type": "array of object"
+        },
+        {
+          "name": "members[].category_kind",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "uncategorized"
+          ]
+        },
+        {
+          "name": "members[].custom_category_id",
+          "type": "string"
+        },
+        {
+          "name": "members[].pfc_detailed",
+          "type": "string"
+        },
+        {
+          "name": "members[].pfc_primary",
+          "type": "string"
         },
         {
           "name": "tags",
@@ -6750,6 +7040,10 @@
           "type": "string"
         },
         {
+          "name": "group_name",
+          "type": "string"
+        },
+        {
           "name": "id",
           "type": "string",
           "required": true
@@ -6768,6 +7062,10 @@
             "and",
             "or"
           ]
+        },
+        {
+          "name": "members",
+          "type": "array of object"
         },
         {
           "name": "pfc_detailed",
@@ -6820,9 +7118,11 @@
         "custom_grandparent_pfc_primary",
         "custom_parent_id",
         "custom_parent_pfc_primary",
+        "group_name",
         "id",
         "managed_by_goal_id",
         "match_logic",
+        "members",
         "pfc_detailed",
         "pfc_detailed_display",
         "pfc_primary",
@@ -7097,6 +7397,12 @@
           "description": "UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted when the provider gave none"
         },
         {
+          "name": "transactions[].budget_expense_amount",
+          "type": "number",
+          "format": "double",
+          "description": "Net expense amount counted in this budget drilldown; omitted outside budget drilldowns."
+        },
+        {
           "name": "transactions[].category_override_date",
           "type": "string",
           "format": "date-time"
@@ -7305,6 +7611,7 @@
         "transactions[].account_id",
         "transactions[].amount",
         "transactions[].authorized_date",
+        "transactions[].budget_expense_amount",
         "transactions[].category_override_kind",
         "transactions[].category_source",
         "transactions[].custom_category_override_display",
@@ -7346,6 +7653,27 @@
           "type": "string",
           "format": "date-time",
           "description": "Present only when reversed is true; the deleted_at timestamp."
+        }
+      ]
+    },
+    {
+      "operationId": "getBudgetPlanVsActual",
+      "method": "GET",
+      "path": "/api/v1/budgets/{id}/plan-vs-actual",
+      "summary": "Get budget plan and activity",
+      "tags": [
+        "Budgets"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Compare the current budget plan with posted activity in its eligible current period. Unknown actuals remain null. This read does not synchronize or run automation.",
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Budget ID",
+          "type": "string"
         }
       ]
     },
@@ -7424,6 +7752,10 @@
           "type": "string"
         },
         {
+          "name": "categories[].group_name",
+          "type": "string"
+        },
+        {
           "name": "categories[].id",
           "type": "string",
           "required": true
@@ -7442,6 +7774,10 @@
             "and",
             "or"
           ]
+        },
+        {
+          "name": "categories[].members",
+          "type": "array of object"
         },
         {
           "name": "categories[].pfc_detailed",
@@ -7577,9 +7913,11 @@
         "categories[].custom_grandparent_pfc_primary",
         "categories[].custom_parent_id",
         "categories[].custom_parent_pfc_primary",
+        "categories[].group_name",
         "categories[].id",
         "categories[].managed_by_goal_id",
         "categories[].match_logic",
+        "categories[].members",
         "categories[].pfc_detailed",
         "categories[].pfc_detailed_display",
         "categories[].pfc_primary",
@@ -15606,6 +15944,12 @@
           "description": "UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted when the provider gave none"
         },
         {
+          "name": "budget_expense_amount",
+          "type": "number",
+          "format": "double",
+          "description": "Net expense amount counted in this budget drilldown; omitted outside budget drilldowns."
+        },
+        {
           "name": "category_override_date",
           "type": "string",
           "format": "date-time"
@@ -15810,6 +16154,7 @@
         "account_id",
         "amount",
         "authorized_date",
+        "budget_expense_amount",
         "category_override_kind",
         "category_source",
         "custom_category_override_display",
@@ -16077,6 +16422,12 @@
           "description": "UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted when the provider gave none"
         },
         {
+          "name": "budget_expense_amount",
+          "type": "number",
+          "format": "double",
+          "description": "Net expense amount counted in this budget drilldown; omitted outside budget drilldowns."
+        },
+        {
           "name": "category_override_date",
           "type": "string",
           "format": "date-time"
@@ -16281,6 +16632,7 @@
         "account_id",
         "amount",
         "authorized_date",
+        "budget_expense_amount",
         "category_override_kind",
         "category_source",
         "custom_category_override_display",
@@ -16566,6 +16918,12 @@
           "description": "UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted when the provider gave none"
         },
         {
+          "name": "budget_expense_amount",
+          "type": "number",
+          "format": "double",
+          "description": "Net expense amount counted in this budget drilldown; omitted outside budget drilldowns."
+        },
+        {
           "name": "category_override_date",
           "type": "string",
           "format": "date-time"
@@ -16770,6 +17128,7 @@
         "account_id",
         "amount",
         "authorized_date",
+        "budget_expense_amount",
         "category_override_kind",
         "category_source",
         "custom_category_override_display",

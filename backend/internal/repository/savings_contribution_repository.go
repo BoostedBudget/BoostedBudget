@@ -308,11 +308,17 @@ func (r *savingsContributionRepository) insertInTx(ctx context.Context, tx Queri
 		contrib.Status = "confirmed"
 	}
 
+	// Only trusted writer-selected constants enter this SQL fragment; clients cannot
+	// set FlowKind. Keeping provenance distinct avoids reporting carried balances as income.
+	flowKindSQL := "'contribution'"
+	if contrib.FlowKind == "opening_balance" {
+		flowKindSQL = "'opening_balance'"
+	}
 	_, err := tx.Exec(ctx, `
 		INSERT INTO savings_goal_contributions (
 			id, savings_goal_id, transaction_id, amount, source, status,
-			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at, flow_kind
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, `+flowKindSQL+`)`,
 		contrib.ID,
 		contrib.SavingsGoalID,
 		contrib.TransactionID,
@@ -466,8 +472,8 @@ func (r *savingsContributionRepository) UpsertFromTransaction(
 	upsertQuery := `
 		INSERT INTO savings_goal_contributions (
 			id, savings_goal_id, transaction_id, amount, source, status,
-			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
-		) VALUES (gen_random_uuid(), $1, $2, $3, $4, 'confirmed', true, false, CURRENT_DATE, $5, $5)
+			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at, flow_kind
+		) VALUES (gen_random_uuid(), $1, $2, $3, $4, 'confirmed', true, false, CURRENT_DATE, $5, $5, 'contribution')
 		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL AND archived_at IS NULL
 		DO UPDATE SET
 			amount     = EXCLUDED.amount,
@@ -579,8 +585,8 @@ func (r *savingsContributionRepository) InsertManualFromTransaction(
 	upsertQuery := `
 		INSERT INTO savings_goal_contributions (
 			id, savings_goal_id, transaction_id, amount, source, status,
-			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
-		) VALUES (gen_random_uuid(), $1, $2, $3, 'manual', 'confirmed', false, true, $4, $5, $5)
+			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at, flow_kind
+		) VALUES (gen_random_uuid(), $1, $2, $3, 'manual', 'confirmed', false, true, $4, $5, $5, 'contribution')
 		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL AND archived_at IS NULL
 		DO UPDATE SET
 			amount                    = EXCLUDED.amount,
@@ -675,8 +681,8 @@ func (r *savingsContributionRepository) UpsertProposedFromTransaction(
 	upsertQuery := `
 		INSERT INTO savings_goal_contributions (
 			id, savings_goal_id, transaction_id, amount, source, status,
-			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at
-		) VALUES (gen_random_uuid(), $1, $2, $3, 'confirmed_transfer', 'proposed', true, false, CURRENT_DATE, $4, $4)
+			managed_by_reconciliation, confirmed_by_user, occurred_on, created_at, updated_at, flow_kind
+		) VALUES (gen_random_uuid(), $1, $2, $3, 'confirmed_transfer', 'proposed', true, false, CURRENT_DATE, $4, $4, 'contribution')
 		ON CONFLICT (transaction_id, savings_goal_id) WHERE transaction_id IS NOT NULL AND deleted_at IS NULL AND archived_at IS NULL
 		DO UPDATE SET
 			amount     = EXCLUDED.amount,
