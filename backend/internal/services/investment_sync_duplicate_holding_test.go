@@ -191,7 +191,7 @@ func (f *duplicateHoldingFixture) sync(t *testing.T, holdings ...plaid.Holding) 
 		f.plaidSecurityID: f.internalSecurityID,
 	}, nil)
 	f.deps.accountRepo.On("GetByLinkedItemID", ctx, f.linkedItem.ID).Return([]domain.Account{
-		{ID: f.internalAccountID, PlaidAccountID: f.plaidAccountID, UserID: f.userID},
+		{ID: f.internalAccountID, PlaidAccountID: f.plaidAccountID, UserID: f.userID, Type: "investment"},
 	}, nil)
 
 	var written []domain.Holding

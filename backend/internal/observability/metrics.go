@@ -774,11 +774,11 @@ var (
 		Buckets: prometheus.DefBuckets,
 	})
 
-	// InvestmentHoldingsSynced counts holdings replaced per sync by outcome.
+	// InvestmentHoldingsSynced counts holding rows handled per sync by outcome.
 	// Issue #659: Plaid Investments
 	InvestmentHoldingsSynced = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "investment_holdings_synced_total",
-		Help: "Total number of investment holdings synced by outcome (replaced/cleared).",
+		Help: "Holding rows by outcome: replaced counts persisted rows after deduplication; skipped_non_investment counts Plaid payload rows.",
 	}, []string{"outcome"})
 
 	// InvestmentTransactionsSynced counts investment transactions processed by action.
