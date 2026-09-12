@@ -301,6 +301,114 @@ describe('MCP transport integration', () => {
 
   // ── Test 2 (Scenario 4): write-confirmation round trip ────────────────────
 
+  it('discovers search detail, selected response fields, and rejects invalid detail over transport', async () => {
+    const { sessionId } = await initialize(worker, bearerToken)
+    const listed = await sendMcp(worker, bearerToken, 'tools/list', {}, sessionId)
+    const tools = (listed.body!.result as { tools: Array<{ name: string; inputSchema: { properties: Record<string, { enum?: string[] }> } }> }).tools
+    expect(tools.find((tool) => tool.name === 'search')!.inputSchema.properties.detail?.enum).toEqual(['compact', 'full'])
+    for (const detail of [undefined, 'compact', 'full']) {
+      const result = await sendMcp(worker, bearerToken, 'tools/call', { name: 'search', arguments: { query: 'getTransactions', ...(detail ? { detail } : {}) } }, sessionId)
+      const text = (result.body!.result as { content: Array<{ text: string }> }).content[0]!.text
+      expect(text).toContain(`Response detail: ${detail ?? 'compact'}`)
+      expect(text).toContain('transactions[].account.name')
+      if (detail === 'full') expect(text).toContain('transactions[].account.plaid_account_id')
+      else {
+        expect(text).not.toContain('transactions[].account.plaid_account_id')
+        expect(text).toContain('transactions[].effective_pfc_primary_display')
+      }
+    }
+    for (const detail of [null, 'verbose']) {
+      const result = await sendMcp(worker, bearerToken, 'tools/call', { name: 'search', arguments: { query: 'getAccounts', detail } }, sessionId)
+      expect(!!result.body?.error || (result.body?.result as { isError?: boolean })?.isError).toBe(true)
+    }
+  })
+
+  it('discovers response detail and preserves compact/full calls and safe POST bodies', async () => {
+    const payload = { accounts: [{ id: 'a', name: 'Checking', user_id: 'hidden-owner' }], total_count: 1 }
+    const previewBody = { conditions: [{ field: 'name', operator: 'contains', value: 'Coffee' }], condition_logic: 'AND' }
+    let receivedBody: unknown
+    const base = makeExtendedFetchSpy([{ url: '/api/v1/accounts', method: 'GET', response: () => Response.json(payload), callCount: 0 }])
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const [url, method] = extractUrlAndMethod(input, init)
+      if (url.includes('/preview') && method === 'POST') {
+        receivedBody = input instanceof Request ? await input.clone().json() : JSON.parse(String(init?.body))
+        return Response.json({ total_matches: 1 })
+      }
+      return base(input, init)
+    })
+    const { sessionId } = await initialize(worker, bearerToken)
+    const listed = await sendMcp(worker, bearerToken, 'tools/list', {}, sessionId)
+    const tools = (listed.body!.result as { tools: Array<{ name: string; inputSchema: { properties: { calls: { items: { properties: Record<string, { enum?: string[]; default?: unknown }> } } } } }> }).tools
+    for (const name of ['readExecute', 'writeExecute']) {
+      const properties = tools.find((tool) => tool.name === name)!.inputSchema.properties.calls.items.properties
+      expect(properties.detail?.enum).toEqual(['compact', 'full'])
+      expect(properties.detail).not.toHaveProperty('default')
+      expect(properties.body).toBeDefined()
+      for (const detail of [undefined, 'full']) {
+        const result = await sendMcp(worker, bearerToken, 'tools/call', { name, arguments: { calls: [{ operationId: 'getAccounts', ...(detail ? { detail } : {}) }] } }, sessionId)
+        const text = (result.body!.result as { content: Array<{ text: string }> }).content[0]!.text
+        if (detail === 'full') expect(text).toBe(`✅ getAccounts: ${JSON.stringify(payload)}`)
+        else {
+          expect(text).not.toContain('hidden-owner')
+          expect(text).toContain('detail: "full"')
+        }
+      }
+    }
+    const preview = await sendMcp(worker, bearerToken, 'tools/call', { name: 'readExecute', arguments: { calls: [{ operationId: 'previewCategoryMatches', body: previewBody }] } }, sessionId)
+    expect((preview.body!.result as { content: Array<{ text: string }> }).content[0]!.text).toContain('total_matches')
+    expect(receivedBody).toEqual(previewBody)
+  })
+
+  it('preserves recipe detail through schema, confirmed save, and complete resolution', async () => {
+    const calls = [
+      { operationId: 'getAccounts', params: { include_hidden: true }, detail: 'compact' },
+      { operationId: 'getTransactions', body: { synthetic: true }, pathParams: { id: 'synthetic' }, detail: 'full' },
+      ...Array.from({ length: 24 }, () => ({ operationId: 'getCashFlowSummary' })),
+    ]
+    const spec = calls.map(({ operationId, ...rest }) => {
+      const { pathParams, ...args } = rest as Record<string, unknown>
+      return { operation_id: operationId, ...args, ...(pathParams ? { path_params: pathParams } : {}) }
+    })
+    let savedBody: unknown
+    let backendCalls = 0
+    const base = makeExtendedFetchSpy([])
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const [url, method] = extractUrlAndMethod(input, init)
+      if (url.includes('/api/v1/mcp/recipes') && method === 'POST') {
+        backendCalls++
+        if (url.endsWith('/run')) return Response.json({ name: 'Synthetic review', calls: spec })
+        savedBody = input instanceof Request ? await input.clone().json() : JSON.parse(String(init?.body))
+        return Response.json({ id: 'synthetic-recipe' })
+      }
+      return base(input, init)
+    })
+    const { sessionId } = await initialize(worker, bearerToken)
+    const listed = await sendMcp(worker, bearerToken, 'tools/list', {}, sessionId)
+    const tools = (listed.body!.result as { tools: Array<{ name: string; inputSchema: { properties: { calls: { maxItems?: number; items: { properties: Record<string, { enum?: string[] }> } } } } }> }).tools
+    const schema = tools.find(tool => tool.name === 'recipe.save')!.inputSchema.properties.calls
+    expect(schema.maxItems).toBeUndefined()
+    expect(schema.items.properties.detail?.enum).toEqual(['compact', 'full'])
+    expect(schema.items.properties.detail).not.toHaveProperty('default')
+    for (const detail of [null, '', 'verbose']) {
+      const invalid = await sendMcp(worker, bearerToken, 'tools/call', { name: 'recipe.save', arguments: { name: 'Invalid', calls: [{ operationId: 'getAccounts', detail }] } }, sessionId)
+      expect(!!invalid.body?.error || (invalid.body?.result as { isError?: boolean })?.isError).toBe(true)
+    }
+    expect(backendCalls).toBe(0)
+    const challenge = await sendMcp(worker, bearerToken, 'tools/call', { name: 'recipe.save', arguments: { name: 'Synthetic review', calls } }, sessionId)
+    const challengeText = (challenge.body!.result as { content: Array<{ text: string }> }).content[0]!.text
+    const token = /confirmationToken: "([^"]+)"/.exec(challengeText)?.[1]
+    expect(token).toBeTruthy()
+    expect(backendCalls).toBe(0)
+    const confirmed = await sendMcp(worker, bearerToken, 'tools/call', { name: 'recipe.save', arguments: { name: 'Synthetic review', calls, confirmationToken: token } }, challenge.sessionId ?? sessionId)
+    expect((confirmed.body!.result as { content: Array<{ text: string }> }).content[0]!.text).toContain('saved successfully')
+    expect(savedBody).toEqual({ name: 'Synthetic review', spec })
+    expect(backendCalls).toBe(1)
+    const resolved = await sendMcp(worker, bearerToken, 'tools/call', { name: 'recipe.run', arguments: { id: 'synthetic-recipe' } }, sessionId)
+    const text = (resolved.body!.result as { content: Array<{ text: string }> }).content[0]!.text
+    expect(JSON.parse(text.slice(text.indexOf('{"calls":')))).toEqual({ calls })
+    expect(backendCalls).toBe(2)
+  })
+
   it('Scenario 4: write-confirmation round trip — createMCPRecipe', async () => {
     // Backend interceptor for POST /api/v1/mcp/recipes (only called on confirmed write)
     let capturedIdempotencyKey: string | undefined

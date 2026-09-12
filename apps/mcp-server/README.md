@@ -51,6 +51,75 @@ Follow your client's instructions for adding a remote MCP server at `https://mcp
 
 ## Example Prompts
 
+### Response detail
+
+Resource responses default to `compact`: useful financial and workflow fields stay,
+while provider payloads, duplicate metadata, cosmetics, and bulky diagnostics are
+available in `full`. Focused analytics, previews, counts, and acknowledgments already
+contain useful summaries and are returned unchanged.
+
+The response catalog explicitly classifies all 142 exposed operations: 71 have compact
+projections and 71 intentionally pass through. Adding an exposed operation or changing
+a projected response schema requires reviewing its catalog policy; artifact generation
+checks coverage against the complete OpenAPI schemas.
+
+Choose detail **on each call**, beside `operationId`, not in query `params` or `body`:
+
+```json
+{
+  "calls": [
+    { "operationId": "getTransactions", "params": { "limit": 10 } },
+    { "operationId": "getAccounts", "detail": "full" }
+  ]
+}
+```
+
+`search({ query: "getTransactions", detail: "full" })` documents the full response;
+the default documents the compact projection. Response descriptions distinguish
+the underlying API contract from MCP's selected fields. Discovery omits `$schema`
+tooling links from its field documentation; full execution preserves them.
+
+Each actually reduced result includes a full-detail hint. After a completed write,
+follow the suggested **read** operation to inspect current state; do not repeat the
+write to obtain more detail. Execution-history reads in full return historical
+definition snapshots, which can differ from a rule or boost's current definition.
+Boost-scoped history recovery uses global history so it can find executions after
+their parent is deleted. Follow the hint from offset zero and match the execution
+IDs retained in the compact payload. If the status-filtered history ends before
+all IDs are found, remove status and restart at offset zero. Stop once all IDs are
+found or unfiltered history ends, and report any missing IDs; separate reads do
+not provide a consistent snapshot. The MCP server does not fetch these pages
+automatically.
+
+Transaction dates, signs, currency when supplied, pending/reversal/review flags,
+effective categories, and investment fields survive compaction. Missing currency
+never implies USD. The unified feed's `source` distinguishes banking from investment;
+`data_source` identifies the provider. Bare transaction `source` identifies the
+provider instead. Embedded account identity is included only when already supplied
+by the API; the MCP server does not issue extra account lookups.
+
+Full detail preserves the API's decoded response shape, subject to the existing
+per-result and batch output limits. Unknown response fields or incompatible shapes
+cause a complete-result fallback with a warning, rather than silently losing data.
+Compaction reduces model-facing output, not backend queries or API-to-worker traffic.
+
+The deterministic synthetic [size regression suite](src/responses/size-regression.test.ts)
+measures 51,470 full versus 27,567 compact rendered characters (46.4% less), including
+headers and full-detail hints. It covers transaction pages, accounts, definitions,
+history, budgets, goals, notifications, a focused summary, and a production-config
+recipe fixture. These are character measurements, not a guaranteed token reduction
+for every live response. A small response can grow because its safe full-detail hint
+costs more than the fields removed.
+
+Saved recipe calls retain their detail settings; existing recipes default to compact.
+`recipe.run` resolves complete call objects without executing them. Execute the returned
+calls in batches of at most 25. A resolution exceeding 100,000 rendered characters
+returns an explicit error with no executable calls, rather than a truncated call.
+
+Deploy the recipe-detail-compatible backend before this worker. Rolling back the
+worker is independent; keep a backend that preserves recipe detail when decoding and
+reserializing JSONB specs, since an older backend can otherwise discard saved settings.
+
 ### 1. "What's my dining spend this month?"
 
 The agent uses `search` to find the right analytics operation, then `readExecute` to fetch the data:

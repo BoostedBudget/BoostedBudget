@@ -16,7 +16,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { McpAgent } from 'agents/mcp'
 import { z } from 'zod'
 import { handleSearch } from './tools/search'
-import { buildReadExecuteHandler, buildWriteExecuteHandler } from './tools/execute'
+import { buildReadExecuteHandler, buildWriteExecuteHandler, type ExecuteCall } from './tools/execute'
+import { executeCallSchema } from './tools/call-schema'
 import { buildRecipeTools } from './tools/recipes'
 import { createHostProxy } from '../sandbox/host-proxy'
 import { createFetchMutator } from '../client/fetch-mutator'
@@ -140,6 +141,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           'Use this to find the right operation before calling readExecute() or writeExecute().',
         inputSchema: {
           query: z.string().optional().describe('Keyword search (e.g. "spending category", "budget create")'),
+          detail: z.enum(['compact', 'full']).optional().describe('Response fields to describe (default: compact). Full includes diagnostics and provider metadata.'),
           // Issue #1610b: this enum previously omitted 'destructive', diverging from
           // search.ts's SearchInputSchema (which has accepted it since #1569 Task 16) — an
           // agent asking to filter FOR or AGAINST destructive operations got a schema mismatch
@@ -151,7 +153,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       },
       // Explicit type annotation: the `as any` cast above erases the inferred input type,
       // so this is what keeps the handler's argument checked.
-      async (input: { query?: string; class?: 'read' | 'write' | 'destructive'; tag?: string; limit?: number }) => {
+      async (input: { query?: string; detail?: 'compact' | 'full'; class?: 'read' | 'write' | 'destructive'; tag?: string; limit?: number }) => {
         const p = this.props as McpAgentProps
         posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'search' })
         const result = handleSearch(input, specIndex)
@@ -192,16 +194,12 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           'default settings row on first read. Use writeExecute() for anything else.',
         inputSchema: {
           calls: z.array(
-            z.object({
-              operationId: z.string().describe('The operationId from search() results'),
-              params: z.record(z.string(), z.unknown()).optional().describe('Query parameters'),
-              pathParams: z.record(z.string(), z.string()).optional().describe('Path parameters (e.g. { id: "abc" })'),
-            }),
+            executeCallSchema,
           ).max(25, 'Maximum 25 calls per readExecute() invocation').describe('Ordered list of read-only API calls to execute (max 25)'),
         },
       },
       async (input: {
-        calls: Array<{ operationId: string; params?: Record<string, unknown>; pathParams?: Record<string, string> }>
+        calls: ExecuteCall[]
       }) => {
         const p = this.props as McpAgentProps
         posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'readExecute' })
@@ -235,18 +233,13 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           'Prefer readExecute() for read-only calls.',
         inputSchema: {
           calls: z.array(
-            z.object({
-              operationId: z.string().describe('The operationId from search() results'),
-              params: z.record(z.string(), z.unknown()).optional().describe('Query parameters'),
-              body: z.record(z.string(), z.unknown()).optional().describe('Request body for write operations'),
-              pathParams: z.record(z.string(), z.string()).optional().describe('Path parameters (e.g. { id: "abc" })'),
-            }),
+            executeCallSchema,
           ).max(25, 'Maximum 25 calls per writeExecute() invocation').describe('Ordered list of API calls to execute (max 25)'),
           confirmationToken: z.string().optional().describe('Confirmation token for write operations'),
         },
       },
       async (input: {
-        calls: Array<{ operationId: string; params?: Record<string, unknown>; body?: Record<string, unknown>; pathParams?: Record<string, string> }>
+        calls: ExecuteCall[]
         confirmationToken?: string
       }) => {
         const p = this.props as McpAgentProps
@@ -296,19 +289,14 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
         inputSchema: {
           name: z.string().describe('Recipe name'),
           description: z.string().optional().describe('Optional description'),
-          calls: z.array(z.object({
-            operationId: z.string(),
-            params: z.record(z.string(), z.unknown()).optional(),
-            body: z.record(z.string(), z.unknown()).optional(),
-            pathParams: z.record(z.string(), z.string()).optional(),
-          })).describe('Ordered read-only API calls'),
+          calls: z.array(executeCallSchema).describe('Ordered read-only API calls'),
           confirmationToken: z.string().optional(),
         },
       },
       async (input: {
         name: string
         description?: string
-        calls: Array<{ operationId: string; params?: Record<string, unknown>; body?: Record<string, unknown>; pathParams?: Record<string, string> }>
+        calls: Array<{ operationId: string; params?: Record<string, unknown>; body?: Record<string, unknown>; pathParams?: Record<string, string>; detail?: 'compact' | 'full' }>
         confirmationToken?: string
       }) => {
         const p = this.props as McpAgentProps

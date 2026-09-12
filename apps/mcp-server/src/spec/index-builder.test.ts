@@ -11,12 +11,62 @@
 
 import { describe, expect, it, beforeAll } from 'bun:test'
 import { readFileSync } from 'node:fs'
+import { parse } from 'yaml'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildSpecIndex, indexFromSpec } from './index-builder'
 import type { SpecEntry } from './search-runtime'
+import { responseFields } from './search-runtime'
 
 let entries: SpecEntry[]
+
+describe('#1634 projection-aware discovery', () => {
+  it('expands only projected response paths and documents conditional derived fields', () => {
+    const expanded = entries.map((e) => ({ ...e, compactResponseBody: responseFields(e, 'compact') }))
+    const tx = expanded.find((e) => e.operationId === 'getTransactions')!
+    expect(tx.responseBody?.some((f) => f.name === 'transactions[].account.plaid_account_id')).toBe(true)
+    expect(tx.compactResponseBody?.some((f) => f.name === 'transactions[].account.plaid_account_id')).toBe(false)
+    expect(tx.compactResponseBody?.some((f) => f.name === 'transactions[].account.name')).toBe(true)
+    expect(tx.compactResponseBody?.find((f) => f.name === 'transactions[].effective_pfc_primary_display')).toMatchObject({ type: 'string|null' })
+    expect(tx.compactResponseBody?.find((f) => f.name === 'transactions[].effective_pfc_primary_display')?.required).toBeUndefined()
+    for (const name of ['limit', 'next_cursor', 'total_amount', 'total_count', 'transactions']) expect(tx.compactResponseBody?.some((f) => f.name === name)).toBe(true)
+    const bare = expanded.find((e) => e.operationId === 'getTransactionByID')!
+    expect(bare.compactResponseBody?.find((f) => f.name === 'reversed')).toMatchObject({ type: 'boolean', description: expect.stringContaining('provider_removed_posted') })
+    expect(bare.compactResponseBody?.find((f) => f.name === 'reversed_at')).toMatchObject({ type: 'string', format: 'date-time' })
+    expect(bare.compactResponseBody?.find((f) => f.name === 'reversed_at')?.required).toBeUndefined()
+    const budget = expanded.find((e) => e.operationId === 'getBudgets')!
+    expect(budget.compactResponseBody?.some((f) => f.name === 'categories[].allocated_amount')).toBe(true)
+    const boost = expanded.find((e) => e.operationId === 'getBoosts')!
+    expect(boost.compactResponseBody?.some((f) => f.name.startsWith('conditions[].'))).toBe(false)
+    expect(boost.compactResponseBody?.some((f) => f.name.startsWith('actions[].'))).toBe(false)
+    for (const [operationId, opaque] of [['getMCPRecipe', 'spec'], ['getUserTransactionAnnotationHistory', 'changes[].prior'], ['getUserBoostExecutions', 'executions[].output_data']]) {
+      const entry = entries.find((e) => e.operationId === operationId)!
+      for (const detail of ['compact', 'full'] as const) {
+        const fields = responseFields(entry, detail)!
+        expect(fields.some((field) => field.name === opaque)).toBe(true)
+        expect(fields.some((field) => field.name.startsWith(`${opaque}.`))).toBe(false)
+      }
+    }
+    expect(entries.find((e) => e.operationId === 'getCashFlowSummary')?.compactResponseBody).toBeUndefined()
+    expect(entries.filter((e) => e.excluded).every((e) => !e.responseBody && !e.compactResponseBody)).toBe(true)
+  })
+
+  it('validates full schemas in the actual build path, including omitted tooling fields', async () => {
+    const spec = parse(readFileSync(resolve(import.meta.dir, '../../../../api/openapi.yaml'), 'utf8'))
+    spec.components.schemas.Account.properties.surprise = { type: 'string' }
+    await expect(buildSpecIndex(spec)).rejects.toThrow('unclassified field surprise')
+    delete spec.components.schemas.Account.properties.surprise
+    delete spec.components.schemas.Transaction.properties.$schema
+    await expect(buildSpecIndex(spec)).rejects.toThrow('stale field $schema')
+    const changedContainer = parse(readFileSync(resolve(import.meta.dir, '../../../../api/openapi.yaml'), 'utf8'))
+    changedContainer.components.schemas.GetTransactionsOutputBody.properties.transactions = { type: 'object' }
+    await expect(buildSpecIndex(changedContainer)).rejects.toThrow('expected array schema')
+  })
+
+  it('regenerates the committed artifact exactly', async () => {
+    expect(JSON.parse(readFileSync(resolve(import.meta.dir, 'generated/spec-index.json'), 'utf8'))).toEqual(await buildSpecIndex())
+  })
+})
 
 beforeAll(async () => {
   const index = await buildSpecIndex()
@@ -547,43 +597,18 @@ describe('issue #1610a: response body extraction', () => {
   })
 })
 
-// ── Issue #1610a: the byte-budget regression test that did not exist ────────
-//
-// Nothing anywhere previously asserted a SIZE on spec-index.json — only drift gates (does the
-// generated file match the committed one), which say nothing about whether that committed file
-// is reasonably sized. This is what stops the next contributor from re-adding response depth 2
-// (measured +162%, see the module doc comment) or dropping the allowed-only filter (+68 KB).
-//
-// ⚠ NOT pinned to the exact measured byte count (289,705 at measurement time): T1 in this same
-// branch added a field to the Account response schema, which is this index's own input, so the
-// true count has already moved and will keep moving as the API grows. This asserts a CEILING
-// with headroom instead — its only job is to catch a gross regression (e.g. depth 2 creeping
-// back in, which alone would roughly triple the file), not to pin today's exact size.
+// Artifact drift and size are separate guarantees: deterministic output can still bloat.
 describe('issue #1610a: spec-index.json byte budget', () => {
   const __dirname = dirname(fileURLToPath(import.meta.url))
   const COMMITTED_INDEX_PATH = resolve(__dirname, 'generated/spec-index.json')
 
-  it('stays under a generous ceiling — regression guard against depth-2 response schemas, not a precision pin', () => {
+  it('bounds artifact size after selective expansion and compact metadata deduplication', () => {
     const raw = readFileSync(COMMITTED_INDEX_PATH, 'utf-8')
     const bytes = Buffer.byteLength(raw, 'utf-8')
-    // ~395 KB: headroom above today's measured size, and still far below the ~467-487 KB a
-    // depth-2 (with-or-without-descriptions) response schema would produce. This guard exists to
-    // catch that depth-2 explosion, not to pin the index to the byte, so headroom is restored
-    // rather than the entry cut.
-    //
-    // The arithmetic, because two feature branches landed on top of each other here:
-    //   345,461  before either  (#1630 and #1631 both branched from this)
-    //   375,602  after merging both        -> +30.1 KB, all depth-1 field growth
-    // #1630 raised the ceiling 350 -> 380 KB for its share; #1631 raised it 350 -> 365 KB for its
-    // own. Neither number accounts for BOTH, and 375,602 against 380,000 leaves 1.2% — which is
-    // the saturated state that makes the NEXT feature look like the culprit for a budget that had
-    // one field of room left. 395 KB is the same measured-plus-headroom treatment both raises
-    // intended, applied once to the combined total.
-    //
-    // ⚠ If you are here because it tripped again, MEASURE BEFORE RAISING. Growth of a few KB from
-    // new response fields is what this budget absorbs; a jump toward ~467 KB is the regression it
-    // exists to catch. Those need opposite responses and only the byte count tells you which you
-    // have.
-    expect(bytes).toBeLessThan(395_000)
+    // #1634: explicit profile paths expand from 375,602 to 526,611 bytes. The initial
+    // duplicate-rich-view experiment cost 653,461. A 560 KB ceiling
+    // allows ~6% headroom while rejecting duplicate rich views. Selective-depth tests
+    // above separately guard opaque payloads and passthrough; request depth stays two.
+    expect(bytes).toBeLessThan(560_000)
   })
 })
