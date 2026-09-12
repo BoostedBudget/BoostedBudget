@@ -31,13 +31,14 @@
  * OpenAPI spec version: 1.0.0
  */
 import type { BudgetGroupMember } from './budgetGroupMember';
+import type { CreateBudgetCategoryRequestCategoryKind } from './createBudgetCategoryRequestCategoryKind';
 import type { CreateBudgetCategoryRequestMatchLogic } from './createBudgetCategoryRequestMatchLogic';
 
 export interface CreateBudgetCategoryRequest {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   allocated_amount: number;
-  category_kind: string;
+  category_kind: CreateBudgetCategoryRequestCategoryKind;
   custom_category_id?: string;
   group_name?: string;
   /** How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400). */

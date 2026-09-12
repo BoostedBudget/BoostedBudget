@@ -32,6 +32,7 @@
  */
 import type { BudgetCategory } from './budgetCategory';
 import type { BudgetGroupMember } from './budgetGroupMember';
+import type { CategoryPreviewRequestCategoryKind } from './categoryPreviewRequestCategoryKind';
 import type { CategoryPreviewRequestMatchLogic } from './categoryPreviewRequestMatchLogic';
 
 export interface CategoryPreviewRequest {
@@ -39,7 +40,7 @@ export interface CategoryPreviewRequest {
   readonly $schema?: string;
   /** Existing budget whose complete sibling configuration participates in matching. */
   budget_id?: string;
-  category_kind: string;
+  category_kind: CategoryPreviewRequestCategoryKind;
   custom_category_id?: string;
   /**
      * Complete unsaved sibling configuration for a new budget preview.

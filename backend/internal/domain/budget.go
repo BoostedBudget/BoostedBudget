@@ -415,14 +415,15 @@ func (b *Budget) ExceedsExpectedIncome() bool {
 
 // BudgetCategory represents a category allocation within a budget.
 // Uses a discriminated union: category_kind='pfc' (pfc_primary required),
-// category_kind='custom' (custom_category_id required), or
-// category_kind='savings' (savings_goal_id required — Issue #1300).
+// category_kind='custom' (custom_category_id required),
+// category_kind='savings' (savings_goal_id required — Issue #1300),
+// category_kind='group' (members required for new groups), or category_kind='remainder'.
 type BudgetCategory struct {
 	GroupName        *string             `json:"group_name,omitempty" db:"group_name"`
 	Members          []BudgetGroupMember `json:"members,omitempty" db:"-"`
 	ID               string              `json:"id" db:"id"`
 	BudgetID         string              `json:"budget_id" db:"budget_id"`
-	CategoryKind     string              `json:"category_kind" db:"category_kind"` // "pfc", "custom", or "savings"
+	CategoryKind     string              `json:"category_kind" db:"category_kind" enum:"pfc,custom,savings,group,remainder"`
 	PFCPrimary       *string             `json:"pfc_primary,omitempty" db:"pfc_primary"`
 	PFCDetailed      *string             `json:"pfc_detailed,omitempty" db:"pfc_detailed"`
 	CustomCategoryID *string             `json:"custom_category_id,omitempty" db:"custom_category_id"`
@@ -606,7 +607,7 @@ func (bc *BudgetCategory) Validate() error {
 		}
 	default:
 		if bc.MatchLogic != MatchLogicTagOnly {
-			return fmt.Errorf("%w: category_kind must be pfc, custom, or savings", ErrInvalidBudget)
+			return fmt.Errorf("%w: category_kind must be pfc, custom, savings, group, or remainder", ErrInvalidBudget)
 		}
 	}
 
@@ -726,7 +727,7 @@ type CreateBudgetRequest struct {
 
 // CreateBudgetCategoryRequest represents a category allocation in a budget creation request.
 type CreateBudgetCategoryRequest struct {
-	CategoryKind string              `json:"category_kind" validate:"required,oneof=pfc custom savings group remainder"`
+	CategoryKind string              `json:"category_kind" validate:"required,oneof=pfc custom savings group remainder" enum:"pfc,custom,savings,group,remainder"`
 	GroupName    *string             `json:"group_name,omitempty"`
 	Members      []BudgetGroupMember `json:"members,omitempty"`
 	// PFCPrimary set with PFCDetailed omitted makes this a pfc_primary category. A pfc_primary
@@ -796,7 +797,7 @@ type CategoryPreviewRequest struct {
 	DraftCategories   []BudgetCategory    `json:"draft_categories,omitempty" doc:"Complete unsaved sibling configuration for a new budget preview."`
 	GroupName         *string             `json:"group_name,omitempty"`
 	Members           []BudgetGroupMember `json:"members,omitempty"`
-	CategoryKind      string              `json:"category_kind"`
+	CategoryKind      string              `json:"category_kind" enum:"pfc,custom,group,remainder"`
 	PFCPrimary        *string             `json:"pfc_primary,omitempty"`
 	PFCDetailed       *string             `json:"pfc_detailed,omitempty"`
 	CustomCategoryID  *string             `json:"custom_category_id,omitempty"`

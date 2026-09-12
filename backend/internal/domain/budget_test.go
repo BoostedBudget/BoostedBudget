@@ -735,7 +735,7 @@ func TestBudgetCategory_Validate(t *testing.T) {
 				AllocatedAmount: 100.00,
 			},
 			wantErr: true,
-			errMsg:  "category_kind must be pfc, custom, or savings",
+			errMsg:  "category_kind must be pfc, custom, savings, group, or remainder",
 		},
 		{
 			name: "negative allocated_amount",

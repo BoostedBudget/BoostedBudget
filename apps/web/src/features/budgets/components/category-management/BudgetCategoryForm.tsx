@@ -27,6 +27,7 @@ import { HierarchicalCategoryTreeSelect } from '@/shared/components/Hierarchical
 import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 import { buildCategoryHierarchy } from '@/features/categories/utils/buildCategoryHierarchy';
 import { SavingsGoalSelect } from './SavingsGoalSelect';
+import type { BudgetCategoryCategoryKind } from '@boostedbudget/api-client/models';
 
 export interface BudgetCategoryFormProps {
   currencyCode?: string;
@@ -99,6 +100,7 @@ function hasSelectedCategory(formData: FormData, retainedEmptyGroup: boolean): b
 function toPreviewDraftCategory(category: BudgetCategory): NonNullable<BudgetPreviewContext['draft_categories']>[number] {
   return {
     ...category,
+    category_kind: category.category_kind as BudgetCategoryCategoryKind,
     auto_created: category.auto_created ?? false,
     custom_parent_id: category.custom_parent_id ?? undefined,
     custom_parent_pfc_primary: category.custom_parent_pfc_primary ?? undefined,

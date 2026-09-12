@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { BudgetCategoryCategoryKind } from './budgetCategoryCategoryKind';
 import type { BudgetCategoryMatchLogic } from './budgetCategoryMatchLogic';
 import type { BudgetGroupMember } from './budgetGroupMember';
 
@@ -39,7 +40,7 @@ export interface BudgetCategory {
   allocated_amount: number;
   auto_created: boolean;
   budget_id: string;
-  category_kind: string;
+  category_kind: BudgetCategoryCategoryKind;
   created_at: string;
   custom_category_id?: string;
   custom_grandparent_pfc_primary?: string;
