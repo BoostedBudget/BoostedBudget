@@ -962,6 +962,8 @@ describe('AccountCustomizationModal', () => {
 
       expect(copy).toMatch(/2 years/)
       expect(copy).toMatch(/stop saving/i)
+      expect(copy).toMatch(/investment transactions/i)
+      expect(copy).toMatch(/holdings.*account type/i)
       // The de-duplication promise must survive too — it is the REASON the user reaches for the
       // toggle, and a warning with no stated benefit is not a usable control.
       expect(copy).toMatch(/twice/i)

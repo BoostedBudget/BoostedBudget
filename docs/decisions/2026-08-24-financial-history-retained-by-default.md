@@ -516,6 +516,24 @@ correct design is the read filter this amendment replaced.
 was the original design, it is still correct for every case outside the three tests, and reverting
 to it costs nothing but the duplicate.
 
+### Holdings are classified by account type, not the transaction preference (#1640 / #1616)
+
+`user_accounts.exclude_investment_sync` remains limited to investment transactions. It does not
+disable holdings ingestion for an account whose stored `accounts.type` is `investment`. Holdings
+cannot satisfy the three tests above: the banking route does not retain equivalent position
+history, the user-facing control names duplicate transaction activity, and Plaid's holdings API is
+current-state only, so a later run cannot backfill missed `holding_snapshots`.
+
+The inverse classification is also explicit. `SyncHoldings` does not replace holdings for an
+account whose exact stored type is anything other than `investment`, even when Plaid returns a
+holding for it. Such a provider row is outside the investment universe rather than a liquidation.
+Any legacy live row is retained unchanged and remains excluded from type-gated current investment
+reads. The sync must not call the empty replacement path: doing so would claim the provider observed
+an empty position set when it did not, and would introduce an unexplained cutover in the deliberately
+ungated legacy `portfolio_snapshots.total_value` series. The daily whole-user capture may continue
+carrying that retained raw row without writing a provider-observation marker; that preserves recorded
+history without admitting new non-investment provider values.
+
 ---
 
 ## The Decisions
