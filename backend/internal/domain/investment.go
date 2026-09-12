@@ -277,6 +277,12 @@ type HoldingSyncResult struct {
 	SecuritiesUpserted int
 	HoldingsReplaced   int
 	AccountsProcessed  int
+	// AccountsSkippedNonInvestment counts owner-valid active accounts omitted because their
+	// stored accounts.type is not exactly "investment". They are inapplicable, not failures.
+	AccountsSkippedNonInvestment int
+	// HoldingsSkippedNonInvestment counts Plaid payload rows addressed to those omitted accounts.
+	// It is a data-quality signal and never contributes to HoldingsReplaced.
+	HoldingsSkippedNonInvestment int
 	// Errors records accounts skipped due to unmapped securities — a real per-sync correctness
 	// problem, not a stable state. This field gates the portfolio snapshot upsert
 	// (investment_sync_service.go SyncHoldings): a non-empty Errors means the sync could not

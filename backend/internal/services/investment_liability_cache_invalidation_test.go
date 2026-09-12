@@ -57,7 +57,7 @@ func TestInvestmentSyncService_SyncHoldings_BumpsUserCacheGenerationAfterSuccess
 	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, linkedItem.AccessToken).Return(holdingsResp, nil)
 	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).Return(map[string]string{plaidSecurityID: internalSecurityID}, nil)
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID},
+		{ID: internalAccountID, PlaidAccountID: plaidAccountID, UserID: userID, Type: "investment"},
 	}, nil)
 	deps.holdingRepo.On("ReplaceForAccount", ctx, internalAccountID, userID, mock.Anything).Return(nil)
 
@@ -76,6 +76,43 @@ func TestInvestmentSyncService_SyncHoldings_BumpsUserCacheGenerationAfterSuccess
 	assert.NotEqual(t, preGen, postGen,
 		"a successful holdings sync must bump the user's cache generation so GetNetWorthTrend "+
 			"cannot keep serving the pre-sync holdings value")
+}
+
+func TestInvestmentSyncService_SyncHoldings_NonInvestmentSkipDoesNotBumpUserCacheGeneration(t *testing.T) {
+	svc, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-cache-type-skip", userID)
+	plaidAccountID := "plaid-depository-cache-skip"
+	plaidSecurityID := "plaid-security-cache-skip"
+
+	response := plaid.NewInvestmentsHoldingsGetResponse(
+		[]plaid.AccountBase{{AccountId: plaidAccountID}},
+		[]plaid.Holding{makePlaidHolding(plaidAccountID, plaidSecurityID, 1, 100, 100, 100)},
+		[]plaid.Security{makePlaidSecurity(plaidSecurityID, "Cash position", "CASH")},
+		makeMinimalPlaidItem(),
+		"req-cache-type-skip",
+	)
+	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, linkedItem.AccessToken).Return(response, nil)
+	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).Return(map[string]string{plaidSecurityID: uuid.New().String()}, nil)
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{{
+		ID: uuid.New().String(), PlaidAccountID: plaidAccountID, UserID: userID, Type: "depository",
+	}}, nil)
+
+	fake := redisclient.NewFake("cache")
+	c := cache.NewCache(cache.Options{Client: fake})
+	svc.SetCacheInvalidation(c.Generations())
+	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, userID)
+	require.NoError(t, err)
+
+	result, err := svc.SyncHoldings(ctx, linkedItem)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.AccountsSkippedNonInvestment)
+	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+
+	postGen, err := c.Generations().Get(ctx, cache.ScopeUser, userID)
+	require.NoError(t, err)
+	assert.Equal(t, preGen, postGen, "ignoring a provider row commits no holdings state and needs no cache bump")
 }
 
 func TestInvestmentSyncService_SyncHoldings_NoBumpWhenCacheInvalidationNotWired(t *testing.T) {
