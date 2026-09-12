@@ -4,6 +4,7 @@
  */
 
 import type { OperationClass } from '../manifest/capability-manifest'
+import type { ResponseDetail } from '../responses/projection'
 
 /** A single parameter extracted from the OpenAPI spec for discoverability. */
 export interface SpecParameter {
@@ -54,11 +55,24 @@ export interface SpecEntry {
   requestBody?: SpecBodyField[]
   /**
    * Response body fields extracted from the operation's JSON 200/201 success response
-   * (issue #1610a), flattened one level deep (MAX_RESPONSE_DEPTH) and allowed-operations-only —
+   * as full API fields, shallow except for explicitly profiled child targets, allowed-operations-only —
    * see index-builder.ts. Deliberately NOT included in searchSpec's haystack (search-runtime.ts):
    * matching on response field names would make almost every query match almost everything.
    */
   responseBody?: SpecBodyField[]
+  /** Compact projection fields, including conditional derived values. Absent for passthrough operations. */
+  compactResponseBody?: (string | SpecBodyField)[]
+}
+
+/** Compact metadata references full fields by name to avoid duplicating descriptions. */
+export function responseFields(entry: SpecEntry, detail: ResponseDetail): SpecBodyField[] | undefined {
+  if (detail === 'full' || !entry.compactResponseBody) return entry.responseBody
+  const full = new Map(entry.responseBody?.map((field) => [field.name, field]))
+  return entry.compactResponseBody.flatMap((field) => {
+    if (typeof field !== 'string') return [field]
+    const descriptor = full.get(field)
+    return descriptor ? [descriptor] : []
+  })
 }
 
 export interface SpecIndex {

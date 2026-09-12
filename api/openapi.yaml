@@ -4809,6 +4809,15 @@ components:
         body:
           additionalProperties: {}
           type: object
+        detail:
+          description: Response detail; omission preserves the default compact presentation. JSON null is treated as omission, not the string null.
+          enum:
+            - compact
+            - full
+            - null
+          type:
+            - string
+            - "null"
         operation_id:
           type: string
         params:
