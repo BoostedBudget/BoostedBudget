@@ -22,6 +22,117 @@ function makeProxy(invokeResult: unknown = {}) {
   }
 }
 
+describe('response detail', () => {
+  for (const [operationId, status] of [['rejectTransferSuggestion', 'rejected'], ['acceptTransferSuggestion', 'accepted']]) {
+    it(`recovery includes the resulting ${status} transfer status`, async () => {
+      const result = await buildWriteExecuteHandler(makeProxy({ suggestion: { id: 'suggestion', status, user_id: 'omit' } }), [
+        { operationId: 'getTransferSuggestions', method: 'GET', path: '/suggestions' },
+      ])({ calls: [{ operationId: operationId! }] })
+      expect(result.toolResult.content[0]!.text).toContain('operationId: "getTransferSuggestions"')
+      expect(result.toolResult.content[0]!.text).toContain(`params: {"status":"${status}"}`)
+    })
+  }
+
+  it('recovers hidden and terminal accounts with explicit list filters', async () => {
+    const result = await buildWriteExecuteHandler(makeProxy({ account: { id: 'account', is_hidden: true, status: 'removed', user_id: 'omit' } }))({
+      calls: [{ operationId: 'updateAccount' }],
+    })
+    expect(result.toolResult.content[0]!.text).toContain('params: {"include_hidden":"true","status":"all_statuses"}')
+  })
+
+  it('keeps a successful full write byte-identical and presentation out of request arguments', async () => {
+    const payload = { id: 'budget', name: 'Trip', user_id: 'owner', created_at: 'yesterday' }
+    const proxy = { invoke: mock(async (_operation: string, _args: Record<string, unknown>) => payload) }
+    const result = await buildWriteExecuteHandler(proxy, [{ operationId: 'createBudget', method: 'POST', path: '/budgets' }])({
+      calls: [{ operationId: 'createBudget', body: { name: 'Trip' }, detail: 'full' }], confirmationToken: 'confirmed',
+    })
+    expect(result.toolResult.content[0]!.text).toBe(`✅ createBudget: ${JSON.stringify(payload)}`)
+    expect(proxy.invoke.mock.calls[0]![1]).toEqual({ url: '/budgets', method: 'POST', data: { name: 'Trip' } })
+    expect(result.auditEvents[0]!.result).toBe('success')
+  })
+
+  it('charges recovery hints to the whole batch budget', async () => {
+    const payload = { accounts: [{ id: 'a', name: '', user_id: 'omit' }] }
+    payload.accounts[0]!.name = 'x'.repeat(99_870)
+    const proxy = makeProxy(payload)
+    const result = await buildReadExecuteHandler(proxy, [{ operationId: 'getAccounts', method: 'GET', path: '/accounts' }])({
+      calls: Array.from({ length: 4 }, () => ({ operationId: 'getAccounts' })),
+    })
+    expect(proxy.invoke).toHaveBeenCalledTimes(3)
+    expect(result.toolResult.content[0]!.text).toContain('Batch result budget exhausted after 3 of 4')
+  })
+
+  it('uses the catalog history recovery read and does not hint on an unchanged empty collection', async () => {
+    const specs = [{ operationId: 'getBoostExecutions', method: 'GET', path: '/boosts/{id}/executions' }]
+    const result = await buildReadExecuteHandler(makeProxy({ executions: [{ id: 'execution', definition_snapshot: {} }] }), specs)({ calls: [{ operationId: 'getBoostExecutions', pathParams: { id: 'deleted-boost' } }] })
+    expect(result.toolResult.content[0]!.text).toContain('operationId: "getUserBoostExecutions", detail: "full"')
+    const empty = await buildReadExecuteHandler(makeProxy({ executions: [] }), specs)({ calls: [{ operationId: 'getBoostExecutions' }] })
+    expect(empty.toolResult.content[0]!.text).toBe('✅ getBoostExecutions: {"executions":[]}')
+    const schema = await buildReadExecuteHandler(makeProxy({ $schema: 'schema', executions: [] }), specs)({ calls: [{ operationId: 'getBoostExecutions' }] })
+    expect(schema.toolResult.content[0]!.text).toContain('detail: "full"')
+  })
+
+  it('recovers category writes through their parent budget and continues after fallback', async () => {
+    const proxy = { invoke: mock(async (operationId: string) => operationId === 'addBudgetCategory'
+      ? { id: 'category-id', budget_id: 'budget-id', created_at: 'omit' }
+      : operationId === 'createBudget' ? { id: 'new-budget', future_field: 'kept-on-fallback' } : { total: 1 }) }
+    const specs = [
+      { operationId: 'getBudget', method: 'GET', path: '/budgets/{id}' },
+      { operationId: 'addBudgetCategory', method: 'POST', path: '/budgets/{id}/categories' },
+    ]
+    const result = await buildWriteExecuteHandler(proxy, specs)({ calls: [
+      { operationId: 'addBudgetCategory', pathParams: { id: 'budget-id' } },
+      { operationId: 'createBudget' }, { operationId: 'getCashFlowSummary' },
+    ] })
+    const text = result.toolResult.content[0]!.text
+    expect(text).toContain('operationId: "getBudget", detail: "full"')
+    expect(text).toContain('pathParams: {"id":"budget-id"}')
+    expect(text).not.toContain('pathParams: {"id":"category-id"}')
+    expect(text).toContain('Compact response unavailable; returned full response.')
+    expect(text).toContain('kept-on-fallback')
+    expect(text).toContain('✅ getCashFlowSummary')
+    expect(result.auditEvents.map((event) => event.result)).toEqual(['success', 'success', 'success'])
+  })
+
+  it('reserves the full-response hint within the result allowance', async () => {
+    const proxy = makeProxy({ accounts: [{ id: 'a', name: 'x'.repeat(100_000), user_id: 'omit' }] })
+    const result = await buildReadExecuteHandler(proxy, [{ operationId: 'getAccounts', method: 'GET', path: '/accounts' }])({ calls: [{ operationId: 'getAccounts' }] })
+    const text = result.toolResult.content[0]!.text
+    const marker = text.match(/\n… \[truncated:[^\]]+\]/)![0]
+    expect(text.replace(marker, '').length - '✅ getAccounts: '.length).toBeLessThanOrEqual(100_000)
+    expect(text).toContain('detail: "full"')
+  })
+
+  it('explains the parent goal ID for contribution recovery', async () => {
+    const result = await buildWriteExecuteHandler(makeProxy({ id: 'contribution', savings_goal_id: 'goal', updated_at: 'omit' }), [
+      { operationId: 'listSavingsGoalContributions', method: 'GET', path: '/goals/{id}/contributions' },
+    ])({ calls: [{ operationId: 'logSavingsGoalContribution' }] })
+    expect(result.toolResult.content[0]!.text).toContain('pathParams: {"id":"goal"}')
+  })
+
+  for (const build of [buildReadExecuteHandler, buildWriteExecuteHandler]) {
+    it(`${build.name} defaults to compact and preserves full payloads on request`, async () => {
+      const payload = { accounts: [{ id: 'a', name: 'Checking', user_id: 'private' }], total_count: 1 }
+      const proxy = makeProxy(payload)
+      const handler = build(proxy, [{ operationId: 'getAccounts', method: 'GET', path: '/accounts' }])
+      const compact = await handler({ calls: [{ operationId: 'getAccounts' }] })
+      expect(compact.toolResult.content[0]!.text).not.toContain('private')
+      expect(compact.toolResult.content[0]!.text).toContain('detail: "full"')
+      const full = await handler({ calls: [{ operationId: 'getAccounts', detail: 'full' }] })
+      expect(full.toolResult.content[0]!.text).toBe(`✅ getAccounts: ${JSON.stringify(payload)}`)
+      expect(proxy.invoke.mock.calls[1]![1]).toEqual({ url: '/accounts', method: 'GET' })
+    })
+
+    it(`${build.name} validates the whole batch before any proxy activity`, async () => {
+      const proxy = { invoke: mock(async () => ({})), confirmBatch: mock(async () => ({ needsConfirmation: true, count: 1 })) }
+      const result = await build(proxy)({ calls: [{ operationId: 'createBudget' }, { operationId: 'getAccounts', detail: 'invalid' as 'full' }] })
+      expect(result.toolResult.isError).toBe(true)
+      expect(proxy.invoke).not.toHaveBeenCalled()
+      expect(proxy.confirmBatch).not.toHaveBeenCalled()
+    })
+  }
+})
+
 function makeFailingProxy(code: string, message: string, confirmationToken?: string) {
   return {
     invoke: mock(() =>
@@ -300,7 +411,7 @@ describe('buildWriteExecuteHandler', () => {
       const handler = buildWriteExecuteHandler(proxy)
 
       const { toolResult } = await handler({
-        calls: [{ operationId: 'getTransactions' }],
+        calls: [{ operationId: 'getTransactions', detail: 'full' }],
       })
 
       const text = toolResult.content[0]?.text ?? ''
@@ -332,7 +443,7 @@ describe('buildWriteExecuteHandler', () => {
       const handler = buildWriteExecuteHandler(proxy)
 
       const { toolResult } = await handler({
-        calls: [{ operationId: 'getTransactions' }],
+        calls: [{ operationId: 'getTransactions', detail: 'full' }],
       })
 
       const text = toolResult.content[0]?.text ?? ''
