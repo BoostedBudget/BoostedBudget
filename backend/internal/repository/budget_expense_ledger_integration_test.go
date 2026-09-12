@@ -64,6 +64,24 @@ func TestBudgetExpenseLedgerPostedNonTransferAndPartialSavings(t *testing.T) {
 	require.Equal(t, 70.0, *combined.Lines["food"].Amount)
 	require.Len(t, savings, 1)
 	require.Equal(t, 30.0, *savings[0].ActualAmount)
+	t.Run("tombstoned goal retains expense weight but not current activity", func(t *testing.T) {
+		subtx, err := tx.Begin(ctx)
+		require.NoError(t, err)
+		defer subtx.Rollback(ctx) //nolint:errcheck
+
+		_, err = subtx.Exec(ctx, `UPDATE savings_goals SET deleted_at=NOW(),deleted_reason='user_deleted',deleted_by='user' WHERE id=$1`, goal)
+		require.NoError(t, err)
+
+		retained, currentSavings, err := ReadBudgetAccountingInputs(ctx, subtx, user, []domain.BudgetCategory{{ID: "food", CategoryKind: "pfc", PFCPrimary: &food}}, start, start.AddDate(0, 1, -1))
+		require.NoError(t, err)
+		require.Equal(t, 70.0, *retained.Lines["food"].Amount)
+		require.Empty(t, currentSavings, "a deleted goal must remain absent from current savings activity")
+
+		require.NoError(t, NewSavingsGoalRepository(subtx).PurgeGoal(ctx, goal, user, nil))
+		purged, _, err := ReadBudgetAccountingInputs(ctx, subtx, user, []domain.BudgetCategory{{ID: "food", CategoryKind: "pfc", PFCPrimary: &food}}, start, start.AddDate(0, 1, -1))
+		require.NoError(t, err)
+		require.Equal(t, 100.0, *purged.Lines["food"].Amount, "explicit purge removes the retained expense weight")
+	})
 	_, err = tx.Exec(ctx, `UPDATE savings_goals SET currency_code='EUR' WHERE id=$1`, goal)
 	require.NoError(t, err)
 	foreign, err := ReadBudgetExpenseLedger(ctx, tx, user, []domain.BudgetCategory{{ID: "food", CategoryKind: "pfc", PFCPrimary: &food}}, start, start.AddDate(0, 1, -1))

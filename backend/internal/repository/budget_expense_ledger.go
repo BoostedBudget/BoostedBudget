@@ -221,7 +221,9 @@ const budgetExpenseFactsQuery = `WITH contribution_weights AS (
  WHEN BOOL_OR(c.archived_at IS NOT NULL) AND COUNT(*)>1 THEN 'ambiguous_savings_generation'
  ELSE '' END AS reason
  FROM savings_goal_contributions c JOIN savings_goals g ON g.id=c.savings_goal_id
- WHERE g.user_id=$1 AND g.deleted_at IS NULL AND c.deleted_at IS NULL
+ -- tombstone-exempt(savings_goals g): retained contributions remain historical expense weights
+ -- after goal retirement; an explicit purge removes the contribution rows themselves.
+ WHERE g.user_id=$1 AND c.deleted_at IS NULL
  AND c.status='confirmed' AND c.transaction_id IS NOT NULL AND c.flow_kind<>'opening_balance'
  GROUP BY c.transaction_id
  )
