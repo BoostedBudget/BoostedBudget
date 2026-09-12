@@ -945,6 +945,23 @@ describe('BudgetCategoryForm', () => {
   })
 
   describe('Soft Warning — allocation exceeds expected income', () => {
+    it('keeps the dollar prefix for USD budgets', () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          currencyCode="USD"
+        />
+      )
+
+      const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
+      expect(amountInput.parentElement).toHaveTextContent('$')
+    })
+
     it('uses the budget currency for the amount prefix and over-allocation warning', async () => {
       render(
         <BudgetCategoryForm
@@ -969,6 +986,51 @@ describe('BudgetCategoryForm', () => {
       const warning = await screen.findByRole('status')
       expect(warning).toHaveTextContent('€100.00')
       expect(screen.getByText('€100.00')).toHaveAttribute('data-ph-mask')
+    })
+
+    it('falls back safely when the currency code is malformed', async () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          currencyCode="USDX"
+          expectedIncome={1000}
+          totalAllocatedExcludingCurrent={900}
+        />
+      )
+
+      const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
+      expect(amountInput.parentElement).toHaveTextContent('USDX')
+
+      fireEvent.change(amountInput, { target: { value: '200' } })
+
+      const warningAmount = await screen.findByText('USDX 100.00')
+      expect(warningAmount).toHaveAttribute('data-ph-mask')
+    })
+
+    it('renders a multi-character currency marker as a separate input addon', () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          currencyCode="CAD"
+        />
+      )
+
+      const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
+      const currencyAddon = screen.getByText('CA$')
+      expect(currencyAddon.parentElement).toBe(amountInput.parentElement)
+      expect(currencyAddon.nextElementSibling).toBe(amountInput)
+      expect(currencyAddon).not.toHaveClass('absolute')
+      expect(amountInput).not.toHaveClass('pl-7')
     })
 
     it('TestSoftWarning_ShowsWhenAllocationExceedsIncome — shows warning and keeps save enabled', async () => {

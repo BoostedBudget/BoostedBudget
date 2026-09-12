@@ -110,14 +110,31 @@ function toPreviewDraftCategory(category: BudgetCategory): NonNullable<BudgetPre
   };
 }
 
-function getCurrencySymbol(currencyCode: string): string {
+interface CurrencyDisplay {
+  marker: string;
+  format: (amount: number) => string;
+}
+
+function createCurrencyDisplay(currencyCode: string): CurrencyDisplay {
+  const normalizedCode = currencyCode.trim().toUpperCase() || 'USD';
   try {
-    return new Intl.NumberFormat('en-US', {
+    const formatter = new Intl.NumberFormat('en-US', {
       style: 'currency',
-      currency: currencyCode,
-    }).formatToParts(0).find((part) => part.type === 'currency')?.value ?? currencyCode;
+      currency: normalizedCode,
+    });
+    return {
+      marker: formatter.formatToParts(0).find((part) => part.type === 'currency')?.value ?? normalizedCode,
+      format: (amount) => formatter.format(amount),
+    };
   } catch {
-    return currencyCode;
+    const numberFormatter = new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+    return {
+      marker: normalizedCode,
+      format: (amount) => `${normalizedCode} ${numberFormatter.format(amount)}`,
+    };
   }
 }
 
@@ -266,12 +283,9 @@ export function BudgetCategoryForm({
     return projected > expectedIncome ? projected - expectedIncome : null;
   }, [expectedIncome, totalAllocatedExcludingCurrent, formData.allocated_amount]);
 
+  const currencyDisplay = useMemo(() => createCurrencyDisplay(currencyCode), [currencyCode]);
   const formatCurrency = (amount: number, currency = currencyCode): string =>
-    new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency,
-    }).format(amount);
-  const currencySymbol = getCurrencySymbol(currencyCode);
+    currency === currencyCode ? currencyDisplay.format(amount) : createCurrencyDisplay(currency).format(amount);
 
   // Clear error on category change (category_kind, PFC, or custom selection)
   const clearCategoryError = useCallback(
@@ -642,9 +656,12 @@ export function BudgetCategoryForm({
             >
               Amount
             </label>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
-                {currencySymbol}
+            <div className="flex">
+              <span
+                aria-hidden="true"
+                className="inline-flex shrink-0 items-center rounded-l-lg border border-input bg-muted px-3 text-sm text-muted-foreground"
+              >
+                {currencyDisplay.marker}
               </span>
               <input
                 type="number"
@@ -653,7 +670,7 @@ export function BudgetCategoryForm({
                 onChange={handleAmountChange}
                 min="0"
                 step="0.01"
-                className={cn(inputBase, 'pl-7', errors.allocated_amount && inputError)}
+                className={cn(inputBase, 'min-w-0 rounded-l-none border-l-0', errors.allocated_amount && inputError)}
                 placeholder="0.00"
               />
             </div>
@@ -785,7 +802,7 @@ export function BudgetCategoryForm({
               aria-live="polite"
             >
               Allocations exceed expected income by{' '}
-              <span data-ph-mask>{formatCurrency(allocationOverage)}</span>.{' '}
+              <span data-ph-mask>{currencyDisplay.format(allocationOverage)}</span>.{' '}
               You&apos;ll be dipping into savings or going over budget.
             </Alert>
           )}
