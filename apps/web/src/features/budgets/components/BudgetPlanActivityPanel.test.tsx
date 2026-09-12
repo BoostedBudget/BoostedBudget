@@ -19,10 +19,10 @@ describe('BudgetPlanActivityPanel', () => {
   }
   it('provides a privacy toggle and opens the matching allocation activity dialog', () => {
     renderPanel()
-    fireEvent.click(screen.getByRole('button', { name: 'Hide activity amounts' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Hide amounts' }))
     expect(screen.getByText('Chart hidden in privacy mode.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'View allocation 1 activity' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Show activity amounts' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show amounts' }))
     fireEvent.click(screen.getByRole('button', { name: 'View allocation 1 activity' }))
     expect(screen.getByRole('dialog', { name: 'Allocation activity' })).toBeInTheDocument()
     expect(screen.getByText(/Posted spending from 2026-09-01 through 2026-09-12/)).toBeInTheDocument()

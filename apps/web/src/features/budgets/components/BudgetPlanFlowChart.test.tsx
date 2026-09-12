@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { MockEChartsChart } from '@/test/mocks/shared-charts'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 import { BudgetPlanFlowChart, type BudgetPlanFlowData } from './BudgetPlanFlowChart'
 
 const data: BudgetPlanFlowData = {
@@ -12,7 +13,10 @@ const data: BudgetPlanFlowData = {
 }
 
 describe('BudgetPlanFlowChart', () => {
-  beforeEach(() => MockEChartsChart.mockClear())
+  beforeEach(() => {
+    MockEChartsChart.mockClear()
+    mockTrackEvent.mockClear()
+  })
 
   it('shows separate planned, observed and declared income, with a complete accessible table', () => {
     render(<BudgetPlanFlowChart data={data} onSelectLine={() => {}} />)
@@ -50,7 +54,14 @@ describe('BudgetPlanFlowChart', () => {
     const lines = Array.from({ length: 15 }, (_, i) => ({ ...data.lines[0]!, id: `line${i}`, label: `Line ${i}` }))
     render(<BudgetPlanFlowChart data={{ ...data, lines }} onSelectLine={() => {}} />)
     expect(within(screen.getByRole('table')).getAllByRole('row')).toHaveLength(16)
-    expect(screen.getByRole('button', { name: 'Show all allocations' })).toBeInTheDocument()
+    const button = screen.getByRole('button', { name: 'View full table' })
+
+    fireEvent.click(button)
+
+    expect(mockTrackEvent).toHaveBeenCalledWith('budget_plan_full_table_viewed', {
+      hidden_allocation_count: 5,
+    })
+    expect(mockTrackEvent).toHaveBeenCalledTimes(1)
   })
 
   it('maps chart nodes to stable allocations and sends More to the complete table', () => {
