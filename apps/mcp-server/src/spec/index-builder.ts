@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url'
 import $RefParser from '@apidevtools/json-schema-ref-parser'
 import { parse as parseYaml } from 'yaml'
 import { getCapability } from '../manifest/capability-manifest'
+import { validateResponseCatalog } from '../responses/catalog-validation'
+import { responseCatalog, responseProfiles, type ProjectionTarget, type ResponseDetail } from '../responses/projection'
 import type { SpecBodyField, SpecEntry, SpecIndex, SpecParameter } from './search-runtime'
 
 // Paths relative to repo root
@@ -175,13 +177,9 @@ function resolveTypeAndFormat(
 // without bound."
 const MAX_BODY_DEPTH = 2
 
-// Response schemas get their OWN, shallower depth cap. Task #1610a measured the cost: depth 2
-// on the response side (mirroring the request side) would add 162% to spec-index.json's size
-// (2,650 fields vs 1,423 at depth 1) for 133 KB of the 162 — field COUNT drives the cost, not
-// descriptions. Depth 1 (a response's own top-level fields, `object`/`array of object` marked
-// but not expanded) plus allowed-only filtering (excluded ops can never be executed, so their
-// response shape is dead weight) is the implemented row: +56%, not +162%. Do NOT repoint
-// MAX_BODY_DEPTH here — that would silently shallow out every request body too.
+// Response fields remain shallow except for explicit catalog child targets (#1634).
+// This keeps conditions/actions and other arbitrary JSON opaque while expanding entity
+// collections and nested identity fields. Request depth is independent and stays two.
 const MAX_RESPONSE_DEPTH = 1
 
 /**
@@ -347,18 +345,50 @@ function extractResponseBodyFields(
   return out
 }
 
+/** Expand only explicitly profiled objects; all other JSON remains opaque. */
+function extractProjectedFields(schema: OpenAPISchema | undefined, spec: OpenAPISpec, target: ProjectionTarget, detail: ResponseDetail, prefix = ''): SpecBodyField[] {
+  const resolved = resolveSchema(schema, spec)
+  const object = target.array ? resolveSchema(resolved?.items, spec) : resolved
+  const properties = object?.properties
+  if (!properties) return []
+  const profile = responseProfiles[target.profile]!
+  const fields: SpecBodyField[] = []
+  flattenBodySchema(object, spec, 1, prefix, fields, RESPONSE_BODY_POLICY)
+  const result = fields.flatMap((field) => {
+    const key = prefix ? field.name.slice(prefix.length + 1) : field.name
+    if (detail === 'compact' && profile.omit.includes(key)) return []
+    const child = profile.children[key]
+    if (!child) return [field]
+    const childPrefix = field.name + (child.array ? '[]' : '')
+    return [field, ...extractProjectedFields(properties[key], spec, child, detail, childPrefix)]
+  })
+  const name = (key: string) => prefix ? `${prefix}.${key}` : key
+  if (detail === 'compact' && profile.derived) {
+    for (const level of ['primary', 'detailed']) {
+      result.push({ name: name(`effective_pfc_${level}_display`), type: 'string|null', description: `Present only when category_override_kind is not custom and the source display exists (including null). Uses pfc_${level}_override_display for a pfc override, otherwise pfc_${level}_display.` })
+    }
+    if (profile.derived === 'transaction') {
+      result.push({ name: name('reversed'), type: 'boolean', description: 'True when deleted_at is non-null and deleted_reason is provider_removed_posted; false otherwise.' })
+      result.push({ name: name('reversed_at'), type: 'string', format: 'date-time', description: 'Present only when reversed is true; the deleted_at timestamp.' })
+    }
+  }
+  return result
+}
+
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const
 export { HTTP_METHODS }
 
-export async function buildSpecIndex(): Promise<SpecIndex> {
+export async function buildSpecIndex(sourceSpec?: OpenAPISpec): Promise<SpecIndex> {
   // Parse YAML
-  const rawYaml = readFileSync(OPENAPI_PATH, 'utf-8')
-  const rawSpec = parseYaml(rawYaml) as OpenAPISpec
+  const rawSpec = sourceSpec ?? parseYaml(readFileSync(OPENAPI_PATH, 'utf-8')) as OpenAPISpec
 
   // Dereference all $refs (inline — no remote refs in this spec)
   const spec = (await $RefParser.dereference(rawSpec as object)) as OpenAPISpec
 
-  return indexFromSpec(spec)
+  const index = indexFromSpec(spec)
+  const errors = validateResponseCatalog(spec, index.entries.filter((entry) => !entry.excluded).map((entry) => entry.operationId))
+  if (errors.length) throw new Error(`Invalid MCP response catalog:\n${errors.join('\n')}`)
+  return index
 }
 
 /**
@@ -409,12 +439,23 @@ export function indexFromSpec(spec: OpenAPISpec): SpecIndex {
       // resolves $ref against components.schemas locally (spec is already in scope).
       const requestBody = extractRequestBodyFields(operation.requestBody, spec)
 
-      // Extract the response body schema (issue #1610a) — allowed operations ONLY. An
+      // Extract the response body schema — allowed operations ONLY. An
       // excluded operation can never be executed through MCP, so a response schema for one
       // is dead weight in the index (measured: −68 KB of the +56% budget row). Computing it
       // unconditionally would silently regress the size budget the moment a new operation is
       // excluded.
-      const responseBody = capability.excluded ? [] : extractResponseBodyFields(operation.responses, spec)
+      const policy = responseCatalog[operationId]
+      const responseSchema = findJsonSuccessResponseSchema(operation.responses)
+      let responseBody: SpecBodyField[] = []
+      let compactResponseBody: SpecBodyField[] = []
+      if (!capability.excluded) {
+        if (policy?.kind === 'project') {
+          responseBody = extractProjectedFields(responseSchema, spec, policy.target, 'full')
+          compactResponseBody = extractProjectedFields(responseSchema, spec, policy.target, 'compact')
+        } else {
+          responseBody = extractResponseBodyFields(operation.responses, spec)
+        }
+      }
 
       const entry: SpecEntry = {
         operationId,
@@ -429,6 +470,10 @@ export function indexFromSpec(spec: OpenAPISpec): SpecIndex {
       if (parameters.length > 0) entry.parameters = parameters
       if (requestBody.length > 0) entry.requestBody = requestBody
       if (responseBody.length > 0) entry.responseBody = responseBody
+      if (compactResponseBody.length > 0) {
+        const fullNames = new Set(responseBody.map((field) => field.name))
+        entry.compactResponseBody = compactResponseBody.map((field) => fullNames.has(field.name) ? field.name : field)
+      }
 
       entries.push(entry)
     }

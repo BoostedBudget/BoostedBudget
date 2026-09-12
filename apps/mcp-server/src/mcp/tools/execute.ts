@@ -69,6 +69,7 @@
 import { getCapability } from '../../manifest/capability-manifest'
 import type { CapabilityEntry, OperationClass as AuditOperationClass } from '../../manifest/capability-manifest'
 import { HostProxyError } from '../../sandbox/host-proxy'
+import { projectResponse, responseCatalog, type ResponseDetail } from '../../responses/projection'
 import { isReadExecuteAdmitted, READ_ONLY_METHODS } from './read-execute-admission'
 import type { McpToolResult } from './search'
 
@@ -77,6 +78,7 @@ export interface ExecuteCall {
   params?: Record<string, unknown>
   body?: Record<string, unknown>
   pathParams?: Record<string, string>
+  detail?: ResponseDetail
 }
 
 /** readExecute's input — deliberately has NO confirmationToken field: under the three-way
@@ -92,13 +94,13 @@ export interface WriteExecuteInput {
 }
 
 export interface HostProxy {
-  invoke(operationId: string, args: Record<string, unknown>, opts?: { confirmationToken?: string; idempotencyKey?: string }): Promise<unknown>
+  invoke(operationId: string, args: Record<string, unknown>, opts?: { confirmationToken?: string; idempotencyKey?: string; presentation?: { detail: ResponseDetail } }): Promise<unknown>
   /**
    * #1625: batch-level confirmation gate. Optional so existing test doubles that only stub
    * invoke() keep working — when absent, the per-call gate inside invoke() still applies.
    */
   confirmBatch?(
-    gated: Array<{ operationId: string; args: Record<string, unknown> }>,
+    gated: Array<{ operationId: string; args: Record<string, unknown>; presentation?: { detail: ResponseDetail } }>,
     token?: string,
   ): Promise<{ needsConfirmation: boolean; token?: string; count: number }>
 }
@@ -178,7 +180,7 @@ function buildRequestArgs(
  * endpoints, reporting a confident answer built on a fragment. Truncation
  * must now be large enough to rarely fire, and self-describing when it does.
  */
-const MAX_RESULT_CHARS = 100_000
+export const MAX_RESULT_CHARS = 100_000
 
 /**
  * Max characters of the WHOLE BATCH's rendered output, across every call in one
@@ -202,7 +204,7 @@ const MAX_BATCH_RESULT_CHARS = 300_000
  * NOT include any sample of the omitted content (sizes only; no financial
  * data in the marker itself).
  */
-function renderResult(result: unknown): string {
+function renderResult(result: unknown, reservedChars = 0): string {
   // #1625: a 204 No Content arrives here as `undefined` (fetch-mutator.ts maps it), and
   // JSON.stringify(undefined) returns the VALUE undefined, not a string — so `.length` threw a
   // TypeError that was not a HostProxyError, landing in the generic "unexpected error" branch,
@@ -212,11 +214,12 @@ function renderResult(result: unknown): string {
   // (a bare function or symbol), which cannot reach here today but would fail identically.
   if (result === undefined) return 'No Content (204) — the operation succeeded and returned no body.'
   const full = JSON.stringify(result) ?? 'null'
-  if (full.length <= MAX_RESULT_CHARS) return full
+  const limit = Math.max(0, MAX_RESULT_CHARS - reservedChars)
+  if (full.length <= limit) return full
 
-  const shown = full.slice(0, MAX_RESULT_CHARS)
+  const shown = full.slice(0, limit)
   return (
-    `${shown}\n… [truncated: showing ${MAX_RESULT_CHARS} of ${full.length} characters. ` +
+    `${shown}\n… [truncated: showing ${limit} of ${full.length} characters. ` +
     `Narrow the query — add filters, a date range, or a smaller limit — to receive the complete result.]`
   )
 }
@@ -279,6 +282,55 @@ interface BuildHandlerOptions {
   admissionGate?: (call: ExecuteCall, capability: CapabilityEntry, specEntries: ExecuteSpecEntry[]) => string | undefined
 }
 
+function fullResponseHint(call: ExecuteCall, result: unknown, specs: ExecuteSpecEntry[]): string {
+  const policy = responseCatalog[call.operationId]
+  if (!policy || policy.kind !== 'project') return ''
+  const recovery = policy.recoveryOperationId
+  const value = result && typeof result === 'object' && !Array.isArray(result) ? result as Record<string, unknown> : {}
+  if (call.operationId === 'getBoostExecutions' && recovery === 'getUserBoostExecutions') {
+    // Global history survives a purged parent's NULL FK. A boost-scoped offset
+    // cannot address this different result set; match the retained execution IDs.
+    const limit = typeof value.limit === 'number' && Number.isInteger(value.limit) && value.limit >= 1 && value.limit <= 100 ? value.limit : 20
+    const status = call.params?.status
+    const params = { limit, offset: 0,
+      ...(typeof status === 'string' && status.length > 0 && status.length <= 100 ? { status } : {}),
+    }
+    return `Full response available via readExecute: operationId: "${recovery}", detail: "full" (top-level call field), params: ${JSON.stringify(params)}. ` +
+      'Locate the execution IDs retained in this compact payload across global history pages; advance offset by the returned limit. ' +
+      'If filtered history is exhausted before all IDs are found, remove status and restart offset at 0. ' +
+      'Stop when all IDs are found or unfiltered history is exhausted; report any missing IDs. Reads are not a consistent snapshot.'
+  }
+  const path = specs.find((entry) => entry.operationId === recovery)?.path ?? ''
+  const required = [...path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]!)
+  const pathParams: Record<string, string> = {}
+  for (const key of required) {
+    // Child mutation results carry their own id; the recovery read needs the parent id.
+    let responseIdField = key
+    if (recovery === 'getBudget' && (call.operationId === 'addBudgetCategory' || call.operationId === 'updateBudgetCategory')) {
+      responseIdField = 'budget_id'
+    } else if (recovery === 'listSavingsGoalContributions') {
+      responseIdField = 'savings_goal_id'
+    }
+    const id = recovery === call.operationId ? call.pathParams?.[key] : value[responseIdField]
+    if (typeof id === 'string' && id.length <= 200) pathParams[key] = id
+  }
+  const missing = required.filter((key) => !pathParams[key])
+  // List defaults can hide the very resource a successful mutation just changed.
+  const suggestion = value.suggestion as Record<string, unknown> | undefined
+  const status = suggestion?.status
+  let params: Record<string, string> | undefined
+  if (call.operationId === 'updateAccount') {
+    params = { include_hidden: 'true', status: 'all_statuses' }
+  } else if (recovery === 'getTransferSuggestions' && recovery !== call.operationId && typeof status === 'string' && status.length <= 100) {
+    params = { status }
+  }
+  return `Full response available via readExecute: operationId: "${recovery}", detail: "full" (top-level call field)` +
+    (Object.keys(pathParams).length ? `, pathParams: ${JSON.stringify(pathParams)}` : '') +
+    (params ? `, params: ${JSON.stringify(params)}` : '') +
+    (missing.length ? `. Supply the required ${missing.join(', ')} path parameter(s)` : '') +
+    (recovery === call.operationId ? '. Keep the same query and body parameters.' : '.')
+}
+
 /**
  * Shared core for readExecute and writeExecute — both walk the same batch, hit the same
  * manifest gate, and render results/truncation/audit events identically. Only the admission
@@ -296,6 +348,13 @@ function buildHandlerCore(
     if (!calls || calls.length === 0) {
       return {
         toolResult: { content: [{ type: 'text', text: 'No operations specified. Provide at least one call.' }] },
+        auditEvents: [],
+      }
+    }
+
+    if (calls.some((call) => call.detail !== undefined && call.detail !== 'compact' && call.detail !== 'full')) {
+      return {
+        toolResult: { isError: true, content: [{ type: 'text', text: 'Invalid response detail. Use "compact" or "full".' }] },
         auditEvents: [],
       }
     }
@@ -322,6 +381,7 @@ function buildHandlerCore(
       const canonical = calls.map((call) => ({
         operationId: call.operationId,
         args: buildRequestArgs(call, specEntries),
+        ...(call.detail !== undefined ? { presentation: { detail: call.detail } } : {}),
       }))
       const gated = canonical.filter((c) => {
         const capability = getCapability(c.operationId)
@@ -439,9 +499,18 @@ function buildHandlerCore(
       try {
         const result = await proxy.invoke(call.operationId, args, {
           confirmationToken: capability.confirmationRequired ? confirmationToken : undefined,
+          ...(call.detail !== undefined ? { presentation: { detail: call.detail } } : {}),
         })
-        const rendered = renderResult(result)
-        pushResult(`✅ ${call.operationId}: ${rendered}`)
+        const projected = projectResponse(call.operationId, result, call.detail)
+        let note = ''
+        if (projected.warning) {
+          note = 'Compact response unavailable; returned full response.'
+        } else if (projected.reduced) {
+          note = fullResponseHint(call, result, specEntries)
+        }
+        const suffix = note ? `\n\n${note}` : ''
+        const rendered = renderResult(projected.value, suffix.length)
+        pushResult(`✅ ${call.operationId}: ${rendered}${suffix}`)
         auditEvents.push({ operationId: call.operationId, operationClass, result: 'success' })
       } catch (err) {
         if (err instanceof HostProxyError) {
