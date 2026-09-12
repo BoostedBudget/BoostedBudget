@@ -315,9 +315,9 @@ func formatOptionalStringForLog(v *string) string {
 	return *v
 }
 
-// SyncHoldings fetches the complete holdings snapshot from Plaid and atomically
-// replaces all holdings per account. Since Plaid returns a full snapshot (no delta),
-// we delete existing holdings and insert fresh ones inside a single DB transaction.
+// SyncHoldings fetches the complete holdings snapshot from Plaid and atomically replaces holdings
+// for accounts classified as investments. Since Plaid returns a full snapshot (no delta), eligible
+// accounts delete existing holdings and insert fresh ones inside a single DB transaction.
 func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *domain.LinkedItem) (*domain.HoldingSyncResult, error) {
 	// Issue #1531 Task 10b-2a-ii: bump the user's cache generation once, on the way out,
 	// whenever at least one account's holdings were actually replaced below — regardless of
@@ -361,6 +361,8 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 	}
 	accountMap := make(map[string]string, len(accounts))
 	holdingUserAccountMap := make(map[string]*string, len(accounts))
+	nonInvestmentAccountIDs := make(map[string]struct{}, len(accounts))
+	accountsSkippedNonInvestment := 0
 	for _, a := range accounts {
 		// #1537 (F14): the (actor, account) pair is assembled from two sources that nothing forces to
 		// agree — UserID comes from linkedItem.UserID below, while these accounts come from
@@ -379,18 +381,33 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 			)
 			continue
 		}
+		// Issues #1640 and #1616: account type—not exclude_investment_sync—defines holdings
+		// eligibility. Skipping here preserves legacy rows and keeps inapplicable accounts out of
+		// completeness checks. The retention ADR records why the transaction preference cannot apply.
+		if a.Type != "investment" {
+			nonInvestmentAccountIDs[a.PlaidAccountID] = struct{}{}
+			accountsSkippedNonInvestment++
+			continue
+		}
 		accountMap[a.PlaidAccountID] = a.ID
 		holdingUserAccountMap[a.PlaidAccountID] = a.UserAccountID
 	}
 
 	// Group Plaid holdings by plaid_account_id for efficient lookup
 	holdingsByAccount := make(map[string][]plaid.Holding, len(accounts))
+	holdingsSkippedNonInvestment := 0
 	for _, h := range resp.Holdings {
+		if _, skipped := nonInvestmentAccountIDs[h.AccountId]; skipped {
+			holdingsSkippedNonInvestment++
+			continue
+		}
 		holdingsByAccount[h.AccountId] = append(holdingsByAccount[h.AccountId], h)
 	}
 
 	result := &domain.HoldingSyncResult{
-		SecuritiesUpserted: len(domainSecurities),
+		SecuritiesUpserted:           len(domainSecurities),
+		AccountsSkippedNonInvestment: accountsSkippedNonInvestment,
+		HoldingsSkippedNonInvestment: holdingsSkippedNonInvestment,
 	}
 
 	// Issue #1569 Task 4: the only per-account completeness signal Plaid's
@@ -579,13 +596,17 @@ func (s *investmentSyncService) SyncHoldings(ctx context.Context, linkedItem *do
 		"securities_upserted", result.SecuritiesUpserted,
 		"holdings_replaced", result.HoldingsReplaced,
 		"accounts_processed", result.AccountsProcessed,
+		"accounts_skipped_non_investment", result.AccountsSkippedNonInvestment,
+		"holdings_skipped_non_investment", result.HoldingsSkippedNonInvestment,
 	)
 
 	if s.analytics != nil {
 		s.analytics.Capture(linkedItem.UserID, phclient.EventInvestmentHoldingsSynced, map[string]interface{}{
-			"securities_upserted": result.SecuritiesUpserted,
-			"holdings_replaced":   result.HoldingsReplaced,
-			"accounts_processed":  result.AccountsProcessed,
+			"securities_upserted":             result.SecuritiesUpserted,
+			"holdings_replaced":               result.HoldingsReplaced,
+			"accounts_processed":              result.AccountsProcessed,
+			"accounts_skipped_non_investment": result.AccountsSkippedNonInvestment,
+			"holdings_skipped_non_investment": result.HoldingsSkippedNonInvestment,
 		})
 	}
 
