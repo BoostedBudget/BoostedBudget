@@ -1540,11 +1540,36 @@ func TestBudgetCategory_Validate_MatchLogic(t *testing.T) {
 			name: "valid tag_only with tags",
 			category: BudgetCategory{
 				BudgetID:        "budget-123",
+				CategoryKind:    "pfc",
+				PFCPrimary:      ptrStr("FOOD_AND_DRINK"),
 				AllocatedAmount: 100.00,
 				MatchLogic:      MatchLogicTagOnly,
 				Tags:            []string{"groceries", "food"},
 			},
 			wantErr: false,
+		},
+		{
+			name: "tag_only rejects an unknown category kind",
+			category: BudgetCategory{
+				BudgetID:        "budget-123",
+				CategoryKind:    "unknown_kind",
+				AllocatedAmount: 100.00,
+				MatchLogic:      MatchLogicTagOnly,
+				Tags:            []string{"groceries"},
+			},
+			wantErr: true,
+			errMsg:  "category_kind must be pfc, custom, savings, group, or remainder",
+		},
+		{
+			name: "tag_only rejects a missing category kind",
+			category: BudgetCategory{
+				BudgetID:        "budget-123",
+				AllocatedAmount: 100.00,
+				MatchLogic:      MatchLogicTagOnly,
+				Tags:            []string{"groceries"},
+			},
+			wantErr: true,
+			errMsg:  "category_kind must be pfc, custom, savings, group, or remainder",
 		},
 		{
 			name: "valid 'and' logic with both category and tags",

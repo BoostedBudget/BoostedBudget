@@ -1635,6 +1635,25 @@ describe('BudgetCategoryForm', () => {
       expect(screen.queryByText(/match logic/i)).toBeNull()
     })
 
+    it('disables preview for savings without fabricating a preview category kind', async () => {
+      const user = userEvent.setup()
+      renderSavingsForm()
+      await user.click(screen.getByRole('button', { name: /savings goal/i }))
+
+      expect(mockUsePreviewCategories).toHaveBeenLastCalledWith(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        [],
+        'category_only',
+        '',
+        '',
+        false,
+        expect.any(Object),
+      )
+    })
+
     it('submits savings_goal_id and category_kind=savings', async () => {
       const user = userEvent.setup({ delay: null })
       renderSavingsForm()

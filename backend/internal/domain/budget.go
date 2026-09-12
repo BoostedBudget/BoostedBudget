@@ -606,9 +606,7 @@ func (bc *BudgetCategory) Validate() error {
 			return fmt.Errorf("%w: custom_category_id must not be set when category_kind is savings", ErrInvalidBudget)
 		}
 	default:
-		if bc.MatchLogic != MatchLogicTagOnly {
-			return fmt.Errorf("%w: category_kind must be pfc, custom, savings, group, or remainder", ErrInvalidBudget)
-		}
+		return fmt.Errorf("%w: category_kind must be pfc, custom, savings, group, or remainder", ErrInvalidBudget)
 	}
 
 	if bc.AllocatedAmount < 0 {
