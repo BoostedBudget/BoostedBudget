@@ -145,12 +145,18 @@ describe('BudgetTransactionList', () => {
   })
 
   describe('pagination', () => {
-    it('refreshes an open drilldown when the report snapshot changes', () => {
-      const refetch = mock(() => Promise.resolve())
-      mockUseBudgetTransactions.mockReturnValue(createMockHookState({ refetch }))
-      const { rerender } = renderWithRouter(<BudgetTransactionList budgetId="budget-1" categoryId="category-1" snapshotVersion="first" />)
-      rerender(<BrowserRouter><BudgetTransactionList budgetId="budget-1" categoryId="category-1" snapshotVersion="second" /></BrowserRouter>)
-      expect(refetch).toHaveBeenCalledTimes(1)
+    it('passes the report snapshot version to the transaction hook', () => {
+      mockUseBudgetTransactions.mockReturnValue(createMockHookState())
+      renderWithRouter(
+        <BudgetTransactionList
+          budgetId="budget-1"
+          categoryId="category-1"
+          snapshotVersion="2026-09-12T12:00:00Z"
+        />
+      )
+      expect(mockUseBudgetTransactions).toHaveBeenCalledWith('budget-1', 'category-1', {
+        snapshotVersion: '2026-09-12T12:00:00Z',
+      })
     })
     it('distinguishes gross spending, savings and counted expense in the report currency', () => {
       mockUseBudgetTransactions.mockReturnValue(createMockHookState({ transactions: [{ ...mockTransaction, amount: 100, budget_expense_amount: 70 }], totalCount: 1, totalAmount: 70 }))
@@ -242,7 +248,9 @@ describe('BudgetTransactionList', () => {
         <BudgetTransactionList budgetId="my-budget" categoryId="my-category" />
       )
 
-      expect(mockUseBudgetTransactions).toHaveBeenCalledWith('my-budget', 'my-category')
+      expect(mockUseBudgetTransactions).toHaveBeenCalledWith('my-budget', 'my-category', {
+        snapshotVersion: undefined,
+      })
     })
   })
 

@@ -86,6 +86,74 @@ describe('useBudgetTransactions', () => {
   })
 
   describe('data fetching', () => {
+    it('versions the canonical page-one query key without sending the snapshot to the API', () => {
+      mockQueryState(undefined, true)
+
+      renderHook(
+        () => useBudgetTransactions('budget-1', 'category-1', { snapshotVersion: '2026-09-12T12:00:00Z' }),
+        { wrapper: createWrapper() }
+      )
+
+      const canonicalKey = mockGetCategoryTransactionsQueryKey(
+        'budget-1',
+        'category-1',
+        { limit: 20, offset: 0 }
+      )
+      expect(mockUseGetCategoryTransactions).toHaveBeenCalledWith(
+        'budget-1',
+        'category-1',
+        { limit: 20, offset: 0 },
+        expect.objectContaining({
+          query: expect.objectContaining({
+            queryKey: [...canonicalKey, '2026-09-12T12:00:00Z'],
+          }),
+        })
+      )
+    })
+
+    it('preserves the canonical query key when no snapshot version is provided', () => {
+      mockQueryState(undefined, true)
+
+      renderHook(() => useBudgetTransactions('budget-1', 'category-1'), {
+        wrapper: createWrapper(),
+      })
+
+      const canonicalKey = mockGetCategoryTransactionsQueryKey(
+        'budget-1',
+        'category-1',
+        { limit: 20, offset: 0 }
+      )
+      expect(mockUseGetCategoryTransactions).toHaveBeenCalledWith(
+        'budget-1',
+        'category-1',
+        { limit: 20, offset: 0 },
+        expect.objectContaining({
+          query: expect.objectContaining({ queryKey: canonicalKey }),
+        })
+      )
+    })
+
+    it('does not reuse a warmed page-one cache entry from an older report snapshot', () => {
+      mockQueryState(undefined, true)
+      const client = new QueryClient()
+      const canonicalKey = mockGetCategoryTransactionsQueryKey(
+        'budget-1',
+        'category-1',
+        { limit: 20, offset: 0 }
+      )
+      const oldKey = [...canonicalKey, 'older-snapshot']
+      client.setQueryData(oldKey, { transactions: [mockTransaction] })
+
+      renderHook(
+        () => useBudgetTransactions('budget-1', 'category-1', { snapshotVersion: 'newer-snapshot' }),
+        { wrapper: createWrapper(client) }
+      )
+
+      const newerKey = [...canonicalKey, 'newer-snapshot']
+      expect(client.getQueryData(newerKey)).toBeUndefined()
+      expect(client.getQueryData(oldKey)).toBeDefined()
+    })
+
     it('should fetch transactions on mount', async () => {
       mockQueryState({
         transactions: [mockTransaction],
@@ -155,15 +223,64 @@ describe('useBudgetTransactions', () => {
   })
 
   describe('load more', () => {
+    it('resets accumulated pagination and discards an older in-flight page when the snapshot changes', async () => {
+      const initial = {
+        transactions: [mockTransaction],
+        total_count: 3,
+        total_amount: 150,
+        has_more: true,
+      }
+      mockQueryState(initial)
+      mockGetCategoryTransactions.mockResolvedValueOnce({
+        ...initial,
+        transactions: [{ ...mockTransaction, id: 'accumulated-page' }],
+      })
+      let resolveOldPage!: (value: typeof initial) => void
+      mockGetCategoryTransactions.mockImplementationOnce(
+        () => new Promise((resolve) => { resolveOldPage = resolve })
+      )
+      const { result, rerender } = renderHook(
+        ({ snapshotVersion }) => useBudgetTransactions('budget-1', 'category-1', { snapshotVersion }),
+        { initialProps: { snapshotVersion: 'older-snapshot' }, wrapper: createWrapper() }
+      )
+
+      await act(async () => { await result.current.loadMore() })
+      expect(result.current.transactions.map(({ id }) => id)).toEqual(['tx-1', 'accumulated-page'])
+
+      let pending!: Promise<void>
+      act(() => { pending = result.current.loadMore() })
+      expect(result.current.loadingMore).toBe(true)
+
+      rerender({ snapshotVersion: 'newer-snapshot' })
+      expect(result.current.transactions).toEqual([mockTransaction])
+      expect(result.current.loadingMore).toBe(false)
+
+      await act(async () => {
+        resolveOldPage({
+          ...initial,
+          transactions: [{ ...mockTransaction, id: 'stale-page' }],
+          has_more: false,
+        })
+        await pending
+      })
+      expect(result.current.transactions).toEqual([mockTransaction])
+    })
+
     it('discards a pending page immediately on central cache invalidation even with unchanged first-page data', async () => {
       const initial = { transactions: [mockTransaction], total_count: 2, total_amount: 100, has_more: true }
       mockQueryState(initial)
       const client = new QueryClient()
-      const key = mockGetCategoryTransactionsQueryKey('budget-1', 'category-1', { limit: 20, offset: 0 })
+      const key = [
+        ...mockGetCategoryTransactionsQueryKey('budget-1', 'category-1', { limit: 20, offset: 0 }),
+        'report-snapshot',
+      ]
       client.setQueryData(key, initial)
       let resolvePage!: (value: typeof initial) => void
       mockGetCategoryTransactions.mockImplementationOnce(() => new Promise((resolve) => { resolvePage = resolve }))
-      const { result } = renderHook(() => useBudgetTransactions('budget-1', 'category-1'), { wrapper: createWrapper(client) })
+      const { result } = renderHook(
+        () => useBudgetTransactions('budget-1', 'category-1', { snapshotVersion: 'report-snapshot' }),
+        { wrapper: createWrapper(client) }
+      )
       let pending!: Promise<void>
       act(() => { pending = result.current.loadMore() })
       await act(async () => { await client.invalidateQueries({ queryKey: key }); resolvePage(initial); await pending })

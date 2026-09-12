@@ -6,8 +6,8 @@
  * Fetches paginated transactions matching a budget category.
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { hashKey, useQueryClient } from '@tanstack/react-query';
 import {
   useGetCategoryTransactions,
   getGetCategoryTransactionsQueryKey,
@@ -17,6 +17,7 @@ import type { Transaction } from '../../transactions/types';
 
 interface UseBudgetTransactionsOptions {
   pageSize?: number;
+  snapshotVersion?: string;
 }
 
 interface UseBudgetTransactionsResult {
@@ -45,7 +46,18 @@ export function useBudgetTransactions(
   options?: UseBudgetTransactionsOptions
 ): UseBudgetTransactionsResult {
   const pageSize = options?.pageSize ?? 20;
+  const snapshotVersion = options?.snapshotVersion;
   const queryClient = useQueryClient();
+  const pageOneQueryKey = useMemo(() => {
+    const canonicalKey = getGetCategoryTransactionsQueryKey(
+      budgetId,
+      categoryId,
+      { limit: pageSize, offset: 0 }
+    );
+    return snapshotVersion === undefined
+      ? canonicalKey
+      : [...canonicalKey, snapshotVersion];
+  }, [budgetId, categoryId, pageSize, snapshotVersion]);
 
   // State for accumulated transactions (for load more)
   const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
@@ -67,6 +79,7 @@ export function useBudgetTransactions(
     refetch: queryRefetch,
   } = useGetCategoryTransactions(budgetId, categoryId, { limit: pageSize, offset: 0 }, {
     query: {
+      queryKey: pageOneQueryKey,
       staleTime: 30 * 1000, // 30 seconds
       refetchOnWindowFocus: true,
       refetchInterval: 30_000,
@@ -78,15 +91,15 @@ export function useBudgetTransactions(
   // Invalidation happens before React renders the refetch. Retire direct pagination
   // requests immediately, including when structural sharing keeps page one identical.
   useEffect(() => {
-    const key = getGetCategoryTransactionsQueryKey(budgetId, categoryId, { limit: pageSize, offset: 0 });
+    const queryHash = hashKey(pageOneQueryKey);
     return queryClient.getQueryCache().subscribe((event) => {
-      if (event.type === 'updated' && event.query.queryKey[0] === key[0] &&
+      if (event.type === 'updated' && event.query.queryHash === queryHash &&
         (event.action.type === 'invalidate' || event.action.type === 'fetch')) {
         pageEpoch.current += 1;
         setLoadingMore(false);
       }
     });
-  }, [budgetId, categoryId, pageSize, queryClient]);
+  }, [pageOneQueryKey, queryClient]);
 
   // Convert error to Error instance
   const error = queryError
@@ -119,7 +132,7 @@ export function useBudgetTransactions(
       offsetRef.current = 0;
     }
     return () => { pageEpoch.current += 1; };
-  }, [data, dataUpdatedAt, pageSize, budgetId, categoryId]);
+  }, [data, dataUpdatedAt, pageSize, budgetId, categoryId, snapshotVersion]);
 
   // Load more transactions
   const loadMore = useCallback(async () => {
@@ -158,10 +171,11 @@ export function useBudgetTransactions(
     setLoadingMore(false);
     offsetRef.current = 0;
     await queryClient.invalidateQueries({
-      queryKey: getGetCategoryTransactionsQueryKey(budgetId, categoryId, { limit: pageSize, offset: 0 }),
+      queryKey: pageOneQueryKey,
+      exact: true,
     });
     await queryRefetch();
-  }, [queryClient, queryRefetch, budgetId, categoryId, pageSize]);
+  }, [queryClient, queryRefetch, pageOneQueryKey]);
 
   return {
     transactions: allTransactions,

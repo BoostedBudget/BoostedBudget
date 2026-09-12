@@ -6,7 +6,6 @@
  */
 
 import { Receipt } from 'lucide-react';
-import { useEffect, useRef } from 'react';
 import { formatCurrencyFull } from '@/shared/charts/formatters';
 import { useBudgetTransactions } from '../../hooks/useBudgetTransactions';
 import { TransactionCard } from '../../../transactions/components/TransactionCard';
@@ -34,12 +33,7 @@ export function BudgetTransactionList({ budgetId, categoryId, currencyCode = 'US
     hasMore,
     loadMore,
     refetch,
-  } = useBudgetTransactions(budgetId, categoryId);
-  const previousSnapshot = useRef(snapshotVersion);
-  useEffect(() => {
-    if (snapshotVersion && snapshotVersion !== previousSnapshot.current) void refetch();
-    previousSnapshot.current = snapshotVersion;
-  }, [snapshotVersion, refetch]);
+  } = useBudgetTransactions(budgetId, categoryId, { snapshotVersion });
 
   // Loading state
   if (loading) {
