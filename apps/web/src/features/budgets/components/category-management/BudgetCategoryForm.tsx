@@ -27,7 +27,7 @@ import { HierarchicalCategoryTreeSelect } from '@/shared/components/Hierarchical
 import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 import { buildCategoryHierarchy } from '@/features/categories/utils/buildCategoryHierarchy';
 import { SavingsGoalSelect } from './SavingsGoalSelect';
-import type { BudgetCategoryCategoryKind } from '@boostedbudget/api-client/models';
+import type { CategoryPreviewRequest } from '@boostedbudget/api-client/models';
 
 export interface BudgetCategoryFormProps {
   currencyCode?: string;
@@ -51,7 +51,7 @@ export interface BudgetCategoryFormProps {
 }
 
 interface FormData {
-  category_kind: string;
+  category_kind: CreateBudgetCategoryRequest['category_kind'];
   group_name: string;
   members: BudgetGroupMember[];
   pfc_primary: string;
@@ -100,7 +100,6 @@ function hasSelectedCategory(formData: FormData, retainedEmptyGroup: boolean): b
 function toPreviewDraftCategory(category: BudgetCategory): NonNullable<BudgetPreviewContext['draft_categories']>[number] {
   return {
     ...category,
-    category_kind: category.category_kind as BudgetCategoryCategoryKind,
     auto_created: category.auto_created ?? false,
     custom_parent_id: category.custom_parent_id ?? undefined,
     custom_parent_pfc_primary: category.custom_parent_pfc_primary ?? undefined,
@@ -225,9 +224,11 @@ export function BudgetCategoryForm({
     // Savings categories don't match transactions — skip preview
     return isOpen && hasCategory && !isSavingsKind && !retainedEmptyGroup && !!budgetStartDate && !!budgetEndDate;
   }, [isOpen, hasCategory, isSavingsKind, retainedEmptyGroup, budgetStartDate, budgetEndDate]);
+  const previewCategoryKind: CategoryPreviewRequest['category_kind'] =
+    formData.category_kind === 'savings' ? 'pfc' : formData.category_kind;
 
   const { preview, loading: previewLoading, error: previewError } = usePreviewCategories(
-    formData.category_kind,
+    previewCategoryKind,
     formData.pfc_primary || undefined,
     formData.pfc_detailed || undefined,
     formData.custom_category_id || undefined,

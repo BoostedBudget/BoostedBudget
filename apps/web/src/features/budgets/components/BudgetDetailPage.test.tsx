@@ -30,7 +30,7 @@ function createMockBudget(overrides: Record<string, unknown> = {}) {
       {
         id: 'cat-1',
         budget_id: 'budget-1',
-        category_kind: 'pfc',
+        category_kind: 'pfc' as const,
         category: ['Food and Drink', 'Groceries'],
         allocated_amount: 500,
         spent_amount: 250,
@@ -42,7 +42,7 @@ function createMockBudget(overrides: Record<string, unknown> = {}) {
       {
         id: 'cat-2',
         budget_id: 'budget-1',
-        category_kind: 'pfc',
+        category_kind: 'pfc' as const,
         category: ['Bills and Utilities', 'Utilities'],
         allocated_amount: 300,
         spent_amount: 280,
