@@ -83,6 +83,13 @@ Each actually reduced result includes a full-detail hint. After a completed writ
 follow the suggested **read** operation to inspect current state; do not repeat the
 write to obtain more detail. Execution-history reads in full return historical
 definition snapshots, which can differ from a rule or boost's current definition.
+Boost-scoped history recovery uses global history so it can find executions after
+their parent is deleted. Follow the hint from offset zero and match the execution
+IDs retained in the compact payload. If the status-filtered history ends before
+all IDs are found, remove status and restart at offset zero. Stop once all IDs are
+found or unfiltered history ends, and report any missing IDs; separate reads do
+not provide a consistent snapshot. The MCP server does not fetch these pages
+automatically.
 
 Transaction dates, signs, currency when supplied, pending/reversal/review flags,
 effective categories, and investment fields survive compaction. Missing currency
@@ -97,7 +104,7 @@ cause a complete-result fallback with a warning, rather than silently losing dat
 Compaction reduces model-facing output, not backend queries or API-to-worker traffic.
 
 The deterministic synthetic [size regression suite](src/responses/size-regression.test.ts)
-measures 51,470 full versus 27,186 compact rendered characters (47.2% less), including
+measures 51,470 full versus 27,567 compact rendered characters (46.4% less), including
 headers and full-detail hints. It covers transaction pages, accounts, definitions,
 history, budgets, goals, notifications, a focused summary, and a production-config
 recipe fixture. These are character measurements, not a guaranteed token reduction

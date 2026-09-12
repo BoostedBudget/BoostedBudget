@@ -286,9 +286,22 @@ function fullResponseHint(call: ExecuteCall, result: unknown, specs: ExecuteSpec
   const policy = responseCatalog[call.operationId]
   if (!policy || policy.kind !== 'project') return ''
   const recovery = policy.recoveryOperationId
+  const value = result && typeof result === 'object' && !Array.isArray(result) ? result as Record<string, unknown> : {}
+  if (call.operationId === 'getBoostExecutions' && recovery === 'getUserBoostExecutions') {
+    // Global history survives a purged parent's NULL FK. A boost-scoped offset
+    // cannot address this different result set; match the retained execution IDs.
+    const limit = typeof value.limit === 'number' && Number.isInteger(value.limit) && value.limit >= 1 && value.limit <= 100 ? value.limit : 20
+    const status = call.params?.status
+    const params = { limit, offset: 0,
+      ...(typeof status === 'string' && status.length > 0 && status.length <= 100 ? { status } : {}),
+    }
+    return `Full response available via readExecute: operationId: "${recovery}", detail: "full" (top-level call field), params: ${JSON.stringify(params)}. ` +
+      'Locate the execution IDs retained in this compact payload across global history pages; advance offset by the returned limit. ' +
+      'If filtered history is exhausted before all IDs are found, remove status and restart offset at 0. ' +
+      'Stop when all IDs are found or unfiltered history is exhausted; report any missing IDs. Reads are not a consistent snapshot.'
+  }
   const path = specs.find((entry) => entry.operationId === recovery)?.path ?? ''
   const required = [...path.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]!)
-  const value = result && typeof result === 'object' && !Array.isArray(result) ? result as Record<string, unknown> : {}
   const pathParams: Record<string, string> = {}
   for (const key of required) {
     // Child mutation results carry their own id; the recovery read needs the parent id.
