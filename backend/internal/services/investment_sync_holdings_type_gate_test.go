@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -148,7 +150,7 @@ func TestInvestmentSyncService_SyncHoldings_NonInvestmentCountersAreOwnerScoped(
 }
 
 func TestInvestmentSyncService_SyncHoldings_ReportsNonInvestmentSkipsToAnalytics(t *testing.T) {
-	svc, deps := setupInvestmentSyncService(t)
+	svc, deps, logs := setupInvestmentSyncServiceWithLogger(t)
 	ctx := context.Background()
 	userID := uuid.New().String()
 	linkedItem := makeLinkedItem("item-holdings-skip-analytics", userID)
@@ -179,7 +181,23 @@ func TestInvestmentSyncService_SyncHoldings_ReportsNonInvestmentSkipsToAnalytics
 	assert.Equal(t, phclient.EventInvestmentHoldingsSynced, analytics.event)
 	assert.Equal(t, 1, analytics.properties["accounts_skipped_non_investment"])
 	assert.Equal(t, 1, analytics.properties["holdings_skipped_non_investment"])
+	completion := requireInvestmentSyncLogRecord(t, logs.String(), "holdings sync complete")
+	assert.Equal(t, float64(1), completion["accounts_skipped_non_investment"])
+	assert.Equal(t, float64(1), completion["holdings_skipped_non_investment"])
 	deps.securityRepo.AssertExpectations(t)
+}
+
+func requireInvestmentSyncLogRecord(t *testing.T, logs, message string) map[string]interface{} {
+	t.Helper()
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		var record map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(line), &record))
+		if record["msg"] == message {
+			return record
+		}
+	}
+	require.FailNow(t, "log record not found", "message: %s; logs: %s", message, logs)
+	return nil
 }
 
 type recordingHoldingsSyncAnalytics struct {
