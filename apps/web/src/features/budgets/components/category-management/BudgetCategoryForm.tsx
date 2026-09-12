@@ -224,8 +224,10 @@ export function BudgetCategoryForm({
     // Savings categories don't match transactions — skip preview
     return isOpen && hasCategory && !isSavingsKind && !retainedEmptyGroup && !!budgetStartDate && !!budgetEndDate;
   }, [isOpen, hasCategory, isSavingsKind, retainedEmptyGroup, budgetStartDate, budgetEndDate]);
-  const previewCategoryKind: CategoryPreviewRequest['category_kind'] =
-    formData.category_kind === 'savings' ? 'pfc' : formData.category_kind;
+  // Savings has no preview contract, so keep the disabled hook call truthful instead of
+  // fabricating a PFC discriminator that could become unsafe if the enablement logic changes.
+  const previewCategoryKind: CategoryPreviewRequest['category_kind'] | undefined =
+    formData.category_kind === 'savings' ? undefined : formData.category_kind;
 
   const { preview, loading: previewLoading, error: previewError } = usePreviewCategories(
     previewCategoryKind,

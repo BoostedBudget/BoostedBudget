@@ -32,7 +32,7 @@ const EMPTY_STATE: UsePreviewCategoriesResult = {
 };
 
 function hasPreviewCategory(
-  categoryKind: CategoryPreviewRequest['category_kind'],
+  categoryKind: CategoryPreviewRequest['category_kind'] | undefined,
   pfcPrimary: string | undefined,
   customCategoryId: string | undefined,
   context: BudgetPreviewContext | undefined
@@ -44,8 +44,10 @@ function hasPreviewCategory(
       return !!context?.group_name && !!context.members?.length;
     case 'pfc':
       return !!pfcPrimary;
-    default:
+    case 'custom':
       return !!customCategoryId;
+    default:
+      return false;
   }
 }
 
@@ -63,7 +65,7 @@ function hasPreviewCategory(
  * @param enabled - Whether to enable preview fetching
  */
 export function usePreviewCategories(
-  categoryKind: CategoryPreviewRequest['category_kind'],
+  categoryKind: CategoryPreviewRequest['category_kind'] | undefined,
   pfcPrimary: string | undefined,
   pfcDetailed: string | undefined,
   customCategoryId: string | undefined,
@@ -97,7 +99,7 @@ export function usePreviewCategories(
       debounceTimeoutRef.current = null;
     }
 
-    if (shouldSkip) {
+    if (shouldSkip || !categoryKind) {
       return;
     }
 
