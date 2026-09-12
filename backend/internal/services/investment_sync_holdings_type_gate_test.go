@@ -123,6 +123,7 @@ func TestInvestmentSyncService_SyncHoldings_NonInvestmentCountersAreOwnerScoped(
 		[]plaid.AccountBase{{AccountId: ownedPlaidID}, {AccountId: foreignPlaidID}, {AccountId: unknownPlaidID}},
 		[]plaid.Holding{
 			makePlaidHolding(ownedPlaidID, securityID, 1, 10, 10, 10),
+			makePlaidHolding(ownedPlaidID, securityID, 4, 10, 40, 40),
 			makePlaidHolding(foreignPlaidID, securityID, 2, 10, 20, 20),
 			makePlaidHolding(unknownPlaidID, securityID, 3, 10, 30, 30),
 		},
@@ -141,7 +142,7 @@ func TestInvestmentSyncService_SyncHoldings_NonInvestmentCountersAreOwnerScoped(
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.AccountsSkippedNonInvestment)
-	assert.Equal(t, 1, result.HoldingsSkippedNonInvestment)
+	assert.Equal(t, 2, result.HoldingsSkippedNonInvestment)
 	assert.Zero(t, result.AccountsProcessed)
 	deps.holdingRepo.AssertNotCalled(t, "ReplaceForAccount", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
