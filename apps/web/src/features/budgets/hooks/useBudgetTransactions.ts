@@ -58,6 +58,7 @@ export function useBudgetTransactions(
       ? canonicalKey
       : [...canonicalKey, snapshotVersion];
   }, [budgetId, categoryId, pageSize, snapshotVersion]);
+  const pageOneQueryHash = useMemo(() => hashKey(pageOneQueryKey), [pageOneQueryKey]);
 
   // State for accumulated transactions (for load more)
   const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
@@ -65,6 +66,8 @@ export function useBudgetTransactions(
   const [hasMore, setHasMore] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const [totalAmount, setTotalAmount] = useState(0);
+  const [paginationQueryHash, setPaginationQueryHash] = useState(pageOneQueryHash);
+  const paginationIsCurrent = paginationQueryHash === pageOneQueryHash;
 
   // Track current offset for pagination
   const offsetRef = useRef(0);
@@ -87,19 +90,19 @@ export function useBudgetTransactions(
       enabled: !!budgetId && !!categoryId,
     },
   });
+  const currentPageTransactions = data?.transactions as unknown as Transaction[] | undefined;
 
   // Invalidation happens before React renders the refetch. Retire direct pagination
   // requests immediately, including when structural sharing keeps page one identical.
   useEffect(() => {
-    const queryHash = hashKey(pageOneQueryKey);
     return queryClient.getQueryCache().subscribe((event) => {
-      if (event.type === 'updated' && event.query.queryHash === queryHash &&
+      if (event.type === 'updated' && event.query.queryHash === pageOneQueryHash &&
         (event.action.type === 'invalidate' || event.action.type === 'fetch')) {
         pageEpoch.current += 1;
         setLoadingMore(false);
       }
     });
-  }, [pageOneQueryKey, queryClient]);
+  }, [pageOneQueryHash, queryClient]);
 
   // Convert error to Error instance
   const error = queryError
@@ -131,12 +134,13 @@ export function useBudgetTransactions(
       setHasMore(false);
       offsetRef.current = 0;
     }
+    setPaginationQueryHash(pageOneQueryHash);
     return () => { pageEpoch.current += 1; };
-  }, [data, dataUpdatedAt, pageSize, budgetId, categoryId, snapshotVersion]);
+  }, [data, dataUpdatedAt, pageSize, pageOneQueryHash]);
 
   // Load more transactions
   const loadMore = useCallback(async () => {
-    if (isLoading || loadingMore || !hasMore) {
+    if (!paginationIsCurrent || isLoading || loadingMore || !hasMore) {
       return;
     }
 
@@ -163,7 +167,7 @@ export function useBudgetTransactions(
     } finally {
       if (epoch === pageEpoch.current) setLoadingMore(false);
     }
-  }, [budgetId, categoryId, pageSize, isLoading, loadingMore, hasMore]);
+  }, [budgetId, categoryId, pageSize, isLoading, loadingMore, hasMore, paginationIsCurrent]);
 
   // Refetch from start
   const refetch = useCallback(async () => {
@@ -178,13 +182,13 @@ export function useBudgetTransactions(
   }, [queryClient, queryRefetch, pageOneQueryKey]);
 
   return {
-    transactions: allTransactions,
-    totalCount,
-    totalAmount,
+    transactions: paginationIsCurrent ? allTransactions : currentPageTransactions ?? [],
+    totalCount: paginationIsCurrent ? totalCount : data?.total_count ?? 0,
+    totalAmount: paginationIsCurrent ? totalAmount : data?.total_amount ?? 0,
     loading: isLoading,
-    loadingMore,
+    loadingMore: paginationIsCurrent && loadingMore,
     error,
-    hasMore,
+    hasMore: paginationIsCurrent ? hasMore : data?.has_more ?? false,
     loadMore,
     refetch,
   };
