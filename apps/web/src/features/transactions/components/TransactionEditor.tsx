@@ -1,4 +1,9 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import type { Account } from '@/features/accounts/types'
+import { formatTransactionAmount } from '@/shared/transactions/amount'
+import { formatDate } from '@/shared/transactions/dates'
+import { mergeTransactionEdit, invalidateTransactionEdit } from '../hooks/transactionEditCache'
 import { useQueryClient } from '@tanstack/react-query'
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
@@ -10,7 +15,8 @@ import type { Primary } from '@boostedbudget/api-client/models/primary'
 import { TagEditor } from '../../tags/components/TagEditor'
 import { CategoryEditor } from '../../categories/components/CategoryEditor'
 import { useReviewMutations } from '../hooks/useReviewMutations'
-import { effectiveCategoryToStringArray } from '@/shared/categories/getEffectiveCategory'
+import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
+import { categorySelectionEqual, seedCategorySelection, type CategorySelection } from '@/shared/categories/categorySelection'
 import { getMerchantDisplayName } from '@/shared/transactions/merchant'
 import { ReviewBadge, reviewBadgeVariantFromTransaction } from '@/shared/components/ReviewBadge'
 import {
@@ -20,6 +26,7 @@ import {
 
 interface TransactionEditorProps {
   transaction: Transaction
+  account?: Pick<Account, 'name'>
   availableTags: UserTag[]
   availableCategories: CustomCategory[]
   plaidPrimaries?: Primary[]
@@ -30,8 +37,13 @@ interface TransactionEditorProps {
   isOpen: boolean
 }
 
-export function TransactionEditor({
+export function TransactionEditor(props: TransactionEditorProps) {
+  return props.isOpen ? <TransactionEditorSession key={props.transaction.id} {...props} /> : null
+}
+
+function TransactionEditorSession({
   transaction,
+  account,
   availableTags,
   availableCategories,
   plaidPrimaries,
@@ -41,11 +53,16 @@ export function TransactionEditor({
   onCategoryCreated,
   isOpen,
 }: TransactionEditorProps) {
+  // This controlled dialog has no Radix DialogTrigger. Remember the actual
+  // opener before the dialog mounts and moves focus into its FocusScope.
+  const [opener] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  const [saved, setSaved] = useState(transaction)
   const [tags, setTags] = useState<string[]>(transaction.tags || [])
-  const [category, setCategory] = useState<string[]>(() =>
-    effectiveCategoryToStringArray(transaction)
+  const [category, setCategory] = useState<CategorySelection>(() =>
+    seedCategorySelection(transaction)
   )
   const [isSaving, setIsSaving] = useState(false)
+  const inFlight = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const trackEvent = useTrackEvent()
   const queryClient = useQueryClient()
@@ -55,28 +72,41 @@ export function TransactionEditor({
   const updateCategoryMutation = useUpdateTransactionCategory()
   const { setReviewed, isPending: isReviewing } = useReviewMutations()
 
+  const hasTagChanges = JSON.stringify(tags) !== JSON.stringify(saved.tags || [])
+  const hasCategoryChanges = !categorySelectionEqual(category, seedCategorySelection(saved))
+  const hasChanges = hasTagChanges || hasCategoryChanges
+
   const handleToggleReviewed = async () => {
+    if (inFlight.current || hasChanges) return
+    inFlight.current = true
+    setIsSaving(true)
     setError(null)
     try {
-      const next = !transaction.reviewed
+      const next = !saved.reviewed
       await setReviewed(transaction.id, next)
-      onSave({ ...transaction, reviewed: next })
+      void invalidateTransactionEdit(queryClient, transaction.id, { reviewHookInvalidated: true })
+      // The review hook already started the authoritative refetch. Do not merge
+      // an older snapshot afterward or let the parent cancel that refetch.
+      const updated = { ...saved, reviewed: next }
+      setSaved(updated)
+      onSave(updated)
     } catch {
       setError('Failed to update review status. Please try again.')
+    } finally {
+      inFlight.current = false
+      setIsSaving(false)
     }
   }
 
-  const hasTagChanges = JSON.stringify(tags) !== JSON.stringify(transaction.tags || [])
-  const hasCategoryChanges = JSON.stringify(category) !== JSON.stringify(effectiveCategoryToStringArray(transaction))
-  const hasChanges = hasTagChanges || hasCategoryChanges
-
   const handleSave = async () => {
+    if (inFlight.current || !hasChanges) return
+    inFlight.current = true
     setIsSaving(true)
     setError(null)
-
+    let didWrite = false
     try {
       // Track the latest version of the transaction after each update
-      let updatedTransaction = transaction
+      let updatedTransaction = saved
 
       // Save tag changes
       if (hasTagChanges) {
@@ -84,32 +114,32 @@ export function TransactionEditor({
           id: transaction.id,
           data: { tags },
         })) as Transaction
+        didWrite = true
+        mergeTransactionEdit(queryClient, updatedTransaction)
+        setSaved(previous => ({ ...previous, tags: updatedTransaction.tags }))
+        setTags(updatedTransaction.tags || [])
       }
 
       // Save category changes
       if (hasCategoryChanges) {
-        const customCat = availableCategories.find((c) => c.name === category[0])
-        // CategoryEditor emits display names for Plaid primaries -- resolve back to enum
-        const plaidMatch = !customCat ? plaidPrimaries?.find((p) => p.display === category[0]) : null
-        const categoryRequest = category.length === 0
-          ? { kind: 'clear' as const }
-          : customCat
-            ? { kind: 'custom' as const, custom_category_id: customCat.id }
-            : { kind: 'pfc' as const, pfc_primary: plaidMatch?.enum ?? category[0], pfc_detailed: category[1] }
         updatedTransaction = (await updateCategoryMutation.mutateAsync({
           id: transaction.id,
-          data: categoryRequest,
+          data: category,
         })) as Transaction
-        queryClient.invalidateQueries({ queryKey: ['review-summary'] })
+        didWrite = true
+        mergeTransactionEdit(queryClient, updatedTransaction)
+        setSaved(updatedTransaction)
         trackEvent(ANALYTICS_EVENTS.TRANSACTION_CATEGORIZED)
       }
 
-      // Pass the updated transaction to parent for immediate state update
+      // Cache ownership stays here; parents may update their selection or close.
       onSave(updatedTransaction)
       onClose()
     } catch {
       setError('Failed to save changes. Please try again.')
     } finally {
+      if (didWrite) void invalidateTransactionEdit(queryClient, transaction.id)
+      inFlight.current = false
       setIsSaving(false)
     }
   }
@@ -117,42 +147,64 @@ export function TransactionEditor({
   if (!isOpen) return null
 
   const displayName = getMerchantDisplayName(transaction)
+  const amount = formatTransactionAmount(transaction.amount)
+  function dismiss(): void {
+    if (!inFlight.current) onClose()
+  }
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1000]"
-      onClick={onClose}
-    >
-      <div
-        className="bg-card rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-labelledby="transaction-editor-title"
+    <Dialog open={isOpen} onOpenChange={open => { if (!open) dismiss() }}>
+      <DialogContent
+        className="flex max-h-[90dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl motion-reduce:animate-none"
+        showCloseButton={false}
+        onEscapeKeyDown={event => {
+          // Radix captures Escape before the picker bubbles it: prevent dialog dismissal,
+          // but let the picker handle the event and return focus to its Change button.
+          const inCategoryPicker = event.target instanceof Element && event.target.closest('[data-category-picker-panel]')
+          if (inFlight.current || inCategoryPicker) event.preventDefault()
+        }}
+        onInteractOutside={event => { if (inFlight.current) event.preventDefault() }}
+        onCloseAutoFocus={event => {
+          event.preventDefault()
+          if (opener?.isConnected) {
+            opener.focus()
+            return
+          }
+          // A successful edit can remove the opener from a filtered list.
+          const fallback = document.querySelector<HTMLElement>('main, [role="main"]') ?? document.body
+          const hadTabIndex = fallback.hasAttribute('tabindex')
+          if (!hadTabIndex) fallback.setAttribute('tabindex', '-1')
+          fallback.focus()
+          if (!hadTabIndex) fallback.removeAttribute('tabindex')
+        }}
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <h2 id="transaction-editor-title" className="m-0 text-lg font-semibold text-foreground">
+        <DialogHeader className="shrink-0 flex-row items-center justify-between px-6 py-4 border-b border-border">
+          <DialogTitle>
             Edit Transaction
-          </h2>
+          </DialogTitle>
+          <DialogDescription className="sr-only">View transaction details and edit tags, category, and review status.</DialogDescription>
           <button
             type="button"
             className="flex items-center justify-center w-8 h-8 p-0 border-none bg-transparent text-muted-foreground cursor-pointer text-2xl leading-none rounded hover:bg-muted hover:text-foreground transition-colors"
-            onClick={onClose}
+            onClick={dismiss}
+            disabled={isSaving}
             aria-label="Close"
           >
             ×
           </button>
-        </div>
+        </DialogHeader>
 
+        <div className="min-h-0 overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-4 bg-muted">
           <div className="text-sm font-medium text-foreground">
             <span data-ph-mask>{displayName}</span>
+            {transaction.name !== displayName && <p data-ph-mask className="text-xs text-muted-foreground">{transaction.name}</p>}
+            {account && <p data-ph-mask className="text-xs text-muted-foreground">{account.name}</p>}
+            <p className="text-xs text-muted-foreground">{formatDate(transaction.date)}</p>
+            {transaction.pending && <span className="text-xs">Pending</span>}
           </div>
-          <div className="text-base font-semibold text-foreground" data-ph-mask>
-            {new Intl.NumberFormat('en-US', {
-              style: 'currency',
-              currency: 'USD',
-              minimumFractionDigits: 2,
-            }).format(Math.abs(transaction.amount))}
+          <div className={`text-base font-semibold ${amount.signClass}`} data-ph-mask>
+            {amount.text}
           </div>
         </div>
 
@@ -177,6 +229,8 @@ export function TransactionEditor({
           <label className="block mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Category</label>
           <CategoryEditor
             selectedCategory={category}
+            currentCategory={getEffectiveCategory(saved)}
+            bankCategory={getEffectiveCategory({ ...transaction, category_override_kind: null })}
             availableCategories={availableCategories}
             plaidPrimaries={plaidPrimaries}
             onChange={setCategory}
@@ -191,27 +245,28 @@ export function TransactionEditor({
           </label>
           <div className="flex items-center justify-between">
             <ReviewBadge
-              variant={reviewBadgeVariantFromTransaction(transaction)}
+              variant={reviewBadgeVariantFromTransaction(saved)}
               data-testid="review-status-badge"
             />
             <ReadOnlyGuard message="Resubscribe to review transactions">
               <button
                 type="button"
                 onClick={handleToggleReviewed}
-                disabled={isReviewing}
+                disabled={isSaving || isReviewing || hasChanges}
                 className="px-3 py-1.5 border border-input rounded-md bg-card text-foreground text-sm font-medium cursor-pointer hover:bg-muted transition-all disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {transaction.reviewed ? 'Mark unreviewed' : 'Mark reviewed'}
+                {saved.reviewed ? 'Mark unreviewed' : 'Mark reviewed'}
               </button>
             </ReadOnlyGuard>
           </div>
         </div>
 
-        <div className="flex justify-end gap-3 px-6 py-4">
+        </div>
+        <DialogFooter className="shrink-0 border-t border-border px-6 py-4">
           <button
             type="button"
             className="px-4 py-2 border border-input rounded-md bg-card text-foreground text-sm font-medium cursor-pointer hover:bg-muted transition-all disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={onClose}
+            onClick={dismiss}
             disabled={isSaving}
           >
             Cancel
@@ -226,8 +281,8 @@ export function TransactionEditor({
               {isSaving ? 'Saving...' : 'Save'}
             </button>
           </ReadOnlyGuard>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

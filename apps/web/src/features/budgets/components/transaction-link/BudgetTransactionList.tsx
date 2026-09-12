@@ -11,6 +11,7 @@ import { useBudgetTransactions } from '../../hooks/useBudgetTransactions';
 import { TransactionCard } from '../../../transactions/components/TransactionCard';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
+import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 
 interface BudgetTransactionListProps {
   budgetId: string;
@@ -21,6 +22,7 @@ interface BudgetTransactionListProps {
  * Displays transactions matching a budget category with pagination.
  */
 export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactionListProps) {
+  const { data: customCategories } = useGetUserCategories();
   const {
     transactions,
     totalCount,
@@ -87,7 +89,7 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
       <ul className="list-none m-0 p-0" role="list">
         {transactions.map((transaction) => (
           <li key={transaction.id} className="border-b border-border last:border-b-0">
-            <TransactionCard transaction={transaction} />
+            <TransactionCard transaction={transaction} customCategories={Array.isArray(customCategories) ? customCategories : undefined} />
           </li>
         ))}
       </ul>

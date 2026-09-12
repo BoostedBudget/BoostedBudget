@@ -9,9 +9,9 @@ type BalanceSummaryResponse struct {
 	// same defect class HoldingSnapshotView.AsOfDate and InvestmentTransaction.DateDisplay fix).
 	AsOfDate         time.Time                      `json:"-"`
 	AsOfDateDisplay  string                         `json:"as_of_date" format:"date" doc:"UTC calendar day (YYYY-MM-DD) this balance summary is as of"`
-	TotalBalance     float64                        `json:"total_balance"`
-	ByType           map[string]*AccountTypeBalance `json:"by_type"`
-	PeriodComparison *PeriodComparisonData          `json:"period_comparison,omitempty"`
+	TotalBalance     float64                        `json:"total_balance" doc:"Signed sum of snapshot balances: raw credit and loan balances are negated (negative raw debt is an overpayment); other account types retain their raw sign"`
+	ByType           map[string]*AccountTypeBalance `json:"by_type" doc:"Account type totals and individual balances use the same signed contributions as total_balance"`
+	PeriodComparison *PeriodComparisonData          `json:"period_comparison,omitempty" doc:"Comparison with the signed balance 30 days earlier; change_amount is current minus previous, and change_percent divides by the absolute previous balance (zero when previous is zero)"`
 }
 
 // AccountTypeBalance represents balance information for a specific account type

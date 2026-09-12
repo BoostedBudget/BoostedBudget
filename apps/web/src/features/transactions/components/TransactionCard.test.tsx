@@ -140,7 +140,7 @@ describe('TransactionCard', () => {
         // No display fields — falls back to formatPFCEnum
       }
       render(<TransactionCard transaction={transactionWithCategories} />)
-      expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument()
+      expect(screen.getByText('Food & Drink › Restaurants')).toBeInTheDocument()
     })
 
     it('should display primary PFC when no detailed is set', () => {
@@ -162,7 +162,7 @@ describe('TransactionCard', () => {
         // No display fields — falls back to formatPFCEnum
       }
       render(<TransactionCard transaction={transactionWithSecondary} />)
-      expect(screen.getByText('General Merchandise › Clothing And Accessories')).toBeInTheDocument()
+      expect(screen.getByText('General Merchandise › Clothing & Accessories')).toBeInTheDocument()
     })
 
     it('should handle null pfc_primary gracefully', () => {
@@ -217,7 +217,7 @@ describe('TransactionCard', () => {
         // No display fields — falls back to formatPFCEnum
       }
       render(<TransactionCard transaction={transactionWithoutOverride} />)
-      expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument()
+      expect(screen.getByText('Food & Drink › Restaurants')).toBeInTheDocument()
     })
   })
 
@@ -528,7 +528,7 @@ describe('TransactionCard', () => {
 
       render(<TransactionCard transaction={multiCategoryTransaction} />)
       // Effective label prefers detailed over primary
-      expect(screen.getByText('Food And Drink › Fast Food')).toBeInTheDocument()
+      expect(screen.getByText('Food & Drink › Fast Food')).toBeInTheDocument()
     })
   })
 
@@ -982,7 +982,7 @@ describe('TransactionCard — PFC v2 source fields (Issue #1073)', () => {
 
     render(<TransactionCard transaction={txn} />)
 
-    expect(screen.getByText('Food And Drink')).toBeTruthy()
+    expect(screen.getByText('Food & Drink')).toBeTruthy()
   })
 
   it('does not show the uncategorized warning when pfc_primary is set', () => {

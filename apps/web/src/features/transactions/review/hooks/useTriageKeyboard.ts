@@ -15,7 +15,7 @@
  * Disabled when `enabled=false` (e.g. when a modal is open).
  */
 
-import { useKeyboardShortcuts } from '@/shared/hooks/useKeyboardShortcuts'
+import { useEffect } from 'react'
 
 export interface UseTriageKeyboardOptions {
   onApprove: () => void
@@ -42,22 +42,38 @@ export function useTriageKeyboard({
   onUndo,
   enabled = true,
 }: UseTriageKeyboardOptions): void {
-  const keymap = {
-    e: onApprove,
-    Enter: onApprove,
-    s: onSkip,
-    c: onRecategorize,
-    x: onToggleSelect,
-    ArrowRight: onNext,
-    n: onNext,
-    ArrowLeft: onPrev,
-    p: onPrev,
-    '?': onToggleHelp,
-    Escape: onClose,
-    ...(onUndo ? { 'Meta+z': onUndo, 'Control+z': onUndo } : {}),
-  }
+  useEffect(() => {
+    if (!enabled) return
+    const keymap: Record<string, (() => void) | undefined> = {
+      e: onApprove,
+      Enter: onApprove,
+      s: onSkip,
+      c: onRecategorize,
+      x: onToggleSelect,
+      ArrowRight: onNext,
+      n: onNext,
+      ArrowLeft: onPrev,
+      p: onPrev,
+      '?': onToggleHelp,
+      Escape: onClose,
+      ...(onUndo ? { 'Meta+z': onUndo, 'Control+z': onUndo } : {}),
+    }
 
-  useKeyboardShortcuts(keymap, enabled)
+    const handler = (event: KeyboardEvent) => {
+      // Typing targets own all keys. Buttons retain native activation while letter
+      // shortcuts still work after an editor restores focus to its opener.
+      const targets = [event.target instanceof Element ? event.target : null, document.activeElement]
+      const typing = 'input, textarea, select, [role="combobox"], [contenteditable]:not([contenteditable="false"])'
+      if (targets.some(target => target?.closest(typing))) return
+      if ((event.key === 'Enter' || event.key === ' ') && targets.some(target => target?.closest('button, a, [role="button"]'))) return
+      if (event.defaultPrevented || event.repeat || event.altKey) return
+      const key = event.metaKey ? `Meta+${event.key}` : event.ctrlKey ? `Control+${event.key}` : event.key
+      const action = keymap[key]
+      if (action) { event.preventDefault(); action() }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [enabled, onApprove, onSkip, onRecategorize, onToggleSelect, onNext, onPrev, onToggleHelp, onClose, onUndo])
 }
 
 /** Canonical shortcut definitions for the help dialog */

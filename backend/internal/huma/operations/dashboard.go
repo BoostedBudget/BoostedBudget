@@ -286,7 +286,7 @@ func RegisterDashboardRoutes(api huma.API, handler *DashboardHandler) {
 		Method:      http.MethodGet,
 		Path:        "/api/v1/dashboard/balance-summary",
 		Summary:     "Get balance summary",
-		Description: "Returns current balance overview with breakdown by account type and period comparison.",
+		Description: "Returns a signed balance overview as of the requested day, with account type and account breakdowns. Raw credit and loan balances are negated, including overpayments; other account types retain their sign. The 30-day comparison uses the same signed contributions and divides change by the absolute previous balance (zero percent when previous is zero).",
 		Tags:        []string{"Dashboard"},
 		Security:    []map[string][]string{{"clerk": {}}},
 	}, handler.GetBalanceSummary)

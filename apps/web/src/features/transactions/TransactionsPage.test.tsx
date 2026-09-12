@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
@@ -65,6 +65,45 @@ function createWrapper() {
 }
 
 describe('TransactionsPage', () => {
+  it.each([false, true])('hydrates reviewed=%s and preserves composed filters when changed', async (reviewed) => {
+    const apiCalls = () => mockGetTransactions.mock.calls as unknown as [Record<string, unknown>][]
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1280 })
+    const preserved = 'start_date=2025-01-01&end_date=2025-01-31&account_ids=account-456&pending=false&search=coffee&pfc_primaries=FOOD_AND_DRINK&sort=amount:asc&include_investment_activity=false'
+    window.history.replaceState({}, '', `/transactions?${preserved}&reviewed=${reviewed}&offset=100`)
+    render(<TransactionsPage />, { wrapper: createWrapper() })
+    fireEvent.click(screen.getByRole('button', { name: /^Filters/ }))
+    const group = within(screen.getByRole('group', { name: 'Review status' }))
+    expect(group.getByRole('button', { name: reviewed ? 'Reviewed' : 'Unreviewed' })).toHaveAttribute('aria-pressed', 'true')
+    await waitFor(() => expect(apiCalls().some(([params]) => params.reviewed === String(reviewed))).toBe(true))
+    for (const [label, value, state] of [['Unreviewed', 'false', 'unreviewed'], ['Reviewed', 'true', 'reviewed'], ['All', null, 'all']] as const) {
+      fireEvent.click(group.getByRole('button', { name: label }))
+      const params = new URLSearchParams(window.location.search)
+      expect(params.get('reviewed')).toBe(value)
+      expect(params.has('offset')).toBe(false)
+      new URLSearchParams(preserved).forEach((v, key) => expect(params.get(key)).toBe(v))
+      expect(mockTrackEvent).toHaveBeenLastCalledWith(ANALYTICS_EVENTS.TRANSACTION_REVIEW_FILTER_CHANGED, { state })
+      await waitFor(() => expect(apiCalls().some(([p]) => value === null ? !Object.hasOwn(p, 'reviewed') : p.reviewed === value)).toBe(true))
+    }
+  })
+
+  it('removes only review with its pill, then clears all filters atomically', async () => {
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1280 })
+    window.history.replaceState({}, '', '/transactions?reviewed=false&pending=true&account_ids=account-456&sort=amount:asc')
+    render(<TransactionsPage />, { wrapper: createWrapper() })
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Review status filter' }))
+    expect(new URLSearchParams(window.location.search).get('reviewed')).toBeNull()
+    expect(new URLSearchParams(window.location.search).get('pending')).toBe('true')
+    expect(new URLSearchParams(window.location.search).get('account_ids')).toBe('account-456')
+    fireEvent.click(screen.getByRole('button', { name: /^Filters/ }))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Review status' })).getByRole('button', { name: 'Reviewed' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
+    expect(new URLSearchParams(window.location.search).toString()).toBe('sort=amount%3Aasc')
+    await waitFor(() => {
+      const calls = mockGetTransactions.mock.calls as unknown as [Record<string, unknown>][]
+      expect(calls.at(-1)?.[0]).not.toHaveProperty('reviewed')
+    })
+  })
+
   const mockTransactions: Transaction[] = [
     {
       id: 'txn-1',
@@ -445,6 +484,19 @@ describe('TransactionsPage', () => {
   })
 
   describe('Transaction Editing', () => {
+    it('tracks editor opens with only the structural transactions source', async () => {
+      const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')!
+      const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')!
+      Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 600 })
+      Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 1200 })
+      try {
+        render(<TransactionsPage />, { wrapper: createWrapper() })
+        const merchant = await screen.findByText('Starbucks Coffee')
+        fireEvent.click(merchant)
+        expect(screen.getByRole('dialog', { name: 'Edit Transaction' })).toBeInTheDocument()
+        expect(mockTrackEvent).toHaveBeenCalledWith('transaction_editor_opened', { source: 'transactions' })
+      } finally { Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height); Object.defineProperty(HTMLElement.prototype, 'offsetWidth', width) }
+    })
     it('should fetch tags and categories on mount', async () => {
       const Wrapper = createWrapper()
       render(<TransactionsPage />, { wrapper: Wrapper })

@@ -590,7 +590,7 @@ describe('PII coverage — CategoryEditor component', () => {
   beforeEach(() => {
     cleanup()
     mockUseGetUserCategories.mockReturnValue({
-      data: { categories: [sentinelCategory] },
+      data: [sentinelCategory],
       isLoading: false,
       error: null,
     })
@@ -604,7 +604,7 @@ describe('PII coverage — CategoryEditor component', () => {
   test('masks user-authored category names', async () => {
     render(
       <CategoryEditor
-        selectedCategory={[SENTINEL_CATEGORY_NAME]}
+        selectedCategory={{ kind: 'custom', custom_category_id: sentinelCategory.id }}
         availableCategories={[sentinelCategory]}
         plaidPrimaries={[{ enum: 'FOOD_AND_DRINK', display: 'Food and Drink' }]}
         onChange={mock(() => {})}

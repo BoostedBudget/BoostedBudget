@@ -65,8 +65,8 @@ func TestGetBalanceSummary_PeriodComparison_AppliesAccountTypeFilterToBaseline(t
 
 	assert.Equal(t, 1500.00, result.TotalBalance, "current total must be depository-only")
 	assert.Equal(t, 1000.00, result.PeriodComparison.PreviousBalance,
-		"the baseline must be depository-only too. Summing the credit account (-400) into it makes "+
-			"the baseline 600 and turns a real +50%% into +150%%.")
+		"the baseline must be depository-only too. Including the raw -400 credit overpayment "+
+			"would raise the signed baseline to 1400 and understate the real +50%% change.")
 	assert.InDelta(t, 500.00, result.PeriodComparison.ChangeAmount, 0.001)
 	assert.InDelta(t, 50.0, result.PeriodComparison.ChangePercent, 0.001)
 }
@@ -127,8 +127,8 @@ func TestGetBalanceSummaryHousehold_PeriodComparison_AppliesAccountTypeFilterToB
 
 	assert.Equal(t, 1000.00, result.TotalBalance, "current household total must be depository-only")
 	assert.Equal(t, 800.00, result.PeriodComparison.PreviousBalance,
-		"the household baseline must be depository-only too. Summing the credit card (-200) makes it "+
-			"600 and turns a real +25%% into +66%%.")
+		"the household baseline must be depository-only too. Including the raw -200 credit overpayment "+
+			"would raise the signed baseline to 1000 and hide the real +25%% change.")
 	assert.InDelta(t, 200.00, result.PeriodComparison.ChangeAmount, 0.001)
 	assert.InDelta(t, 25.0, result.PeriodComparison.ChangePercent, 0.001)
 }
@@ -221,7 +221,7 @@ func TestGetBalanceSummary_PeriodComparison_BaselineIncludesSinceInactiveAccount
 		"the baseline is a HISTORICAL figure: the since-expired depository account's $1,000 was "+
 			"really there 30 days ago and must be counted. Dropping it makes the baseline 1000 and "+
 			"reports 'no change' for a 50%% decrease. Counting the since-expired CREDIT account "+
-			"too would make it 1600 and re-break the type filter.")
+			"too would make it 2400 (the raw -400 is an overpayment) and re-break the type filter.")
 	assert.InDelta(t, -1000.00, result.PeriodComparison.ChangeAmount, 0.001)
 	assert.InDelta(t, -50.0, result.PeriodComparison.ChangePercent, 0.001)
 }

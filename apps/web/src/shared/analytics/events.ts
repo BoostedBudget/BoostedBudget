@@ -258,6 +258,8 @@ export const ANALYTICS_EVENTS = {
   REVIEW_INBOX_VIEWED: 'review_inbox_viewed',
   REVIEW_PRESET_CHANGED: 'review_preset_changed',
   TRANSACTION_APPROVED: 'transaction_approved',
+  TRANSACTION_EDITOR_OPENED: 'transaction_editor_opened',
+  TRANSACTION_REVIEW_FILTER_CHANGED: 'transaction_review_filter_changed',
   TRANSACTION_SKIPPED: 'transaction_skipped',
   REVIEW_BULK_RECATEGORIZED: 'review_bulk_recategorized',
   REVIEW_UNDO: 'review_undo',
