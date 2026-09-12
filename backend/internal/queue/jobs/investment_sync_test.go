@@ -79,10 +79,13 @@ func TestInvestmentHoldingsSyncWorker_Work_Success(t *testing.T) {
 	}
 
 	holdingResult := &domain.HoldingSyncResult{
-		SecuritiesUpserted: 3,
-		HoldingsReplaced:   5,
-		AccountsProcessed:  2,
+		SecuritiesUpserted:           3,
+		HoldingsReplaced:             5,
+		AccountsProcessed:            2,
+		AccountsSkippedNonInvestment: 1,
+		HoldingsSkippedNonInvestment: 4,
 	}
+	beforeSkipped := testutil.ToFloat64(observability.InvestmentHoldingsSynced.WithLabelValues("skipped_non_investment"))
 
 	mockRepo := new(MockLinkedItemRepository)
 	mockSvc := new(MockInvestmentSyncService)
@@ -102,6 +105,8 @@ func TestInvestmentHoldingsSyncWorker_Work_Success(t *testing.T) {
 	}))
 
 	require.NoError(t, err)
+	assert.Equal(t, beforeSkipped+4,
+		testutil.ToFloat64(observability.InvestmentHoldingsSynced.WithLabelValues("skipped_non_investment")))
 	mockRepo.AssertExpectations(t)
 	mockSvc.AssertExpectations(t)
 }
