@@ -54,7 +54,9 @@ export function BudgetPlanFlowChart({ data, privacyMode = false, onSelectLine }:
     onSelectLine(line)
   }
   const showAll = () => {
-    trackEvent(ANALYTICS_EVENTS.BUDGET_PLAN_ALLOCATIONS_EXPANDED)
+    trackEvent(ANALYTICS_EVENTS.BUDGET_PLAN_FULL_TABLE_VIEWED, {
+      hidden_allocation_count: graph.hiddenLineIds.length,
+    })
     tableRef.current?.scrollIntoView?.({ block: 'nearest' })
     tableRef.current?.focus()
   }
@@ -114,7 +116,7 @@ export function BudgetPlanFlowChart({ data, privacyMode = false, onSelectLine }:
           </div>
         </div>
       ) : <p>No allocations yet. Add a category, shared group, or savings goal to build your plan.</p>}
-      {graph.hiddenLineIds.length > 0 && <Button variant="outline" onClick={showAll}>Show all allocations</Button>}
+      {graph.hiddenLineIds.length > 0 && <Button variant="outline" onClick={showAll}>View full table</Button>}
       <div className="overflow-x-auto">
         <table ref={tableRef} tabIndex={-1} className="w-full text-sm">
           <caption className="text-left font-medium mb-2">Budget allocation and activity</caption>

@@ -14,7 +14,7 @@ export default function BudgetPlanActivityPanel({ data, onRefresh }: Props) {
   const currentSelection = data.eligibility === 'eligible' && !privacyMode && selected && data.lines.find((line) => line.id === selected.id && (line.kind !== 'savings' || !line.reasons.some((reason) => reason === 'mixed_currency' || reason === 'unknown_currency')))
   return (
     <div className="space-y-3">
-      <Button variant="outline" aria-pressed={privacyMode} onClick={() => { setPrivacyMode(!privacyMode); setSelected(null) }}>{privacyMode ? 'Show activity amounts' : 'Hide activity amounts'}</Button>
+      <Button variant="outline" aria-pressed={privacyMode} onClick={() => { setPrivacyMode(!privacyMode); setSelected(null) }}>{privacyMode ? 'Show amounts' : 'Hide amounts'}</Button>
       <BudgetPlanFlowChart data={data} privacyMode={privacyMode} onSelectLine={setSelected} />
       <Dialog open={!!currentSelection && currentSelection.kind !== 'savings'} onOpenChange={(open) => { if (!open) setSelected(null) }}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">

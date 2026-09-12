@@ -110,6 +110,17 @@ function toPreviewDraftCategory(category: BudgetCategory): NonNullable<BudgetPre
   };
 }
 
+function getCurrencySymbol(currencyCode: string): string {
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currencyCode,
+    }).formatToParts(0).find((part) => part.type === 'currency')?.value ?? currencyCode;
+  } catch {
+    return currencyCode;
+  }
+}
+
 export function BudgetCategoryForm({
   currencyCode = 'USD',
   budgetId,
@@ -260,6 +271,7 @@ export function BudgetCategoryForm({
       style: 'currency',
       currency,
     }).format(amount);
+  const currencySymbol = getCurrencySymbol(currencyCode);
 
   // Clear error on category change (category_kind, PFC, or custom selection)
   const clearCategoryError = useCallback(
@@ -632,7 +644,7 @@ export function BudgetCategoryForm({
             </label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
-                $
+                {currencySymbol}
               </span>
               <input
                 type="number"

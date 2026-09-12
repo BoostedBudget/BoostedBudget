@@ -945,6 +945,32 @@ describe('BudgetCategoryForm', () => {
   })
 
   describe('Soft Warning — allocation exceeds expected income', () => {
+    it('uses the budget currency for the amount prefix and over-allocation warning', async () => {
+      render(
+        <BudgetCategoryForm
+          isOpen={true}
+          onClose={mockOnClose}
+          onSubmit={mockOnSubmit}
+          mode="create"
+          availableCategories={mockAvailableCategories}
+          availableTags={mockAvailableTags}
+          currencyCode="EUR"
+          expectedIncome={1000}
+          totalAllocatedExcludingCurrent={900}
+        />
+      )
+
+      const amountInput = screen.getByRole('spinbutton', { name: /amount/i })
+      expect(amountInput.parentElement).toHaveTextContent('€')
+      expect(amountInput.parentElement).not.toHaveTextContent('$')
+
+      fireEvent.change(amountInput, { target: { value: '200' } })
+
+      const warning = await screen.findByRole('status')
+      expect(warning).toHaveTextContent('€100.00')
+      expect(screen.getByText('€100.00')).toHaveAttribute('data-ph-mask')
+    })
+
     it('TestSoftWarning_ShowsWhenAllocationExceedsIncome — shows warning and keeps save enabled', async () => {
       render(
         <BudgetCategoryForm
