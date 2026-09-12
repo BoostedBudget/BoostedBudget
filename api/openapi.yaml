@@ -1381,6 +1381,12 @@ components:
         budget_id:
           type: string
         category_kind:
+          enum:
+            - pfc
+            - custom
+            - savings
+            - group
+            - remainder
           type: string
         created_at:
           format: date-time
@@ -2305,6 +2311,11 @@ components:
           description: Existing budget whose complete sibling configuration participates in matching.
           type: string
         category_kind:
+          enum:
+            - pfc
+            - custom
+            - group
+            - remainder
           type: string
         custom_category_id:
           type: string
@@ -2768,6 +2779,12 @@ components:
           format: double
           type: number
         category_kind:
+          enum:
+            - pfc
+            - custom
+            - savings
+            - group
+            - remainder
           type: string
         custom_category_id:
           type: string

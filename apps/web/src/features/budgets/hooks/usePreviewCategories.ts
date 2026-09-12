@@ -121,7 +121,7 @@ export function usePreviewCategories(
         const result = await mutation.mutateAsync({
           data: {
             ...context,
-            category_kind: capturedKind,
+            category_kind: capturedKind as CategoryPreviewRequest['category_kind'],
             pfc_primary: capturedPfcPrimary,
             pfc_detailed: capturedPfcDetailed,
             custom_category_id: capturedCustomId,

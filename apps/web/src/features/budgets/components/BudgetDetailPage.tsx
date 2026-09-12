@@ -32,6 +32,7 @@ import { filterTopLevel } from '../types';
 import { BudgetCategoryManager } from './category-management/BudgetCategoryManager';
 import { BudgetIncomeSection } from './budget-detail/BudgetIncomeSection';
 import { UnallocatedFundsCard } from './budget-detail/UnallocatedFundsCard';
+import type { CreateBudgetCategoryRequest as GeneratedCreateBudgetCategoryRequest } from '@boostedbudget/api-client/models';
 
 const BudgetPlanActivityPanel = lazy(() => import('./BudgetPlanActivityPanel'));
 
@@ -96,7 +97,7 @@ export function BudgetDetailPage() {
     async (req: CreateBudgetCategoryRequest): Promise<BudgetCategory> => {
       const result = await addCategoryMutation.mutateAsync({
         id: budgetId || '',
-        data: req,
+        data: req as GeneratedCreateBudgetCategoryRequest,
       });
       await refetch();
       trackEvent(ANALYTICS_EVENTS.BUDGET_CATEGORY_ADDED);
