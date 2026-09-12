@@ -21,6 +21,7 @@ package services
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/plaid/plaid-go/v23/plaid"
@@ -113,6 +114,115 @@ func TestInvestmentSyncService_SyncHoldings_NonInvestmentSkipDoesNotBumpUserCach
 	postGen, err := c.Generations().Get(ctx, cache.ScopeUser, userID)
 	require.NoError(t, err)
 	assert.Equal(t, preGen, postGen, "ignoring a provider row commits no holdings state and needs no cache bump")
+}
+
+func TestInvestmentSyncService_SyncHoldings_MixedAccountTypesPreserveSuccessfulSideEffects(t *testing.T) {
+	_, deps := setupInvestmentSyncService(t)
+	ctx := context.Background()
+	userID := uuid.New().String()
+	linkedItem := makeLinkedItem("item-cache-mixed-types", userID)
+	investmentPlaidAccountID := "plaid-investment-cache-mixed"
+	depositoryPlaidAccountID := "plaid-depository-cache-mixed"
+	investmentAccountID := uuid.New().String()
+	depositoryAccountID := uuid.New().String()
+	investmentSecurityID := "plaid-security-investment-cache-mixed"
+	depositorySecurityID := "plaid-security-depository-cache-mixed"
+	internalInvestmentSecurityID := uuid.New().String()
+	internalDepositorySecurityID := uuid.New().String()
+	capturedDay := time.Date(2026, time.September, 11, 0, 0, 0, 0, time.UTC)
+
+	investmentHolding := makePlaidHolding(
+		investmentPlaidAccountID, investmentSecurityID, 2, 125, 250, 200,
+	)
+	depositoryHolding := makePlaidHolding(
+		depositoryPlaidAccountID, depositorySecurityID, 1, 50, 50, 50,
+	)
+	response := plaid.NewInvestmentsHoldingsGetResponse(
+		[]plaid.AccountBase{
+			{AccountId: investmentPlaidAccountID},
+			{AccountId: depositoryPlaidAccountID},
+		},
+		[]plaid.Holding{investmentHolding, depositoryHolding},
+		[]plaid.Security{
+			makePlaidSecurity(investmentSecurityID, "Investment security", "INV"),
+			makePlaidSecurity(depositorySecurityID, "Depository security", "DEP"),
+		},
+		makeMinimalPlaidItem(),
+		"req-cache-mixed-types",
+	)
+	deps.plaidSvc.On("InvestmentsHoldingsGet", ctx, linkedItem.AccessToken).Return(response, nil).Once()
+	deps.securityRepo.On("UpsertBatch", ctx, mock.Anything).Return(map[string]string{
+		investmentSecurityID: internalInvestmentSecurityID,
+		depositorySecurityID: internalDepositorySecurityID,
+	}, nil).Once()
+	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
+		{
+			ID: investmentAccountID, PlaidAccountID: investmentPlaidAccountID,
+			UserID: userID, Type: "investment",
+		},
+		{
+			ID: depositoryAccountID, PlaidAccountID: depositoryPlaidAccountID,
+			UserID: userID, Type: "depository",
+		},
+	}, nil).Once()
+	deps.holdingRepo.On(
+		"ReplaceForAccount",
+		ctx,
+		investmentAccountID,
+		userID,
+		mock.MatchedBy(func(holdings []domain.Holding) bool {
+			return len(holdings) == 1 &&
+				holdings[0].AccountID == investmentAccountID &&
+				holdings[0].SecurityID == internalInvestmentSecurityID
+		}),
+	).Return(capturedDay, nil).Once()
+
+	// setupInvestmentSyncService installs a permissive snapshot default. Use a fresh mock so this
+	// test proves the mixed run upserts exactly once under the holding repository's captured day.
+	snapshotRepo := new(MockPortfolioSnapshotRepository)
+	snapshotRepo.On("Upsert", ctx, userID, capturedDay).
+		Return(&domain.PortfolioSnapshot{ID: uuid.New().String(), UserID: userID}, nil).
+		Once()
+	svc := NewInvestmentSyncService(
+		deps.webhookRepo,
+		deps.linkedItemRepo,
+		deps.accountRepo,
+		deps.securityRepo,
+		deps.holdingRepo,
+		deps.invTxnRepo,
+		snapshotRepo,
+		deps.userAccountRepo,
+		deps.plaidSvc,
+		nil,
+	)
+	fake := redisclient.NewFake("cache")
+	c := cache.NewCache(cache.Options{Client: fake})
+	svc.SetCacheInvalidation(c.Generations())
+	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, userID)
+	require.NoError(t, err)
+
+	result, err := svc.SyncHoldings(ctx, linkedItem)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.AccountsProcessed)
+	assert.Equal(t, 1, result.HoldingsReplaced)
+	assert.Equal(t, 1, result.AccountsSkippedNonInvestment)
+	assert.Equal(t, 1, result.HoldingsSkippedNonInvestment)
+	assert.Empty(t, result.Errors)
+	assert.Empty(t, result.SkippedIncomplete)
+	deps.holdingRepo.AssertNotCalled(
+		t, "ReplaceForAccount", ctx, depositoryAccountID, userID, mock.Anything,
+	)
+	deps.plaidSvc.AssertExpectations(t)
+	deps.securityRepo.AssertExpectations(t)
+	deps.accountRepo.AssertExpectations(t)
+	deps.holdingRepo.AssertExpectations(t)
+	snapshotRepo.AssertExpectations(t)
+
+	postGen, err := c.Generations().Get(ctx, cache.ScopeUser, userID)
+	require.NoError(t, err)
+	assert.NotEqual(t, preGen, postGen,
+		"a committed investment replacement must bump cache even when another account is skipped")
 }
 
 func TestInvestmentSyncService_SyncHoldings_NoBumpWhenCacheInvalidationNotWired(t *testing.T) {
