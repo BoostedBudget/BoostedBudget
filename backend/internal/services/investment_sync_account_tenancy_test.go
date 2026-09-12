@@ -59,8 +59,8 @@ func TestSyncHoldings_AccountOwnedByAnotherUser_IsSkipped(t *testing.T) {
 
 	// The linked item resolves to TWO accounts, one of which is owned by somebody else.
 	deps.accountRepo.On("GetByLinkedItemID", ctx, linkedItem.ID).Return([]domain.Account{
-		{ID: ownedInternal, PlaidAccountID: ownedPlaidAcct, UserID: actorUserID},
-		{ID: foreignInternal, PlaidAccountID: foreignPlaidAcct, UserID: strangerUserID},
+		{ID: ownedInternal, PlaidAccountID: ownedPlaidAcct, UserID: actorUserID, Type: "investment"},
+		{ID: foreignInternal, PlaidAccountID: foreignPlaidAcct, UserID: strangerUserID, Type: "investment"},
 	}, nil)
 
 	// Permissive, so a write to the foreign account is a readable assertion failure, not a panic.
@@ -221,7 +221,7 @@ func TestSyncInvestmentTransactions_RetainedAndOwnedByAnotherUser_IsSkipped(t *t
 			assert.NotEqual(t, foreignInternal, tx.AccountID,
 				"an investment transaction was written for a RETAINED account %s, owned by user %s, "+
 					"under actor %s — the tenancy guard must fire even when the account is retained",
-					foreignInternal, strangerUserID, actorUserID)
+				foreignInternal, strangerUserID, actorUserID)
 		}
 	}
 }

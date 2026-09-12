@@ -1,8 +1,12 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,21 +83,25 @@ func TestInvestmentHoldingsSyncWorker_Work_Success(t *testing.T) {
 	}
 
 	holdingResult := &domain.HoldingSyncResult{
-		SecuritiesUpserted: 3,
-		HoldingsReplaced:   5,
-		AccountsProcessed:  2,
+		SecuritiesUpserted:           3,
+		HoldingsReplaced:             5,
+		AccountsProcessed:            2,
+		AccountsSkippedNonInvestment: 1,
+		HoldingsSkippedNonInvestment: 4,
 	}
+	beforeSkipped := testutil.ToFloat64(observability.InvestmentHoldingsSynced.WithLabelValues("skipped_non_investment"))
 
 	mockRepo := new(MockLinkedItemRepository)
 	mockSvc := new(MockInvestmentSyncService)
 
 	mockRepo.On("GetByIDAndUser", ctx, itemID, userID).Return(linkedItem, nil)
 	mockSvc.On("SyncHoldings", ctx, linkedItem).Return(holdingResult, nil)
+	var logs bytes.Buffer
 
 	worker := NewInvestmentHoldingsSyncWorker(InvestmentHoldingsSyncWorkerDeps{
 		InvestmentSyncSvc: mockSvc,
 		LinkedItemRepo:    mockRepo,
-		Logger:            newTestLogger(),
+		Logger:            slog.New(slog.NewJSONHandler(&logs, nil)),
 	})
 
 	err := worker.Work(ctx, newTestHoldingsJob(InvestmentHoldingsSyncArgs{
@@ -102,8 +110,26 @@ func TestInvestmentHoldingsSyncWorker_Work_Success(t *testing.T) {
 	}))
 
 	require.NoError(t, err)
+	assert.Equal(t, beforeSkipped+4,
+		testutil.ToFloat64(observability.InvestmentHoldingsSynced.WithLabelValues("skipped_non_investment")))
+	completion := requireInvestmentHoldingsWorkerLogRecord(t, logs.String(), "investment holdings sync completed")
+	assert.Equal(t, float64(1), completion["accounts_skipped_non_investment"])
+	assert.Equal(t, float64(4), completion["holdings_skipped_non_investment"])
 	mockRepo.AssertExpectations(t)
 	mockSvc.AssertExpectations(t)
+}
+
+func requireInvestmentHoldingsWorkerLogRecord(t *testing.T, logs, message string) map[string]interface{} {
+	t.Helper()
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		var record map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(line), &record))
+		if record["msg"] == message {
+			return record
+		}
+	}
+	require.FailNow(t, "log record not found", "message: %s; logs: %s", message, logs)
+	return nil
 }
 
 func TestInvestmentHoldingsSyncWorker_Work_LinkedItemNotFound(t *testing.T) {
