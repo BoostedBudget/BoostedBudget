@@ -325,7 +325,7 @@ echo ""
 
 echo "Case 14: a deploy job no longer gated on mcp_changed must be an error"
 mutate_file "$PROD" 1 \
-  "    if: \${{ needs.detect-changes.outputs.mcp_changed == 'true' }}" \
+  "    if: \${{ always() && !cancelled() && needs.detect-changes.result == 'success' && needs.deploy-to-fly.result == 'success' && needs.detect-changes.outputs.mcp_changed == 'true' }}" \
   "    if: \${{ always() }}"
 assert_deploy_rejected "deploy-job-ungated" "cannot tell what"
 echo ""
@@ -344,6 +344,108 @@ mutate_file "$PROD" 1 \
       - id: filter-fly-config"
 assert_deploy_rejected "duplicate-filter-mcp" "exactly 1 step with id 'filter-mcp'"
 echo ""
+
+# Exercise both environments through a neutral filename: backend identity must come from jobs.
+echo "Case 16: backend ordering, fail-closed conditions, and runtime result truth cases"
+if python3 - "$SCRIPT" "$PROD" "$STAGING" "$SANDBOX/mutated.yml" <<'PY'
+import copy
+import re
+import subprocess
+import sys
+import yaml
+
+script, prod, staging, target = sys.argv[1:]
+failures = []
+for path, backend in [(prod, 'deploy-to-fly'), (staging, 'deploy-backend')]:
+    with open(path) as handle:
+        real = yaml.safe_load(handle)
+    terms = ['always()', '!cancelled()', "needs.detect-changes.result == 'success'",
+             "needs.%s.result == 'success'" % backend,
+             "needs.detect-changes.outputs.mcp_changed == 'true'"]
+    condition = ' && '.join(terms)
+    base = copy.deepcopy(real)
+    worker = base['jobs']['deploy-mcp-worker']
+    worker['needs'] = ['detect-changes', backend]
+    worker['if'] = condition
+
+    def check(name, workflow, accepted):
+        with open(target, 'w') as handle:
+            yaml.safe_dump(workflow, handle)
+        result = subprocess.run([sys.executable, script, '--deploy', target], capture_output=True, text=True)
+        if (result.returncode == 0) != accepted:
+            failures.append('%s %s: expected %s, got %s' % (backend, name, accepted, result.stdout))
+
+    check('real workflow', real, True)
+    check('canonical fixture', base, True)
+    for name, needs in [('missing backend', ['detect-changes']), ('wrong backend', ['detect-changes', 'build-images']),
+                        ('missing detect', [backend]), ('absent needs', None)]:
+        mutant = copy.deepcopy(base)
+        mutant['jobs']['deploy-mcp-worker']['needs'] = needs
+        check(name, mutant, False)
+    for index, term in enumerate(terms):
+        for name, replacement in [('removed', None), ('inverted', '!(%s)' % term)]:
+            mutant = copy.deepcopy(base)
+            changed = terms[:]
+            if replacement is None:
+                del changed[index]
+            else:
+                changed[index] = replacement
+            mutant['jobs']['deploy-mcp-worker']['if'] = ' && '.join(changed)
+            check('%s %s' % (name, term), mutant, False)
+    for bad in [condition + ' || true', '(' + condition + ') || failure()',
+                condition.replace(' && ', ' || ', 1), '', 'true',
+                condition.replace("'success'", "'success '"),
+                condition.replace("'true'", "' true'")]:
+        mutant = copy.deepcopy(base)
+        mutant['jobs']['deploy-mcp-worker']['if'] = bad
+        check('bypassed condition ' + bad, mutant, False)
+    for wrapped in [condition, '${{ ' + condition + ' }}', '${{\n  ' + condition.replace(' && ', '\n &&  ') + '\n}}']:
+        mutant = copy.deepcopy(base)
+        mutant['jobs']['deploy-mcp-worker']['if'] = wrapped
+        check('whitespace/wrapper', mutant, True)
+    for name in ['missing', 'ambiguous']:
+        mutant = copy.deepcopy(base)
+        if name == 'missing':
+            del mutant['jobs'][backend]
+        else:
+            other = 'deploy-backend' if backend == 'deploy-to-fly' else 'deploy-to-fly'
+            mutant['jobs'][other] = copy.deepcopy(mutant['jobs'][backend])
+        check(name + ' backend identity', mutant, False)
+
+    # Evaluate the REAL job expression with explicit Actions context values. Build success is
+    # intentionally independent: an MCP-only release reuses the prior image via the backend job.
+    scenarios = [('changed', True, 'success', 'success', False, 'success', True),
+                 ('unchanged', False, 'success', 'success', False, 'success', False),
+                 ('backend failed', True, 'failure', 'success', False, 'success', False),
+                 ('backend cancelled', True, 'cancelled', 'success', False, 'success', False),
+                 ('backend skipped', True, 'skipped', 'success', False, 'skipped', False),
+                 ('detect failed', True, 'success', 'failure', False, 'success', False),
+                 ('run cancelled', True, 'success', 'success', True, 'success', False),
+                 ('build skipped', True, 'success', 'success', False, 'skipped', True)]
+    for name, changed, result, detect, cancelled, build, expected in scenarios:
+        expr = str(real['jobs']['deploy-mcp-worker']['if']).strip()
+        if expr.startswith('${{') and expr.endswith('}}'):
+            expr = expr[3:-2]
+        for old, new in [('always()', 'True'), ('!cancelled()', str(not cancelled)),
+                         ('needs.%s.result' % backend, repr(result)),
+                         ('needs.detect-changes.result', repr(detect)),
+                         ('needs.detect-changes.outputs.mcp_changed', repr(str(changed).lower())),
+                         ('needs.build-images.result', repr(build))]:
+            expr = expr.replace(old, new)
+        expr = expr.replace('&&', ' and ').replace('||', ' or ')
+        if re.search(r'[^\s\w\x27=()]', expr):
+            failures.append('%s unmodelled runtime expression %s' % (backend, expr))
+        elif eval(expr.strip(), {'__builtins__': {}}, {}) != expected:
+            failures.append('%s runtime case %s' % (backend, name))
+if failures:
+    sys.exit('\n'.join(failures))
+print('Both environments reject ordering/gate mutants and pass runtime truth cases.')
+PY
+then
+  pass "backend ordering and runtime truth cases"
+else
+  fail "backend ordering and runtime truth cases"
+fi
 
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]
