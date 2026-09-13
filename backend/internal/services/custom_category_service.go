@@ -91,6 +91,7 @@ type BudgetCategoryRepository interface {
 	// reparent-then-reactivate path that could commit an escaping/double-counted pair with no
 	// guard ever inspecting it.
 	GetByUserID(ctx context.Context, userID string) ([]*domain.Budget, error)
+	GetByUserIDInTx(ctx context.Context, tx repository.Transaction, userID string) ([]*domain.Budget, error)
 	// GetCategoriesByBudgetID returns a budget's LIVE categories, with CustomParentID /
 	// CustomParentPFCPrimary populated from the CURRENT (pre-write) custom_categories row —
 	// see checkReparentDoesNotEscape for why that must be overlaid with the PROPOSED parent
@@ -445,8 +446,16 @@ func (s *customCategoryService) reparentCategoryChecked(ctx context.Context, use
 	if s.budgetCategoryRepo == nil {
 		return fmt.Errorf("budget category repository not configured: cannot validate reparent of %s against existing budgets", category.ID)
 	}
+	tx, err := s.budgetCategoryRepo.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if err := repository.LockBudgetConfiguration(ctx, tx, userID); err != nil {
+		return err
+	}
 
-	children, err := s.categoryRepo.GetChildren(ctx, category.ID)
+	children, err := s.categoryRepo.GetChildrenInTx(ctx, tx, category.ID)
 	if err != nil {
 		return err
 	}
@@ -462,7 +471,7 @@ func (s *customCategoryService) reparentCategoryChecked(ctx context.Context, use
 	// custom grandparent to report, same as CustomGrandparentPFCPrimary's own doc comment.
 	var proposedGrandparentPFCPrimary *string
 	if category.ParentID != nil {
-		newParent, err := s.categoryRepo.GetByID(ctx, *category.ParentID)
+		newParent, err := s.categoryRepo.GetByIDInTx(ctx, tx, *category.ParentID)
 		if err != nil {
 			return err
 		}
@@ -475,17 +484,10 @@ func (s *customCategoryService) reparentCategoryChecked(ctx context.Context, use
 	// PFC root, then reactivating, would otherwise yield exactly the escaping/double-counted pair
 	// this guard exists to prevent. GetByUserID returns every non-deleted budget regardless of
 	// is_active (mirrors budgetRepository.GetByUserID); only deleted_at IS NULL is excluded.
-	budgets, err := s.budgetCategoryRepo.GetByUserID(ctx, userID)
+	budgets, err := s.budgetCategoryRepo.GetByUserIDInTx(ctx, tx, userID)
 	if err != nil {
 		return err
 	}
-
-	tx, err := s.budgetCategoryRepo.BeginTx(ctx)
-	if err != nil {
-		return err
-	}
-	// Rollback after a successful commit is a no-op; its error is not actionable.
-	defer tx.Rollback(ctx) //nolint:errcheck
 
 	for _, budget := range budgets {
 		// Issue #1630 B3b: locked INSIDE this shared transaction, not a self-committing helper —
@@ -493,6 +495,26 @@ func (s *customCategoryService) reparentCategoryChecked(ctx context.Context, use
 		// AND the custom_categories write, closing the reparent-vs-reparent race.
 		cats, err := s.budgetCategoryRepo.GetCategoriesByBudgetIDLockedInTx(ctx, tx, budget.ID)
 		if err != nil {
+			return err
+		}
+		// Group coverage must use the proposed tree too, including children of
+		// the moved category whose grandparent PFC changes with that move.
+		for i := range cats {
+			for j := range cats[i].Members {
+				m := &cats[i].Members[j]
+				if m.CustomCategoryID == nil || !subtree[*m.CustomCategoryID] {
+					continue
+				}
+				if *m.CustomCategoryID == category.ID {
+					m.CustomParentID = category.ParentID
+					m.CustomParentPFCPrimary = category.ParentPFCPrimary
+					m.CustomGrandparentPFCPrimary = proposedGrandparentPFCPrimary
+				} else {
+					m.CustomGrandparentPFCPrimary = category.ParentPFCPrimary
+				}
+			}
+		}
+		if err := domain.ValidateBudgetGroupCoverage(cats); err != nil {
 			return err
 		}
 

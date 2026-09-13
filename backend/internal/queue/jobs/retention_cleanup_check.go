@@ -848,7 +848,7 @@ var retentionDeletionItems = []retentionDeletionItem{
 		// Issue #1630 Task B7: budget_hierarchy_audits carries its own user_id CASCADE (same
 		// shape as portfolio_snapshot_repairs above) — it is the audit ledger for the budgets this
 		// same phrase already names, not a separate kind of record.
-		tables:      []string{"budgets", "budget_categories", "budget_period_events", "rollover_history", "budget_hierarchy_audits"},
+		tables:      []string{"budgets", "budget_categories", "budget_group_members", "budget_period_events", "rollover_history", "budget_hierarchy_audits"},
 		mustMention: []string{"budgets", "rollover"},
 	},
 	{

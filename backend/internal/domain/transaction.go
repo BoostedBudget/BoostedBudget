@@ -96,6 +96,9 @@ type TagSource struct {
 // The UserAccountID links to a user_accounts record that survives when a user
 // re-links a bank (which assigns new item_id and account_id values).
 type Transaction struct {
+	// BudgetExpenseAmount is the posted expense portion counted by a budget
+	// drilldown after proven savings allocations. Amount remains the gross bank row.
+	BudgetExpenseAmount *float64 `json:"budget_expense_amount,omitempty" doc:"Net expense amount counted in this budget drilldown; omitted outside budget drilldowns."`
 	// Core identifiers
 	ID           string `json:"id" db:"id"`
 	UserID       string `json:"user_id" db:"user_id"`

@@ -39,7 +39,7 @@ describe('usePreviewCategories', () => {
   })
 
   const defaultParams = {
-    categoryKind: 'pfc',
+    categoryKind: 'pfc' as const,
     pfcPrimary: 'FOOD_AND_DRINK' as const,
     pfcDetailed: undefined as string | undefined,
     customCategoryId: undefined as string | undefined,
@@ -49,6 +49,22 @@ describe('usePreviewCategories', () => {
     endDate: '2024-01-31',
     enabled: true,
   }
+
+  it('previews group members with saved siblings and the replaced line identity', async () => {
+    mockMutateAsync.mockResolvedValue({ transaction_count: 2, total_amount: 80 })
+    renderHook(() => usePreviewCategories('group', undefined, undefined, undefined, defaultParams.tags, 'category_only', '2026-09-01', '2026-09-12', true, {
+      budget_id: 'budget-1', replace_category_id: 'line-1', group_name: 'Daily life', members: [{ category_kind: 'uncategorized' }],
+    }), { wrapper: createWrapper() })
+    await waitFor(() => expect(mockMutateAsync).toHaveBeenCalledWith({ data: expect.objectContaining({
+      category_kind: 'group', budget_id: 'budget-1', replace_category_id: 'line-1', group_name: 'Daily life', members: [{ category_kind: 'uncategorized' }],
+    }) }))
+  })
+
+  it('previews Other without requiring a custom category', async () => {
+    mockMutateAsync.mockResolvedValue({ transaction_count: 2, total_amount: 80 })
+    renderHook(() => usePreviewCategories('remainder', undefined, undefined, undefined, defaultParams.tags, 'category_only', '2026-09-01', '2026-09-12', true, { budget_id: 'budget-1' }), { wrapper: createWrapper() })
+    await waitFor(() => expect(mockMutateAsync).toHaveBeenCalledWith({ data: expect.objectContaining({ category_kind: 'remainder', budget_id: 'budget-1' }) }))
+  })
 
   it('should return loading=true initially when enabled', async () => {
     mockMutateAsync.mockResolvedValue({ transaction_count: 5, total_amount: 250 })

@@ -9,6 +9,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
 )
@@ -43,6 +44,23 @@ type BudgetHierarchyResyncArgs struct {
 // Kind returns the unique identifier for this job type.
 func (BudgetHierarchyResyncArgs) Kind() string { return "budget_hierarchy_resync" }
 
+func budgetHierarchyNeedsResync(categories []domain.BudgetCategory, customIDs, pfcPrimaries map[string]bool) bool {
+	for _, cat := range categories {
+		// Groups and Other depend on the complete hierarchy and all sibling matches;
+		// conservatively recompute them for any reparent rather than miss a complement.
+		if cat.CategoryKind == "group" || cat.CategoryKind == "remainder" {
+			return true
+		}
+		if cat.CategoryKind == "custom" && cat.CustomCategoryID != nil && customIDs[*cat.CustomCategoryID] {
+			return true
+		}
+		if cat.CategoryKind == "pfc" && cat.PFCPrimary != nil && pfcPrimaries[*cat.PFCPrimary] {
+			return true
+		}
+	}
+	return false
+}
+
 // budgetHierarchyResyncCategoryRepo is the minimal custom-category repository this worker needs:
 // the reparented category's CURRENT (post-write) parent linkage, and its direct children — the
 // whole "subtree" a custom-custom nest can have. custom_category.go's Validate/validateParent caps
@@ -64,14 +82,10 @@ type budgetHierarchyResyncCategoryRepo interface {
 }
 
 // BudgetHierarchyResyncWorker recomputes spent_amount for every LIVE budget category in every
-// active budget affected by a custom-category reparent. It deliberately does NOT call
-// services.BudgetSyncService.RecalculateBudget — see services.NarrowBudgetPeriodDates's doc
-// comment for the hazards that call would reintroduce (income recalculation, time.Now()-derived
-// periods for non-custom budgets, budget_updated automation that can trigger boosts, and
-// swallowed per-category failures). This worker touches only spent_amount, derives its period
-// from the budget's own stored anchor fields, fires no events, and propagates the first error it
-// hits rather than swallowing it — the whole job retries, which is safe because recomputing spend
-// is idempotent.
+// active budget affected by a custom-category reparent. It uses the shared current UTC
+// period, clipped to stored dates, while preserving income read under the budget lock.
+// It deliberately does not emit budget_updated automation events. A failed sibling
+// calculation aborts the batch and propagates the error so River can retry safely.
 type BudgetHierarchyResyncWorker struct {
 	river.WorkerDefaults[BudgetHierarchyResyncArgs]
 
@@ -221,26 +235,30 @@ func (w *BudgetHierarchyResyncWorker) Work(ctx context.Context, job *river.Job[B
 			return fmt.Errorf("load categories for budget %s: %w", budget.ID, err)
 		}
 
-		affected := false
-		for i := range categories {
-			cat := &categories[i]
-			if cat.CategoryKind == "custom" && cat.CustomCategoryID != nil && affectedCustomIDs[*cat.CustomCategoryID] {
-				affected = true
-				break
-			}
-			if cat.CategoryKind == "pfc" && cat.PFCPrimary != nil && affectedPFCPrimaries[*cat.PFCPrimary] {
-				affected = true
-				break
-			}
-		}
-		if !affected {
+		if !budgetHierarchyNeedsResync(categories, affectedCustomIDs, affectedPFCPrimaries) {
 			continue
 		}
 
 		// Whole-budget recompute, not just the affected rows: the reparent shifts what a
 		// PARENT's hierarchical category clause rolls up, so a sibling row's total can shift too
 		// even when its own identity fields never appear in affectedCustomIDs/affectedPFCPrimaries.
-		periodStart, periodEnd := services.NarrowBudgetPeriodDates(budget)
+		if atomic, ok := w.budgetRepo.(repository.BudgetActualsRepository); ok {
+			updated, err := atomic.RecalculateBudgetActuals(ctx, args.UserID, budget.ID, false)
+			if err != nil {
+				return fmt.Errorf("atomic hierarchy resync for budget %s: %w", budget.ID, err)
+			}
+			if updated == nil {
+				continue
+			}
+			budgetsResynced++
+			categoriesResynced += len(updated.Categories)
+			continue
+		}
+		period := domain.CurrentBudgetActualsRange(budget, time.Now())
+		if !period.Eligible {
+			continue
+		}
+		periodStart, periodEnd := period.Start, period.ActualThrough
 		for i := range categories {
 			cat := &categories[i]
 			if cat.CategoryKind == "savings" {

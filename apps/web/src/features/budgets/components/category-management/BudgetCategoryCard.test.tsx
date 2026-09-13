@@ -7,16 +7,16 @@ import { MATCH_LOGIC_LABELS } from '@boostedbudget/shared-types/matching'
 import { scanForUnmaskedPII, type PIISentinel } from '@/test/pii-masking'
 
 mock.module('../BudgetProgressBar', () => ({
-  BudgetProgressBar: ({ spent, total }: { spent: number; total: number }) => (
-    <div data-testid="budget-progress-bar" data-spent={spent} data-total={total}>
+  BudgetProgressBar: ({ spent, total, currencyCode }: { spent: number; total: number; currencyCode?: string }) => (
+    <div data-testid="budget-progress-bar" data-spent={spent} data-total={total} data-currency={currencyCode}>
       Progress: {spent}/{total}
     </div>
   ),
 }))
 
 mock.module('../transaction-link/BudgetTransactionList', () => ({
-  BudgetTransactionList: ({ budgetId, categoryId }: { budgetId: string; categoryId: string }) => (
-    <div data-testid="budget-transaction-list" data-budget-id={budgetId} data-category-id={categoryId}>
+  BudgetTransactionList: ({ budgetId, categoryId, currencyCode }: { budgetId: string; categoryId: string; currencyCode?: string }) => (
+    <div data-testid="budget-transaction-list" data-budget-id={budgetId} data-category-id={categoryId} data-currency={currencyCode}>
       Transaction List
     </div>
   ),
@@ -49,6 +49,25 @@ describe('BudgetCategoryCard', () => {
   })
 
   describe('Rendering', () => {
+    it('uses the budget currency for group amounts, progress and expanded activity', async () => {
+      const user = userEvent.setup()
+      render(<BudgetCategoryCard category={createMockCategory({ category_kind: 'group', group_name: 'Daily life' })} budgetId="budget-1" currencyCode="EUR" />)
+      expect(screen.getByText('€500.00')).toBeInTheDocument()
+      expect(screen.getByText('€250.00')).toBeInTheDocument()
+      expect(screen.getByTestId('budget-progress-bar')).toHaveAttribute('data-currency', 'EUR')
+      await user.click(screen.getByRole('button', { name: 'View transactions' }))
+      expect(screen.getByTestId('budget-transaction-list')).toHaveAttribute('data-currency', 'EUR')
+    })
+    it('labels shared limits and masks the group name', () => {
+      render(<BudgetCategoryCard category={createMockCategory({ category_kind: 'group', group_name: 'Daily life', members: [{ category_kind: 'uncategorized' }] })} />)
+      expect(screen.getByText('Shared limit')).toBeInTheDocument()
+      expect(screen.getByText('Daily life')).toHaveAttribute('data-ph-mask')
+    })
+    it('explains the automatic remainder without calling it Uncategorized', () => {
+      render(<BudgetCategoryCard category={createMockCategory({ category_kind: 'remainder' })} />)
+      expect(screen.getByText('Automatic remainder')).toBeInTheDocument()
+      expect(screen.getByText('Other')).toBeInTheDocument()
+    })
     it('should render category path as hierarchical string', () => {
       const category = createMockCategory()
       render(<BudgetCategoryCard category={category} />)

@@ -397,7 +397,27 @@ func writeTablesFor(bodies map[funcKey]string, frags map[string]string, schema m
 	for _, m := range reMethodCall.FindAllStringSubmatch(body, -1) {
 		follow(recv, m[1])
 	}
+	// An explicit local concrete value supplies the receiver type without guessing
+	// an injected interface. Custom-category deletion uses this shape to refresh
+	// budget siblings in the same transaction; those indirect writes count too.
+	for _, local := range regexp.MustCompile(`\b([a-zA-Z_]\w*)\s*:=\s*&?([a-zA-Z_]\w*)\s*\{`).FindAllStringSubmatch(body, -1) {
+		calls := regexp.MustCompile(`\b` + regexp.QuoteMeta(local[1]) + `\.([a-zA-Z_]\w*)\s*\(`)
+		for _, call := range calls.FindAllStringSubmatch(body, -1) {
+			follow(local[2], call[1])
+		}
+	}
 	return tables, resolved
+}
+
+func TestWriteSetFollowsExplicitCrossRepositoryTransactionDelegate(t *testing.T) {
+	bodies := map[funcKey]string{
+		{"customCategoryRepository", "DeleteWithReassignment"}: "UPDATE custom_categories SET deleted_at=NOW(); budgetRepo := &budgetRepository{db:tx}; budgetRepo.refreshBudgetActualsInTx(ctx,tx,id)",
+		{"budgetRepository", "refreshBudgetActualsInTx"}:       "UPDATE budgets SET income_amount=$1; UPDATE budget_categories SET spent_amount=$1",
+	}
+	tables, resolved := writeTablesFor(bodies, nil, map[string]bool{"budgets": true, "budget_categories": true, "custom_categories": true}, "customCategoryRepository", "DeleteWithReassignment", nil, 0)
+	if !resolved || !tables["budgets"] || !tables["budget_categories"] || !tables["custom_categories"] {
+		t.Fatalf("transaction delegate writes missing: %v", tables)
+	}
 }
 
 // implReceiverFor resolves iface to its concrete receiver type.

@@ -6,7 +6,7 @@
  */
 
 import { Receipt } from 'lucide-react';
-import { formatCurrencyFull } from '@/shared/charts/formatters';
+import { createCurrencyDisplay } from '@/shared/utils/currency';
 import { useBudgetTransactions } from '../../hooks/useBudgetTransactions';
 import { TransactionCard } from '../../../transactions/components/TransactionCard';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -14,6 +14,8 @@ import { Button } from '@/components/ui/button';
 import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 
 interface BudgetTransactionListProps {
+  snapshotVersion?: string;
+  currencyCode?: string;
   budgetId: string;
   categoryId: string;
 }
@@ -21,7 +23,7 @@ interface BudgetTransactionListProps {
 /**
  * Displays transactions matching a budget category with pagination.
  */
-export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactionListProps) {
+export function BudgetTransactionList({ budgetId, categoryId, currencyCode = 'USD', snapshotVersion }: BudgetTransactionListProps) {
   const { data: customCategories } = useGetUserCategories();
   const {
     transactions,
@@ -33,7 +35,8 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
     hasMore,
     loadMore,
     refetch,
-  } = useBudgetTransactions(budgetId, categoryId);
+  } = useBudgetTransactions(budgetId, categoryId, { snapshotVersion });
+  const formatAmount = createCurrencyDisplay(currencyCode, 2).format;
 
   // Loading state
   if (loading) {
@@ -81,7 +84,7 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
           Transactions ({totalCount})
         </h3>
         <span className="text-sm font-medium text-muted-foreground" data-ph-mask>
-          Total: {formatCurrencyFull(totalAmount)}
+          Total: {formatAmount(totalAmount)}
         </span>
       </div>
 
@@ -89,7 +92,11 @@ export function BudgetTransactionList({ budgetId, categoryId }: BudgetTransactio
       <ul className="list-none m-0 p-0" role="list">
         {transactions.map((transaction) => (
           <li key={transaction.id} className="border-b border-border last:border-b-0">
-            <TransactionCard transaction={transaction} customCategories={Array.isArray(customCategories) ? customCategories : undefined} />
+            <TransactionCard transaction={transaction} customCategories={Array.isArray(customCategories) ? customCategories : undefined} currencyCode={currencyCode} />
+            {transaction.budget_expense_amount != null && <div className="px-4 pb-3 text-sm">
+              <div data-ph-mask>Expense counted: {formatAmount(transaction.budget_expense_amount)}</div>
+              <div data-ph-mask>Allocated to savings: {formatAmount(transaction.amount - transaction.budget_expense_amount)}</div>
+            </div>}
           </li>
         ))}
       </ul>

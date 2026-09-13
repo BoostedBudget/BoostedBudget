@@ -81,6 +81,11 @@ describe('TransactionCard', () => {
   }
 
   describe('Basic Rendering', () => {
+    it('renders a malformed supplied currency with its amount still masked', () => {
+      render(<TransactionCard transaction={mockTransaction} currencyCode="U$D" />)
+      expect(screen.getByText('-U$D 25.50').closest('[data-ph-mask]')).not.toBeNull()
+    })
+
     it('should render transaction name', () => {
       render(<TransactionCard transaction={mockTransaction} />)
       // Displays merchant_name when available, otherwise name

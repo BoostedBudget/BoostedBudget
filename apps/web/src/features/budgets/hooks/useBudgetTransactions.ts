@@ -6,8 +6,8 @@
  * Fetches paginated transactions matching a budget category.
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { hashKey, useQueryClient } from '@tanstack/react-query';
 import {
   useGetCategoryTransactions,
   getGetCategoryTransactionsQueryKey,
@@ -17,6 +17,7 @@ import type { Transaction } from '../../transactions/types';
 
 interface UseBudgetTransactionsOptions {
   pageSize?: number;
+  snapshotVersion?: string;
 }
 
 interface UseBudgetTransactionsResult {
@@ -45,7 +46,19 @@ export function useBudgetTransactions(
   options?: UseBudgetTransactionsOptions
 ): UseBudgetTransactionsResult {
   const pageSize = options?.pageSize ?? 20;
+  const snapshotVersion = options?.snapshotVersion;
   const queryClient = useQueryClient();
+  const pageOneQueryKey = useMemo(() => {
+    const canonicalKey = getGetCategoryTransactionsQueryKey(
+      budgetId,
+      categoryId,
+      { limit: pageSize, offset: 0 }
+    );
+    return snapshotVersion === undefined
+      ? canonicalKey
+      : [...canonicalKey, snapshotVersion];
+  }, [budgetId, categoryId, pageSize, snapshotVersion]);
+  const pageOneQueryHash = useMemo(() => hashKey(pageOneQueryKey), [pageOneQueryKey]);
 
   // State for accumulated transactions (for load more)
   const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
@@ -56,19 +69,45 @@ export function useBudgetTransactions(
 
   // Track current offset for pagination
   const offsetRef = useRef(0);
+  const pageEpoch = useRef(0);
 
   // Initial query
   const {
     data,
+    dataUpdatedAt,
     isLoading,
     error: queryError,
     refetch: queryRefetch,
   } = useGetCategoryTransactions(budgetId, categoryId, { limit: pageSize, offset: 0 }, {
     query: {
+      queryKey: pageOneQueryKey,
       staleTime: 30 * 1000, // 30 seconds
+      refetchOnWindowFocus: true,
+      refetchInterval: 30_000,
+      refetchIntervalInBackground: false,
       enabled: !!budgetId && !!categoryId,
     },
   });
+  const [paginationSource, setPaginationSource] = useState({
+    queryHash: pageOneQueryHash,
+    dataUpdatedAt,
+  });
+  const paginationIsCurrent = paginationSource.queryHash === pageOneQueryHash &&
+    paginationSource.dataUpdatedAt === dataUpdatedAt;
+  const currentPageTransactions = data?.transactions as unknown as Transaction[] | undefined;
+
+  // Invalidation happens before React renders the refetch. Retire direct pagination
+  // requests immediately, including when structural sharing keeps page one identical.
+  useEffect(() => {
+    return queryClient.getQueryCache().subscribe((event) => {
+      if (event.type === 'updated' && event.query.queryHash === pageOneQueryHash &&
+        (event.action.type === 'invalidate' || event.action.type === 'fetch')) {
+        pageEpoch.current += 1;
+        setLoadingMore(false);
+        setPaginationSource((source) => ({ ...source, queryHash: '' }));
+      }
+    });
+  }, [pageOneQueryHash, queryClient]);
 
   // Convert error to Error instance
   const error = queryError
@@ -79,6 +118,8 @@ export function useBudgetTransactions(
 
   // Update state when initial data arrives
   useEffect(() => {
+    pageEpoch.current += 1;
+    setLoadingMore(false);
     if (data) {
       // Cast transactions to local type
       const transactions = data.transactions as unknown as Transaction[];
@@ -91,22 +132,32 @@ export function useBudgetTransactions(
        
       setHasMore(data.has_more);
       offsetRef.current = pageSize;
+    } else {
+      setAllTransactions([]);
+      setTotalCount(0);
+      setTotalAmount(0);
+      setHasMore(false);
+      offsetRef.current = 0;
     }
-  }, [data, pageSize]);
+    setPaginationSource({ queryHash: pageOneQueryHash, dataUpdatedAt });
+    return () => { pageEpoch.current += 1; };
+  }, [data, dataUpdatedAt, pageSize, pageOneQueryHash]);
 
   // Load more transactions
   const loadMore = useCallback(async () => {
-    if (isLoading || loadingMore || !hasMore) {
+    if (!paginationIsCurrent || isLoading || loadingMore || !hasMore) {
       return;
     }
 
     setLoadingMore(true);
+    const epoch = pageEpoch.current;
 
     try {
       const response = await getCategoryTransactions(budgetId, categoryId, {
         limit: pageSize,
         offset: offsetRef.current,
       });
+      if (epoch !== pageEpoch.current) return;
 
       // Cast transactions to local type
       const newTransactions = response.transactions as unknown as Transaction[];
@@ -119,27 +170,30 @@ export function useBudgetTransactions(
       // Error is handled but we don't update the main error state for loadMore
       console.error('Failed to load more transactions:', err);
     } finally {
-      setLoadingMore(false);
+      if (epoch === pageEpoch.current) setLoadingMore(false);
     }
-  }, [budgetId, categoryId, pageSize, isLoading, loadingMore, hasMore]);
+  }, [budgetId, categoryId, pageSize, isLoading, loadingMore, hasMore, paginationIsCurrent]);
 
   // Refetch from start
   const refetch = useCallback(async () => {
+    pageEpoch.current += 1;
+    setLoadingMore(false);
     offsetRef.current = 0;
     await queryClient.invalidateQueries({
-      queryKey: getGetCategoryTransactionsQueryKey(budgetId, categoryId, { limit: pageSize, offset: 0 }),
+      queryKey: pageOneQueryKey,
+      exact: true,
     });
     await queryRefetch();
-  }, [queryClient, queryRefetch, budgetId, categoryId, pageSize]);
+  }, [queryClient, queryRefetch, pageOneQueryKey]);
 
   return {
-    transactions: allTransactions,
-    totalCount,
-    totalAmount,
+    transactions: paginationIsCurrent ? allTransactions : currentPageTransactions ?? [],
+    totalCount: paginationIsCurrent ? totalCount : data?.total_count ?? 0,
+    totalAmount: paginationIsCurrent ? totalAmount : data?.total_amount ?? 0,
     loading: isLoading,
-    loadingMore,
+    loadingMore: paginationIsCurrent && loadingMore,
     error,
-    hasMore,
+    hasMore: paginationIsCurrent ? hasMore : data?.has_more ?? false,
     loadMore,
     refetch,
   };

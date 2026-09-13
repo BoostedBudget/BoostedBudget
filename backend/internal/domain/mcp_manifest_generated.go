@@ -82,6 +82,7 @@ var MCPOperationManifest = map[string]MCPOperationClass{
 	"getBoostExecutions":                             MCPClassRead,
 	"getBoosts":                                      MCPClassRead,
 	"getBudget":                                      MCPClassRead,
+	"getBudgetPlanVsActual":                          MCPClassExcluded,
 	"getBudgetVsActual":                              MCPClassRead,
 	"getBudgets":                                     MCPClassRead,
 	"getCashFlowHistory":                             MCPClassRead,

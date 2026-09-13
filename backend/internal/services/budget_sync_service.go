@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"log/slog"
 	"time"
 
@@ -82,7 +83,7 @@ type budgetSyncService struct {
 	categoryService BudgetSpentCalculator
 	logger          *slog.Logger
 	eventProcessor  EventTriggerProcessor        // Optional: triggers automation rules on budget updates
-	savingsSpent    SavingsContributionSpentCalc  // Optional: computes savings category spent from ledger (#1300)
+	savingsSpent    SavingsContributionSpentCalc // Optional: computes savings category spent from ledger (#1300)
 }
 
 // NewBudgetSyncService creates a new BudgetSyncService instance.
@@ -134,6 +135,16 @@ func (s *budgetSyncService) RecalculateBudgetAmounts(ctx context.Context, userID
 
 // RecalculateBudget recalculates income and spent amounts for a single budget.
 func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domain.Budget) error {
+	if atomic, ok := s.budgetRepo.(repository.BudgetActualsRepository); ok {
+		fresh, err := atomic.RecalculateBudgetActuals(ctx, budget.UserID, budget.ID, true)
+		if err != nil {
+			return fmt.Errorf("failed to recalculate budget actuals: %w", err)
+		}
+		if fresh == nil {
+			return nil
+		}
+		return s.emitBudgetUpdated(ctx, fresh, fresh.Categories, fresh.IncomeAmount)
+	}
 	// Calculate current period dates based on budget period type
 	startDate, endDate := calculateBudgetPeriodDates(budget, time.Now())
 
@@ -196,6 +207,10 @@ func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domai
 		}
 	}
 
+	return s.emitBudgetUpdated(ctx, budget, categories, incomeAmount)
+}
+
+func (s *budgetSyncService) emitBudgetUpdated(ctx context.Context, budget *domain.Budget, categories []domain.BudgetCategory, incomeAmount float64) error {
 	// Total over TOP-LEVEL categories only — a parent's spend already rolls up its
 	// children, so summing every row would double-count sub-allocations (Issue #1203).
 	totalSpent := (&domain.Budget{Categories: categories}).TotalSpent()
