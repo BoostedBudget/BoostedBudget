@@ -26,7 +26,7 @@ type AccountGetter interface {
 // that touch the tombstone use the budget's SeriesID rather than its ID.
 type GoalAutoCreateBudgetRepo interface {
 	GetActiveByUserID(ctx context.Context, userID string) ([]*domain.Budget, error)
-	CreateCategory(ctx context.Context, category *domain.BudgetCategory) error
+	AddCategoryChecked(ctx context.Context, budgetID string, category *domain.BudgetCategory) (*domain.BudgetCategory, error)
 	IsGoalDetachedForSeries(ctx context.Context, seriesID, goalID string) (bool, error)
 }
 
@@ -354,7 +354,7 @@ func (s *savingsGoalService) autoCreateSavingsCategories(ctx context.Context, us
 			UpdatedAt:       time.Now(),
 		}
 
-		if err := s.budgetRepo.CreateCategory(ctx, category); err != nil {
+		if _, err := s.budgetRepo.AddCategoryChecked(ctx, budget.ID, category); err != nil {
 			s.logger.Warn("auto-create: failed to create savings category",
 				slog.String("budget_id", budget.ID),
 				slog.String("goal_id", goalID),
@@ -669,6 +669,7 @@ func (s *savingsGoalService) applyBasisSwitch(
 		// Seed: carry the existing manual balance as a confirmed contribution.
 		if priorAmount > 0 {
 			seed := &domain.SavingsGoalContribution{
+				FlowKind:                "opening_balance",
 				SavingsGoalID:           goal.ID,
 				Amount:                  priorAmount,
 				Source:                  "manual",

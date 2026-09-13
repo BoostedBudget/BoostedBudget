@@ -144,6 +144,8 @@ func (m *mockBudgetSyncService) SetSavingsSpentCalc(calc services.SavingsContrib
 
 // mockTransactionRepoForBudget is a mock implementation of repository.TransactionRepository for budget tests
 type mockTransactionRepoForBudget struct {
+	start, end   time.Time
+	calls        int
 	transactions []domain.Transaction
 	totalCount   int
 	totalAmount  float64
@@ -151,6 +153,9 @@ type mockTransactionRepoForBudget struct {
 }
 
 func (m *mockTransactionRepoForBudget) GetTransactionsForBudgetCategory(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
+	m.start = startDate
+	m.end = endDate
+	m.calls++
 	if m.err != nil {
 		return nil, 0, 0, m.err
 	}
@@ -285,6 +290,12 @@ func (m *mockCustomCategoryRepoForBudget) GetNamesByIDs(ctx context.Context, use
 }
 func (m *mockCustomCategoryRepoForBudget) GetLiveNamesByIDs(ctx context.Context, userID string, ids []string) (map[string]string, error) {
 	return map[string]string{}, nil
+}
+func (m *mockCustomCategoryRepoForBudget) GetByIDInTx(ctx context.Context, _ repository.Transaction, id string) (*domain.CustomCategory, error) {
+	return m.GetByID(ctx, id)
+}
+func (m *mockCustomCategoryRepoForBudget) GetChildrenInTx(ctx context.Context, _ repository.Transaction, id string) ([]*domain.CustomCategory, error) {
+	return m.GetChildren(ctx, id)
 }
 func (m *mockCustomCategoryRepoForBudget) GetChildren(ctx context.Context, parentID string) ([]*domain.CustomCategory, error) {
 	return nil, nil
@@ -1108,7 +1119,7 @@ func TestCreateBudget_MCPOrigin_AuditFailureRollsBack(t *testing.T) {
 	userID := "user-mcp-audit-fail"
 	const workerSecret = "test-worker-secret-fail"
 
-	tx := &mockTx{}
+	tx := &mockTx{queryRowResult: inactiveBudgetSnapshotRow{}}
 	db := &mockDB{tx: tx}
 
 	handler := NewBudgetHandler(
@@ -1139,6 +1150,20 @@ func TestCreateBudget_MCPOrigin_AuditFailureRollsBack(t *testing.T) {
 	assert.Error(t, err, "handler must return error when audit INSERT fails (fail-closed)")
 	assert.Nil(t, out)
 	assert.False(t, tx.committed, "tx must NOT be committed when audit fails")
+}
+
+// The audit-boundary test does not exercise actuals. Its DB row explicitly opts
+// out of a current-period refresh rather than returning a nil pgx.Row.
+type inactiveBudgetSnapshotRow struct{}
+
+func (inactiveBudgetSnapshotRow) Scan(dest ...any) error {
+	*dest[0].(*string) = "audit-fixture-owner"
+	*dest[1].(*domain.BudgetPeriod) = domain.BudgetPeriodMonthly
+	*dest[2].(*time.Time) = time.Now()
+	*dest[3].(**time.Time) = nil
+	*dest[4].(*bool) = false
+	*dest[5].(*float64) = 0
+	return nil
 }
 
 // mockGoalOwnershipCheckerForBudget is a simple ownership checker that accepts/rejects
@@ -1175,7 +1200,7 @@ func TestCreateBudget_MCPOrigin_SavingsGoalIDOR(t *testing.T) {
 	ownGoalID := "goal-own-user-mcp"
 
 	makeHandler := func(checker services.GoalOwnershipChecker) (*BudgetHandler, *mockTx) {
-		tx := &mockTx{}
+		tx := &mockTx{queryRowResult: inactiveBudgetSnapshotRow{}}
 		db := &mockDB{tx: tx}
 		auditRepo := &mockMCPAuditRepositoryForBudget{}
 		handler := NewBudgetHandler(

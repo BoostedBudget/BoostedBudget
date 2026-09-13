@@ -96,12 +96,14 @@ func TestUpdateBudget_PFCPrimaryIncomeSource_PersistsAndSyncsIncomeAmount(t *tes
 	`, accountID, linkedItemID, userID)
 	require.NoError(t, err, "seed account")
 
-	// Two income deposits inside the budget's current period (seedClaim1630Budget uses
-	// time.Now() as start_date with a monthly period), $1500 and $2000 — mirrors task 0's
-	// pinned $3500 total. Inflow = negative amount under PFCv2.
-	now := time.Now()
-	insertHappyPathIncomeTxn(t, tx, userID, accountID, linkedItemID, now.Add(-24*time.Hour), -1500.00)
-	insertHappyPathIncomeTxn(t, tx, userID, accountID, linkedItemID, now.Add(-12*time.Hour), -2000.00)
+	// Both posted deposits belong to the budget's eligible UTC day, including on
+	// the first day of a month. Relative hour offsets could precede its start_date.
+	// Keep task 0's pinned $3500 total. Inflow = negative amount under PFCv2.
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	_, err = tx.Exec(ctx, `UPDATE budgets SET start_date=$2 WHERE id=$1`, budgetID, today)
+	require.NoError(t, err)
+	insertHappyPathIncomeTxn(t, tx, userID, accountID, linkedItemID, today, -1500.00)
+	insertHappyPathIncomeTxn(t, tx, userID, accountID, linkedItemID, today, -2000.00)
 
 	// Wire the REAL budget service + REAL sync service (income calculator + category
 	// matching service), not mocks, so domain.Validate(), persistence and recalculation all

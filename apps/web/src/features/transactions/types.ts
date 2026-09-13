@@ -56,6 +56,8 @@ export interface TagSource {
  * Matches backend domain.Transaction schema (PFC v2 canonical)
  */
 export interface Transaction {
+  /** Present only on budget drilldowns; excludes the portion allocated to savings. */
+  budget_expense_amount?: number
   id: string
   user_id: string
   account_id: string

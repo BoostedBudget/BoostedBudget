@@ -30,13 +30,16 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { BudgetGroupMember } from './budgetGroupMember';
 import type { UpdateBudgetCategoryRequestMatchLogic } from './updateBudgetCategoryRequestMatchLogic';
 
 export interface UpdateBudgetCategoryRequest {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   allocated_amount?: number;
+  group_name?: string;
   /** How tags and category matching combine. tag_only and and both REQUIRE a non-empty tags array — omitting tags with either of these is rejected (400). */
   match_logic?: UpdateBudgetCategoryRequestMatchLogic;
+  members?: BudgetGroupMember[];
   tags?: string[];
 }

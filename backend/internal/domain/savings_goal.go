@@ -149,6 +149,9 @@ func (sg *SavingsGoal) Validate() error {
 // Contributions are split-capable: one transaction may be allocated across multiple goals
 // via the partial unique constraint (transaction_id, savings_goal_id).
 type SavingsGoalContribution struct {
+	// FlowKind is write-side provenance for activity reporting. It does not change
+	// the contribution's role in the goal-progress ledger and is not client-settable.
+	FlowKind      string `json:"-" db:"flow_kind"`
 	ID            string `json:"id" db:"id"`
 	SavingsGoalID string `json:"savings_goal_id" db:"savings_goal_id"`
 	// TransactionID is nil for manually entered contributions.

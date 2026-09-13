@@ -91,6 +91,7 @@ func (e fkCascadeEdge) String() string {
 //     not deleted at all any more, so a CASCADE that hard-deletes one defeats the tombstone, and
 //     takes its own history children with it in the same statement.
 var historyBearingTables = map[string]string{
+	"budget_group_members": "retained selector membership history for shared allocations (#1637)",
 	// History proper.
 	"account_status_history":     "the per-day record of whether an account was live; the liveness baseline reads it",
 	"balance_snapshots":          "daily account balances; the only record of what a balance was on a past day",
@@ -146,7 +147,7 @@ var deliberatelyNotHistoryBearing = map[string]string{
 		"value, and a user would not notice losing it — the reason it exists at all is that an " +
 		"account holding nothing writes no snapshot row, so 'confirmed empty' and 'never synced' " +
 		"were indistinguishable and the portfolio re-link rule reported a stale predecessor.",
-		"holdings": "LIVE STATE, not history: what the account holds right now. ReplaceForAccount " +
+	"holdings": "LIVE STATE, not history: what the account holds right now. ReplaceForAccount " +
 		"deliberately deletes and re-inserts it on every sync, which is how it stays true. The " +
 		"history is holding_snapshots, captured in that SAME transaction but AFTER the inserts, " +
 		"derived from the rows just written — it records the new state, it does not preserve the " +
@@ -165,6 +166,8 @@ var deliberatelyNotHistoryBearing = map[string]string{
 // it is allowed to exist. Adding an entry here is a deliberate decision to let some delete destroy
 // history; say why, in the same commit as the migration.
 var allowedHistoryCascades = map[fkCascadeEdge]string{
+	{child: "budget_group_members", parent: "budget_categories", constraint: "fk_budget_group_members_category", childCols: "budget_category_id", parentCols: "id"}: "erasure reachability through retained budget categories; normal category removal tombstones the parent",
+	{child: "budget_group_members", parent: "custom_categories", constraint: "fk_budget_group_members_custom", childCols: "custom_category_id", parentCols: "id"}:   "custom categories are tombstoned on ordinary deletion; this edge only removes membership during GDPR erasure",
 	// ---- GDPR erasure off `users`. -------------------------------------------------------------
 	// One real `DELETE FROM users` is the whole erasure mechanism (ADR 2026-08-01). Every one of
 	// these is required: removing any of them strands personal data after a completed erasure.
@@ -269,9 +272,10 @@ var allowedHistoryCascades = map[fkCascadeEdge]string{
 // _events, _executions, _statements, _contributions, _repairs, _log or _audit is a claim the author
 // made about what the table is; this test only asks them to finish the sentence.
 //
-// ⚠ HOW MUCH IT ACTUALLY COVERS, measured rather than assumed: **8 of the 18 tables already in
+// ⚠ HOW MUCH IT ACTUALLY COVERS, measured rather than assumed: **9 of the 20 tables already in
 // historyBearingTables do not match this regexp** — accounts, boosts, budget_categories, budgets,
-// custom_categories, investment_transactions, savings_goals, transactions. That is 44%, and it is
+// custom_categories, investment_transactions, savings_goals, transactions, budget_group_members.
+// That is 45%, and it is
 // the LARGEST class the guards protect: the tombstoned parents. The net is structurally incapable
 // of finding another one of those, because their names describe a thing rather than a record of a
 // thing.
@@ -544,6 +548,7 @@ func TestHistoryShapedTableClassification_MapsAgreeOnNothing(t *testing.T) {
 // a shaped table, the number here changes and the comment gets updated with it.
 func TestHistoryShapedTableClassification_TheNetMissesMostOfWhatItProtects(t *testing.T) {
 	want := map[string]bool{
+		"budget_group_members": true, // retained membership configuration also has no history-shaped suffix
 		"accounts": true, "boosts": true, "budget_categories": true, "budgets": true,
 		"custom_categories": true, "investment_transactions": true, "savings_goals": true,
 		"transactions": true,

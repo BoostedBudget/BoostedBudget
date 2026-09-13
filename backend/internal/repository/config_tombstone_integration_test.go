@@ -133,8 +133,8 @@ func seedConfigTombstoneFixture(t *testing.T) *configTombstoneFixture {
 		f.contribIDs = append(f.contribIDs, id)
 		mustExec("savings_goal_contribution", `
 			INSERT INTO savings_goal_contributions
-				(id, savings_goal_id, amount, source, status, managed_by_reconciliation, confirmed_by_user, occurred_on)
-			VALUES ($1, $2, $3, $4, 'confirmed', $5, true, CURRENT_DATE - $6::int)
+				(id, savings_goal_id, amount, source, status, managed_by_reconciliation, confirmed_by_user, occurred_on, flow_kind)
+			VALUES ($1, $2, $3, $4, 'confirmed', $5, true, CURRENT_DATE - $6::int, 'contribution')
 		`, id, f.goalID, spec.amount, spec.source, spec.managed, i)
 	}
 

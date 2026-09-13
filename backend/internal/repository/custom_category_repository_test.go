@@ -238,20 +238,15 @@ func TestCustomCategoryRepository_Update(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(category.UserID).
 		WillReturnResult(pgxmock.NewResult("SELECT", 1))
-	mock.ExpectExec(regexp.QuoteMeta(`
-		UPDATE custom_categories
-		SET name = $1, parent_pfc_primary = $2, parent_id = $3, icon = $4, color = $5, usage_count = $6, updated_at = $7
-		WHERE id = $8
-	`)).WithArgs(
+	mock.ExpectQuery(`UPDATE custom_categories[\s\S]*RETURNING parent_pfc_primary,parent_id`).WithArgs(
 		category.Name,
-		category.ParentPFCPrimary,
-		category.ParentID,
 		category.Icon,
 		category.Color,
 		category.UsageCount,
 		pgxmock.AnyArg(),
 		category.ID,
-	).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		category.UserID,
+	).WillReturnRows(pgxmock.NewRows([]string{"parent_pfc_primary", "parent_id"}).AddRow(nil, nil))
 	mock.ExpectCommit()
 
 	err := repo.Update(ctx, category)
@@ -275,20 +270,15 @@ func TestCustomCategoryRepository_Update_NotFound(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("SELECT", 1))
-	mock.ExpectExec(regexp.QuoteMeta(`
-		UPDATE custom_categories
-		SET name = $1, parent_pfc_primary = $2, parent_id = $3, icon = $4, color = $5, usage_count = $6, updated_at = $7
-		WHERE id = $8
-	`)).WithArgs(
+	mock.ExpectQuery(`UPDATE custom_categories[\s\S]*RETURNING parent_pfc_primary,parent_id`).WithArgs(
 		category.Name,
-		category.ParentPFCPrimary,
-		category.ParentID,
 		category.Icon,
 		category.Color,
 		category.UsageCount,
 		pgxmock.AnyArg(),
 		category.ID,
-	).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+		category.UserID,
+	).WillReturnRows(pgxmock.NewRows([]string{"parent_pfc_primary", "parent_id"}))
 	mock.ExpectRollback()
 
 	err := repo.Update(ctx, category)
@@ -519,6 +509,7 @@ func TestCustomCategoryRepository_DeleteWithReassignment(t *testing.T) {
 	categoryID := uuid.New().String()
 
 	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(userID).WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectExec(`UPDATE custom_categories[\s\S]*SET deleted_at = NOW\(\)`).
 		WithArgs(categoryID, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -529,6 +520,7 @@ func TestCustomCategoryRepository_DeleteWithReassignment(t *testing.T) {
 	mock.ExpectExec(`UPDATE budget_categories[\s\S]*SET deleted_at = NOW\(\)[\s\S]*SELECT b.id FROM budgets b WHERE b.user_id = \$1`).
 		WithArgs(userID, categoryID, domain.SoftDeleteReasonParent, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectQuery(`SELECT b.id FROM budgets b`).WithArgs(userID).WillReturnRows(pgxmock.NewRows([]string{"id"}))
 	mock.ExpectCommit()
 
 	// nil auditLog: the audit entry is optional at this layer, and its in-transaction write is
@@ -552,6 +544,7 @@ func TestCustomCategoryRepository_DeleteWithReassignment_NotFound(t *testing.T) 
 	categoryID := uuid.New().String()
 
 	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs(userID).WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectExec(`UPDATE custom_categories[\s\S]*SET deleted_at = NOW\(\)`).
 		WithArgs(categoryID, userID, domain.SoftDeleteReasonUser, domain.SoftDeletedByUser).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))

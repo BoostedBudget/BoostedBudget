@@ -97,6 +97,14 @@ func (s *categoryPreviewService) PreviewCategoryMatches(ctx context.Context, use
 		}
 	}
 
+	if contextual, ok := s.statsCalculator.(interface {
+		PreviewBudgetCategory(context.Context, string, *domain.CategoryPreviewRequest) (*domain.CategoryPreviewResponse, error)
+	}); ok {
+		return contextual.PreviewBudgetCategory(ctx, userID, req)
+	}
+	if req.CategoryKind == "group" || req.CategoryKind == "remainder" || req.BudgetID != "" || len(req.DraftCategories) > 0 {
+		return nil, errors.New("context-aware budget preview is unavailable")
+	}
 	count, totalAmount, err := s.statsCalculator.GetMatchingTransactionStats(
 		ctx,
 		userID,

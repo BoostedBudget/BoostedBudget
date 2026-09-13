@@ -2505,6 +2505,7 @@ func main() {
 
 		// Register Huma budget routes (Issue #559: Huma migration)
 		humaBudgetHandler := operations.NewBudgetHandler(budgetService, budgetSyncService, transactionService, operations.BudgetHandlerDeps{
+			PlanService:          services.NewBudgetPlanService(repository.NewBudgetPlanRepository(db)),
 			IdempotencyRepo:      humaIdempotencyRepo,
 			DB:                   db,
 			MCPAuditRepo:         humaMCPAuditRepo,

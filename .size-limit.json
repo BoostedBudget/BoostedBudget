@@ -78,6 +78,12 @@
     "gzip": true
   },
   {
+    "name": "budget-plan",
+    "path": "apps/web/dist/assets/budget-plan-*.js",
+    "limit": "4.6 KB",
+    "gzip": true
+  },
+  {
     "name": "budgets",
     "path": "apps/web/dist/assets/budgets-*.js",
     "limit": "25 KB",

@@ -78,6 +78,12 @@ func (m *MockCustomCategoryRepository) GetLiveNamesByIDs(ctx context.Context, us
 	return args.Get(0).(map[string]string), args.Error(1)
 }
 
+func (m *MockCustomCategoryRepository) GetByIDInTx(ctx context.Context, _ repository.Transaction, id string) (*domain.CustomCategory, error) {
+	return m.GetByID(ctx, id)
+}
+func (m *MockCustomCategoryRepository) GetChildrenInTx(ctx context.Context, _ repository.Transaction, id string) ([]*domain.CustomCategory, error) {
+	return m.GetChildren(ctx, id)
+}
 func (m *MockCustomCategoryRepository) GetChildren(ctx context.Context, parentID string) ([]*domain.CustomCategory, error) {
 	args := m.Called(ctx, parentID)
 	if args.Get(0) == nil {
@@ -680,6 +686,9 @@ type MockBudgetCategoryRepository struct {
 	mock.Mock
 }
 
+func (m *MockBudgetCategoryRepository) GetByUserIDInTx(ctx context.Context, _ repository.Transaction, id string) ([]*domain.Budget, error) {
+	return m.GetByUserID(ctx, id)
+}
 func (m *MockBudgetCategoryRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.Budget, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
