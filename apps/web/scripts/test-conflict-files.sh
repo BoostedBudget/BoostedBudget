@@ -18,7 +18,7 @@ for arg in "$@"; do
     esac
 done
 
-echo "Running process-isolated test groups (A, B, C, D, E, F, G)..."
+echo "Running process-isolated test groups (A, B, C, D, E, F, G, H)..."
 cd /tmp
 
 run_group() {
@@ -193,6 +193,17 @@ for f in \
     GROUP_G_PRELOAD_ARGS+=(--preload "$f")
 done
 
+# Group H: real PostHog SDK. The centralized posthog preload replaces the SDK module,
+# so this privacy boundary needs its own process to exercise actual sessionStorage behavior.
+GROUP_H_FILES=(
+    "$FRONTEND_DIR/src/shared/lib/posthog-real-sdk.test.ts"
+)
+GROUP_H_PRELOAD_ARGS=()
+for f in \
+    "$FRONTEND_DIR/src/test/happydom.ts"; do
+    GROUP_H_PRELOAD_ARGS+=(--preload "$f")
+done
+
 run_group A "Minimal preloads" "${GROUP_A_PRELOAD_ARGS[@]}" "${GROUP_A_FILES[@]}"
 run_group B "Registry/context" "${GROUP_B_PRELOAD_ARGS[@]}" "${GROUP_B_FILES[@]}"
 run_group C "Inline mocks" "${GROUP_C_PRELOAD_ARGS[@]}" "${GROUP_C_FILES[@]}"
@@ -200,5 +211,6 @@ run_group D "Real hooks" "${GROUP_D_PRELOAD_ARGS[@]}" "${GROUP_D_FILES[@]}"
 run_group E "MerchantsTab inline DataTable mock" "${GROUP_E_PRELOAD_ARGS[@]}" "${GROUP_E_FILES[@]}"
 run_group F "Real savings-goals hooks + real query cache" "${GROUP_F_PRELOAD_ARGS[@]}" "${GROUP_F_FILES[@]}"
 run_group G "SankeyViewModeControl against real Radix toggle-group" "${GROUP_G_PRELOAD_ARGS[@]}" "${GROUP_G_FILES[@]}"
+run_group H "Real PostHog SDK sessionStorage privacy" "${GROUP_H_PRELOAD_ARGS[@]}" "${GROUP_H_FILES[@]}"
 
 echo "Process-isolated test groups completed!"

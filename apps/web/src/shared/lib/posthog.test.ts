@@ -5,6 +5,7 @@ import type { CaptureResult, PostHogConfig } from 'posthog-js';
 import {
   capturePageView,
   clearPostHogQueuedEvents,
+  guardPostHogRetryQueue,
   isAnonymousAnalyticsPath,
   isSensitiveAnalyticsPath,
   listenForAnalyticsWithdrawal,
@@ -46,18 +47,30 @@ function isAtLeast(version: number[], minimum: readonly number[]): boolean {
 }
 
 describe('posthog config', () => {
-  test('withdrawal prevents a delayed request failure from refilling the retry queue', () => {
+  test('withdrawal prevents stale retries while a later authority generation can retry', () => {
+    let generation = 1;
+    let granted = true;
     const retryQueue = {
       _isPolling: true,
       _queue: [] as unknown[],
       _enqueue(request: unknown) { this._queue.push(request) },
+      retriableRequest(request: unknown) { this._enqueue(request) },
     };
 
+    guardPostHogRetryQueue({ _retryQueue: retryQueue }, () => generation, () => granted);
+    const staleRequest = { event: 'obsolete-authority-event' };
+    retryQueue.retriableRequest(staleRequest);
     clearPostHogQueuedEvents({ _retryQueue: retryQueue });
-    retryQueue._enqueue({ event: 'obsolete-authority-event' });
+    generation += 1;
+    granted = false;
+    retryQueue._enqueue(staleRequest);
 
     expect(retryQueue._queue).toEqual([]);
     expect(retryQueue._isPolling).toBe(false);
+
+    granted = true;
+    retryQueue.retriableRequest({ event: 'new-authority-event' });
+    expect(retryQueue._queue).toHaveLength(1);
   });
 
   test.each(['/pricing/', '/Pricing', '/legal/privacy-policy/'])(
@@ -144,6 +157,7 @@ describe('posthog config', () => {
       persistence: cfg.persistence,
       reuseAnonymousId: cfg.reuseAnonymousId,
       request_batching: cfg.request_batching,
+      disable_persistence: cfg.disable_persistence,
     }).toEqual({
       opt_out_capturing_by_default: false,
       opt_out_persistence_by_default: false,
@@ -169,6 +183,7 @@ describe('posthog config', () => {
       persistence: 'sessionStorage',
       reuseAnonymousId: true,
       request_batching: false,
+      disable_persistence: true,
     });
   });
 
@@ -324,7 +339,8 @@ describe('posthog config', () => {
 
     expect(out?.properties?.safe).toBe('kept');
     expect(out?.properties?.email).toBeUndefined();
-    expect(out?.properties?.self).toBe(out?.properties);
+    expect(out?.properties?.self).toBeNull();
+    expect(() => JSON.stringify(out)).not.toThrow();
     expect(nested.email).toBe('secret@example.com');
     expect(nested.self).toBe(nested);
   });
@@ -427,10 +443,12 @@ describe('posthog lifecycle', () => {
     dnt = false;
     client = {
       capture: mock(() => {}),
+      clearPersistence: mock(() => {}),
       clearQueuedEvents: mock(() => {}),
       identify: mock(() => {}),
       init: mock(() => {}),
       reset: mock(() => {}),
+      setPersistenceEnabled: mock(() => {}),
       setPersonProperties: mock(() => {}),
       stopSessionRecording: mock(() => {}),
     };
@@ -483,24 +501,53 @@ describe('posthog lifecycle', () => {
       setGranted(granted);
     });
     client.clearQueuedEvents = mock(() => { order.push('clear'); });
+    client.clearPersistence = mock(() => { order.push('clear-persistence'); });
     client.stopSessionRecording = mock(() => { order.push('stop'); });
     client.reset = mock(() => { order.push('reset'); });
+    client.setPersistenceEnabled = mock((enabled: boolean) => { order.push(`persistence:${enabled}`); });
     lifecycle.grant('user-123');
     order.length = 0;
 
     lifecycle.deny();
 
-    expect(order).toEqual(['gate:false', 'clear', 'stop', 'reset']);
+    expect(order).toEqual(['gate:false', 'persistence:false', 'clear-persistence', 'clear', 'stop', 'reset']);
     expect(client.reset).toHaveBeenCalledWith(true);
     expect(lifecycle.getState()).toBe('denied');
+  });
+
+  test('pending and denied clear stale SDK storage before first initialization', () => {
+    lifecycle.setScope('user-a');
+    lifecycle.setPending();
+    lifecycle.deny();
+
+    expect(client.init).not.toHaveBeenCalled();
+    expect(client.clearPersistence).toHaveBeenCalledTimes(2);
+  });
+
+  test('pending disables persistence before any reset and grant restores it before identity', () => {
+    const order: string[] = [];
+    client.setPersistenceEnabled = mock((enabled: boolean) => { order.push(`persistence:${enabled}`); });
+    client.clearPersistence = mock(() => { order.push('clear-persistence'); });
+    client.identify = mock(() => { order.push('identify'); });
+    lifecycle.setScope('user-a');
+    lifecycle.grantFromAuthority('user-a', 'user-a');
+    order.length = 0;
+
+    lifecycle.setPending();
+    expect(order).toEqual(['persistence:false', 'clear-persistence']);
+
+    lifecycle.grantFromAuthority('user-a', 'user-a');
+    expect(order).toEqual(['persistence:false', 'clear-persistence', 'persistence:true', 'identify']);
   });
 
   test('separate tab lifecycles do not share native consent or identity state', () => {
     const tabBClient: AnalyticsClient = {
       capture: mock(() => {}),
+      clearPersistence: mock(() => {}),
       identify: mock(() => {}),
       init: mock(() => {}),
       reset: mock(() => {}),
+      setPersistenceEnabled: mock(() => {}),
       setPersonProperties: mock(() => {}),
       stopSessionRecording: mock(() => {}),
     };
