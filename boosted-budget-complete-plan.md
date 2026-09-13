@@ -2638,6 +2638,42 @@ Each phase produces a deployable, valuable product increment. The architecture s
 
 ---
 
-*Document Version: 2.0.0*  
-*Last Updated: [Current Date]*  
+## 2026-09-13 — #1610/#1612 Requirements-Gap Closure
+
+- **Tracking:** Continue on `bugfix/1610-mcp-response-root-shapes` in draft PR #1649. The PR
+  disposition remains `Closes #1610` and `Refs #1612`; #1612 is already closed by its original
+  delivery.
+- **Verified complete:** Search now exposes resolved JSON 200/201 response-root shapes and
+  token-frugal allowed-operation response fields; `$ref`, array, scalar, null, depth/cycle, omitted
+  tooling-field, byte-budget, exhaustive OpenAPI-oracle, and generated-artifact coverage is in
+  place. The committed MCP spec index remains generated rather than hand-edited.
+- **Retained executor contract:** Legacy `execute` is a hard cut with no alias. `readExecute`
+  admits only the reviewed non-destructive/scoped set, including two acknowledged side-effecting
+  GETs and the safe preview POST. Privacy may create caller-owned defaults; profile reads update
+  the existing caller's last-login timestamp. `writeExecute` accepts reads, writes, and ordered
+  read-to-write batches.
+  Confirmation hashes the exact whole calls array and the challenge executes nothing. Manifest
+  exclusions remain effective in both executors. `recipe.run` resolves calls but never executes
+  them; the selected executor enforces the boundary afterward.
+- **Closed output defect:** Caller/backend-controlled denial, error, and confirmation text could
+  bypass #1612's aggregate accounting. Every complete emitted result is now capped at
+  `MAX_EMITTED_RESULT_CHARS` (101,000 UTF-16 code units) with an explicit shown/full-size marker;
+  the existing 100,000 per-payload and 300,000 aggregate limits remain unchanged. The aggregate
+  limit is a hard cap on the returned text, including separators and exhaustion guidance; the
+  executor reserves that guidance before starting another call and does not run a call when no
+  useful bounded result can fit. Under-budget output and first-error abort remain unchanged.
+- **Contract coverage:** Tests pin tool re-enumeration (`execute` absent), the asymmetric public
+  confirmation-token schemas, resolved JSON-201 response fields, exact under-budget and aggregate
+  boundaries, omitted-call guidance, and bounded unknown-operation, backend-error, and
+  confirmation paths.
+- **Completion gates:** Each implementation task receives fresh subagent implementation,
+  specification review, and quality review. Then run code simplification, all backend/frontend/MCP
+  unit, integration, type, lint, E2E, artifact, and shell gates; obtain the mandatory Codex
+  adversarial review (retry once, then fresh-context fallback if unavailable); update PR #1649
+  with evidence before marking it ready.
+
+*Document Version: 2.0.1*
+
+*Last Updated: 2026-09-13*
+
 *Project: BoostedBudget - Global Financial Automation Platform*

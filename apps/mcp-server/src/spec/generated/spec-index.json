@@ -19600,7 +19600,7 @@
       ],
       "manifestClass": "read",
       "excluded": false,
-      "description": "Retrieves the authenticated user's profile, creating one if it's their first login.",
+      "description": "Retrieves the authenticated user's existing profile, then attempts a best-effort last-login timestamp update. An update failure does not fail the response, and returned last_login_at is the value fetched before that update.",
       "responseShape": {
         "type": "object"
       },

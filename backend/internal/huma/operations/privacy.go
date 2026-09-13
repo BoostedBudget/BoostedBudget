@@ -84,11 +84,11 @@ func RegisterPrivacyRoutes(api huma.API, handler *PrivacyHandler) {
 		Description: "Retrieves the authenticated user's privacy settings, creating defaults if none exist.",
 		Tags:        []string{"Privacy"},
 		Security:    []map[string][]string{{"clerk": {}}},
-		// #1610: this GET lazily creates the caller's own default row on first access — it is
-		// not pure-read despite being admitted by the MCP server's readExecute path. Flows into
+		// #1610: this GET may lazily create the caller's own default row on first access — it has
+		// a caller-scoped read side effect despite being admitted by readExecute. This flows into
 		// api/openapi.yaml as a sibling of operationId (huma.Operation.Extensions is marshaled,
 		// unlike Metadata) so apps/mcp-server can assert on it instead of only a by-name allowlist.
-		Extensions: map[string]any{"x-mcp-lazy-init": true},
+		Extensions: map[string]any{"x-mcp-read-side-effect": true},
 	}, handler.GetPrivacySettings)
 
 	// PUT /api/v1/user/privacy - Update privacy settings
