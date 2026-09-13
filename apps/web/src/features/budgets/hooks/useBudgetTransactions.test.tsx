@@ -318,6 +318,43 @@ describe('useBudgetTransactions', () => {
       expect(current.transactions.map(({ id }) => id)).toEqual(['fresh-first-page', 'fresh-second-page'])
     })
 
+    it('hides accumulated rows as soon as the current first page is invalidated', async () => {
+      const initial = {
+        transactions: [mockTransaction],
+        total_count: 2,
+        total_amount: 100,
+        has_more: true,
+      }
+      mockQueryState(initial, false, null, 100)
+      mockGetCategoryTransactions.mockResolvedValueOnce({
+        ...initial,
+        transactions: [{ ...mockTransaction, id: 'old-second-page' }],
+        has_more: false,
+      })
+      const client = new QueryClient()
+      const key = mockGetCategoryTransactionsQueryKey(
+        'budget-1',
+        'category-1',
+        { limit: 20, offset: 0 }
+      )
+      client.setQueryData(key, initial)
+      const { result } = renderHook(() => useBudgetTransactions('budget-1', 'category-1'), {
+        wrapper: createWrapper(client),
+      })
+
+      await act(async () => { await result.current.loadMore() })
+      expect(result.current.transactions.map(({ id }) => id)).toEqual(['tx-1', 'old-second-page'])
+
+      await act(async () => {
+        await client.invalidateQueries({ queryKey: key, exact: true, refetchType: 'none' })
+      })
+
+      expect(result.current.transactions.map(({ id }) => id)).toEqual(['tx-1'])
+      expect(result.current.totalCount).toBe(2)
+      expect(result.current.totalAmount).toBe(100)
+      expect(result.current.hasMore).toBe(true)
+    })
+
     it('resets accumulated pagination and discards an older in-flight page when the snapshot changes', async () => {
       const initial = {
         transactions: [mockTransaction],
