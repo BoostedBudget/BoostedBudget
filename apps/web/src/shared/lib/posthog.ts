@@ -55,7 +55,7 @@ export function isSensitiveAnalyticsPath(value: string): boolean {
 
 export function sanitizeAnalyticsUrl(value: string): string {
   const { origin, pathname } = pathFromUrl(value)
-  let safePath = pathname
+  let safePath = redactCapabilityUrlPath(pathname) ?? pathname
   for (const [pattern, replacement] of ENTITY_ROUTES) {
     if (pattern.test(safePath)) {
       safePath = safePath.replace(pattern, replacement)
@@ -170,25 +170,38 @@ export function setAnalyticsLifecyclePending(): void {
   analyticsLifecycle.setPending()
 }
 
+export function setProductAnalyticsScope(scope: string): void {
+  analyticsLifecycle.setScope(scope)
+}
+
 export function initPostHog(): boolean {
   return analyticsLifecycle.init()
 }
 
 export function grantProductAnalytics(
+  scope: string,
   distinctId?: string,
   personProperties?: Properties,
 ): void {
-  analyticsLifecycle.grant(distinctId, personProperties)
+  analyticsLifecycle.grantExplicitly(scope, distinctId, personProperties)
+}
+
+export function applyProductAnalyticsAuthority(
+  scope: string,
+  distinctId?: string,
+  personProperties?: Properties,
+): void {
+  analyticsLifecycle.grantFromAuthority(scope, distinctId, personProperties)
 }
 
 export function denyProductAnalytics(): void {
   analyticsLifecycle.deny()
 }
 
-export function withdrawProductAnalytics(): void {
-  denyProductAnalytics()
+export function withdrawProductAnalytics(scope: string): void {
+  analyticsLifecycle.withdraw(scope)
   try {
-    localStorage.setItem(WITHDRAWAL_STORAGE_KEY, String(Date.now()))
+    localStorage.setItem(WITHDRAWAL_STORAGE_KEY, JSON.stringify({ scope, nonce: Date.now() }))
     localStorage.removeItem(WITHDRAWAL_STORAGE_KEY)
   } catch {
     // Local denial is authoritative even when cross-tab storage is unavailable.
@@ -198,11 +211,22 @@ export function withdrawProductAnalytics(): void {
 export function listenForAnalyticsWithdrawal(): () => void {
   function handleStorage(event: StorageEvent): void {
     if (event.key === WITHDRAWAL_STORAGE_KEY && event.newValue !== null) {
-      denyProductAnalytics()
+      try {
+        const message = JSON.parse(event.newValue) as { scope?: unknown }
+        if (typeof message.scope === 'string') analyticsLifecycle.withdraw(message.scope)
+      } catch {
+        // Ignore malformed or legacy messages that cannot be scoped safely.
+      }
     }
   }
   window.addEventListener('storage', handleStorage)
   return () => window.removeEventListener('storage', handleStorage)
+}
+
+export function subscribeToAnalyticsLifecycle(
+  listener: (state: AnalyticsLifecycleState) => void,
+): () => void {
+  return analyticsLifecycle.subscribe(listener)
 }
 
 export function capturePageView(url: string): void {

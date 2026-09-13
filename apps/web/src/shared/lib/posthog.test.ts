@@ -13,6 +13,7 @@ import {
   sanitizeCapturedNetworkRequest,
 } from './posthog';
 import { createProductAnalyticsLifecycle, type AnalyticsClient } from './analyticsLifecycle';
+import * as posthogModule from './posthog';
 import { mockPosthogCapture } from '@/test/mocks/posthog';
 
 const minimumPostHogVersion = [1, 430, 2] as const;
@@ -75,7 +76,7 @@ describe('posthog config', () => {
   test('broadcasts a signed-out denial so every open tab stops analytics', () => {
     const app = readFileSync(resolve(import.meta.dir, '../../App.tsx'), 'utf8');
 
-    expect(app).toMatch(/if \(consents\.analytics\) grantProductAnalytics\(\)\s+else withdrawProductAnalytics\(\)/);
+    expect(app).toMatch(/if \(consents\.analytics\) grantProductAnalytics\('anonymous'\)\s+else withdrawProductAnalytics\('anonymous'\)/);
   });
 
   test('autocapture is disabled', () => {
@@ -311,6 +312,30 @@ describe('posthog config', () => {
     expect(out.responseBody).toBeUndefined();
     expect(request.requestHeaders.authorization).toBe('Bearer sentinel');
   });
+
+  test.each([
+    [
+      'https://api.example/api/v1/households/invites/invite-token-sentinel/accept?code=query-sentinel',
+      'https://api.example/api/v1/households/invites/[redacted]/accept',
+    ],
+    [
+      'https://api.example/api/v1/user/delete/cancel/deletion-token-sentinel#hash-sentinel',
+      'https://api.example/api/v1/user/delete/cancel/[redacted]',
+    ],
+  ])('redacts capability tokens from replay network URL %s', (name, expected) => {
+    const out = sanitizeCapturedNetworkRequest({
+      name,
+      entryType: 'resource',
+      startTime: 1,
+      duration: 2,
+      requestHeaders: { authorization: 'Bearer sentinel' },
+      requestBody: 'body-sentinel',
+    });
+
+    expect(out.name).toBe(expected);
+    expect(out.requestHeaders).toBeUndefined();
+    expect(out.requestBody).toBeUndefined();
+  });
 });
 
 describe('posthog lifecycle', () => {
@@ -388,22 +413,94 @@ describe('posthog lifecycle', () => {
     expect(lifecycle.getState()).toBe('denied');
   });
 
-  test('a cross-tab withdrawal immediately applies local denial and cleans up', () => {
-    grantProductAnalytics('user-123');
+  test('a cross-tab withdrawal latches denial against stale authority and cleans up', () => {
+    posthogModule.setProductAnalyticsScope('user-123');
+    posthogModule.applyProductAnalyticsAuthority('user-123', 'user-123');
     const cleanup = listenForAnalyticsWithdrawal();
 
     window.dispatchEvent(new StorageEvent('storage', {
       key: 'boostedbudget:analytics-withdrawal',
-      newValue: 'withdraw',
+      newValue: JSON.stringify({ scope: 'user-123', nonce: 1 }),
     }));
+    expect(getAnalyticsLifecycleState()).toBe('denied');
+    posthogModule.applyProductAnalyticsAuthority('user-123', 'user-123');
     expect(getAnalyticsLifecycleState()).toBe('denied');
 
     cleanup();
-    grantProductAnalytics('user-123');
+    grantProductAnalytics('user-123', 'user-123');
     window.dispatchEvent(new StorageEvent('storage', {
       key: 'boostedbudget:analytics-withdrawal',
-      newValue: 'withdraw',
+      newValue: JSON.stringify({ scope: 'user-123', nonce: 2 }),
     }));
     expect(getAnalyticsLifecycleState()).toBe('granted');
+  });
+
+  test('exposes identity-scoped authority and withdrawal transitions', () => {
+    const scoped = lifecycle as unknown as Record<string, unknown>;
+
+    expect(scoped.setScope).toBeFunction();
+    expect(scoped.grantFromAuthority).toBeFunction();
+    expect(scoped.grantExplicitly).toBeFunction();
+    expect(scoped.withdraw).toBeFunction();
+    expect(scoped.subscribe).toBeFunction();
+  });
+
+  test('exposes scoped browser lifecycle integration points', () => {
+    expect(posthogModule.setProductAnalyticsScope).toBeFunction();
+    expect(posthogModule.applyProductAnalyticsAuthority).toBeFunction();
+    expect(posthogModule.subscribeToAnalyticsLifecycle).toBeFunction();
+  });
+
+  test('failed backend withdrawal stays denied when stale server authority refetches true', () => {
+    lifecycle.setScope('user-a');
+    lifecycle.grantFromAuthority('user-a', 'user-a');
+    lifecycle.withdraw('user-a');
+
+    lifecycle.setPending();
+    lifecycle.grantFromAuthority('user-a', 'user-a');
+    expect(lifecycle.getState()).toBe('denied');
+
+    lifecycle.grantExplicitly('user-a', 'user-a');
+    expect(lifecycle.getState()).toBe('granted');
+  });
+
+  test('ignores late authority responses from a torn-down identity generation', () => {
+    lifecycle.setScope('user-a');
+    lifecycle.grantFromAuthority('user-a', 'user-a');
+    lifecycle.setScope('user-b');
+
+    lifecycle.grantFromAuthority('user-a', 'user-a');
+    expect(lifecycle.getState()).toBe('pending');
+    expect(client.identify).toHaveBeenCalledTimes(1);
+
+    lifecycle.grantFromAuthority('user-b', 'user-b');
+    expect(lifecycle.getState()).toBe('granted');
+    expect(client.identify).toHaveBeenLastCalledWith('user-b', undefined);
+  });
+
+  test('notifies subscribers only when authority newly transitions to granted', () => {
+    const states: string[] = [];
+    lifecycle.setScope('anonymous');
+    const cleanup = lifecycle.subscribe(state => states.push(state));
+
+    lifecycle.grantFromAuthority('anonymous');
+    lifecycle.grantFromAuthority('anonymous');
+    expect(states).toEqual(['granted']);
+
+    cleanup();
+    lifecycle.withdraw('anonymous');
+    lifecycle.grantExplicitly('anonymous');
+    expect(states).toEqual(['granted']);
+  });
+
+  test('identifies a signed-in grant before notifying pageview subscribers', () => {
+    const order: string[] = [];
+    client.identify = mock(() => { order.push('identify'); });
+    lifecycle.setScope('user-a');
+    lifecycle.subscribe(() => { order.push('pageview'); });
+
+    lifecycle.grantFromAuthority('user-a', 'user-a');
+
+    expect(order).toEqual(['identify', 'pageview']);
   });
 });

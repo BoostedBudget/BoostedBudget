@@ -59,6 +59,18 @@ describe('useProfile', () => {
   })
 
   describe('Initial State', () => {
+    it('scopes the root analytics profile cache to the current Clerk identity', () => {
+      renderHook(() => useProfile({ enabled: true, userId: 'user-a' }), {
+        wrapper: createWrapper(),
+      })
+
+      expect(mockUseGetUserProfile).toHaveBeenCalledWith({
+        query: expect.objectContaining({
+          queryKey: ['/api/v1/user/profile', 'user-a'],
+        }),
+      })
+    })
+
     it('should return loading=true initially', () => {
       mockUseGetUserProfile.mockReturnValue({
         data: undefined,

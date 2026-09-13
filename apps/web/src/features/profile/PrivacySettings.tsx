@@ -101,7 +101,7 @@ export function PrivacySettings({
       return
     }
     const withdrawingAnalytics = updates.gdpr_analytics_consent === false
-    if (withdrawingAnalytics) analyticsActions.withdraw()
+    if (withdrawingAnalytics && user) analyticsActions.withdraw(user.id)
 
     try {
       setSaveError(null)
@@ -111,7 +111,7 @@ export function PrivacySettings({
       await refetch()
       setSuccessMessage('Settings saved successfully!')
       if (updates.gdpr_analytics_consent === true && user) {
-        analyticsActions.grant(user.id, {
+        analyticsActions.grant(user.id, user.id, {
           subscription_tier: user.publicMetadata?.subscription_tier,
           primary_region: user.publicMetadata?.primary_region,
         })

@@ -11,6 +11,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import App, { HeaderPlaceholder } from './App'
 import { ThemeProvider } from './shared/theme'
+import Cookies from 'js-cookie'
+import { COOKIE_CONSENT_NAME } from './privacy'
+import {
+  getAnalyticsLifecycleState,
+  resetAnalyticsLifecycleForTests,
+  subscribeToAnalyticsLifecycle,
+} from './shared/lib/posthog'
+import { mockPosthogCapture } from '@/test/mocks/posthog'
 
 import {
   mockUseAuth,
@@ -21,7 +29,7 @@ import {
   createMockClerkUser,
   createMockClerk,
 } from '@/test/mocks/clerk'
-import { mockUseUpdatePrivacySettings } from '@/test/mocks/privacy-api'
+import { mockUseGetPrivacySettings, mockUseUpdatePrivacySettings } from '@/test/mocks/privacy-api'
 
 const mockFetch = mock(() =>
   Promise.resolve({
@@ -72,6 +80,10 @@ describe('App', () => {
     mockUseClerk.mockClear()
     mockUseUpdatePrivacySettings.mockClear()
     mockFetch.mockClear()
+    mockPosthogCapture.mockClear()
+    resetAnalyticsLifecycleForTests()
+    window.ENV = { ...window.ENV, POSTHOG_KEY: 'ph_test' }
+    Cookies.remove(COOKIE_CONSENT_NAME)
 
     // Default privacy settings mock
     mockUseUpdatePrivacySettings.mockReturnValue({
@@ -121,6 +133,80 @@ describe('App', () => {
         expect(screen.queryByRole('button', { name: /user menu/i })).not.toBeInTheDocument()
       })
     })
+
+    it('reconsiders a first-visit anonymous grant after sign-in and logout in the same SPA', async () => {
+      mockUseGetPrivacySettings.mockReturnValue({
+        data: { gdpr_analytics_consent: false },
+        isLoading: false,
+        isFetching: false,
+        error: null,
+        refetch: mock(() => Promise.resolve()),
+      } as never)
+      const Wrapper = createMemoryWrapper(['/'])
+      const analyticsPageViews = {
+        capture: mockPosthogCapture,
+        getState: getAnalyticsLifecycleState,
+        subscribe: subscribeToAnalyticsLifecycle,
+      }
+      const { rerender } = render(<App analyticsPageViews={analyticsPageViews} />, { wrapper: Wrapper })
+
+      await userEvent.click(await screen.findByRole('button', { name: /accept all cookies/i }))
+      expect(getAnalyticsLifecycleState()).toBe('granted')
+      expect(mockPosthogCapture).toHaveBeenCalledWith('/')
+
+      mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: true, isLoaded: true }))
+      mockUseUser.mockReturnValue(createMockClerkUser({
+        isSignedIn: true,
+        user: { ...mockClerkUser, id: 'user-a' },
+      }))
+      rerender(<App analyticsPageViews={analyticsPageViews} />)
+      await waitFor(() => expect(getAnalyticsLifecycleState()).toBe('denied'))
+
+      mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: false, isLoaded: true }))
+      mockUseUser.mockReturnValue(createMockClerkUser({ isLoaded: true, user: null }))
+      rerender(<App analyticsPageViews={analyticsPageViews} />)
+
+      await waitFor(() => expect(getAnalyticsLifecycleState()).toBe('granted'))
+      expect(mockPosthogCapture.mock.calls.map(call => call[0])).toEqual(['/', '/dashboard', '/'])
+      rerender(<App analyticsPageViews={analyticsPageViews} />)
+      expect(mockPosthogCapture.mock.calls.map(call => call[0])).toEqual(['/', '/dashboard', '/'])
+    })
+  })
+
+  it('captures the current route once when signed-in privacy resolves granted', async () => {
+    mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: true, isLoaded: true }))
+    mockUseUser.mockReturnValue(createMockClerkUser({
+      isSignedIn: true,
+      user: { ...mockClerkUser, id: 'user-a' },
+    }))
+    mockUseGetPrivacySettings.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isFetching: true,
+      error: null,
+      refetch: mock(() => Promise.resolve()),
+    } as never)
+    const Wrapper = createMemoryWrapper(['/legal/cookie-policy'])
+    const analyticsPageViews = {
+      capture: mockPosthogCapture,
+      getState: getAnalyticsLifecycleState,
+      subscribe: subscribeToAnalyticsLifecycle,
+    }
+    const { rerender } = render(<App analyticsPageViews={analyticsPageViews} />, { wrapper: Wrapper })
+    expect(mockPosthogCapture).not.toHaveBeenCalled()
+
+    mockUseGetPrivacySettings.mockReturnValue({
+      data: { gdpr_analytics_consent: true },
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch: mock(() => Promise.resolve()),
+    } as never)
+    rerender(<App analyticsPageViews={analyticsPageViews} />)
+    await waitFor(() => expect(mockPosthogCapture).toHaveBeenCalledTimes(1))
+
+    rerender(<App analyticsPageViews={analyticsPageViews} />)
+    expect(mockPosthogCapture).toHaveBeenCalledTimes(1)
   })
 
   describe('when user is authenticated', () => {

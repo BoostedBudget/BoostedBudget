@@ -9,7 +9,10 @@ import {
 } from './types';
 
 interface CookieConsentProps {
-  onConsentChange?: (consents: CookieConsentSettings) => void;
+  onConsentChange?: (
+    consents: CookieConsentSettings,
+    source: 'stored' | 'explicit',
+  ) => void;
 }
 
 const DEFAULT_CONSENTS: CookieConsentSettings = {
@@ -38,7 +41,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
       setShowBanner(true);
     } else {
       // Apply existing consents
-      onConsentChange?.(consentData.consents);
+      onConsentChange?.(consentData.consents, 'stored');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -58,7 +61,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
     });
 
     setShowBanner(false);
-    onConsentChange?.(consents);
+    onConsentChange?.(consents, 'explicit');
   };
 
   const handleAcceptAll = () => {
