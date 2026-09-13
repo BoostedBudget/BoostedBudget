@@ -231,6 +231,10 @@ def check(root: pathlib.Path) -> list[str]:
     else:
         bun_update = bun_updates[0]
         groups = bun_update.get("groups") or {}
+        if next(iter(groups), None) != "expo-react-native-compatibility":
+            findings.append(
+                "Expo compatibility group must be first so generic groups cannot claim its dependencies"
+            )
         group = groups.get("expo-react-native-compatibility") or {}
         patterns = group.get("patterns") or []
         if group.get("update-types") != ["minor", "patch"]:
