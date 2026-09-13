@@ -8,7 +8,7 @@ GUARD="$REPO_ROOT/scripts/check-mobile-ci.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-TOTAL=65
+TOTAL=71
 case_no=0
 pass=0
 fail=0
@@ -23,9 +23,44 @@ copy_fixture() {
   local dest="$1"
   mkdir -p "$dest/.github/workflows" "$dest/apps/mobile"
   cp "$REPO_ROOT/.github/workflows/test.yml" "$dest/.github/workflows/test.yml"
+  cp "$REPO_ROOT/.github/workflows/warm-ci-cache.yml" "$dest/.github/workflows/warm-ci-cache.yml"
   cp "$REPO_ROOT/.github/dependabot.yml" "$dest/.github/dependabot.yml"
   cp "$REPO_ROOT/apps/mobile/package.json" "$dest/apps/mobile/package.json"
   touch "$dest/bun.lock"
+}
+
+mutate_playwright_resolution() {
+  python3 - "$1" "$2" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+action = sys.argv[2]
+text = path.read_text()
+portable = "require(require.resolve('@playwright/test/package.json', { paths: ['./apps/web'] })).version"
+assert text.count(portable) == 1, (path, text.count(portable))
+broken = "require('./apps/web/node_modules/@playwright/test/package.json').version"
+if action == 'broken':
+    text = text.replace(portable, broken)
+elif action == 'comment':
+    assignment = f'version="$(node -p "{portable}")"'
+    replacement = f'# {portable}\n          version="$(node -p "{broken}")"'
+    assert text.count(assignment) == 1, (path, text.count(assignment))
+    text = text.replace(assignment, replacement)
+elif action == 'disabled':
+    import yaml
+    doc = yaml.safe_load(text)
+    matches = [
+        step
+        for job in doc['jobs'].values()
+        for step in job.get('steps', [])
+        if step.get('name') == 'Resolve Playwright version'
+    ]
+    assert len(matches) == 1, (path, len(matches))
+    matches[0]['if'] = False
+    text = yaml.safe_dump(doc, sort_keys=False)
+else:
+    raise AssertionError(action)
+path.write_text(text)
+PY
 }
 
 # Mutate exactly one workflow invariant through the parsed structure. Re-serializing the fixture
@@ -223,6 +258,25 @@ reject_workflow "Expo Doctor is missing" "replace-command" "bun run doctor|echo 
 reject_workflow "web export is missing" "replace-command" "bun run --cwd apps/mobile export:web|echo skipped-web-export"
 reject_workflow "iOS export is missing" "replace-command" "bun run --cwd apps/mobile export:ios|echo skipped-ios-export"
 reject_workflow "Android export is missing" "replace-command" "bun run --cwd apps/mobile export:android|echo skipped-android-export"
+
+reject_playwright_resolution() {
+  announce "$1"
+  local fixture="$TMP/playwright-$case_no"
+  copy_fixture "$fixture"
+  mutate_playwright_resolution "$fixture/$2" "$3"
+  if guard_passes "$fixture"; then
+    bad "accepted workspace-layout-dependent Playwright resolution"
+  else
+    ok "rejected"
+  fi
+}
+
+reject_playwright_resolution "E2E Playwright resolution assumes nested node_modules" ".github/workflows/test.yml" "broken"
+reject_playwright_resolution "cache warmer Playwright resolution assumes nested node_modules" ".github/workflows/warm-ci-cache.yml" "broken"
+reject_playwright_resolution "E2E portable resolver survives only in a comment" ".github/workflows/test.yml" "comment"
+reject_playwright_resolution "cache warmer portable resolver survives only in a comment" ".github/workflows/warm-ci-cache.yml" "comment"
+reject_playwright_resolution "E2E Playwright resolver is disabled" ".github/workflows/test.yml" "disabled"
+reject_playwright_resolution "cache warmer Playwright resolver is disabled" ".github/workflows/warm-ci-cache.yml" "disabled"
 
 # These retain the required command as inert text. A global substring scan accepts every one.
 reject_workflow "echo masquerades as mobile lint" "echo-command" "bun run --cwd apps/mobile lint"

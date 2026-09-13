@@ -128,7 +128,7 @@ jobs:
         id: playwright
         run: |
           set -euo pipefail
-          version="$(node -p "require('./apps/web/node_modules/@playwright/test/package.json').version")"
+          version="$(node -p "require(require.resolve('@playwright/test/package.json', { paths: ['./apps/web'] })).version")"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "Playwright ${version}"
 
