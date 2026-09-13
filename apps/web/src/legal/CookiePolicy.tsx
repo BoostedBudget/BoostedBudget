@@ -56,8 +56,8 @@ export function CookiePolicy() {
           <p>
             No PostHog persistence or capture occurs before the applicable consent choice resolves.
             Signed-out visitors choose through our consent banner; signed-in users choose in
-            Profile → Privacy Settings. Signed-out visitors can withdraw through their browser
-            cookie controls; signed-in users can withdraw in Privacy Settings.
+            Profile → Privacy Settings. Signed-out visitors can reopen Cookie Settings and explicitly
+            withdraw; signed-in users can withdraw in Privacy Settings.
           </p>
           <p>PostHog analytics cookies collect:</p>
           <ul>
@@ -68,8 +68,9 @@ export function CookiePolicy() {
             <li>Production session replay is disabled</li>
           </ul>
           <p>
-            PostHog uses both cookies and browser <strong>localStorage</strong> for persistence.
-            Both are covered under this consent category.
+            After consent, PostHog persistence is limited to tab-scoped sessionStorage.
+            The anonymous consent cookie remains the cross-session authority, but PostHog identity
+            and event state do not carry between tabs.
           </p>
           <p>
             Do Not Track is a browser-only hard stop: when your browser sends DNT, browser analytics
@@ -99,8 +100,9 @@ export function CookiePolicy() {
             </li>
             <li>
               <strong>Browser Settings:</strong> You can also control cookies through your browser
-              settings. Signed-out visitors can remove the consent cookie there to withdraw
-              analytics consent; blocking necessary cookies will prevent BoostedBudget from working.
+              settings. Use BoostedBudget&apos;s Cookie Settings control for an immediate signed-out
+              analytics withdrawal broadcast; blocking necessary cookies will prevent the Service
+              from working.
             </li>
           </ul>
           <p>
@@ -141,7 +143,7 @@ export function CookiePolicy() {
             <li><strong>Session cookies:</strong> Deleted when you close your browser</li>
             <li><strong>Authentication cookies:</strong> Up to 30 days (or until you log out)</li>
             <li><strong>Cookie consent preferences:</strong> 365 days</li>
-            <li><strong>Analytics cookies:</strong> Up to 1 year (PostHog default)</li>
+            <li><strong>PostHog analytics state:</strong> Until the browser tab session ends</li>
           </ul>
         </section>
 

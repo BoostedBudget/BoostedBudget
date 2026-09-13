@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useUser } from '@clerk/react-router'
 import { useGetPrivacySettings } from '@boostedbudget/api-client/endpoints/privacy/privacy'
 import { useProfile } from '@/features/profile/hooks/useProfile'
+import { privacySettingsQueryKey } from '../privacy/privacyQueryKey'
 import {
   applyProductAnalyticsAuthority,
   denyProductAnalytics,
@@ -44,7 +45,7 @@ export function usePostHogIdentify(
   const privacy = useGetPrivacySettings({
     query: {
       enabled: Boolean(userId),
-      queryKey: ['/api/v1/user/privacy', userId ?? 'signed-out'],
+      queryKey: privacySettingsQueryKey(userId),
       retry: false,
     },
   })

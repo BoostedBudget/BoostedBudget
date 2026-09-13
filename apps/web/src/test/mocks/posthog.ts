@@ -6,8 +6,6 @@ import { mock } from 'bun:test'
 export const mockPosthogCapture = mock((_event?: string, _properties?: Record<string, unknown>) => {})
 export const mockPosthogIdentify = mock(() => {})
 export const mockPosthogReset = mock(() => {})
-export const mockPosthogOptIn = mock(() => {})
-export const mockPosthogOptOut = mock(() => {})
 export const mockPosthogInit = mock(() => {})
 // Issue #1413: server-authoritative tier/comp person-property sync (usePostHogIdentify)
 export const mockPosthogSetPersonProperties = mock(() => {})
@@ -37,8 +35,6 @@ export const mockPosthogInstance = {
   capture: mockPosthogCapture,
   identify: mockPosthogIdentify,
   reset: mockPosthogReset,
-  opt_in_capturing: mockPosthogOptIn,
-  opt_out_capturing: mockPosthogOptOut,
   setPersonProperties: mockPosthogSetPersonProperties,
   stopSessionRecording: mockPosthogStopSessionRecording,
 }

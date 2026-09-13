@@ -7,6 +7,7 @@ import { redactCapabilityUrlPath } from '@boostedbudget/api-client/client'
 import { ANALYTICS_EVENTS } from '../analytics'
 import { isPiiKey } from './piiScrubbing'
 import {
+  createAnalyticsCaptureGate,
   createProductAnalyticsLifecycle,
   type AnalyticsLifecycleSnapshot,
   type AnalyticsLifecycleState,
@@ -37,17 +38,51 @@ const ENTITY_ROUTES: ReadonlyArray<[RegExp, string]> = [
 ]
 const URL_PROPERTIES = new Set([
   '$current_url', '$pathname', '$initial_current_url', 'current_url',
+  '$session_entry_current_url', '$session_entry_pathname', '$session_entry_url',
   'pathname', 'page_url', 'request_url', 'url', 'href',
 ])
 const REFERRER_PROPERTIES = new Set([
   '$referrer', '$referring_domain', '$initial_referrer',
-  '$initial_referring_domain', 'referrer', 'referring_domain',
+  '$initial_referring_domain', '$session_entry_referrer',
+  '$session_entry_referring_domain', 'referrer', 'referring_domain',
 ])
 const CAMPAIGN_CLICK_ID_PROPERTIES = new Set([
   'gclid', 'fbclid', 'msclkid', '$gclid', '$fbclid', '$msclkid',
 ])
 
 const WITHDRAWAL_STORAGE_KEY = 'boostedbudget:analytics-withdrawal'
+
+export interface ClearablePostHogQueue {
+  _enqueue?: (request: unknown) => unknown
+  _flushTimeout?: ReturnType<typeof setTimeout>
+  _isPolling?: boolean
+  _poller?: ReturnType<typeof setTimeout>
+  _queue?: unknown[]
+}
+
+export interface PostHogWithQueues {
+  __request_queue?: unknown[]
+  _requestQueue?: ClearablePostHogQueue
+  _retryQueue?: ClearablePostHogQueue
+}
+
+export function clearPostHogQueuedEvents(
+  sdk: PostHogWithQueues = posthog as unknown as PostHogWithQueues,
+): void {
+  // posthog-js 1.430.2 has no public queue-discard API. Clear both pinned SDK
+  // queues so withdrawal cannot later transmit an event accepted beforehand.
+  for (const queue of [sdk._requestQueue, sdk._retryQueue]) {
+    if (!queue) continue
+    if (queue._flushTimeout) clearTimeout(queue._flushTimeout)
+    if (queue._poller) clearTimeout(queue._poller)
+    queue._flushTimeout = undefined
+    queue._poller = undefined
+    queue._isPolling = false
+    queue._queue = []
+  }
+  if (sdk._retryQueue) sdk._retryQueue._enqueue = () => undefined
+  sdk.__request_queue = []
+}
 
 function pathFromUrl(value: string): { origin: string; pathname: string } {
   try {
@@ -87,11 +122,14 @@ function isCampaignProperty(key: string): boolean {
   const normalized = key.toLowerCase()
   return normalized.startsWith('utm_')
     || normalized.startsWith('$initial_utm_')
+    || normalized.startsWith('$session_entry_utm_')
     || CAMPAIGN_CLICK_ID_PROPERTIES.has(normalized)
 }
 
-function containsSensitiveUrl(value: unknown): boolean {
+function containsSensitiveUrl(value: unknown, visited = new WeakSet<object>()): boolean {
   if (!value || typeof value !== 'object') return false
+  if (visited.has(value)) return false
+  visited.add(value)
   for (const [key, child] of Object.entries(value)) {
     const isSensitiveUrl = URL_PROPERTIES.has(key.toLowerCase())
       && typeof child === 'string'
@@ -99,16 +137,26 @@ function containsSensitiveUrl(value: unknown): boolean {
     if (isSensitiveUrl) {
       return true
     }
-    if (containsSensitiveUrl(child)) return true
+    if (containsSensitiveUrl(child, visited)) return true
   }
   return false
 }
 
-function sanitizeValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sanitizeValue)
+function sanitizeValue(value: unknown, seen = new WeakMap<object, unknown>()): unknown {
   if (!value || typeof value !== 'object') return value
+  if (value instanceof Date) return new Date(value.getTime())
+  const existing = seen.get(value)
+  if (existing !== undefined) return existing
+
+  if (Array.isArray(value)) {
+    const sanitized: unknown[] = []
+    seen.set(value, sanitized)
+    for (const child of value) sanitized.push(sanitizeValue(child, seen))
+    return sanitized
+  }
 
   const sanitized: Record<string, unknown> = {}
+  seen.set(value, sanitized)
   for (const [key, child] of Object.entries(value)) {
     const normalized = key.toLowerCase()
     if (isPiiKey(key) || REFERRER_PROPERTIES.has(normalized) || isCampaignProperty(normalized)) continue
@@ -116,7 +164,7 @@ function sanitizeValue(value: unknown): unknown {
       if (typeof child === 'string') sanitized[key] = sanitizeAnalyticsUrl(child)
       continue
     }
-    sanitized[key] = sanitizeValue(child)
+    sanitized[key] = sanitizeValue(child, seen)
   }
   return sanitized
 }
@@ -133,10 +181,15 @@ export function sanitizeCapturedNetworkRequest(
   return copy
 }
 
-export function posthogConfig(): Partial<PostHogConfig> {
+export function posthogConfig(
+  isCaptureAllowed: () => boolean = analyticsCaptureGate.isGranted,
+): Partial<PostHogConfig> {
   return {
-    opt_out_capturing_by_default: true,
-    opt_out_persistence_by_default: true,
+    opt_out_capturing_by_default: false,
+    opt_out_persistence_by_default: false,
+    persistence: 'sessionStorage',
+    reuseAnonymousId: true,
+    request_batching: false,
     respect_dnt: true,
     capture_pageview: false,
     capture_pageleave: false,
@@ -165,7 +218,7 @@ export function posthogConfig(): Partial<PostHogConfig> {
       maskCapturedNetworkRequestFn: sanitizeCapturedNetworkRequest,
     },
     before_send: event => {
-      if (!event || containsSensitiveUrl(event.properties)) return null
+      if (!isCaptureAllowed() || !event || containsSensitiveUrl(event.properties)) return null
       return sanitizeValue(event) as typeof event
     },
   }
@@ -230,12 +283,14 @@ export function withdrawProductAnalytics(scope: string): void {
   }
 }
 
-export function listenForAnalyticsWithdrawal(): () => void {
+export function listenForAnalyticsWithdrawal(
+  onWithdrawal: (scope: string) => void = scope => analyticsLifecycle.withdraw(scope),
+): () => void {
   function handleStorage(event: StorageEvent): void {
     if (event.key === WITHDRAWAL_STORAGE_KEY && event.newValue !== null) {
       try {
         const message = JSON.parse(event.newValue) as { scope?: unknown }
-        if (typeof message.scope === 'string') analyticsLifecycle.withdraw(message.scope)
+        if (typeof message.scope === 'string') onWithdrawal(message.scope)
       } catch {
         // Ignore malformed or legacy messages that cannot be scoped safely.
       }
@@ -274,11 +329,24 @@ export function setProductAnalyticsPersonProperties(properties: Properties): voi
 
 /** Test-only reset; production authority transitions use pending/grant/deny above. */
 export function resetAnalyticsLifecycleForTests(): void {
-  analyticsLifecycle.resetForTests()
+  analyticsLifecycle.resetForTests(true)
+}
+
+const analyticsCaptureGate = createAnalyticsCaptureGate()
+
+const analyticsClient = {
+  capture: (event: string, properties?: Properties) => posthog.capture(event, properties),
+  clearQueuedEvents: clearPostHogQueuedEvents,
+  identify: (distinctId: string, properties?: Properties) => posthog.identify(distinctId, properties),
+  init: (key: string, config: Partial<PostHogConfig>) => posthog.init(key, config),
+  reset: (resetDeviceId: boolean) => posthog.reset(resetDeviceId),
+  setPersonProperties: (properties: Properties) => posthog.setPersonProperties(properties),
+  stopSessionRecording: () => posthog.stopSessionRecording(),
 }
 
 const analyticsLifecycle = createProductAnalyticsLifecycle({
-  client: posthog,
+  captureGate: analyticsCaptureGate,
+  client: analyticsClient,
   config: posthogConfig,
   getHost: () => window.ENV?.POSTHOG_HOST
     || import.meta.env.VITE_POSTHOG_HOST

@@ -59,9 +59,24 @@ describe('useConsentAwarePageViews', () => {
       { initialProps: { url: '/accounts/account-secret?query=sentinel' } },
     )
 
-    rerender({ url: '/accounts/other-secret#hash-sentinel' })
+    rerender({ url: '/accounts/account-secret#hash-sentinel' })
 
     expect(lifecycle.capture).toHaveBeenCalledTimes(1)
+  })
+
+  it('captures navigation between entity IDs while transmitting only sanitized templates', () => {
+    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1 })
+    const { rerender } = renderHook(
+      ({ url }) => useConsentAwarePageViews(url, lifecycle.dependencies),
+      { initialProps: { url: '/accounts/account-a?query=one' } },
+    )
+
+    rerender({ url: '/accounts/account-b#private-fragment' })
+
+    expect(lifecycle.capture.mock.calls.map(call => call[0])).toEqual([
+      '/accounts/account-a?query=one',
+      '/accounts/account-b#private-fragment',
+    ])
   })
 
   it('suppresses a protected route on logout until the anonymous public redirect', () => {
