@@ -16,6 +16,12 @@ import {
   mockUseUpdatePrivacySettings,
   mockUpdatePrivacySettingsMutateAsync,
 } from '@/test/mocks/privacy-api'
+import { createMockClerkUser, mockClerkUser, mockUseUser } from '@/test/mocks/clerk'
+import {
+  mockCaptureProductEvent,
+  mockGrantProductAnalytics,
+  mockWithdrawProductAnalytics,
+} from '@/test/mocks/posthog'
 
 const mockSettingsWithAlertsEnabled = {
   gdpr_necessary_consent: true,
@@ -33,7 +39,10 @@ function renderPrivacySettings() {
   })
   return render(
     <QueryClientProvider client={queryClient}>
-      <PrivacySettings />
+      <PrivacySettings analyticsActions={{
+        grant: mockGrantProductAnalytics,
+        withdraw: mockWithdrawProductAnalytics,
+      }} />
     </QueryClientProvider>
   )
 }
@@ -43,6 +52,14 @@ describe('PrivacySettings', () => {
     mockUseGetPrivacySettings.mockClear()
     mockUseUpdatePrivacySettings.mockClear()
     mockUpdatePrivacySettingsMutateAsync.mockClear()
+    mockGrantProductAnalytics.mockClear()
+    mockWithdrawProductAnalytics.mockClear()
+    mockCaptureProductEvent.mockClear()
+    mockUseUser.mockReturnValue(createMockClerkUser({
+      isLoaded: true,
+      isSignedIn: true,
+      user: mockClerkUser,
+    }))
 
     mockUseGetPrivacySettings.mockReturnValue({
       data: mockSettingsWithAlertsEnabled,
@@ -178,6 +195,53 @@ describe('PrivacySettings', () => {
           data: { include_in_aggregate_stats: false },
         })
       })
+    })
+  })
+
+  describe('analytics consent ordering', () => {
+    it('waits for the backend before granting without emitting a privacy event', async () => {
+      let resolveSave!: (value: typeof mockSettingsWithAlertsEnabled) => void
+      mockUseGetPrivacySettings.mockReturnValue({
+        data: { ...mockSettingsWithAlertsEnabled, gdpr_analytics_consent: false },
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      mockUpdatePrivacySettingsMutateAsync.mockImplementation(() => new Promise(resolve => {
+        resolveSave = resolve
+      }))
+      renderPrivacySettings()
+
+      fireEvent.click(screen.getByLabelText(/analytics cookies/i))
+      fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
+      expect(mockGrantProductAnalytics).not.toHaveBeenCalled()
+
+      resolveSave({ ...mockSettingsWithAlertsEnabled, gdpr_analytics_consent: true })
+      await waitFor(() => expect(mockGrantProductAnalytics).toHaveBeenCalledWith(
+        mockClerkUser.id,
+        expect.objectContaining({ subscription_tier: 'free', primary_region: 'iad' }),
+      ))
+      expect(mockCaptureProductEvent).not.toHaveBeenCalledWith('privacy_settings_changed')
+    })
+
+    it('withdraws locally before persistence and stays off when persistence fails', async () => {
+      const order: string[] = []
+      mockWithdrawProductAnalytics.mockImplementation(() => { order.push('withdraw') })
+      mockUpdatePrivacySettingsMutateAsync.mockImplementation(() => {
+        order.push('persist')
+        return Promise.reject(new Error('offline'))
+      })
+      renderPrivacySettings()
+
+      fireEvent.click(screen.getByLabelText(/analytics cookies/i))
+      fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
+
+      expect(order).toEqual(['withdraw', 'persist'])
+      await waitFor(() => {
+        expect(screen.getByText(/failed to save privacy settings/i)).toBeInTheDocument()
+      })
+      expect(mockGrantProductAnalytics).not.toHaveBeenCalled()
+      expect(mockCaptureProductEvent).not.toHaveBeenCalledWith('privacy_settings_changed')
     })
   })
 })

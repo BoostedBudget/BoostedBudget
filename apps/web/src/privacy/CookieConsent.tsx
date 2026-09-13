@@ -181,7 +181,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
                 </div>
                 <p className="m-0 text-sm text-muted-foreground leading-relaxed">
                   Help us understand how visitors interact with our website by collecting
-                  and reporting information anonymously via PostHog.
+                  pseudonymous usage patterns through PostHog only after you choose analytics.
                 </p>
               </div>
 

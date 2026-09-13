@@ -201,6 +201,12 @@ export function PrivacyPolicy() {
             You can manage your cookie preferences through our Cookie Consent banner or in your Privacy Settings.
             For full details on the cookies we use, see our <Link to="/legal/cookie-policy">Cookie Policy</Link>.
           </p>
+          <p>
+            PostHog provides pseudonymous product analytics only after the applicable consent choice
+            resolves. No PostHog persistence or capture occurs before that point. Production session
+            replay is disabled. Do Not Track is enforced in the browser only; it does not rewrite your
+            server-authoritative consent setting, so browser analytics can undercount consenting DNT users.
+          </p>
         </section>
 
         <section>
@@ -249,9 +255,10 @@ export function PrivacyPolicy() {
 
           <h3>7.2 Do Not Track Signals</h3>
           <p>
-            Some browsers transmit "Do Not Track" (DNT) signals. Because there is no industry
-            consensus on how to respond to DNT signals, we do not currently respond to them.
-            However, you can control analytics tracking through our cookie consent controls.
+            When a browser transmits a "Do Not Track" (DNT) signal, browser analytics remain off
+            even if the saved account preference permits analytics. DNT does not rewrite the
+            server-authoritative consent setting, so aggregate browser analytics may undercount
+            consenting users who enable DNT.
           </p>
         </section>
 

@@ -515,7 +515,8 @@ describe('PrivacyPolicy', () => {
     renderWithRouter(<PrivacyPolicy />)
     // "Do Not Track" appears in both the h3 heading and the paragraph body
     expect(screen.getAllByText(/do not track/i).length).toBeGreaterThan(0)
-    expect(screen.getByText(/no industry/i)).toBeInTheDocument()
+    expect(screen.getByText(/browser analytics remain off/i)).toBeInTheDocument()
+    expect(screen.queryByText(/we do not currently respond/i)).not.toBeInTheDocument()
   })
 
   it('renders data breach notification commitment', () => {
@@ -562,6 +563,14 @@ describe('PrivacyPolicy', () => {
     const cookieLinks = screen.getAllByRole('link', { name: /cookie policy/i })
     expect(cookieLinks.length).toBeGreaterThan(0)
     expect(cookieLinks.some((link) => link.getAttribute('href') === '/legal/cookie-policy')).toBe(true)
+  })
+
+  it('documents the fail-closed browser analytics privacy boundary', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    expect(screen.getByText(/pseudonymous product analytics/i)).toBeInTheDocument()
+    expect(screen.getByText(/no posthog persistence or capture occurs before/i)).toBeInTheDocument()
+    expect(screen.getByText(/production session replay is disabled/i)).toBeInTheDocument()
+    expect(screen.getByText(/do not track.*browser only/i)).toBeInTheDocument()
   })
 
   it('renders application-level encryption details (Section 4.2)', () => {

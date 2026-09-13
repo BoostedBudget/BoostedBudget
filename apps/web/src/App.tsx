@@ -6,8 +6,6 @@ import { useCookieState } from './shared/hooks/useCookieState'
 import {
   CookieConsent,
   type CookieConsentSettings,
-  cookieToPrivacySettings,
-  privacySettingsToCookie,
   COOKIE_CONSENT_NAME,
   COOKIE_CONSENT_VERSION,
   type CookieConsentData
@@ -53,8 +51,6 @@ const HouseholdOverCapacityBanner = lazy(() =>
 )
 import { SubscriptionManagementSkeleton } from './features/billing/components/SubscriptionManagementSkeleton'
 import { SubscriptionErrorState } from './features/billing/components/SubscriptionErrorState'
-import { useUpdatePrivacySettings } from '@boostedbudget/api-client/endpoints/privacy/privacy'
-import type { PrivacySettings as PrivacySettingsType } from './features/profile/types'
 import { LandingPage } from './features/landing'
 // #1601: concrete modules, NOT the './features/admin' barrel. That barrel re-exports every
 // admin page (AdminDashboardPage, UsersPage, HealthDashboardPage, WebhooksPage,
@@ -64,7 +60,6 @@ import { LandingPage } from './features/landing'
 import { AdminRoute } from './features/admin/components/AdminRoute'
 import { AdminLayout } from './features/admin/components/AdminLayout'
 import { NotFoundPage } from './features/not-found/NotFoundPage'
-import { ANALYTICS_EVENTS } from './shared/analytics/events'
 
 // #1601 — see the AppFooter import note above for why this is lazy.
 const Header = lazy(() =>
@@ -91,7 +86,7 @@ export function HeaderPlaceholder() {
 }
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useTheme } from './shared/theme'
-import { posthog } from './shared/lib/posthog'
+import { capturePageView, grantProductAnalytics, withdrawProductAnalytics } from './shared/lib/posthog'
 import { devLog } from './shared/lib/devLog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
 import { PageSkeleton } from './shared/components/PageSkeleton'
@@ -205,14 +200,17 @@ function App() {
   const { isSignedIn: isAuthenticated } = useAuth()
   const location = useLocation()
   const { resolvedTheme } = useTheme()
-  const [, setConsentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
+  const [consentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
   const lastScrolledLocationKeyRef = useRef<string | null>(null)
 
-  usePostHogIdentify()
+  const anonymousAnalyticsConsent = consentCookie?.version === COOKIE_CONSENT_VERSION
+    ? consentCookie.consents.analytics
+    : null
+  usePostHogIdentify(anonymousAnalyticsConsent)
 
   useEffect(() => {
-    posthog.capture(ANALYTICS_EVENTS.POSTHOG_PAGEVIEW)
-  }, [location.pathname])
+    capturePageView(`${location.pathname}${location.search}${location.hash}`)
+  }, [location.hash, location.pathname, location.search])
 
   // Issue #1411 (B1 fix): react-router's <Link> only performs client-side navigation
   // (history.pushState) — it never scrolls to a URL fragment. Without this effect,
@@ -269,9 +267,6 @@ function App() {
     return () => window.clearInterval(intervalId)
   }, [location.pathname, location.hash, location.key])
 
-  // Use generated mutation hook for privacy settings
-  const updatePrivacyMutation = useUpdatePrivacySettings()
-
   const isLandingPage = location.pathname === '/' && !isAuthenticated
 
   // Initialize Paddle.js SDK
@@ -311,49 +306,11 @@ function App() {
     }
   }, [])
 
-  const updateConsentCookie = (consents: CookieConsentSettings) => {
-    const expires = new Date()
-    expires.setDate(expires.getDate() + 365) // 1 year
-
-    const consentData: CookieConsentData = {
-      consents,
-      timestamp: new Date().toISOString(),
-      version: COOKIE_CONSENT_VERSION,
-    }
-
-    setConsentCookie(consentData, {
-      path: '/',
-      expires,
-      sameSite: 'strict',
-      secure: window.location.protocol === 'https:',
-    })
-  }
-
-  const handleConsentChange = async (consents: CookieConsentSettings) => {
+  const handleConsentChange = (consents: CookieConsentSettings) => {
     devLog('Cookie consents updated:', consents)
-
-    if (consents.analytics) {
-      posthog.opt_in_capturing()
-    } else {
-      posthog.opt_out_capturing()
-    }
-
-    if (isAuthenticated) {
-      try {
-        const privacyUpdate = cookieToPrivacySettings(consents)
-        await updatePrivacyMutation.mutateAsync({ data: privacyUpdate })
-        devLog('Cookie consent synced to backend')
-      } catch (error) {
-        console.error('Failed to sync cookie consent to backend:', error)
-      }
-    }
-  }
-
-  const handlePrivacySettingsChange = (settings: PrivacySettingsType) => {
-    devLog('Privacy settings updated:', settings)
-    const cookieSettings = privacySettingsToCookie(settings)
-    updateConsentCookie(cookieSettings)
-    devLog('Privacy settings synced to cookie')
+    if (isAuthenticated) return
+    if (consents.analytics) grantProductAnalytics()
+    else withdrawProductAnalytics()
   }
 
   return (
@@ -580,7 +537,7 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Suspense fallback={<PageSkeleton />}>
-                    <ProfilePage onPrivacySettingsChange={handlePrivacySettingsChange} />
+                    <ProfilePage />
                   </Suspense>
                 </ProtectedRoute>
               }
@@ -659,7 +616,7 @@ function App() {
 
       <AppFooter />
 
-      <CookieConsent onConsentChange={handleConsentChange} />
+      {!isAuthenticated && <CookieConsent onConsentChange={handleConsentChange} />}
       <Toaster position="bottom-right" richColors theme={resolvedTheme} />
     </div>
   )
