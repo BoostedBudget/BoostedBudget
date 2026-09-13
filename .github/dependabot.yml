@@ -70,8 +70,42 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "orval"
         update-types: ["version-update:semver-major"]
+      # Expo SDK upgrades are coordinated compatibility events, not routine bumps. Dependabot
+      # may group patch/minor updates below; majors stay manual and must pass Expo Doctor plus
+      # all three static exports in the mobile CI job.
+      - dependency-name: "expo*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@expo/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-native*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@react-native/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "nativewind"
+        update-types: ["version-update:semver-major"]
     # Group dependencies by type across ALL workspaces
     groups:
+      # These packages form one Expo SDK 57 compatibility surface. Keeping them in one PR lets
+      # Expo Doctor and the iOS/Android/web export gate assess the combination Dependabot would
+      # actually merge, instead of independently green-lighting versions that conflict together.
+      expo-react-native-compatibility:
+        patterns:
+          - "@babel/core"
+          - "@babel/runtime"
+          - "@expo/*"
+          - "@react-native/*"
+          - "@testing-library/react-native"
+          - "babel-preset-expo"
+          - "expo"
+          - "expo-*"
+          - "jest-expo"
+          - "nativewind"
+          - "react"
+          - "react-dom"
+          - "react-native*"
+        update-types:
+          - "minor"
+          - "patch"
       frontend-framework:
         patterns:
           - "react"
@@ -82,6 +116,9 @@ updates:
         update-types:
           - "minor"
           - "patch"
+        exclude-patterns:
+          - "react"
+          - "react-dom"
       frontend-ui-libraries:
         patterns:
           - "@radix-ui/*"
@@ -116,6 +153,8 @@ updates:
         update-types:
           - "minor"
           - "patch"
+        exclude-patterns:
+          - "@testing-library/react-native"
       build-tools:
         patterns:
           - "turbo"
