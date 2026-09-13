@@ -1,10 +1,14 @@
 import {
   PostHog,
   type DisplaySurveyType,
+  type PostHogConfig,
   type Survey,
 } from 'posthog-js'
+import { matchPath } from 'react-router'
 import {
   clearPostHogQueuedEvents,
+  clearPostHogSessionPersistence,
+  guardPostHogRetryQueue,
   posthogConfig,
   sanitizeAnalyticsUrl,
   type PostHogWithQueues,
@@ -16,33 +20,50 @@ export interface VerifiedPostHogIdentity {
 }
 
 const POPOVER_SURVEY_DISPLAY = 'popover' as typeof DisplaySurveyType.Popover
+const PINNED_POSTHOG_VERSION = '1.430.2'
+const SUPPORT_PERSISTENCE_NAME = 'boostedbudget_support'
+const SURVEY_PERSISTENCE_NAME = 'boostedbudget_surveys'
+const SURVEY_STORAGE_KEYS = ['lastSeenSurveyDate']
+const SURVEY_STORAGE_PREFIXES = ['seenSurvey_', 'inProgressSurvey_', 'abandonedSurvey_']
 
-const EXCLUDED_ENGAGEMENT_ROUTES = [
-  /^\/$/,
-  /^\/(?:oauth-)?callback(?:\/|$)/,
-  /^\/(?:pricing|mcp|privacy)(?:\/|$)/,
-  /^\/legal(?:\/|$)/,
-  /^\/sign-(?:in|up)(?:\/|$)/,
-  /^\/admin(?:\/|$)/,
-  /^\/cancel-deletion(?:\/|$)/,
-  /^\/households?\/invite(?:s)?(?:\/|$)/,
-]
+export const POSTHOG_ENGAGEMENT_ROUTES = {
+  dashboard: '/dashboard',
+  accounts: '/accounts',
+  reconnectAccount: '/accounts/reconnect',
+  account: '/accounts/:accountId',
+  transactions: '/transactions',
+  review: '/review',
+  insights: '/insights',
+  planning: '/planning',
+  budget: '/budgets/:budgetId',
+  autoCategorization: '/auto-categorization',
+  boosts: '/boosts',
+  newBoost: '/boosts/new',
+  boost: '/boosts/:id',
+  editBoost: '/boosts/:id/edit',
+  profile: '/profile',
+  billingManage: '/billing/manage',
+  billingSuccess: '/billing/success',
+} as const
 
 export function isPostHogEngagementRoute(pathname: string): boolean {
-  return !EXCLUDED_ENGAGEMENT_ROUTES.some(pattern => pattern.test(pathname))
+  return Object.values(POSTHOG_ENGAGEMENT_ROUTES)
+    .some(path => matchPath({ path, end: true }, pathname) !== null)
 }
 
 export interface EngagementPostHogClient {
   setIdentity(distinctId: string, identityHash: string): void
   identify(distinctId: string): void
-  shutdown(): Promise<void>
+  shutdown(options?: { preserveSurveyState?: boolean }): Promise<void>
   conversations: {
     hide(): void
     show(): void
     isAvailable(): boolean
+    reset(): void
   }
   surveys: {
     dispose(): void
+    reset(): void
     getActiveMatchingSurveys(callback: (surveys: Survey[]) => void): void
     displaySurvey(surveyId: string, options: {
       displayType: typeof DisplaySurveyType.Popover
@@ -67,7 +88,7 @@ export function isSupportedSurvey(survey: Survey): boolean {
   return survey.questions.length > 0 && survey.questions.every(question => {
     if (question.type === 'rating') return true
     if (question.type === 'single_choice' || question.type === 'multiple_choice') {
-      return question.hasOpenChoice !== true
+      return question.hasOpenChoice === undefined || question.hasOpenChoice === false
     }
     return false
   })
@@ -89,64 +110,223 @@ function sharedIsolatedConfig() {
   }
 }
 
-type InternalRequest = { callback?: (response: unknown) => void } & Record<string, unknown>
-type InternalPostHog = PostHog & {
+interface InternalResponse {
+  [key: string]: unknown
+  statusCode: number
+  error?: Error
+}
+
+type InternalRequest = {
+  callback?: (response: InternalResponse) => void
+  data?: unknown
+  fetchOptions?: NonNullable<PostHogConfig['fetch_options']> & { signal?: AbortSignal }
+  timeout?: number
+  url?: string
+} & Record<string, unknown>
+
+type InternalPostHog = {
+  version: string
+  config: PostHog['config'] & {
+    identity_distinct_id?: string
+    identity_hash?: string
+  }
   _send_request(options: InternalRequest): void
-  conversations: PostHog['conversations'] & {
-    _conversationsManager?: { _currentUrl?: () => string }
+}
+
+export interface PinnedPostHogRequestBoundary {
+  isActive(): boolean
+  shutdown(): void
+}
+
+function sanitizeConversationsPayload(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeConversationsPayload)
+  if (!value || typeof value !== 'object') return value
+  const sanitized: Record<string, unknown> = {}
+  for (const [key, child] of Object.entries(value)) {
+    if (key === 'session_id' || key === 'session_replay_url' || key === 'widget_session_id') continue
+    if ((key === 'current_url' || key === 'request_url') && typeof child === 'string') {
+      sanitized[key] = sanitizeAnalyticsUrl(child)
+      continue
+    }
+    sanitized[key] = sanitizeConversationsPayload(child)
+  }
+  return sanitized
+}
+
+function inactiveResponse(): InternalResponse {
+  return {
+    statusCode: 0,
+    error: new DOMException('PostHog product authority ended', 'AbortError'),
   }
 }
 
-function guardTransport(client: PostHog): () => void {
-  const internal = client as InternalPostHog
-  const send = internal._send_request.bind(client)
+export function installPinnedPostHogRequestBoundary(client: PostHog): PinnedPostHogRequestBoundary {
+  const internal = client as unknown as InternalPostHog
+  if (internal.version !== PINNED_POSTHOG_VERSION) {
+    throw new Error(`Unsupported posthog-js version; expected ${PINNED_POSTHOG_VERSION}`)
+  }
+  if (typeof internal._send_request !== 'function') {
+    throw new Error('Unsupported posthog-js internals; expected _send_request transport')
+  }
+  const send = internal._send_request.bind(internal)
   let active = true
+  const aborters = new Set<AbortController>()
+  const timers = new Set<ReturnType<typeof setTimeout>>()
+  const settleOnShutdown = new Set<() => void>()
+
   internal._send_request = (options) => {
-    if (!active) return
+    if (!active) {
+      options.callback?.(inactiveResponse())
+      return
+    }
+    const isConversationsRequest = options.url?.includes('/api/conversations/') === true
+    if (isConversationsRequest
+      && (!internal.config.identity_distinct_id || !internal.config.identity_hash)) {
+      options.callback?.(inactiveResponse())
+      return
+    }
+
+    const aborter = new AbortController()
+    aborters.add(aborter)
+    const requestTimeout = typeof options.timeout === 'number' && options.timeout > 0
+      ? options.timeout
+      : 60_000
+    const timeout = setTimeout(() => aborter.abort(), requestTimeout)
+    timers.add(timeout)
     const callback = options.callback
+    let settled = false
+    const settleInactive = () => {
+      if (!callback || settled) return
+      settled = true
+      settleOnShutdown.delete(settleInactive)
+      callback(inactiveResponse())
+    }
+    if (callback) settleOnShutdown.add(settleInactive)
     send({
       ...options,
-      callback: callback ? response => {
-        if (active) callback(response)
-      } : undefined,
+      data: isConversationsRequest ? sanitizeConversationsPayload(options.data) : options.data,
+      fetchOptions: { ...options.fetchOptions, signal: aborter.signal },
+      callback: response => {
+        aborters.delete(aborter)
+        clearTimeout(timeout)
+        timers.delete(timeout)
+        settleOnShutdown.delete(settleInactive)
+        if (!callback || settled) return
+        settled = true
+        callback(active ? response as InternalResponse : inactiveResponse())
+      },
     })
   }
-  return () => { active = false }
-}
 
-export function installConversationsPrivacyBoundary(client: PostHog): void {
-  const manager = (client as InternalPostHog).conversations._conversationsManager
-  if (!manager || typeof manager._currentUrl !== 'function') {
-    throw new Error('Unsupported posthog-js Conversations internals; expected 1.430.2 privacy boundary')
+  return {
+    isActive: () => active,
+    shutdown() {
+      if (!active) return
+      active = false
+      for (const timer of timers) clearTimeout(timer)
+      timers.clear()
+      for (const aborter of aborters) aborter.abort()
+      aborters.clear()
+      for (const settle of [...settleOnShutdown]) settle()
+      settleOnShutdown.clear()
+    },
   }
-  manager._currentUrl = () => sanitizeAnalyticsUrl(window.location.href)
-  client.get_session_id = () => undefined
-  client.get_session_replay_url = () => null
 }
 
-function adaptPostHogClient(client: PostHog, stopTransport: () => void): EngagementPostHogClient {
+function clearStorageKeys(storage: Storage, keys: string[], prefixes: string[]): void {
+  try {
+    for (const key of keys) storage.removeItem(key)
+    for (let index = storage.length - 1; index >= 0; index -= 1) {
+      const key = storage.key(index)
+      if (key && prefixes.some(prefix => key.startsWith(prefix))) storage.removeItem(key)
+    }
+  } catch {
+    // Storage may be unavailable in hardened browser contexts.
+  }
+}
+
+function captureSurveyDisplayState(): Map<string, string> {
+  const snapshot = new Map<string, string>()
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (!key) continue
+      const tracked = SURVEY_STORAGE_KEYS.includes(key)
+        || SURVEY_STORAGE_PREFIXES.some(prefix => key.startsWith(prefix))
+      const value = tracked ? localStorage.getItem(key) : null
+      if (value !== null) snapshot.set(key, value)
+    }
+  } catch {
+    // Storage may be unavailable in hardened browser contexts.
+  }
+  return snapshot
+}
+
+function restoreSurveyDisplayState(snapshot: Map<string, string>): void {
+  try {
+    for (const [key, value] of snapshot) localStorage.setItem(key, value)
+  } catch {
+    // Storage may be unavailable in hardened browser contexts.
+  }
+}
+
+export function clearIsolatedSurveyState(): void {
+  clearPostHogSessionPersistence(SURVEY_PERSISTENCE_NAME)
+  clearStorageKeys(localStorage, SURVEY_STORAGE_KEYS, SURVEY_STORAGE_PREFIXES)
+}
+
+function clearIsolatedSupportState(token: string): void {
+  clearPostHogSessionPersistence(SUPPORT_PERSISTENCE_NAME)
+  clearStorageKeys(localStorage, [`ph_conv_${token}`], [])
+}
+
+function adaptPostHogClient(
+  client: PostHog,
+  boundary: PinnedPostHogRequestBoundary,
+  product: 'support' | 'surveys',
+  token: string,
+  removeWindowListeners: () => void,
+): EngagementPostHogClient {
+  const stopRetryGuard = guardPostHogRetryQueue(
+    client as unknown as PostHogWithQueues,
+    () => 0,
+    boundary.isActive,
+  )
   return {
     setIdentity: (distinctId, hash) => client.setIdentity(distinctId, hash),
     identify: distinctId => client.identify(distinctId),
-    shutdown: async () => {
-      stopTransport()
+    shutdown: async (options) => {
+      const preservedSurveyState = options?.preserveSurveyState
+        ? captureSurveyDisplayState()
+        : null
+      boundary.shutdown()
+      removeWindowListeners()
+      if (product === 'support') client.conversations.reset()
+      else {
+        client.surveys.reset()
+        client.surveys.dispose()
+      }
       clearPostHogQueuedEvents(client as unknown as PostHogWithQueues)
       client.set_config({ disable_persistence: true })
       client.reset(true)
-      await client.shutdown()
       clearPostHogQueuedEvents(client as unknown as PostHogWithQueues)
+      const shutdown = client.shutdown()
+      clearPostHogQueuedEvents(client as unknown as PostHogWithQueues)
+      stopRetryGuard()
+      if (product === 'support') clearIsolatedSupportState(token)
+      else clearIsolatedSurveyState()
+      if (preservedSurveyState) restoreSurveyDisplayState(preservedSurveyState)
+      await shutdown
     },
     conversations: {
       hide: () => client.conversations.hide(),
       show: () => client.conversations.show(),
-      isAvailable: () => {
-        if (!client.conversations.isAvailable()) return false
-        installConversationsPrivacyBoundary(client)
-        return true
-      },
+      isAvailable: () => client.conversations.isAvailable(),
+      reset: () => client.conversations.reset(),
     },
     surveys: {
       dispose: () => client.surveys.dispose(),
+      reset: () => client.surveys.reset(),
       getActiveMatchingSurveys: callback => client.getActiveMatchingSurveys(callback),
       displaySurvey: (surveyId, options) => client.displaySurvey(surveyId, options),
     },
@@ -158,48 +338,179 @@ function resetSupportClient(client: EngagementPostHogClient): void {
   void client.shutdown()
 }
 
-function resetSurveyClient(client: EngagementPostHogClient): void {
+function resetSurveyClient(
+  client: EngagementPostHogClient,
+  options?: { preserveSurveyState?: boolean },
+): void {
   client.surveys.dispose()
-  void client.shutdown()
+  void client.shutdown(options)
 }
 
-export function createIsolatedSupportClient(): EngagementPostHogClient {
-  const key = window.ENV?.POSTHOG_KEY || import.meta.env.VITE_POSTHOG_KEY
+interface IsolatedClientDependencies {
+  createPostHog?: () => PostHog
+  host?: string
+  key?: string
+}
+
+interface WindowListenerRegistration {
+  listener: Parameters<Window['addEventListener']>[1]
+  options?: Parameters<Window['addEventListener']>[2]
+  type: string
+}
+
+function initializeWithCapturedWindowListeners(initialize: () => void): () => void {
+  const registrations: WindowListenerRegistration[] = []
+  const originalAdd = window.addEventListener
+  const originalRemove = window.removeEventListener
+  const removeCapturedListeners = () => {
+    for (const registration of registrations.splice(0)) {
+      originalRemove.call(window, registration.type, registration.listener, registration.options)
+    }
+  }
+  window.addEventListener = ((
+    type: string,
+    listener: Parameters<Window['addEventListener']>[1],
+    options?: Parameters<Window['addEventListener']>[2],
+  ) => {
+    registrations.push({ type, listener, options })
+    originalAdd.call(window, type, listener, options)
+  }) as typeof window.addEventListener
+  window.removeEventListener = ((
+    type: string,
+    listener: Parameters<Window['removeEventListener']>[1],
+    options?: Parameters<Window['removeEventListener']>[2],
+  ) => {
+    const index = registrations.findIndex(registration => (
+      registration.type === type && registration.listener === listener
+    ))
+    if (index >= 0) registrations.splice(index, 1)
+    originalRemove.call(window, type, listener, options)
+  }) as typeof window.removeEventListener
+
+  try {
+    initialize()
+  } catch (error) {
+    removeCapturedListeners()
+    throw error
+  } finally {
+    window.addEventListener = originalAdd
+    window.removeEventListener = originalRemove
+  }
+
+  return removeCapturedListeners
+}
+
+function discardPartialClient(
+  client: PostHog,
+  boundary: PinnedPostHogRequestBoundary,
+  product: 'support' | 'surveys',
+  token: string,
+  removeWindowListeners: () => void,
+): void {
+  boundary.shutdown()
+  removeWindowListeners()
+  try {
+    if (product === 'support') client.conversations.reset()
+    else {
+      client.surveys.reset()
+      client.surveys.dispose()
+    }
+  } catch {
+    // Continue through every cleanup boundary after a partial SDK initialization.
+  }
+  clearPostHogQueuedEvents(client as unknown as PostHogWithQueues)
+  try {
+    client.set_config({ disable_persistence: true })
+    client.reset(true)
+  } catch {
+    // The pinned SDK may not have completed enough initialization to reset normally.
+  }
+  clearPostHogQueuedEvents(client as unknown as PostHogWithQueues)
+  try {
+    void client.shutdown().catch(() => {})
+  } catch {
+    // A synchronous shutdown failure must not prevent app-owned storage cleanup.
+  }
+  if (product === 'support') clearIsolatedSupportState(token)
+  else clearIsolatedSurveyState()
+}
+
+export function createIsolatedSupportClient(
+  dependencies: IsolatedClientDependencies = {},
+): EngagementPostHogClient {
+  const key = dependencies.key
+    || window.ENV?.POSTHOG_KEY
+    || import.meta.env.VITE_POSTHOG_KEY
   if (!key) throw new Error('PostHog Support is not configured')
-  const client = new PostHog()
-  const stopTransport = guardTransport(client)
-  client.init(key, {
-    ...sharedIsolatedConfig(),
-    api_host: window.ENV?.POSTHOG_HOST || import.meta.env.VITE_POSTHOG_HOST || 'https://us.i.posthog.com',
-    disable_conversations: false,
-    disable_surveys: true,
-    disable_surveys_automatic_display: true,
-    // Conversations is the only PostHog extension that this service client may load.
-    disable_external_dependency_loading: false,
-    persistence_name: 'boostedbudget_support',
-  })
-  return adaptPostHogClient(client, stopTransport)
+  clearIsolatedSupportState(key)
+  const client = dependencies.createPostHog?.() ?? new PostHog()
+  const boundary = installPinnedPostHogRequestBoundary(client)
+  let removeWindowListeners = () => {}
+  try {
+    removeWindowListeners = initializeWithCapturedWindowListeners(() => {
+      client.init(key, {
+        ...sharedIsolatedConfig(),
+        api_host: dependencies.host
+          || window.ENV?.POSTHOG_HOST
+          || import.meta.env.VITE_POSTHOG_HOST
+          || 'https://us.i.posthog.com',
+        advanced_disable_flags: false,
+        disable_conversations: false,
+        disable_surveys: true,
+        disable_surveys_automatic_display: true,
+        // Conversations is the only PostHog extension that this service client may load.
+        disable_external_dependency_loading: false,
+        persistence_name: SUPPORT_PERSISTENCE_NAME,
+        api_transport: 'fetch',
+        disable_beacon: true,
+      })
+    })
+    client.get_session_id = () => ''
+    client.get_session_replay_url = () => ''
+    return adaptPostHogClient(client, boundary, 'support', key, removeWindowListeners)
+  } catch (error) {
+    discardPartialClient(client, boundary, 'support', key, removeWindowListeners)
+    throw error
+  }
 }
 
-export function createIsolatedSurveyClient(): EngagementPostHogClient {
-  const key = window.ENV?.POSTHOG_KEY || import.meta.env.VITE_POSTHOG_KEY
+export function createIsolatedSurveyClient(
+  dependencies: IsolatedClientDependencies = {},
+): EngagementPostHogClient {
+  const key = dependencies.key
+    || window.ENV?.POSTHOG_KEY
+    || import.meta.env.VITE_POSTHOG_KEY
   if (!key) throw new Error('PostHog Surveys are not configured')
   const consentedConfig = posthogConfig(() => true)
-  const client = new PostHog()
-  const stopTransport = guardTransport(client)
-  client.init(key, {
-    ...consentedConfig,
-    api_host: window.ENV?.POSTHOG_HOST || import.meta.env.VITE_POSTHOG_HOST || 'https://us.i.posthog.com',
-    disable_persistence: false,
-    persistence: 'sessionStorage',
-    persistence_name: 'boostedbudget_surveys',
-    disable_conversations: true,
-    disable_surveys: false,
-    // Never allow PostHog to auto-render a remotely-created free-text survey.
-    disable_surveys_automatic_display: true,
-    disable_external_dependency_loading: false,
-  })
-  return adaptPostHogClient(client, stopTransport)
+  const client = dependencies.createPostHog?.() ?? new PostHog()
+  const boundary = installPinnedPostHogRequestBoundary(client)
+  let removeWindowListeners = () => {}
+  try {
+    removeWindowListeners = initializeWithCapturedWindowListeners(() => {
+      client.init(key, {
+        ...consentedConfig,
+        api_host: dependencies.host
+          || window.ENV?.POSTHOG_HOST
+          || import.meta.env.VITE_POSTHOG_HOST
+          || 'https://us.i.posthog.com',
+        advanced_disable_flags: false,
+        disable_persistence: false,
+        persistence: 'sessionStorage',
+        persistence_name: SURVEY_PERSISTENCE_NAME,
+        disable_conversations: true,
+        disable_surveys: false,
+        // Never allow PostHog to auto-render a remotely-created free-text survey.
+        disable_surveys_automatic_display: true,
+        disable_external_dependency_loading: false,
+        api_transport: 'fetch',
+        disable_beacon: true,
+      })
+    })
+    return adaptPostHogClient(client, boundary, 'surveys', key, removeWindowListeners)
+  } catch (error) {
+    discardPartialClient(client, boundary, 'surveys', key, removeWindowListeners)
+    throw error
+  }
 }
 
 export function createPostHogEngagementController({
@@ -225,10 +536,10 @@ export function createPostHogEngagementController({
 
   function deactivateSurveys(): void {
     surveyGeneration += 1
-    if (!surveyClient) return
-    resetSurveyClient(surveyClient)
+    if (surveyClient) resetSurveyClient(surveyClient)
     surveyClient = null
     surveyIdentity = null
+    clearIsolatedSurveyState()
   }
 
   return {
@@ -248,7 +559,11 @@ export function createPostHogEngagementController({
     deactivateSupport,
     activateSurveys(identity) {
       if (surveyClient && surveyIdentity === identity.distinct_id) return
-      deactivateSurveys()
+      surveyGeneration += 1
+      if (surveyClient) resetSurveyClient(surveyClient)
+      surveyClient = null
+      if (surveyIdentity !== identity.distinct_id) clearIsolatedSurveyState()
+      surveyIdentity = null
       const generation = surveyGeneration
       let client: EngagementPostHogClient | null = null
       try {
@@ -274,7 +589,9 @@ export function createPostHogEngagementController({
     deactivateSurveys,
     suspendSurveys() {
       surveyGeneration += 1
-      surveyClient?.surveys.dispose()
+      if (!surveyClient) return
+      resetSurveyClient(surveyClient, { preserveSurveyState: true })
+      surveyClient = null
     },
     getSupportClient: () => supportClient,
     isSupportAvailable: () => supportClient?.conversations.isAvailable() === true,

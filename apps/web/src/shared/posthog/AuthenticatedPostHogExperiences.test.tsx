@@ -3,7 +3,11 @@ import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { AnalyticsLifecycleSnapshot } from '../lib/posthog'
 import { AuthenticatedPostHogExperiences, type EngagementDependencies } from './AuthenticatedPostHogExperiences'
-import type { PostHogEngagementController } from './engagement'
+import {
+  createPostHogEngagementController,
+  type EngagementPostHogClient,
+  type PostHogEngagementController,
+} from './engagement'
 
 function controller(available = true) {
   return {
@@ -73,6 +77,38 @@ describe('AuthenticatedPostHogExperiences', () => {
     expect(c.showSupport).toHaveBeenCalled()
   })
 
+  test('does not construct the Support SDK client until the authenticated user clicks', async () => {
+    const createSupportClient = mock(() => ({
+      setIdentity: mock(() => {}),
+      identify: mock(() => {}),
+      shutdown: mock(() => Promise.resolve()),
+      conversations: {
+        hide: mock(() => {}),
+        show: mock(() => {}),
+        isAvailable: mock(() => true),
+        reset: mock(() => {}),
+      },
+      surveys: {
+        dispose: mock(() => {}),
+        reset: mock(() => {}),
+        getActiveMatchingSurveys: mock(() => {}),
+        displaySurvey: mock(() => {}),
+      },
+    } satisfies EngagementPostHogClient))
+    const actualController = createPostHogEngagementController({
+      createSupportClient,
+      createSurveyClient: () => { throw new Error('surveys are denied') },
+    })
+    render(<AuthenticatedPostHogExperiences
+      controller={actualController}
+      dependencies={deps({ analytics: { generation: 2, state: 'denied', scope: 'user_A' } })}
+    />)
+
+    expect(createSupportClient).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'Support' }))
+    expect(createSupportClient).toHaveBeenCalledTimes(1)
+  })
+
   test('support remains click-available without analytics consent while surveys stay disabled', async () => {
     const c = controller()
     render(<AuthenticatedPostHogExperiences controller={c} dependencies={deps({
@@ -121,6 +157,22 @@ describe('AuthenticatedPostHogExperiences', () => {
     const { rerender } = render(<AuthenticatedPostHogExperiences controller={c} dependencies={deps()} />)
     rerender(<AuthenticatedPostHogExperiences controller={c} dependencies={deps({ userId: null })} />)
     expect(c.deactivateSupport).toHaveBeenCalled()
+    expect(c.deactivateSurveys).toHaveBeenCalled()
+  })
+
+  test('clears surveys when consent is withdrawn after the client was suspended off-app', () => {
+    const c = controller()
+    const { rerender } = render(
+      <AuthenticatedPostHogExperiences controller={c} dependencies={deps()} routeEligible />,
+    )
+    rerender(<AuthenticatedPostHogExperiences controller={c} dependencies={deps()} routeEligible={false} />)
+    expect(c.suspendSurveys).toHaveBeenCalled()
+
+    rerender(<AuthenticatedPostHogExperiences
+      controller={c}
+      dependencies={deps({ analytics: { generation: 2, state: 'denied', scope: 'user_A' } })}
+      routeEligible={false}
+    />)
     expect(c.deactivateSurveys).toHaveBeenCalled()
   })
 
