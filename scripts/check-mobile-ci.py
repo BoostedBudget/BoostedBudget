@@ -95,6 +95,10 @@ MOBILE_COMPATIBILITY_DEPS = {
 }
 
 PINNED_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
+PLAYWRIGHT_VERSION_EXPRESSION = (
+    "require(require.resolve('@playwright/test/package.json', { paths: ['./apps/web'] })).version"
+)
+PLAYWRIGHT_VERSION_ASSIGNMENT = f'version="$(node -p "{PLAYWRIGHT_VERSION_EXPRESSION}")"'
 
 
 def normalized_command(step: dict) -> str:
@@ -141,17 +145,45 @@ def load_yaml(path: pathlib.Path):
 def check(root: pathlib.Path) -> list[str]:
     findings: list[str] = []
     workflow_path = root / ".github/workflows/test.yml"
+    warm_cache_workflow_path = root / ".github/workflows/warm-ci-cache.yml"
     dependabot_path = root / ".github/dependabot.yml"
     mobile_package_path = root / "apps/mobile/package.json"
 
     try:
         workflow = load_yaml(workflow_path)
+        warm_cache_workflow = load_yaml(warm_cache_workflow_path)
         dependabot = load_yaml(dependabot_path)
         mobile_package = json.loads(mobile_package_path.read_text())
     except (ValueError, OSError) as exc:
         return [str(exc)]
 
     jobs = workflow.get("jobs") or {}
+
+    for label, candidate_workflow in (
+        ("test workflow", workflow),
+        ("cache-warm workflow", warm_cache_workflow),
+    ):
+        resolution_steps = [
+            step
+            for job in (candidate_workflow.get("jobs") or {}).values()
+            for step in (job.get("steps") or [])
+            if isinstance(step, dict) and step.get("name") == "Resolve Playwright version"
+        ]
+        executable_lines = []
+        if len(resolution_steps) == 1:
+            executable_lines = [
+                " ".join(line.split())
+                for line in str(resolution_steps[0].get("run", "")).splitlines()
+                if line.strip() and not line.lstrip().startswith("#")
+            ]
+        if (
+            len(resolution_steps) != 1
+            or "if" in resolution_steps[0]
+            or PLAYWRIGHT_VERSION_ASSIGNMENT not in executable_lines
+        ):
+            findings.append(
+                f"{label} must resolve Playwright from the apps/web workspace without assuming a linker layout"
+            )
     detect = jobs.get("detect-changes") or {}
     outputs = detect.get("outputs") or {}
     if outputs.get("mobile") != "${{ steps.filter.outputs.mobile }}":
