@@ -66,8 +66,6 @@ export function useBudgetTransactions(
   const [hasMore, setHasMore] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const [totalAmount, setTotalAmount] = useState(0);
-  const [paginationQueryHash, setPaginationQueryHash] = useState(pageOneQueryHash);
-  const paginationIsCurrent = paginationQueryHash === pageOneQueryHash;
 
   // Track current offset for pagination
   const offsetRef = useRef(0);
@@ -90,6 +88,12 @@ export function useBudgetTransactions(
       enabled: !!budgetId && !!categoryId,
     },
   });
+  const [paginationSource, setPaginationSource] = useState({
+    queryHash: pageOneQueryHash,
+    dataUpdatedAt,
+  });
+  const paginationIsCurrent = paginationSource.queryHash === pageOneQueryHash &&
+    paginationSource.dataUpdatedAt === dataUpdatedAt;
   const currentPageTransactions = data?.transactions as unknown as Transaction[] | undefined;
 
   // Invalidation happens before React renders the refetch. Retire direct pagination
@@ -134,7 +138,7 @@ export function useBudgetTransactions(
       setHasMore(false);
       offsetRef.current = 0;
     }
-    setPaginationQueryHash(pageOneQueryHash);
+    setPaginationSource({ queryHash: pageOneQueryHash, dataUpdatedAt });
     return () => { pageEpoch.current += 1; };
   }, [data, dataUpdatedAt, pageSize, pageOneQueryHash]);
 
