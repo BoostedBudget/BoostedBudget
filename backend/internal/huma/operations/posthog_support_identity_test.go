@@ -18,8 +18,9 @@ func TestComputePostHogIdentityHashKnownVector(t *testing.T) {
 
 func TestGetPostHogSupportIdentityUsesAuthenticatedSubject(t *testing.T) {
 	handler := NewPostHogSupportIdentityHandler("phc_public", "server-only-secret")
-	output, err := handler.Get(context.Background(), &GetPostHogSupportIdentityInput{
-		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user_clerk_123"},
+	ctx := context.WithValue(context.Background(), inputs.ClerkUserIDKey, "user_clerk_123")
+	output, err := handler.Get(ctx, &GetPostHogSupportIdentityInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "246d147b-7e0f-41bd-a80d-a4a30491b626"},
 	})
 
 	require.NoError(t, err)
@@ -27,6 +28,17 @@ func TestGetPostHogSupportIdentityUsesAuthenticatedSubject(t *testing.T) {
 	assert.Equal(t, "user_clerk_123", output.Body.DistinctID)
 	assert.Equal(t, computePostHogIdentityHash("user_clerk_123", "server-only-secret"), output.Body.IdentityHash)
 	assert.Equal(t, "no-store", output.CacheControl)
+}
+
+func TestGetPostHogSupportIdentityFailsClosedWithoutClerkSubject(t *testing.T) {
+	handler := NewPostHogSupportIdentityHandler("phc_public", "server-only-secret")
+	output, err := handler.Get(context.Background(), &GetPostHogSupportIdentityInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "246d147b-7e0f-41bd-a80d-a4a30491b626"},
+	})
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "User not authenticated")
 }
 
 func TestGetPostHogSupportIdentityFailsClosedWhenUnavailable(t *testing.T) {

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useUser } from '@clerk/react-router'
-import { useLocation } from 'react-router'
 import { useGetPostHogSupportIdentity } from '@boostedbudget/api-client/endpoints/support/support'
 import {
   getAnalyticsLifecycleSnapshot,
@@ -10,14 +9,12 @@ import {
 } from '../lib/posthog'
 import {
   createPostHogEngagementController,
-  isAuthenticatedAppPath,
   type PostHogEngagementController,
   type VerifiedPostHogIdentity,
 } from './engagement'
 
 export interface EngagementDependencies {
   useAuthState(): { isLoaded: boolean; userId: string | null }
-  usePathname(): string
   useVerifiedIdentity(userId: string | null, enabled: boolean): {
     data: VerifiedPostHogIdentity | undefined
     isLoading: boolean
@@ -30,9 +27,6 @@ const defaultDependencies: EngagementDependencies = {
   useAuthState() {
     const { isLoaded, user } = useUser()
     return { isLoaded, userId: user?.id ?? null }
-  },
-  usePathname() {
-    return useLocation().pathname
   },
   useVerifiedIdentity(userId, enabled) {
     return useGetPostHogSupportIdentity({
@@ -62,15 +56,14 @@ export function AuthenticatedPostHogExperiences({
   const ownedController = useMemo(() => createPostHogEngagementController(), [])
   const controller = providedController ?? ownedController
   const { isLoaded, userId } = dependencies.useAuthState()
-  const pathname = dependencies.usePathname()
   const analytics = dependencies.useAnalyticsSnapshot()
-  const inAuthenticatedShell = isLoaded && userId !== null && isAuthenticatedAppPath(pathname)
+  const hasAuthenticatedUser = isLoaded && userId !== null
   const configured = isPostHogConfigured()
-  const identity = dependencies.useVerifiedIdentity(userId, inAuthenticatedShell && configured)
+  const identity = dependencies.useVerifiedIdentity(userId, hasAuthenticatedUser && configured)
   const [supportReady, setSupportReady] = useState(false)
   const [supportUnavailable, setSupportUnavailable] = useState(false)
   const [handedOff, setHandedOff] = useState(false)
-  const verifiedIdentity = inAuthenticatedShell
+  const verifiedIdentity = hasAuthenticatedUser
     && !identity.isLoading
     && !identity.isError
     && identity.data?.distinct_id === userId
@@ -141,7 +134,7 @@ export function AuthenticatedPostHogExperiences({
     return () => document.removeEventListener('visibilitychange', handleVisibility)
   }, [controller, handedOff])
 
-  if (!inAuthenticatedShell) return null
+  if (!hasAuthenticatedUser) return null
 
   if (!configured || identity.isError || supportUnavailable) {
     return (

@@ -432,6 +432,7 @@ generate-api-client:
 	@bun install
 	@echo "🔄 Running orval (via npx for Node.js runtime)..."
 	@cd packages/api-client && npx orval
+	@node packages/api-client/scripts/normalize-generated-output.mjs
 	@echo "✅ Generated packages/api-client/src/"
 
 validate-api-client: generate-api-client

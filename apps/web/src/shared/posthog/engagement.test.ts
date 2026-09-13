@@ -4,7 +4,6 @@ import { resolve } from 'node:path'
 import type { Survey } from 'posthog-js'
 import {
   createPostHogEngagementController,
-  isAuthenticatedAppPath,
   isSupportedSurvey,
   type EngagementPostHogClient,
 } from './engagement'
@@ -51,7 +50,6 @@ function surveyWith(types: SupportedQuestionType[], hasOpenChoice = false): Surv
 function fakeClient() {
   const client = {
     setIdentity: mock(() => {}),
-    clearIdentity: mock(() => {}),
     identify: mock(() => {}),
     reset: mock(() => {}),
     conversations: {
@@ -69,15 +67,6 @@ function fakeClient() {
 }
 
 describe('PostHog authenticated experiences policy', () => {
-  test('only permits authenticated application-shell routes', () => {
-    for (const path of ['/dashboard', '/accounts/1', '/transactions', '/profile', '/admin/health']) {
-      expect(isAuthenticatedAppPath(path)).toBe(true)
-    }
-    for (const path of ['/', '/pricing', '/mcp', '/legal/privacy-policy', '/cancel-deletion/token', '/households/invites/token']) {
-      expect(isAuthenticatedAppPath(path)).toBe(false)
-    }
-  })
-
   test('allows rating and closed choice questions but rejects every free-text path', () => {
     expect(isSupportedSurvey(surveyWith(['rating', 'single_choice', 'multiple_choice']))).toBe(true)
     expect(isSupportedSurvey(surveyWith(['open']))).toBe(false)
@@ -96,13 +85,26 @@ describe('PostHog authenticated experiences policy', () => {
     expect(source).toContain('generation !== this._pollGeneration')
     expect(source).toContain('this._stopPolling()')
   })
+
+  test('the pinned SDK clearIdentity path reloads tickets after entering anonymous mode', () => {
+    const source = readFileSync(resolve(
+      import.meta.dir,
+      '../../../node_modules/posthog-js/lib/src/extensions/conversations/external/index.js',
+    ), 'utf8')
+    const clearIdentity = source.slice(
+      source.indexOf('ConversationsManager.prototype.clearIdentity'),
+      source.indexOf('ConversationsManager.prototype._resetConversationState'),
+    )
+    expect(clearIdentity).toContain('setIdentityMode(false)')
+    expect(clearIdentity).toContain('this._loadTicketsAndReconcileView()')
+  })
 })
 
 describe('PostHog engagement controller', () => {
   beforeEach(() => document.body.classList.remove('posthog-support-widget-active'))
   afterEach(() => document.body.classList.remove('posthog-support-widget-active'))
 
-  test('sets verified Support identity and clears it on logout', () => {
+  test('sets verified Support identity and resets it without anonymous reload on logout', () => {
     const support = fakeClient()
     const controller = createPostHogEngagementController({
       createSupportClient: () => support,
@@ -113,7 +115,6 @@ describe('PostHog engagement controller', () => {
     expect(support.setIdentity).toHaveBeenCalledWith('user_A', 'signed-A')
     controller.deactivateSupport()
     expect(support.conversations.hide).toHaveBeenCalled()
-    expect(support.clearIdentity).toHaveBeenCalled()
     expect(support.reset).toHaveBeenCalledWith(true)
   })
 
@@ -127,7 +128,7 @@ describe('PostHog engagement controller', () => {
     controller.activateSupport({ distinct_id: 'user_A', identity_hash: 'signed-A' })
     const first = controller.getSupportClient()!
     controller.activateSupport({ distinct_id: 'user_B', identity_hash: 'signed-B' })
-    expect(first.clearIdentity).toHaveBeenCalled()
+    expect(first.reset).toHaveBeenCalledWith(true)
     expect(controller.getSupportClient()!.setIdentity).toHaveBeenCalledWith('user_B', 'signed-B')
   })
 
@@ -189,5 +190,38 @@ describe('PostHog engagement controller', () => {
     expect(() => controller.activateSupport({ distinct_id: 'user_A', identity_hash: 'signed-A' })).not.toThrow()
     expect(() => controller.activateSurveys({ distinct_id: 'user_A', identity_hash: 'signed-A' })).not.toThrow()
     expect(controller.getSupportClient()).toBeNull()
+  })
+
+  test('activation failure resets directly without clearing into anonymous mode', () => {
+    const support = fakeClient()
+    support.setIdentity.mockImplementation(() => { throw new Error('verification rejected') })
+    const controller = createPostHogEngagementController({
+      createSupportClient: () => support,
+      createSurveyClient: () => fakeClient(),
+    })
+
+    controller.activateSupport({ distinct_id: 'user_A', identity_hash: 'signed-A' })
+
+    expect(support.reset).toHaveBeenCalledWith(true)
+  })
+
+  test('logout purges Support session state without crossing the anonymous request boundary', () => {
+    const anonymousRequest = mock(() => {})
+    const support = {
+      ...fakeClient(),
+      clearIdentity: () => anonymousRequest(),
+    }
+    support.reset.mockImplementation(() => sessionStorage.removeItem('ph_support_widget_session'))
+    sessionStorage.setItem('ph_support_widget_session', 'authenticated-session')
+    const controller = createPostHogEngagementController({
+      createSupportClient: () => support,
+      createSurveyClient: () => fakeClient(),
+    })
+
+    controller.activateSupport({ distinct_id: 'user_A', identity_hash: 'signed-A' })
+    controller.deactivateSupport()
+
+    expect(anonymousRequest).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem('ph_support_widget_session')).toBeNull()
   })
 })

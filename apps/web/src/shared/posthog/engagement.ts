@@ -1,8 +1,7 @@
 import posthog, {
-  DisplaySurveyType,
+  type DisplaySurveyType,
   type PostHog,
   type Survey,
-  SurveyQuestionType,
 } from 'posthog-js'
 import {
   clearPostHogQueuedEvents,
@@ -15,9 +14,10 @@ export interface VerifiedPostHogIdentity {
   identity_hash: string
 }
 
+const POPOVER_SURVEY_DISPLAY = 'popover' as typeof DisplaySurveyType.Popover
+
 export interface EngagementPostHogClient {
   setIdentity(distinctId: string, identityHash: string): void
-  clearIdentity(): void
   identify(distinctId: string): void
   reset(resetDeviceId?: boolean): void
   conversations: {
@@ -46,28 +46,10 @@ export interface PostHogEngagementController {
   showSupport(): void
 }
 
-const AUTHENTICATED_APP_PATHS = [
-  '/dashboard',
-  '/accounts',
-  '/transactions',
-  '/review',
-  '/insights',
-  '/planning',
-  '/rules',
-  '/activity',
-  '/profile',
-  '/billing',
-  '/admin',
-]
-
-export function isAuthenticatedAppPath(pathname: string): boolean {
-  return AUTHENTICATED_APP_PATHS.some(prefix => pathname === prefix || pathname.startsWith(`${prefix}/`))
-}
-
 export function isSupportedSurvey(survey: Survey): boolean {
   return survey.questions.length > 0 && survey.questions.every(question => {
-    if (question.type === SurveyQuestionType.Rating) return true
-    if (question.type === SurveyQuestionType.SingleChoice || question.type === SurveyQuestionType.MultipleChoice) {
+    if (question.type === 'rating') return true
+    if (question.type === 'single_choice' || question.type === 'multiple_choice') {
       return question.hasOpenChoice !== true
     }
     return false
@@ -93,7 +75,6 @@ function sharedIsolatedConfig() {
 function adaptPostHogClient(client: PostHog): EngagementPostHogClient {
   return {
     setIdentity: (distinctId, hash) => client.setIdentity(distinctId, hash),
-    clearIdentity: () => client.clearIdentity(),
     identify: distinctId => client.identify(distinctId),
     reset: resetDeviceId => {
       clearPostHogQueuedEvents(client as unknown as PostHogWithQueues)
@@ -111,6 +92,16 @@ function adaptPostHogClient(client: PostHog): EngagementPostHogClient {
       displaySurvey: (surveyId, options) => client.displaySurvey(surveyId, options),
     },
   }
+}
+
+function resetSupportClient(client: EngagementPostHogClient): void {
+  client.conversations.hide()
+  client.reset(true)
+}
+
+function resetSurveyClient(client: EngagementPostHogClient): void {
+  client.surveys.dispose()
+  client.reset(true)
 }
 
 let clientSequence = 0
@@ -164,9 +155,7 @@ export function createPostHogEngagementController({
   function deactivateSupport(): void {
     document.body.classList.remove('posthog-support-widget-active')
     if (!supportClient) return
-    supportClient.conversations.hide()
-    supportClient.clearIdentity()
-    supportClient.reset(true)
+    resetSupportClient(supportClient)
     supportClient = null
     supportIdentity = null
   }
@@ -174,8 +163,7 @@ export function createPostHogEngagementController({
   function deactivateSurveys(): void {
     surveyGeneration += 1
     if (!surveyClient) return
-    surveyClient.surveys.dispose()
-    surveyClient.reset(true)
+    resetSurveyClient(surveyClient)
     surveyClient = null
     surveyIdentity = null
   }
@@ -191,9 +179,7 @@ export function createPostHogEngagementController({
         supportClient = client
         supportIdentity = identity.distinct_id
       } catch {
-        client?.conversations.hide()
-        client?.clearIdentity()
-        client?.reset(true)
+        if (client) resetSupportClient(client)
       }
     },
     deactivateSupport,
@@ -208,8 +194,7 @@ export function createPostHogEngagementController({
         surveyClient = client
         surveyIdentity = identity.distinct_id
       } catch {
-        client?.surveys.dispose()
-        client?.reset(true)
+        if (client) resetSurveyClient(client)
         return
       }
       client.surveys.getActiveMatchingSurveys(surveys => {
@@ -217,7 +202,7 @@ export function createPostHogEngagementController({
         const survey = surveys.find(isSupportedSurvey)
         if (!survey) return
         client.surveys.displaySurvey(survey.id, {
-          displayType: DisplaySurveyType.Popover,
+          displayType: POPOVER_SURVEY_DISPLAY,
           ignoreConditions: false,
           ignoreDelay: false,
         })

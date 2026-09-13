@@ -160,9 +160,3 @@ export function useGetRegions<TData = Awaited<ReturnType<typeof getRegions>>, TE
 
   return withQueryKey(query, queryOptions.queryKey);
 }
-
-
-
-
-
-
