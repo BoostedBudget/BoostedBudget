@@ -271,6 +271,8 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 			PFCDetailed:      catReq.PFCDetailed,
 			CustomCategoryID: catReq.CustomCategoryID,
 			SavingsGoalID:    catReq.SavingsGoalID, // Issue #1300: savings bucket linkage
+			GroupName:        catReq.GroupName,
+			Members:          catReq.Members,
 			AllocatedAmount:  catReq.AllocatedAmount,
 			SpentAmount:      0,
 			CreatedAt:        time.Now(),
@@ -279,7 +281,7 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 			MatchLogic:       catReq.MatchLogic,
 		}
 		// R5-2: gate on domain invariants before any write.
-		if err := category.Validate(); err != nil {
+		if err := category.ValidateForCreate(); err != nil {
 			return nil, err
 		}
 		// Issue #1630 HIGH-severity fix: populate this custom category's own hierarchical
@@ -365,7 +367,8 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 					UpdatedAt:       time.Now(),
 				}
 
-				if err := s.budgetRepo.CreateCategory(ctx, savingsCat); err != nil {
+				createdSavingsCat, err := s.budgetRepo.AddCategoryChecked(ctx, budget.ID, savingsCat)
+				if err != nil {
 					s.logger.Warn("carry-forward: failed to create savings category",
 						slog.String("budget_id", budget.ID),
 						slog.String("goal_id", goal.ID),
@@ -374,7 +377,7 @@ func (s *budgetService) CreateBudget(ctx context.Context, userID string, req *do
 					continue
 				}
 
-				budget.Categories = append(budget.Categories, *savingsCat)
+				budget.Categories = append(budget.Categories, *createdSavingsCat)
 			}
 		}
 	}
@@ -713,6 +716,8 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 		PFCDetailed:      req.PFCDetailed,
 		CustomCategoryID: req.CustomCategoryID,
 		SavingsGoalID:    req.SavingsGoalID, // Issue #1300: savings bucket linkage (Codex C1)
+		GroupName:        req.GroupName,
+		Members:          req.Members,
 		AllocatedAmount:  req.AllocatedAmount,
 		SpentAmount:      0,
 		CreatedAt:        time.Now(),
@@ -722,7 +727,7 @@ func (s *budgetService) AddCategory(ctx context.Context, userID, budgetID string
 	}
 
 	// Validate
-	if err := category.Validate(); err != nil {
+	if err := category.ValidateForCreate(); err != nil {
 		return nil, err
 	}
 
@@ -833,6 +838,12 @@ func (s *budgetService) UpdateCategory(ctx context.Context, userID, budgetID, ca
 		category.AllocatedAmount = *req.AllocatedAmount
 	}
 	// Flexible matching fields (Issue #491)
+	if req.GroupName != nil {
+		category.GroupName = req.GroupName
+	}
+	if req.Members != nil {
+		category.Members = *req.Members
+	}
 	if req.Tags != nil {
 		category.Tags = *req.Tags
 	}
@@ -884,6 +895,12 @@ func (s *budgetService) UpdateCategory(ctx context.Context, userID, budgetID, ca
 	// transaction — so a concurrent AddCategory/UpdateCategory racing this edit on the same
 	// budget cannot both persist a combination that violates the guard.
 	updated, err := s.budgetRepo.UpdateCategoryChecked(ctx, budgetID, categoryID, func(c *domain.BudgetCategory) error {
+		if req.GroupName != nil {
+			c.GroupName = req.GroupName
+		}
+		if req.Members != nil {
+			c.Members = *req.Members
+		}
 		if req.AllocatedAmount != nil {
 			c.AllocatedAmount = *req.AllocatedAmount
 		}
@@ -1089,7 +1106,7 @@ func (s *budgetService) BackfillManagedCategories(ctx context.Context, userID st
 				UpdatedAt:       time.Now(),
 			}
 
-			if err := s.budgetRepo.CreateCategory(ctx, category); err != nil {
+			if _, err := s.budgetRepo.AddCategoryChecked(ctx, budget.ID, category); err != nil {
 				s.logger.Error("backfill: failed to create savings category",
 					slog.String("budget_id", budget.ID),
 					slog.String("goal_id", goal.ID),

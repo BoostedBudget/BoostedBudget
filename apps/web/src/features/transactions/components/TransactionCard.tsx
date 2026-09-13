@@ -14,6 +14,7 @@ import { ReviewBadge } from '@/shared/components/ReviewBadge'
 import { reviewBadgeVariantFromTransaction } from '@/shared/components/ReviewBadge/reviewBadgeUtils'
 
 interface TransactionCardProps {
+  currencyCode?: string
   transaction: Transaction
   /** Account this transaction belongs to (for context display) */
   account?: Account | null
@@ -59,7 +60,7 @@ function formatDate(dateStr: string | null | undefined): string {
   }).format(transactionDate)
 }
 
-export function TransactionCard({ transaction, account, onEdit, onCategorize, budgetMatch }: TransactionCardProps) {
+export function TransactionCard({ transaction, account, onEdit, onCategorize, budgetMatch, currencyCode }: TransactionCardProps) {
   const { isReadOnly } = useReadOnly()
   const { id, amount, date, authorized_date, tags, pending } = transaction
 
@@ -73,7 +74,7 @@ export function TransactionCard({ transaction, account, onEdit, onCategorize, bu
   const effective = getEffectiveCategory(transaction)
   const categoryLabel = getEffectiveCategoryLabel(effective)
   const showUncategorizedWarning = categoryLabel === 'Uncategorized'
-  const { text: amountFormatted, signClass: amountClass, arrow, testId: arrowTestId } = formatTransactionAmount(amount)
+  const { text: amountFormatted, signClass: amountClass, arrow, testId: arrowTestId } = formatTransactionAmount(amount, currencyCode)
   const ariaLabel = `Transaction, ${displayDate}${pending ? ', pending' : ''}`
   const categoryColor = getCategoryColor(categoryLabel)
   const accountDisplayName = account ? (account.nickname || account.name) : null

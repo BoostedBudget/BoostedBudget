@@ -51,6 +51,23 @@ const mockConfirmed: SavingsGoalContribution = {
   updated_at: '2026-06-08T00:00:00Z',
 }
 
+it('labels supplementary full history and formats the supplied goal currency', () => {
+  mockUseListSavingsGoalContributions.mockReturnValue({ data: [mockConfirmed], isLoading: false, error: null, refetch: mock(() => Promise.resolve()) })
+  renderWithQueryClient(<GoalContributionsSheet goalId="goal-1" goalName="Goal" open onOpenChange={() => {}} onContributionChanged={() => {}} currencyCode="CAD" contextNote="Full savings history includes entries outside the budget period." />)
+  expect(screen.getByText('CA$250.00')).toBeInTheDocument()
+  expect(screen.getByText('Full savings history includes entries outside the budget period.')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: /log contribution/i }))
+  expect(screen.getByRole('spinbutton', { name: 'Amount (CAD)' })).toBeInTheDocument()
+})
+
+it('renders malformed goal currency safely in masked rows and the log dialog', () => {
+  mockUseListSavingsGoalContributions.mockReturnValue({ data: [mockConfirmed], isLoading: false, error: null, refetch: mock(() => Promise.resolve()) })
+  renderWithQueryClient(<GoalContributionsSheet goalId="goal-1" goalName="Goal" open onOpenChange={() => {}} onContributionChanged={() => {}} currencyCode="U$D" />)
+  expect(screen.getByText('U$D 250.00')).toHaveAttribute('data-ph-mask')
+  fireEvent.click(screen.getByRole('button', { name: /log contribution/i }))
+  expect(screen.getByRole('spinbutton', { name: 'Amount (U$D)' })).toBeInTheDocument()
+})
+
 // R4-2: rejected tombstone — should NOT appear in the sheet UI.
 const mockRejected: SavingsGoalContribution = {
   id: 'c-rejected-1',

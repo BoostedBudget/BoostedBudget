@@ -50,6 +50,30 @@ func TestMatchLogicEnumTagsPublishLegalValues(t *testing.T) {
 	}
 }
 
+func TestCategoryKindEnumTagsPublishLegalValues(t *testing.T) {
+	cases := []struct {
+		what string
+		typ  reflect.Type
+		want string
+	}{
+		{"BudgetCategory (response)", reflect.TypeOf(BudgetCategory{}), "pfc,custom,savings,group,remainder"},
+		{"CreateBudgetCategoryRequest", reflect.TypeOf(CreateBudgetCategoryRequest{}), "pfc,custom,savings,group,remainder"},
+		{"CategoryPreviewRequest", reflect.TypeOf(CategoryPreviewRequest{}), "pfc,custom,group,remainder"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.what, func(t *testing.T) {
+			f, ok := c.typ.FieldByName("CategoryKind")
+			if !ok {
+				t.Fatalf("%s has no CategoryKind field", c.what)
+			}
+			if got := f.Tag.Get("enum"); got != c.want {
+				t.Errorf("%s.CategoryKind enum tag drifted.\n got: %q\nwant: %q", c.what, got, c.want)
+			}
+		})
+	}
+}
+
 // TestMatchLogicWritableFieldsDocumentTheTagsRequirement pins Task 8's second requirement: the
 // "and"/"tag_only" -> non-empty tags requirement (Issue #1630 task 0's ACTUAL mechanism behind
 // the issue's "and -> 400" claim) must be discoverable from the published schema, not just from

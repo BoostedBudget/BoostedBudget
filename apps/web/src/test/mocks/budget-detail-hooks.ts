@@ -5,13 +5,14 @@
 // NOTE: Hook implementation tests use API-level mocks from budgets-api.ts instead.
 
 import { mock } from 'bun:test'
+import type { Budget } from '@/features/budgets/types'
 
 // === useBudgetDetail mock ===
 export const mockBudgetDetailRefetch = mock(() => Promise.resolve())
 export const mockUseBudgetDetail = mock(() => ({
-  budget: null,
+  budget: null as Budget | null,
   loading: false,
-  error: null,
+  error: null as Error | null,
   refetch: mockBudgetDetailRefetch,
 }))
 

@@ -278,7 +278,9 @@ func TestCustomCategory_ParentPFCPrimary_APIRoundTrip_Integration(t *testing.T) 
 	income := "INCOME"
 	readBack.ParentPFCPrimary = &income
 	require.NoError(t, readBack.Validate())
-	require.NoError(t, repo.Update(ctx, readBack))
+	// Hierarchy mutations use the transaction-aware writer; Update changes metadata only.
+	require.NoError(t, LockBudgetConfiguration(ctx, tx, userID))
+	require.NoError(t, repo.UpdateInTx(ctx, tx, readBack))
 
 	afterUpdate, err := repo.GetByID(ctx, created.ID)
 	require.NoError(t, err)
@@ -288,7 +290,7 @@ func TestCustomCategory_ParentPFCPrimary_APIRoundTrip_Integration(t *testing.T) 
 	// Clearing it is how a client says "this category declares nothing" — it must reach NULL, not
 	// the empty string, which the DB CHECK would reject.
 	afterUpdate.ParentPFCPrimary = nil
-	require.NoError(t, repo.Update(ctx, afterUpdate))
+	require.NoError(t, repo.UpdateInTx(ctx, tx, afterUpdate))
 	cleared, err := repo.GetByID(ctx, created.ID)
 	require.NoError(t, err)
 	require.Nil(t, cleared.ParentPFCPrimary)

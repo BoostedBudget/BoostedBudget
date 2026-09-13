@@ -3,7 +3,8 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { BrowserRouter } from 'react-router'
 import type { Transaction } from '../../../transactions/types'
 
-const createMockHookState = (overrides?: Partial<ReturnType<typeof mock>>) => ({
+type HookState = ReturnType<typeof import('../../hooks/useBudgetTransactions').useBudgetTransactions>
+const createMockHookState = (overrides?: Partial<HookState>): HookState => ({
   transactions: [],
   totalCount: 0,
   totalAmount: 0,
@@ -11,8 +12,8 @@ const createMockHookState = (overrides?: Partial<ReturnType<typeof mock>>) => ({
   loadingMore: false,
   error: null,
   hasMore: false,
-  loadMore: mock(() => {}),
-  refetch: mock(() => {}),
+  loadMore: mock(() => Promise.resolve()),
+  refetch: mock(() => Promise.resolve()),
   ...overrides,
 })
 
@@ -34,7 +35,6 @@ const mockTransaction: Transaction = {
   date: '2024-01-15T00:00:00Z',
   name: 'Coffee Shop',
   merchant_name: 'Starbucks',
-  category: '["Food and Drink", "Coffee Shop"]',
   pending: false,
   created_at: '2024-01-15T00:00:00Z',
   updated_at: '2024-01-15T00:00:00Z',
@@ -54,6 +54,17 @@ const renderWithRouter = (component: React.ReactElement) =>
 describe('BudgetTransactionList', () => {
   beforeEach(() => {
     mockUseBudgetTransactions.mockClear()
+  })
+
+  it('preserves malformed currency markers throughout the masked expense breakdown', () => {
+    mockUseBudgetTransactions.mockReturnValue(createMockHookState({
+      transactions: [{ ...mockTransaction, amount: 50, budget_expense_amount: 30 }], totalCount: 1, totalAmount: 30,
+    }))
+    renderWithRouter(<BudgetTransactionList budgetId="budget-1" categoryId="category-1" currencyCode="U$D" />)
+    expect(screen.queryByText('Total: U$D 30.00')).toHaveAttribute('data-ph-mask')
+    expect(screen.getByText('Expense counted: U$D 30.00')).toHaveAttribute('data-ph-mask')
+    expect(screen.getByText('Allocated to savings: U$D 20.00')).toHaveAttribute('data-ph-mask')
+    expect(screen.getByText('-U$D 50.00').closest('[data-ph-mask]')).not.toBeNull()
   })
 
   describe('loading state', () => {
@@ -145,6 +156,27 @@ describe('BudgetTransactionList', () => {
   })
 
   describe('pagination', () => {
+    it('passes the report snapshot version to the transaction hook', () => {
+      mockUseBudgetTransactions.mockReturnValue(createMockHookState())
+      renderWithRouter(
+        <BudgetTransactionList
+          budgetId="budget-1"
+          categoryId="category-1"
+          snapshotVersion="2026-09-12T12:00:00Z"
+        />
+      )
+      expect(mockUseBudgetTransactions).toHaveBeenCalledWith('budget-1', 'category-1', {
+        snapshotVersion: '2026-09-12T12:00:00Z',
+      })
+    })
+    it('distinguishes gross spending, savings and counted expense in the report currency', () => {
+      mockUseBudgetTransactions.mockReturnValue(createMockHookState({ transactions: [{ ...mockTransaction, amount: 100, budget_expense_amount: 70 }], totalCount: 1, totalAmount: 70 }))
+      renderWithRouter(<BudgetTransactionList budgetId="budget-1" categoryId="category-1" currencyCode="CAD" />)
+      expect(screen.getByText('-CA$100.00')).toBeInTheDocument()
+      expect(screen.getByText('Expense counted: CA$70.00')).toBeInTheDocument()
+      expect(screen.getByText('Allocated to savings: CA$30.00')).toBeInTheDocument()
+      expect(screen.getByText('Total: CA$70.00')).toHaveAttribute('data-ph-mask')
+    })
     it('should show Load More button when hasMore', () => {
       mockUseBudgetTransactions.mockReturnValue(
         createMockHookState({
@@ -227,7 +259,9 @@ describe('BudgetTransactionList', () => {
         <BudgetTransactionList budgetId="my-budget" categoryId="my-category" />
       )
 
-      expect(mockUseBudgetTransactions).toHaveBeenCalledWith('my-budget', 'my-category')
+      expect(mockUseBudgetTransactions).toHaveBeenCalledWith('my-budget', 'my-category', {
+        snapshotVersion: undefined,
+      })
     })
   })
 

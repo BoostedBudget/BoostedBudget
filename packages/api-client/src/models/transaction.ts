@@ -42,6 +42,8 @@ export interface Transaction {
   amount: number;
   /** UTC calendar day (YYYY-MM-DD) the transaction was authorized; omitted when the provider gave none */
   authorized_date?: string;
+  /** Net expense amount counted in this budget drilldown; omitted outside budget drilldowns. */
+  budget_expense_amount?: number;
   category_override_date?: string;
   category_override_kind?: string;
   category_source: string;
