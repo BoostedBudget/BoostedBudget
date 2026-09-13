@@ -85,6 +85,13 @@ describe('PostHog authenticated experiences policy', () => {
   })
   test('allows rating and closed choice questions but rejects every free-text path', () => {
     expect(isSupportedSurvey(surveyWith(['rating', 'single_choice', 'multiple_choice']))).toBe(true)
+    expect(isSupportedSurvey({
+      ...surveyWith(['single_choice']),
+      questions: [{
+        ...surveyQuestion('single_choice', false),
+        hasOpenChoice: undefined,
+      }],
+    })).toBe(true)
     expect(isSupportedSurvey(surveyWith(['open']))).toBe(false)
     expect(isSupportedSurvey(surveyWith(['link']))).toBe(false)
     expect(isSupportedSurvey(surveyWith(['single_choice'], true))).toBe(false)
@@ -123,6 +130,9 @@ describe('PostHog authenticated experiences policy', () => {
       { id: 'survey-1', questions: [{ type: 'multiple_choice', question: 'Choose', choices: null }] },
       { id: 'survey-1', questions: [{ type: 'single_choice', question: 'Choose', choices: [] }] },
       { id: 'survey-1', questions: [{ type: 'single_choice', question: 'Choose', choices: ['A', 1] }] },
+      { id: 'survey-1', questions: [{ type: 'single_choice', question: 'Choose', choices: ['A'], hasOpenChoice: null }] },
+      { id: 'survey-1', questions: [{ type: 'single_choice', question: 'Choose', choices: ['A'], hasOpenChoice: 0 }] },
+      { id: 'survey-1', questions: [{ type: 'single_choice', question: 'Choose', choices: ['A'], hasOpenChoice: 'false' }] },
     ]
 
     for (const survey of malformedSurveys) {
