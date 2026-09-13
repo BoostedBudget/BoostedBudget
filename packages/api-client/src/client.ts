@@ -27,12 +27,24 @@ function normalizeBaseUrl(value: string | undefined): string {
   return value?.trim().replace(/\/+$/, '') ?? ''
 }
 
-let runtimeConfig: ApiClientRuntimeConfig = {}
-let hasEverAuthenticated = false
+interface ApiClientRuntimeState {
+  config: ApiClientRuntimeConfig
+  hasEverAuthenticated: boolean
+}
+
+const RUNTIME_STATE_KEY = '__boostedBudgetRuntimeState'
+type RuntimeOwnedRequestConfig = AxiosRequestConfig & {
+  [RUNTIME_STATE_KEY]?: ApiClientRuntimeState
+}
+
+let runtimeState: ApiClientRuntimeState = {
+  config: {},
+  hasEverAuthenticated: false,
+}
 
 /** Return the base URL configured by the host application. */
 export function getApiUrl(): string {
-  return normalizeBaseUrl(runtimeConfig.baseUrl)
+  return normalizeBaseUrl(runtimeState.config.baseUrl)
 }
 
 // This singleton identity is part of the public compatibility surface. Generated
@@ -52,9 +64,11 @@ export const AXIOS_INSTANCE = Axios.create({
  * leaking into the next. The response interceptor is installed only once below.
  */
 export function configureApiClient(config: ApiClientRuntimeConfig = {}): void {
-  runtimeConfig = { ...config, baseUrl: normalizeBaseUrl(config.baseUrl) }
-  hasEverAuthenticated = false
-  AXIOS_INSTANCE.defaults.baseURL = runtimeConfig.baseUrl
+  runtimeState = {
+    config: { ...config, baseUrl: normalizeBaseUrl(config.baseUrl) },
+    hasEverAuthenticated: false,
+  }
+  AXIOS_INSTANCE.defaults.baseURL = runtimeState.config.baseUrl
 }
 
 // Public API paths that should never trigger a sign-in redirect on 401.
@@ -99,12 +113,14 @@ function safelyNotify(
 AXIOS_INSTANCE.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
+    const requestRuntime = (error.config as RuntimeOwnedRequestConfig | undefined)?.[RUNTIME_STATE_KEY]
+      ?? runtimeState
     const details = errorDetails(error)
-    safelyNotify(runtimeConfig.reportError, details)
+    safelyNotify(requestRuntime.config.reportError, details)
 
-    if (runtimeConfig.debug && runtimeConfig.debugLog) {
+    if (requestRuntime.config.debug && requestRuntime.config.debugLog) {
       try {
-        runtimeConfig.debugLog('[API Error]', details)
+        requestRuntime.config.debugLog('[API Error]', details)
       } catch {
         // Debug logging must never replace the API error.
       }
@@ -113,8 +129,8 @@ AXIOS_INSTANCE.interceptors.response.use(
     if (error.response?.status === 401) {
       const requestUrl = error.config?.url || ''
       const isPublicPath = PUBLIC_API_PATHS.some((path) => requestUrl.includes(path))
-      if (!isPublicPath && hasEverAuthenticated) {
-        safelyNotify(runtimeConfig.onUnauthorized, details)
+      if (!isPublicPath && requestRuntime.hasEverAuthenticated) {
+        safelyNotify(requestRuntime.config.onUnauthorized, details)
       }
     }
 
@@ -124,7 +140,10 @@ AXIOS_INSTANCE.interceptors.response.use(
 
 /** Compatibility helper for Clerk integration in the existing web app. */
 export const setAuthTokenProvider = (provider: GetTokenFunction): void => {
-  runtimeConfig = { ...runtimeConfig, getAccessToken: provider }
+  runtimeState = {
+    config: { ...runtimeState.config, getAccessToken: provider },
+    hasEverAuthenticated: runtimeState.hasEverAuthenticated,
+  }
 }
 
 /** Mutator used by all Orval-generated API calls. */
@@ -132,16 +151,20 @@ export const customInstance = async <T>(
   config: AxiosRequestConfig,
   options?: AxiosRequestConfig,
 ): Promise<T> => {
-  const mergedConfig: AxiosRequestConfig = {
+  const requestRuntime = runtimeState
+  const baseURL = options?.baseURL ?? config.baseURL ?? AXIOS_INSTANCE.defaults.baseURL
+  const mergedConfig: RuntimeOwnedRequestConfig = {
     ...config,
     ...options,
+    baseURL,
+    [RUNTIME_STATE_KEY]: requestRuntime,
   }
 
-  if (runtimeConfig.getAccessToken) {
+  if (requestRuntime.config.getAccessToken) {
     try {
-      const token = await runtimeConfig.getAccessToken()
+      const token = await requestRuntime.config.getAccessToken()
       if (token) {
-        hasEverAuthenticated = true
+        requestRuntime.hasEverAuthenticated = true
         mergedConfig.headers = {
           ...mergedConfig.headers,
           Authorization: `Bearer ${token}`,
