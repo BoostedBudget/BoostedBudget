@@ -92,6 +92,8 @@ import {
 } from './shared/lib/posthog'
 import { devLog } from './shared/lib/devLog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
+import { AuthenticatedPostHogExperiences } from './shared/posthog/AuthenticatedPostHogExperiences'
+import { isPostHogEngagementRoute } from './shared/posthog/engagement'
 import {
   useConsentAwarePageViews,
   type PageViewDependencies,
@@ -379,7 +381,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
             <Route
               path="/oauth-callback"
               element={
-                <ProtectedRoute postHogExperiences={false}>
+                <ProtectedRoute>
                   <PremiumRoute>
                     <Suspense fallback={<PageSkeleton />}>
                       <PlaidOAuthCallback />
@@ -604,7 +606,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
             <Route
               path="/admin"
               element={
-                <ProtectedRoute postHogExperiences={false}>
+                <ProtectedRoute>
                   <AdminRoute>
                     <AdminLayout />
                   </AdminRoute>
@@ -635,6 +637,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
       <AppFooter />
 
       {!isAuthenticated && <CookieConsent onConsentChange={handleConsentChange} />}
+      <AuthenticatedPostHogExperiences routeEligible={isPostHogEngagementRoute(location.pathname)} />
       <Toaster position="bottom-right" richColors theme={resolvedTheme} />
     </div>
   )

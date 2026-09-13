@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import type { Survey } from 'posthog-js'
 import {
   createPostHogEngagementController,
+  isPostHogEngagementRoute,
   isSupportedSurvey,
   type EngagementPostHogClient,
 } from './engagement'
@@ -51,7 +52,7 @@ function fakeClient() {
   const client = {
     setIdentity: mock(() => {}),
     identify: mock(() => {}),
-    reset: mock(() => {}),
+    shutdown: mock(() => Promise.resolve()),
     conversations: {
       hide: mock(() => {}),
       show: mock(() => {}),
@@ -67,6 +68,14 @@ function fakeClient() {
 }
 
 describe('PostHog authenticated experiences policy', () => {
+  test('enables product routes by default and excludes public, auth, callback, and admin routes', () => {
+    for (const path of ['/dashboard', '/budgets/id', '/auto-categorization', '/boosts/new', '/billing/manage']) {
+      expect(isPostHogEngagementRoute(path)).toBe(true)
+    }
+    for (const path of ['/', '/pricing', '/mcp', '/legal/terms', '/oauth-callback', '/admin/health', '/sign-in']) {
+      expect(isPostHogEngagementRoute(path)).toBe(false)
+    }
+  })
   test('allows rating and closed choice questions but rejects every free-text path', () => {
     expect(isSupportedSurvey(surveyWith(['rating', 'single_choice', 'multiple_choice']))).toBe(true)
     expect(isSupportedSurvey(surveyWith(['open']))).toBe(false)
@@ -115,7 +124,7 @@ describe('PostHog engagement controller', () => {
     expect(support.setIdentity).toHaveBeenCalledWith('user_A', 'signed-A')
     controller.deactivateSupport()
     expect(support.conversations.hide).toHaveBeenCalled()
-    expect(support.reset).toHaveBeenCalledWith(true)
+    expect(support.shutdown).toHaveBeenCalled()
   })
 
   test('never reuses a support client across an account switch', () => {
@@ -128,7 +137,7 @@ describe('PostHog engagement controller', () => {
     controller.activateSupport({ distinct_id: 'user_A', identity_hash: 'signed-A' })
     const first = controller.getSupportClient()!
     controller.activateSupport({ distinct_id: 'user_B', identity_hash: 'signed-B' })
-    expect(first.reset).toHaveBeenCalledWith(true)
+    expect(first.shutdown).toHaveBeenCalled()
     expect(controller.getSupportClient()!.setIdentity).toHaveBeenCalledWith('user_B', 'signed-B')
   })
 
@@ -164,9 +173,29 @@ describe('PostHog engagement controller', () => {
     controller.activateSurveys({ distinct_id: 'user_A', identity_hash: 'signed-A' })
     controller.deactivateSurveys()
     expect(first.surveys.dispose).toHaveBeenCalled()
-    expect(first.reset).toHaveBeenCalledWith(true)
+    expect(first.shutdown).toHaveBeenCalled()
     controller.activateSurveys({ distinct_id: 'user_A', identity_hash: 'signed-A' })
     expect(second.identify).toHaveBeenCalledWith('user_A')
+  })
+
+  test('route suspension hides surveys without recreating or redisplaying them on return', () => {
+    const survey = fakeClient()
+    survey.surveys.getActiveMatchingSurveys.mockImplementation(callback => callback([
+      surveyWith(['rating']),
+    ]))
+    const controller = createPostHogEngagementController({
+      createSupportClient: () => fakeClient(),
+      createSurveyClient: () => survey,
+    })
+    const identity = { distinct_id: 'user_A', identity_hash: 'signed-A' }
+
+    controller.activateSurveys(identity)
+    controller.suspendSurveys()
+    controller.activateSurveys(identity)
+
+    expect(survey.surveys.dispose).toHaveBeenCalledTimes(1)
+    expect(survey.shutdown).not.toHaveBeenCalled()
+    expect(survey.surveys.displaySurvey).toHaveBeenCalledTimes(1)
   })
 
   test('shows exactly one support control by replacing the app button with the SDK widget', () => {
@@ -202,7 +231,7 @@ describe('PostHog engagement controller', () => {
 
     controller.activateSupport({ distinct_id: 'user_A', identity_hash: 'signed-A' })
 
-    expect(support.reset).toHaveBeenCalledWith(true)
+    expect(support.shutdown).toHaveBeenCalled()
   })
 
   test('logout purges Support session state without crossing the anonymous request boundary', () => {
@@ -211,7 +240,7 @@ describe('PostHog engagement controller', () => {
       ...fakeClient(),
       clearIdentity: () => anonymousRequest(),
     }
-    support.reset.mockImplementation(() => sessionStorage.removeItem('ph_support_widget_session'))
+    support.shutdown.mockImplementation(async () => sessionStorage.removeItem('ph_support_widget_session'))
     sessionStorage.setItem('ph_support_widget_session', 'authenticated-session')
     const controller = createPostHogEngagementController({
       createSupportClient: () => support,
