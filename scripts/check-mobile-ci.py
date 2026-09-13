@@ -204,26 +204,42 @@ def check(root: pathlib.Path) -> list[str]:
             findings.append("mobile-test must run on ubicloud-standard-2")
         steps = [step for step in job.get("steps") or [] if isinstance(step, dict)]
         action_steps = [step for step in steps if isinstance(step.get("uses"), str)]
+        enabled_action_steps = [step for step in action_steps if "if" not in step]
         for step in action_steps:
             if not PINNED_ACTION.fullmatch(str(step["uses"])):
                 findings.append(
                     f"mobile-test action must use a 40-character commit SHA: {step['uses']}"
                 )
-        if not any(str(step.get("uses", "")).startswith("actions/checkout@") for step in action_steps):
-            findings.append("mobile-test must check out the repository")
+        checkout_steps = [
+            step
+            for step in enabled_action_steps
+            if str(step.get("uses", "")).startswith("actions/checkout@")
+        ]
+        if len(checkout_steps) != 1:
+            findings.append(
+                f"mobile-test must contain exactly one enabled checkout action; found {len(checkout_steps)}"
+            )
         node_steps = [
             step
-            for step in action_steps
+            for step in enabled_action_steps
             if str(step.get("uses", "")).startswith("actions/setup-node@")
         ]
+        if len(node_steps) != 1:
+            findings.append(
+                f"mobile-test must contain exactly one enabled setup-node action; found {len(node_steps)}"
+            )
         node_version = str(((node_steps[0].get("with") or {}).get("node-version", ""))) if node_steps else ""
         if not node_version.startswith("22.13"):
             findings.append("mobile-test must pin Node 22.13.x or newer within the 22.13 line")
         bun_steps = [
             step
-            for step in action_steps
+            for step in enabled_action_steps
             if str(step.get("uses", "")).startswith("oven-sh/setup-bun@")
         ]
+        if len(bun_steps) != 1:
+            findings.append(
+                f"mobile-test must contain exactly one enabled setup-bun action; found {len(bun_steps)}"
+            )
         bun_version = str(((bun_steps[0].get("with") or {}).get("bun-version", ""))) if bun_steps else ""
         if bun_version != "1.3.14":
             findings.append("mobile-test must pin Bun 1.3.14")
