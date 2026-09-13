@@ -219,6 +219,7 @@ describe('PrivacySettings', () => {
       resolveSave({ ...mockSettingsWithAlertsEnabled, gdpr_analytics_consent: true })
       await waitFor(() => expect(mockGrantProductAnalytics).toHaveBeenCalledWith(
         mockClerkUser.id,
+        mockClerkUser.id,
         expect.objectContaining({ subscription_tier: 'free', primary_region: 'iad' }),
       ))
       expect(mockCaptureProductEvent).not.toHaveBeenCalledWith('privacy_settings_changed')
@@ -237,6 +238,7 @@ describe('PrivacySettings', () => {
       fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
 
       expect(order).toEqual(['withdraw', 'persist'])
+      expect(mockWithdrawProductAnalytics).toHaveBeenCalledWith(mockClerkUser.id)
       await waitFor(() => {
         expect(screen.getByText(/failed to save privacy settings/i)).toBeInTheDocument()
       })

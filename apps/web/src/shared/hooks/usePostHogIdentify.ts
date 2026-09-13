@@ -1,27 +1,30 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useUser } from '@clerk/react-router'
 import { useGetPrivacySettings } from '@boostedbudget/api-client/endpoints/privacy/privacy'
 import { useProfile } from '@/features/profile/hooks/useProfile'
 import {
+  applyProductAnalyticsAuthority,
   denyProductAnalytics,
-  grantProductAnalytics,
   listenForAnalyticsWithdrawal,
+  setProductAnalyticsScope,
   setProductAnalyticsPersonProperties,
   setAnalyticsLifecyclePending,
 } from '../lib/posthog'
 
 export interface AnalyticsLifecycle {
+  applyAuthority: typeof applyProductAnalyticsAuthority
   deny: typeof denyProductAnalytics
-  grant: typeof grantProductAnalytics
   listenForWithdrawal: typeof listenForAnalyticsWithdrawal
+  setScope: typeof setProductAnalyticsScope
   setPending: typeof setAnalyticsLifecyclePending
   setPersonProperties: typeof setProductAnalyticsPersonProperties
 }
 
 const defaultLifecycle: AnalyticsLifecycle = {
+  applyAuthority: applyProductAnalyticsAuthority,
   deny: denyProductAnalytics,
-  grant: grantProductAnalytics,
   listenForWithdrawal: listenForAnalyticsWithdrawal,
+  setScope: setProductAnalyticsScope,
   setPending: setAnalyticsLifecyclePending,
   setPersonProperties: setProductAnalyticsPersonProperties,
 }
@@ -37,7 +40,6 @@ export function usePostHogIdentify(
 ): void {
   const { user, isLoaded } = useUser()
   const userId = user?.id
-  const previousUserId = useRef<string | null | undefined>(undefined)
   const appliedAuthority = useRef<string | null>(null)
   const privacy = useGetPrivacySettings({
     query: {
@@ -46,29 +48,27 @@ export function usePostHogIdentify(
       retry: false,
     },
   })
-  const { user: profile, loading: profileLoading } = useProfile({ enabled: Boolean(userId) })
+  const { user: profile, loading: profileLoading } = useProfile({
+    enabled: Boolean(userId),
+    userId,
+  })
 
   useEffect(() => lifecycle.listenForWithdrawal(), [lifecycle])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!isLoaded) {
       lifecycle.setPending()
       return
     }
 
-    const previous = previousUserId.current
-    const identityChanged = previous !== undefined && previous !== (userId ?? null)
-    if (identityChanged) {
-      lifecycle.deny()
-      appliedAuthority.current = null
-    }
-    previousUserId.current = userId ?? null
+    const scope = userId ?? 'anonymous'
+    lifecycle.setScope(scope)
 
     if (!userId) {
       const authority = `anonymous:${anonymousAnalyticsConsent === true ? 'granted' : 'denied'}`
       if (appliedAuthority.current === authority) return
       appliedAuthority.current = authority
-      if (anonymousAnalyticsConsent === true) lifecycle.grant()
+      if (anonymousAnalyticsConsent === true) lifecycle.applyAuthority(scope)
       else lifecycle.deny()
       return
     }
@@ -89,7 +89,7 @@ export function usePostHogIdentify(
       return
     }
 
-    lifecycle.grant(userId, {
+    lifecycle.applyAuthority(scope, userId, {
       subscription_tier: user.publicMetadata?.subscription_tier,
       primary_region: user.publicMetadata?.primary_region,
     })

@@ -1,4 +1,4 @@
-import { useEffect, useRef, Suspense, lazy } from 'react'
+import { useEffect, useRef, useState, Suspense, lazy } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router'
 import { useAuth } from '@clerk/react-router'
 import { Toaster } from 'sonner'
@@ -86,9 +86,16 @@ export function HeaderPlaceholder() {
 }
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useTheme } from './shared/theme'
-import { capturePageView, grantProductAnalytics, withdrawProductAnalytics } from './shared/lib/posthog'
+import {
+  grantProductAnalytics,
+  withdrawProductAnalytics,
+} from './shared/lib/posthog'
 import { devLog } from './shared/lib/devLog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
+import {
+  useConsentAwarePageViews,
+  type PageViewDependencies,
+} from './shared/hooks/useConsentAwarePageViews'
 import { PageSkeleton } from './shared/components/PageSkeleton'
 
 // Redirect that forwards any extra query params from the old route to the new one.
@@ -196,21 +203,27 @@ const DeadLetterPage = lazy(() =>
   import('./features/admin').then(m => ({ default: m.DeadLetterPage }))
 )
 
-function App() {
+interface AppProps {
+  analyticsPageViews?: PageViewDependencies
+}
+
+function App({ analyticsPageViews }: AppProps = {}) {
   const { isSignedIn: isAuthenticated } = useAuth()
   const location = useLocation()
   const { resolvedTheme } = useTheme()
   const [consentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
   const lastScrolledLocationKeyRef = useRef<string | null>(null)
 
-  const anonymousAnalyticsConsent = consentCookie?.version === COOKIE_CONSENT_VERSION
-    ? consentCookie.consents.analytics
-    : null
+  const [anonymousAnalyticsConsent, setAnonymousAnalyticsConsent] = useState<boolean | null>(() => (
+    consentCookie?.version === COOKIE_CONSENT_VERSION
+      ? consentCookie.consents.analytics
+      : null
+  ))
   usePostHogIdentify(anonymousAnalyticsConsent)
-
-  useEffect(() => {
-    capturePageView(`${location.pathname}${location.search}${location.hash}`)
-  }, [location.hash, location.pathname, location.search])
+  useConsentAwarePageViews(
+    `${location.pathname}${location.search}${location.hash}`,
+    analyticsPageViews,
+  )
 
   // Issue #1411 (B1 fix): react-router's <Link> only performs client-side navigation
   // (history.pushState) — it never scrolls to a URL fragment. Without this effect,
@@ -306,11 +319,16 @@ function App() {
     }
   }, [])
 
-  const handleConsentChange = (consents: CookieConsentSettings) => {
+  const handleConsentChange = (
+    consents: CookieConsentSettings,
+    source: 'stored' | 'explicit',
+  ) => {
     devLog('Cookie consents updated:', consents)
     if (isAuthenticated) return
-    if (consents.analytics) grantProductAnalytics()
-    else withdrawProductAnalytics()
+    setAnonymousAnalyticsConsent(consents.analytics)
+    if (source === 'stored') return
+    if (consents.analytics) grantProductAnalytics('anonymous')
+    else withdrawProductAnalytics('anonymous')
   }
 
   return (

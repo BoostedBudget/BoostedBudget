@@ -3,18 +3,20 @@ import { renderHook } from '@testing-library/react'
 import { createMockClerkUser, mockClerkUser, mockUseUser } from '@/test/mocks/clerk'
 import { mockUseGetPrivacySettings } from '@/test/mocks/privacy-api'
 import {
+  mockApplyProductAnalyticsAuthority,
   mockDenyProductAnalytics,
-  mockGrantProductAnalytics,
   mockListenForAnalyticsWithdrawal,
   mockSetAnalyticsLifecyclePending,
+  mockSetProductAnalyticsScope,
 } from '@/test/mocks/posthog'
 import { usePostHogIdentify } from './usePostHogIdentify'
 
 const lifecycle = {
+  applyAuthority: mockApplyProductAnalyticsAuthority,
   deny: mockDenyProductAnalytics,
-  grant: mockGrantProductAnalytics,
   listenForWithdrawal: mockListenForAnalyticsWithdrawal,
   setPending: mockSetAnalyticsLifecyclePending,
+  setScope: mockSetProductAnalyticsScope,
   setPersonProperties: () => {},
 }
 
@@ -49,9 +51,10 @@ describe('usePostHogIdentify consent authority', () => {
   beforeEach(() => {
     mockUseUser.mockClear()
     mockUseGetPrivacySettings.mockClear()
-    mockGrantProductAnalytics.mockClear()
+    mockApplyProductAnalyticsAuthority.mockClear()
     mockDenyProductAnalytics.mockClear()
     mockSetAnalyticsLifecyclePending.mockClear()
+    mockSetProductAnalyticsScope.mockClear()
     mockListenForAnalyticsWithdrawal.mockClear()
     mockUseUser.mockReturnValue(createMockClerkUser({ isLoaded: true, user: null }))
     setPrivacy({})
@@ -75,11 +78,11 @@ describe('usePostHogIdentify consent authority', () => {
         renderHook(() => usePostHogIdentify(cookie, lifecycle))
 
         if (server === 'true') {
-          expect(mockGrantProductAnalytics).toHaveBeenCalledTimes(1)
-          expect(mockGrantProductAnalytics.mock.calls[0]?.[0]).toBe('user-a')
+          expect(mockApplyProductAnalyticsAuthority).toHaveBeenCalledTimes(1)
+          expect(mockApplyProductAnalyticsAuthority.mock.calls[0]?.slice(0, 2)).toEqual(['user-a', 'user-a'])
           expect(mockDenyProductAnalytics).not.toHaveBeenCalled()
         } else {
-          expect(mockGrantProductAnalytics).not.toHaveBeenCalled()
+          expect(mockApplyProductAnalyticsAuthority).not.toHaveBeenCalled()
           expect(mockDenyProductAnalytics).toHaveBeenCalledTimes(1)
         }
       })
@@ -93,7 +96,7 @@ describe('usePostHogIdentify consent authority', () => {
     renderHook(() => usePostHogIdentify(true, lifecycle))
 
     expect(mockSetAnalyticsLifecyclePending).toHaveBeenCalledTimes(1)
-    expect(mockGrantProductAnalytics).not.toHaveBeenCalled()
+    expect(mockApplyProductAnalyticsAuthority).not.toHaveBeenCalled()
     expect(mockDenyProductAnalytics).not.toHaveBeenCalled()
   })
 
@@ -103,7 +106,7 @@ describe('usePostHogIdentify consent authority', () => {
     [null, 0, 1],
   ])('uses signed-out anonymous cookie %s as authority', (cookie, grants, denials) => {
     renderHook(() => usePostHogIdentify(cookie, lifecycle))
-    expect(mockGrantProductAnalytics).toHaveBeenCalledTimes(grants)
+    expect(mockApplyProductAnalyticsAuthority).toHaveBeenCalledTimes(grants)
     expect(mockDenyProductAnalytics).toHaveBeenCalledTimes(denials)
   })
 
@@ -114,13 +117,14 @@ describe('usePostHogIdentify consent authority', () => {
 
     rerender()
 
-    expect(mockGrantProductAnalytics).toHaveBeenCalledTimes(1)
+    expect(mockApplyProductAnalyticsAuthority).toHaveBeenCalledTimes(1)
   })
 
   it('tears down A before granting B on a direct user switch', () => {
     const calls: string[] = []
     mockDenyProductAnalytics.mockImplementation(() => { calls.push('deny') })
-    mockGrantProductAnalytics.mockImplementation(id => { calls.push(`grant:${id}`) })
+    mockSetProductAnalyticsScope.mockImplementation(scope => { calls.push(`scope:${scope}`) })
+    mockApplyProductAnalyticsAuthority.mockImplementation((_scope, id) => { calls.push(`grant:${id}`) })
     setSignedIn('user-a')
     setPrivacy({ data: { gdpr_analytics_consent: true } })
     const { rerender } = renderHook(() => usePostHogIdentify(false, lifecycle))
@@ -128,13 +132,14 @@ describe('usePostHogIdentify consent authority', () => {
     setSignedIn('user-b')
     rerender()
 
-    expect(calls).toEqual(['grant:user-a', 'deny', 'grant:user-b'])
+    expect(calls).toEqual(['scope:user-a', 'grant:user-a', 'scope:user-b', 'grant:user-b'])
   })
 
   it('tears down the user before reconsidering an anonymous grant on logout', () => {
     const calls: string[] = []
     mockDenyProductAnalytics.mockImplementation(() => { calls.push('deny') })
-    mockGrantProductAnalytics.mockImplementation(id => { calls.push(`grant:${id ?? 'anonymous'}`) })
+    mockSetProductAnalyticsScope.mockImplementation(scope => { calls.push(`scope:${scope}`) })
+    mockApplyProductAnalyticsAuthority.mockImplementation((_scope, id) => { calls.push(`grant:${id ?? 'anonymous'}`) })
     setSignedIn('user-a')
     setPrivacy({ data: { gdpr_analytics_consent: true } })
     const { rerender } = renderHook(() => usePostHogIdentify(true, lifecycle))
@@ -142,7 +147,7 @@ describe('usePostHogIdentify consent authority', () => {
     mockUseUser.mockReturnValue(createMockClerkUser({ isLoaded: true, user: null }))
     rerender()
 
-    expect(calls).toEqual(['grant:user-a', 'deny', 'grant:anonymous'])
+    expect(calls).toEqual(['scope:user-a', 'grant:user-a', 'scope:anonymous', 'grant:anonymous'])
   })
 
   it('installs and cleans up the cross-tab withdrawal listener', () => {

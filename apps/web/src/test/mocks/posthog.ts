@@ -12,10 +12,20 @@ export const mockPosthogInit = mock(() => {})
 // Issue #1413: server-authoritative tier/comp person-property sync (usePostHogIdentify)
 export const mockPosthogSetPersonProperties = mock(() => {})
 export const mockPosthogStopSessionRecording = mock(() => {})
-export const mockGrantProductAnalytics = mock(() => {})
+export const mockGrantProductAnalytics = mock((
+  _scope: string,
+  _distinctId?: string,
+  _properties?: Record<string, unknown>,
+) => {})
+export const mockApplyProductAnalyticsAuthority = mock((
+  _scope: string,
+  _distinctId?: string,
+  _properties?: Record<string, unknown>,
+) => {})
 export const mockDenyProductAnalytics = mock(() => {})
-export const mockWithdrawProductAnalytics = mock(() => {})
+export const mockWithdrawProductAnalytics = mock((_scope: string) => {})
 export const mockSetAnalyticsLifecyclePending = mock(() => {})
+export const mockSetProductAnalyticsScope = mock((_scope: string) => {})
 export const mockCapturePageView = mock(() => {})
 export const mockCaptureProductEvent = mock((event: string, properties?: Record<string, unknown>) => {
   mockPosthogCapture(event, properties)
