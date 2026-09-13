@@ -5898,6 +5898,26 @@ components:
         - total_positions_checked
         - available
       type: object
+    PostHogSupportIdentity:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/PostHogSupportIdentity.json
+          format: uri
+          readOnly: true
+          type: string
+        distinct_id:
+          description: Canonical authenticated Clerk user ID
+          type: string
+        identity_hash:
+          description: Short-lived transport of the server-computed PostHog identity signature
+          type: string
+      required:
+        - distinct_id
+        - identity_hash
+      type: object
     PreviewRuleBody:
       additionalProperties: false
       properties:
@@ -16810,6 +16830,32 @@ paths:
       summary: Cancel account deletion
       tags:
         - User
+  /api/v1/user/posthog-support-identity:
+    get:
+      description: Returns the authenticated Clerk subject and its server-generated HMAC for PostHog Support.
+      operationId: getPostHogSupportIdentity
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostHogSupportIdentity"
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get a verified PostHog Support identity
+      tags:
+        - Support
   /api/v1/user/privacy:
     get:
       description: Retrieves the authenticated user's privacy settings, creating defaults if none exist.

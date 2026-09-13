@@ -341,6 +341,7 @@ export * from './portfolioHistoryPoint';
 export * from './portfolioSummary';
 export * from './portfolioSummaryDayChangeUnavailableReason';
 export * from './positionReconciliationSummary';
+export * from './postHogSupportIdentity';
 export * from './previewRuleBody';
 export * from './previewUpdateInputBody';
 export * from './previewUpdateInputBodyBillingInterval';

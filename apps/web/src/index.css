@@ -1,6 +1,16 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* PostHog's project setting auto-renders Support. Suppress its container until
+   our authenticated, HMAC-verified app control explicitly hands off to it. */
+#ph-conversations-widget-container {
+  display: none !important;
+}
+
+.posthog-support-widget-active #ph-conversations-widget-container {
+  display: block !important;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 :root {
