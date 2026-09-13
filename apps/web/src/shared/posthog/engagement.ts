@@ -104,7 +104,7 @@ function isSupportedSurveyQuestion(question: unknown): boolean {
   return Array.isArray(question.choices)
     && question.choices.length > 0
     && question.choices.every(isNonEmptyString)
-    && (!('hasOpenChoice' in question) || question.hasOpenChoice === false)
+    && (question.hasOpenChoice === undefined || question.hasOpenChoice === false)
 }
 
 export function isSupportedSurvey(survey: unknown): survey is Survey {
