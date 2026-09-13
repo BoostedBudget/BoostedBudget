@@ -127,7 +127,13 @@ async function initialize(
   worker: WorkerFetch,
   bearerToken: string,
   extraHeaders?: Record<string, string>,
-): Promise<{ sessionId: string | undefined; serverName: string | undefined; protocolVersion: string | undefined }> {
+): Promise<{
+  sessionId: string | undefined
+  serverName: string | undefined
+  serverDescription: string | undefined
+  protocolVersion: string | undefined
+  instructions: string | undefined
+}> {
   const result = await sendMcp(
     worker,
     bearerToken,
@@ -141,17 +147,21 @@ async function initialize(
     extraHeaders,
   )
 
-  const serverInfo = (result.body?.result as Record<string, unknown> | undefined)?.serverInfo as
+  const initializeResult = result.body?.result as Record<string, unknown> | undefined
+  const serverInfo = initializeResult?.serverInfo as
     | Record<string, unknown>
     | undefined
   const serverName = serverInfo?.name as string | undefined
-  const protocolVersion = (result.body?.result as Record<string, unknown> | undefined)
-    ?.protocolVersion as string | undefined
+  const serverDescription = serverInfo?.description as string | undefined
+  const protocolVersion = initializeResult?.protocolVersion as string | undefined
+  const instructions = initializeResult?.instructions as string | undefined
 
   return {
     sessionId: result.sessionId,
     serverName,
+    serverDescription,
     protocolVersion,
+    instructions,
   }
 }
 
@@ -240,10 +250,16 @@ describe('MCP transport integration', () => {
     )
 
     // Step 1: initialize
-    const { sessionId, serverName, protocolVersion } = await initialize(worker, bearerToken)
+    const { sessionId, serverName, serverDescription, protocolVersion, instructions } =
+      await initialize(worker, bearerToken)
 
     expect(serverName).toBe('boostedbudget')
     expect(protocolVersion).toBeTruthy()
+    expect(instructions).toBe(
+      'Analyze accounts, transactions, spending, net worth, and investments; manage envelope budgets, savings goals, categories, and tags. Boost definitions are read-only here; review their history, budget alerts, and transfer, rollover, or savings-goal suggestions. MCP writes require confirmation; BoostedBudget never moves money. Use search first, then readExecute or writeExecute.',
+    )
+    expect(new TextEncoder().encode(instructions).byteLength).toBeLessThanOrEqual(400)
+    expect(serverDescription).toBeUndefined()
     // Session ID may or may not be present depending on agents SDK version
     // (some versions use path-based routing); we don't require it
 
