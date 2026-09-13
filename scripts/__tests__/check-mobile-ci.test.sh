@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Falsification suite for the mobile CI and Dependabot policy guard (#1654).
+# Bash 3.2 compatible: this runs locally on macOS and in the Linux e2e-test job.
 set -Eeuo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -7,93 +8,188 @@ GUARD="$REPO_ROOT/scripts/check-mobile-ci.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+TOTAL=48
+case_no=0
 pass=0
 fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "  FAIL: $1"; fail=$((fail + 1)); }
+announce() {
+  case_no=$((case_no + 1))
+  echo "$case_no/$TOTAL: $1"
+}
 
 copy_fixture() {
   local dest="$1"
-  mkdir -p "$dest/.github/workflows" "$dest/apps/mobile" "$dest/scripts/__tests__"
+  mkdir -p "$dest/.github/workflows" "$dest/apps/mobile"
   cp "$REPO_ROOT/.github/workflows/test.yml" "$dest/.github/workflows/test.yml"
   cp "$REPO_ROOT/.github/dependabot.yml" "$dest/.github/dependabot.yml"
   cp "$REPO_ROOT/apps/mobile/package.json" "$dest/apps/mobile/package.json"
   touch "$dest/bun.lock"
 }
 
-mutate() {
+# Mutate exactly one workflow invariant through the parsed structure. Re-serializing the fixture
+# is intentional: the production guard must depend on YAML semantics, not comments or formatting.
+mutate_workflow() {
   python3 - "$1" "$2" "$3" <<'PY'
-import pathlib, sys
-path, old, new = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-text = path.read_text()
-changed = text.replace(old, new, 1)
-assert changed != text, f"mutation did not apply: {old!r}"
-path.write_text(changed)
+import pathlib, sys, yaml
+path, action, value = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+doc = yaml.safe_load(path.read_text())
+jobs = doc['jobs']
+if action == 'output-id':
+    jobs['detect-changes']['outputs']['mobile'] = '${{ steps.mobile_filter.outputs.mobile }}'
+elif action in ('remove-path', 'add-path'):
+    step = next(s for s in jobs['detect-changes']['steps'] if s.get('id') == 'filter')
+    filters = yaml.safe_load(step['with']['filters'])
+    if action == 'remove-path':
+        assert value in filters['mobile'], value
+        filters['mobile'].remove(value)
+    else:
+        assert value not in filters['mobile'], value
+        filters['mobile'].append(value)
+    step['with']['filters'] = yaml.safe_dump(filters, sort_keys=False)
+elif action == 'mobile-field':
+    field, replacement = value.split('=', 1)
+    jobs['mobile-test'][field] = replacement
+elif action == 'node-version':
+    step = next(s for s in jobs['mobile-test']['steps'] if str(s.get('uses', '')).startswith('actions/setup-node@'))
+    step['with']['node-version'] = value
+elif action == 'bun-version':
+    step = next(s for s in jobs['mobile-test']['steps'] if str(s.get('uses', '')).startswith('oven-sh/setup-bun@'))
+    step['with']['bun-version'] = value
+elif action == 'replace-command':
+    old, new = value.split('|', 1)
+    matches = [s for s in jobs['mobile-test']['steps'] if old in str(s.get('run', ''))]
+    assert len(matches) == 1, (old, len(matches))
+    matches[0]['run'] = str(matches[0]['run']).replace(old, new)
+elif action == 'host-needs':
+    jobs['e2e-test']['needs'] = value
+elif action == 'host-if':
+    jobs['e2e-test']['if'] = False
+else:
+    raise AssertionError(action)
+path.write_text(yaml.safe_dump(doc, sort_keys=False))
+PY
+}
+
+mutate_dependabot() {
+  python3 - "$1" "$2" <<'PY'
+import pathlib, sys, yaml
+path, action = pathlib.Path(sys.argv[1]), sys.argv[2]
+doc = yaml.safe_load(path.read_text())
+bun = next(u for u in doc['updates'] if u.get('package-ecosystem') == 'bun')
+groups = bun['groups']
+if action == 'second-updater':
+    doc['updates'].insert(0, {'package-ecosystem': 'bun', 'directory': '/apps/mobile', 'schedule': {'interval': 'weekly'}})
+elif action == 'root-updater-wrong-directory':
+    bun['directory'] = '/apps/mobile'
+elif action == 'group-last':
+    group = groups.pop('expo-react-native-compatibility')
+    groups['expo-react-native-compatibility'] = group
+elif action == 'group-major-only':
+    groups['expo-react-native-compatibility']['update-types'] = ['major']
+elif action == 'remove-required-pattern':
+    groups['expo-react-native-compatibility']['patterns'].remove('nativewind')
+elif action == 'generic-overlap':
+    groups['frontend-framework']['exclude-patterns'].remove('react-dom')
+elif action == 'remove-expo-major-ignore':
+    bun['ignore'] = [i for i in bun['ignore'] if i.get('dependency-name') != 'expo*']
+elif action == 'remove-react-native-major-ignore':
+    bun['ignore'] = [i for i in bun['ignore'] if i.get('dependency-name') != 'react-native*']
+elif action == 'remove-nativewind-major-ignore':
+    bun['ignore'] = [i for i in bun['ignore'] if i.get('dependency-name') != 'nativewind']
+else:
+    raise AssertionError(action)
+path.write_text(yaml.safe_dump(doc, sort_keys=False))
 PY
 }
 
 guard_passes() { python3 "$GUARD" "$1" >/dev/null 2>&1; }
 
-echo "1/11: the real repository configuration passes"
+reject_workflow() {
+  local label="$1" action="$2" value="$3" dir="$TMP/case-$((case_no + 1))"
+  announce "$label"
+  copy_fixture "$dir"
+  mutate_workflow "$dir/.github/workflows/test.yml" "$action" "$value"
+  if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
+}
+
+reject_dependabot() {
+  local label="$1" action="$2" dir="$TMP/case-$((case_no + 1))"
+  announce "$label"
+  copy_fixture "$dir"
+  mutate_dependabot "$dir/.github/dependabot.yml" "$action"
+  if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
+}
+
+announce "the real repository configuration passes"
 if guard_passes "$REPO_ROOT"; then ok "real configuration accepted"; else bad "real configuration rejected"; fi
 
-echo "2/11: a wrong paths-filter output step id is rejected"
-copy_fixture "$TMP/output"
-mutate "$TMP/output/.github/workflows/test.yml" 'steps.filter.outputs.mobile' 'steps.mobile_filter.outputs.mobile'
-if guard_passes "$TMP/output"; then bad "wrong output step id accepted"; else ok "wrong output step id rejected"; fi
+reject_workflow "wrong paths-filter output step id" "output-id" "unused"
 
-echo "3/11: a missing OpenAPI positive trigger is rejected"
-copy_fixture "$TMP/openapi"
-mutate "$TMP/openapi/.github/workflows/test.yml" $'            mobile:\n              - \'apps/mobile/**\'\n              - \'packages/api-client/**\'\n              - \'packages/design-tokens/**\'\n              - \'api/openapi.yaml\'' $'            mobile:\n              - \'apps/mobile/**\'\n              - \'packages/api-client/**\'\n              - \'packages/design-tokens/**\'\n              - \'api/not-the-contract.yaml\''
-if guard_passes "$TMP/openapi"; then bad "missing OpenAPI trigger accepted"; else ok "missing OpenAPI trigger rejected"; fi
+# Every positive input is removed independently. This catches a guard whose required-path set
+# accidentally protects one dependency while merely appearing to cover the whole matrix.
+reject_workflow "missing apps/mobile/** trigger" "remove-path" "apps/mobile/**"
+reject_workflow "missing API-client trigger" "remove-path" "packages/api-client/**"
+reject_workflow "missing design-token trigger" "remove-path" "packages/design-tokens/**"
+reject_workflow "missing OpenAPI trigger" "remove-path" "api/openapi.yaml"
+reject_workflow "missing root package trigger" "remove-path" "package.json"
+reject_workflow "missing root lockfile trigger" "remove-path" "bun.lock"
+reject_workflow "missing bunfig trigger" "remove-path" "bunfig.toml"
+reject_workflow "missing Turbo graph trigger" "remove-path" "turbo.json"
+reject_workflow "missing test-workflow self-trigger" "remove-path" ".github/workflows/test.yml"
+reject_workflow "missing Dependabot-policy trigger" "remove-path" ".github/dependabot.yml"
+reject_workflow "missing production-guard trigger" "remove-path" "scripts/check-mobile-ci.py"
+reject_workflow "missing guard-suite trigger" "remove-path" "scripts/__tests__/check-mobile-ci.test.sh"
 
-echo "4/11: a backend-wide trigger is rejected"
-copy_fixture "$TMP/backend"
-mutate "$TMP/backend/.github/workflows/test.yml" "              - 'apps/mobile/**'" "              - 'apps/mobile/**'\n              - 'backend/**'"
-if guard_passes "$TMP/backend"; then bad "backend-only changes over-trigger mobile"; else ok "backend over-trigger rejected"; fi
+# Each negative row gets its own narrow over-trigger. None relies on packages/** or backend/** to
+# make several assertions pass for the same reason.
+reject_workflow "backend service changes over-trigger mobile" "add-path" "backend/internal/**"
+reject_workflow "backend config-source changes over-trigger mobile" "add-path" "backend/config/**"
+reject_workflow "migrations over-trigger mobile" "add-path" "backend/migrations/**"
+reject_workflow "desktop web changes over-trigger mobile" "add-path" "apps/web/**"
+reject_workflow "docs changes over-trigger mobile" "add-path" "docs/**"
+reject_workflow "shared-types changes over-trigger mobile" "add-path" "packages/shared-types/**"
+reject_workflow "product config changes over-trigger mobile" "add-path" "config/**"
+reject_workflow "root README changes over-trigger mobile" "add-path" "README.md"
 
-echo "5/11: an unrelated packages glob is rejected"
-copy_fixture "$TMP/packages"
-mutate "$TMP/packages/.github/workflows/test.yml" "              - 'packages/api-client/**'" "              - 'packages/**'"
-if guard_passes "$TMP/packages"; then bad "packages/** over-trigger accepted"; else ok "packages/** over-trigger rejected"; fi
+reject_workflow "mobile job has wrong needs" "mobile-field" "needs=frontend-test"
+reject_workflow "mobile job has wrong if expression" "mobile-field" "if=needs.detect-changes.outputs.frontend == 'true'"
+reject_workflow "mobile job leaves Ubicloud" "mobile-field" "runs-on=self-hosted"
+reject_workflow "mobile job lowers Node below 22.13" "node-version" "22.12.x"
+reject_workflow "mobile job drifts from Bun 1.3.14" "bun-version" "latest"
+reject_workflow "mobile install is not frozen" "replace-command" "bun install --frozen-lockfile|bun install"
+reject_workflow "design-token generated check is missing" "replace-command" "bun run --filter @boostedbudget/design-tokens check|echo skipped-token-check"
+reject_workflow "mobile lint is missing" "replace-command" "bun run --cwd apps/mobile lint|echo skipped-lint"
+reject_workflow "mobile typecheck is missing" "replace-command" "bun run --cwd apps/mobile typecheck|echo skipped-typecheck"
+reject_workflow "Jest line floor drops below 82" "replace-command" '"global":{"lines":82}|"global":{"lines":81}'
+reject_workflow "Expo Doctor is missing" "replace-command" "bunx expo-doctor|echo skipped-expo-doctor"
+reject_workflow "web export is missing" "replace-command" "bun run --cwd apps/mobile export:web|echo skipped-web-export"
+reject_workflow "iOS export is missing" "replace-command" "bun run --cwd apps/mobile export:ios|echo skipped-ios-export"
+reject_workflow "Android export is missing" "replace-command" "bun run --cwd apps/mobile export:android|echo skipped-android-export"
 
-echo "6/11: wrong mobile needs/if wiring is rejected"
-copy_fixture "$TMP/needs"
-mutate "$TMP/needs/.github/workflows/test.yml" $'  mobile-test:\n    name: Mobile Build Scaffold\n    needs: detect-changes' $'  mobile-test:\n    name: Mobile Build Scaffold\n    needs: frontend-test'
-if guard_passes "$TMP/needs"; then bad "wrong needs/if accepted"; else ok "wrong needs/if rejected"; fi
+reject_workflow "guard host gains paths-filter needs" "host-needs" "detect-changes"
+reject_workflow "guard host is disabled" "host-if" "unused"
 
-echo "7/11: mobile runner drift is rejected independently"
-copy_fixture "$TMP/runner"
-mutate "$TMP/runner/.github/workflows/test.yml" $'  mobile-test:\n    name: Mobile Build Scaffold\n    needs: detect-changes\n    if: needs.detect-changes.outputs.mobile == \'true\'\n    runs-on: ubicloud-standard-2' $'  mobile-test:\n    name: Mobile Build Scaffold\n    needs: detect-changes\n    if: needs.detect-changes.outputs.mobile == \'true\'\n    runs-on: [self-hosted, macOS, mac-mini]'
-if guard_passes "$TMP/runner"; then bad "mobile runner drift accepted"; else ok "mobile runner drift rejected"; fi
+reject_dependabot "a second Bun updater competes with the root updater" "second-updater"
+reject_dependabot "the sole Bun updater moves away from the repository root" "root-updater-wrong-directory"
 
-echo "8/11: a missing platform export is rejected independently"
-copy_fixture "$TMP/commands"
-mutate "$TMP/commands/.github/workflows/test.yml" 'bun run --cwd apps/mobile export:android' 'echo skipped-android-export'
-if guard_passes "$TMP/commands"; then bad "missing Android export accepted"; else ok "missing Android export rejected"; fi
+announce "a workspace-local Bun lockfile violates single-lockfile policy"
+lock_dir="$TMP/case-$case_no"
+copy_fixture "$lock_dir"
+touch "$lock_dir/apps/mobile/bun.lock"
+if guard_passes "$lock_dir"; then bad "mobile lockfile accepted"; else ok "rejected"; fi
 
-echo "9/11: disabling the otherwise-ungated guard host is rejected"
-copy_fixture "$TMP/gated"
-mutate "$TMP/gated/.github/workflows/test.yml" '    if: always() && !cancelled()' '    if: false'
-if guard_passes "$TMP/gated"; then bad "disabled guard host accepted"; else ok "disabled guard host rejected"; fi
-
-echo "10/11: breaking the Expo compatibility group is rejected"
-copy_fixture "$TMP/group"
-mutate "$TMP/group/.github/dependabot.yml" $'          - "react-dom"\n          - "react-native*"' $'          - "react-dom"\n          - "react-native-web"'
-if guard_passes "$TMP/group"; then bad "incomplete compatibility group accepted"; else ok "incomplete compatibility group rejected"; fi
-
-echo "11/11: a second Bun updater or mobile lockfile is rejected"
-copy_fixture "$TMP/lock"
-cp "$TMP/lock/bun.lock" "$TMP/lock/apps/mobile/bun.lock"
-python3 - "$TMP/lock/.github/dependabot.yml" <<'PY'
-import pathlib
-p = pathlib.Path(__import__('sys').argv[1])
-t = p.read_text()
-needle = 'updates:\n'
-extra = '''updates:\n  - package-ecosystem: "bun"\n    directory: "/apps/mobile"\n    schedule:\n      interval: "weekly"\n'''
-p.write_text(t.replace(needle, extra, 1))
-PY
-if guard_passes "$TMP/lock"; then bad "competing updater/mobile lockfile accepted"; else ok "competing updater/mobile lockfile rejected"; fi
+reject_dependabot "Expo compatibility group is not first" "group-last"
+reject_dependabot "Expo compatibility group loses minor/patch update types" "group-major-only"
+reject_dependabot "Expo compatibility group drops a required runtime pattern" "remove-required-pattern"
+reject_dependabot "generic frontend group competes for React DOM" "generic-overlap"
+reject_dependabot "Expo major updates are no longer held" "remove-expo-major-ignore"
+reject_dependabot "React Native major updates are no longer held" "remove-react-native-major-ignore"
+reject_dependabot "NativeWind major updates are no longer held" "remove-nativewind-major-ignore"
 
 echo "check-mobile-ci.test.sh: $pass passed, $fail failed"
+if [ "$case_no" -ne "$TOTAL" ]; then
+  bad "declared $TOTAL cases but executed $case_no"
+fi
 [ "$fail" -eq 0 ]
