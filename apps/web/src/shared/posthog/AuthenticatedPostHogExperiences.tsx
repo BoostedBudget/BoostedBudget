@@ -62,9 +62,10 @@ export function AuthenticatedPostHogExperiences({
   const hasAuthenticatedUser = isLoaded && userId !== null
   const hasRouteAuthority = hasAuthenticatedUser && routeEligible
   const configured = isPostHogConfigured()
-  const surveyAuthorized = hasRouteAuthority
+  const surveyConsentAuthorized = hasAuthenticatedUser
     && analytics.state === 'granted'
     && analytics.scope === userId
+  const surveyAuthorized = routeEligible && surveyConsentAuthorized
   const [supportRequestedFor, setSupportRequestedFor] = useState<string | null>(null)
   const supportRequested = hasRouteAuthority && supportRequestedFor === userId
   const identity = dependencies.useVerifiedIdentity(
@@ -119,7 +120,9 @@ export function AuthenticatedPostHogExperiences({
   }, [controller, supportRequested, verifiedIdentity])
 
   useEffect(() => {
-    if (!routeEligible) {
+    if (!surveyConsentAuthorized) {
+      controller.deactivateSurveys()
+    } else if (!routeEligible) {
       controller.suspendSurveys()
     } else if (verifiedIdentity && surveyAuthorized) {
       controller.activateSurveys(verifiedIdentity)
@@ -132,6 +135,7 @@ export function AuthenticatedPostHogExperiences({
     analytics.state,
     controller,
     routeEligible,
+    surveyConsentAuthorized,
     surveyAuthorized,
     userId,
     verifiedIdentity,

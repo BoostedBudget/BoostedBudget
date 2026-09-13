@@ -93,7 +93,10 @@ import {
 import { devLog } from './shared/lib/devLog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
 import { AuthenticatedPostHogExperiences } from './shared/posthog/AuthenticatedPostHogExperiences'
-import { isPostHogEngagementRoute } from './shared/posthog/engagement'
+import {
+  isPostHogEngagementRoute,
+  POSTHOG_ENGAGEMENT_ROUTES,
+} from './shared/posthog/engagement'
 import {
   useConsentAwarePageViews,
   type PageViewDependencies,
@@ -366,7 +369,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               element={<Navigate to="/dashboard" replace />}
             />
             <Route
-              path="/dashboard"
+              path={POSTHOG_ENGAGEMENT_ROUTES.dashboard}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -391,7 +394,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               }
             />
             <Route
-              path="/accounts"
+              path={POSTHOG_ENGAGEMENT_ROUTES.accounts}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -403,7 +406,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               }
             />
             <Route
-              path="/accounts/reconnect"
+              path={POSTHOG_ENGAGEMENT_ROUTES.reconnectAccount}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -415,7 +418,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               }
             />
             <Route
-              path="/accounts/:accountId"
+              path={POSTHOG_ENGAGEMENT_ROUTES.account}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -427,7 +430,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               }
             />
             <Route
-              path="/transactions"
+              path={POSTHOG_ENGAGEMENT_ROUTES.transactions}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -439,7 +442,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               }
             />
             <Route
-              path="/review"
+              path={POSTHOG_ENGAGEMENT_ROUTES.review}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -454,7 +457,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
             <Route path="/reports" element={<ForwardSearch to="/insights?tab=spending" />} />
             <Route path="/net-worth" element={<ForwardSearch to="/insights?tab=net-worth" />} />
             <Route
-              path="/insights"
+              path={POSTHOG_ENGAGEMENT_ROUTES.insights}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -469,7 +472,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
             <Route path="/savings" element={<ForwardSearch to="/planning?tab=savings" />} />
             <Route path="/budgets" element={<ForwardSearch to="/planning?tab=budgets" />} />
             <Route
-              path="/planning"
+              path={POSTHOG_ENGAGEMENT_ROUTES.planning}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -481,7 +484,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               }
             />
             <Route
-              path="/budgets/:budgetId"
+              path={POSTHOG_ENGAGEMENT_ROUTES.budget}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -493,7 +496,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               }
             />
             <Route
-              path="/auto-categorization"
+              path={POSTHOG_ENGAGEMENT_ROUTES.autoCategorization}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -505,7 +508,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               }
             />
             <Route
-              path="/boosts"
+              path={POSTHOG_ENGAGEMENT_ROUTES.boosts}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -517,7 +520,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               }
             />
             <Route
-              path="/boosts/new"
+              path={POSTHOG_ENGAGEMENT_ROUTES.newBoost}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -529,7 +532,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               }
             />
             <Route
-              path="/boosts/:id"
+              path={POSTHOG_ENGAGEMENT_ROUTES.boost}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -541,7 +544,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               }
             />
             <Route
-              path="/boosts/:id/edit"
+              path={POSTHOG_ENGAGEMENT_ROUTES.editBoost}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -553,7 +556,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               }
             />
             <Route
-              path="/profile"
+              path={POSTHOG_ENGAGEMENT_ROUTES.profile}
               element={
                 <ProtectedRoute>
                   <Suspense fallback={<PageSkeleton />}>
@@ -569,7 +572,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
             <Route path="/pricing" element={<Suspense fallback={<PageSkeleton />}><PricingPage /></Suspense>} />
             <Route path="/mcp" element={<Suspense fallback={<PageSkeleton />}><McpPage /></Suspense>} />
             <Route
-              path="/billing/manage"
+              path={POSTHOG_ENGAGEMENT_ROUTES.billingManage}
               element={
                 <ProtectedRoute>
                   <ErrorBoundary
@@ -588,7 +591,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               }
             />
             <Route
-              path="/billing/success"
+              path={POSTHOG_ENGAGEMENT_ROUTES.billingSuccess}
               element={
                 <ProtectedRoute>
                   <Suspense fallback={<PageSkeleton />}>

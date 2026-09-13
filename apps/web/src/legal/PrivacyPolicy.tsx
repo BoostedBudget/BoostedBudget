@@ -173,7 +173,12 @@ export function PrivacyPolicy() {
             <li><strong>Paddle:</strong> Payment processing and subscription management</li>
             <li><strong>PostHog:</strong> Product analytics and closed-answer surveys (only with your
               consent), plus authenticated Support chat when you choose to contact us. Support uses a
-              server-verified account identifier and is unavailable to signed-out visitors.</li>
+              server-verified account identifier and is unavailable to signed-out visitors. PostHog
+              receives your Support message content and a sanitized application route without URL
+              query parameters or account and budget identifiers. The browser creates a temporary
+              Support session identifier only after you select Support. It is not included in
+              authenticated requests and is removed on logout, account switch, or when you leave the
+              authenticated application. Session replay links are not included.</li>
             <li><strong>Cloud Infrastructure:</strong> AWS (data hosting), Fly.io (application hosting)</li>
             <li><strong>Sentry:</strong> Error tracking and performance monitoring. Sentry may receive
               error context, device and browser information, IP address, and application state at the
