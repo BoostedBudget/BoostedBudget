@@ -20,7 +20,7 @@ describe('BudgetPlanActivityPanel', () => {
     const wrapper = ({ children }: PropsWithChildren) => <QueryClientProvider client={client}><MemoryRouter>{children}</MemoryRouter></QueryClientProvider>
     return render(<BudgetPlanActivityPanel data={data} onRefresh={() => {}} />, { wrapper })
   }
-  it.each(['expense', 'unbudgeted'] as const)('closes open %s activity when refreshed actuals become unavailable', (kind) => {
+  it.each(['expense', 'unbudgeted'] as const)('keeps open %s activity closed after refreshed actuals recover', (kind) => {
     const line = { ...report.lines[0]!, kind }
     const { rerender } = renderPanel({ ...report, lines: [line] })
     fireEvent.click(screen.getByRole('button', { name: 'View allocation 1 activity' }))
@@ -34,6 +34,10 @@ describe('BudgetPlanActivityPanel', () => {
 
     expect(screen.queryAllByRole('dialog', { name: 'Allocation activity' })).toHaveLength(0)
     expect(screen.getByText('Activity unavailable')).toBeInTheDocument()
+
+    rerender(<BudgetPlanActivityPanel data={{ ...report, as_of: '2026-09-12T12:02:00Z', lines: [line] }} onRefresh={() => {}} />)
+
+    expect(screen.queryAllByRole('dialog', { name: 'Allocation activity' })).toHaveLength(0)
   })
   it('provides a privacy toggle and opens the matching allocation activity dialog', () => {
     renderPanel()
