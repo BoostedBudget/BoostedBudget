@@ -8,7 +8,7 @@ GUARD="$REPO_ROOT/scripts/check-mobile-ci.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-TOTAL=60
+TOTAL=63
 case_no=0
 pass=0
 fail=0
@@ -85,6 +85,10 @@ elif action == 'float-action':
     matches = [s for s in jobs['mobile-test']['steps'] if str(s.get('uses', '')).startswith(value + '@')]
     assert len(matches) == 1, (value, len(matches))
     matches[0]['uses'] = value + '@v4'
+elif action == 'disable-action':
+    matches = [s for s in jobs['mobile-test']['steps'] if str(s.get('uses', '')).startswith(value + '@')]
+    assert len(matches) == 1, (value, len(matches))
+    matches[0]['if'] = False
 elif action == 'host-needs':
     jobs['e2e-test']['needs'] = value
 elif action == 'host-if':
@@ -227,6 +231,9 @@ reject_workflow "Expo Doctor runs from the wrong working directory" "doctor-work
 reject_workflow "checkout action floats on a tag" "float-action" "actions/checkout"
 reject_workflow "setup-node action floats on a tag" "float-action" "actions/setup-node"
 reject_workflow "setup-bun action floats on a tag" "float-action" "oven-sh/setup-bun"
+reject_workflow "checkout action is disabled" "disable-action" "actions/checkout"
+reject_workflow "setup-node action is disabled" "disable-action" "actions/setup-node"
+reject_workflow "setup-bun action is disabled" "disable-action" "oven-sh/setup-bun"
 
 reject_mobile_package "Expo Doctor is absent from the mobile manifest" "remove-doctor"
 reject_mobile_package "Expo Doctor uses a non-exact version range" "range-doctor"
