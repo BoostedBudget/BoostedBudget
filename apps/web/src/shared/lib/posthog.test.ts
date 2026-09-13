@@ -73,6 +73,13 @@ describe('posthog config', () => {
     expect(retryQueue._queue).toHaveLength(1);
   });
 
+  test('fails loudly when the initialized SDK retry queue is incompatible', () => {
+    expect(() => guardPostHogRetryQueue({}, () => 1, () => true))
+      .toThrow(/initialized PostHog retry queue/i);
+    expect(() => guardPostHogRetryQueue({ _retryQueue: { _enqueue: () => {} } }, () => 1, () => true))
+      .toThrow(/retriableRequest/i);
+  });
+
   test.each(['/pricing/', '/Pricing', '/legal/privacy-policy/'])(
     'recognizes router-equivalent anonymous public route %s',
     route => {
@@ -587,9 +594,17 @@ describe('posthog lifecycle', () => {
   });
 
   test('test authority reset can preserve one physical SDK initialization', () => {
+    const order: string[] = [];
+    client.setPersistenceEnabled = mock(() => { order.push('disable-persistence'); });
+    client.clearPersistence = mock(() => { order.push('clear-persistence'); });
+    client.clearQueuedEvents = mock(() => { order.push('clear-queues'); });
+    client.stopSessionRecording = mock(() => { order.push('stop-recording'); });
+    client.clearLegacyConsent = mock(() => { order.push('clear-legacy-consent'); });
+    client.reset = mock(() => { order.push('reset'); });
     lifecycle.setScope('user-a');
     lifecycle.grantFromAuthority('user-a', 'user-a');
     (client.init as ReturnType<typeof mock>).mockClear();
+    order.length = 0;
 
     lifecycle.resetForTests(true);
     lifecycle.setScope('user-b');
@@ -597,6 +612,16 @@ describe('posthog lifecycle', () => {
 
     expect(client.init).not.toHaveBeenCalled();
     expect(client.reset).toHaveBeenCalledWith(true);
+    expect(order).toEqual([
+      'disable-persistence',
+      'clear-persistence',
+      'clear-queues',
+      'stop-recording',
+      'clear-legacy-consent',
+      'reset',
+      'clear-legacy-consent',
+      'disable-persistence',
+    ]);
   });
 
   test('a cross-tab withdrawal latches denial against stale authority and cleans up', () => {
