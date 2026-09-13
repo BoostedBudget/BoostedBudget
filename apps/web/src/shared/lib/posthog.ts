@@ -417,6 +417,7 @@ const analyticsCaptureGate = createAnalyticsCaptureGate()
 
 const analyticsClient = {
   capture: (event: string, properties?: Properties) => posthog.capture(event, properties),
+  clearLegacyConsent: () => posthog.clear_opt_in_out_capturing(),
   clearPersistence: () => {
     const persistenceName = posthog.config.persistence_name
       || posthog.config.token
