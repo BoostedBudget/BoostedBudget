@@ -131,6 +131,10 @@ describe('recipe.templates', () => {
     expect(Array.isArray(parsed.templates)).toBe(true)
     expect(parsed.templates.length).toBeGreaterThan(0)
     expect(parsed.note).toContain('recipe.save()')
+    expect(parsed.note).toContain('recipe.run() resolves')
+    expect(parsed.note).toContain('readExecute()')
+    expect(parsed.note).toContain('writeExecute()')
+    expect(parsed.note).not.toContain('recipe.run() to execute it')
   })
 
   it('every operationId in every template exists in capability-manifest as read', () => {
