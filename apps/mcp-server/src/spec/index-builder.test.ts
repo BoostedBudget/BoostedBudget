@@ -828,19 +828,37 @@ describe('issue #1610: explicit response-root shapes', () => {
   })
 
   it('falls back to JSON 201 when 200 has no JSON schema', () => {
-    const index = indexFromSpec(operationSpec({
-      '200': {
-        content: { 'text/plain': { schema: { type: 'string' } } },
+    const spec = {
+      ...operationSpec({
+        '200': {
+          content: { 'text/plain': { schema: { type: 'string' } } },
+        },
+        '201': {
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/CreatedAccount' } },
+          },
+        },
+      }),
+      components: {
+        schemas: {
+          CreatedAccount: {
+            type: 'object',
+            required: ['id'],
+            properties: {
+              id: { type: 'string' },
+              display_name: { type: 'string' },
+            },
+          },
+        },
       },
-      '201': {
-        content: { 'application/json': { schema: { type: 'array', items: { type: 'integer' } } } },
-      },
-    }))
+    }
+    const entry = indexFromSpec(spec).entries[0]
 
-    expect(index.entries[0]?.responseShape).toEqual({
-      type: 'array',
-      items: { type: 'integer' },
-    })
+    expect(entry?.responseShape).toEqual({ type: 'object' })
+    expect(entry?.responseBody).toEqual([
+      { name: 'id', type: 'string', required: true },
+      { name: 'display_name', type: 'string' },
+    ])
   })
 
   it('records a nullable array<string> root without inventing response fields', () => {
@@ -1039,7 +1057,7 @@ describe('issue #1610a: spec-index.json byte budget', () => {
   it('bounds artifact size after selective expansion and compact metadata deduplication', () => {
     const raw = readFileSync(COMMITTED_INDEX_PATH, 'utf-8')
     const bytes = Buffer.byteLength(raw, 'utf-8')
-    // #1610: the current response-root artifact is 550,483 bytes, leaving 9,517 bytes
+    // #1610: the current response-root artifact is 550,623 bytes, leaving 9,377 bytes
     // (~1.7%) below this ceiling. Keep the assertion threshold-based so harmless JSON
     // ordering or description edits do not create a brittle exact-size pin.
     expect(bytes).toBeLessThan(560_000)

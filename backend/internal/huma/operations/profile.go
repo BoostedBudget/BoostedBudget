@@ -73,7 +73,7 @@ type UpdateProfileOutput struct {
 // --- Handler Methods ---
 
 // GetProfile handles GET /api/v1/user/profile requests.
-// Retrieves the authenticated user's profile, creating one if it's their first login.
+// Retrieves the authenticated user's existing profile before a best-effort last-login update.
 func (h *ProfileHandler) GetProfile(ctx context.Context, input *GetProfileInput) (*GetProfileOutput, error) {
 	user, err := h.service.GetProfile(ctx, input.UserID, input.Email)
 	if err != nil {
@@ -160,14 +160,14 @@ func RegisterProfileRoutes(api huma.API, handler *ProfileHandler) {
 		Method:      http.MethodGet,
 		Path:        "/api/v1/user/profile",
 		Summary:     "Get user profile",
-		Description: "Retrieves the authenticated user's profile, creating one if it's their first login.",
+		Description: "Retrieves the authenticated user's existing profile, then attempts a best-effort last-login timestamp update. An update failure does not fail the response, and returned last_login_at is the value fetched before that update.",
 		Tags:        []string{"Profile"},
 		Security:    []map[string][]string{{"clerk": {}}},
-		// #1610: this GET lazily creates the caller's own profile row on first login — it is
-		// not pure-read despite being admitted by the MCP server's readExecute path. Flows into
+		// #1610: this GET attempts a best-effort update of the caller's last-login timestamp — it
+		// has a caller-scoped read side effect despite being admitted by readExecute. This flows into
 		// api/openapi.yaml as a sibling of operationId (huma.Operation.Extensions is marshaled,
 		// unlike Metadata) so apps/mcp-server can assert on it instead of only a by-name allowlist.
-		Extensions: map[string]any{"x-mcp-lazy-init": true},
+		Extensions: map[string]any{"x-mcp-read-side-effect": true},
 	}, handler.GetProfile)
 
 	// PUT /api/v1/user/profile - Update user profile

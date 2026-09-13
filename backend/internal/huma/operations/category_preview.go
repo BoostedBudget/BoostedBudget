@@ -67,7 +67,7 @@ func RegisterCategoryPreviewRoutes(api huma.API, handler *CategoryPreviewHandler
 		// persist) but its handler (CategoryPreviewService.PreviewCategoryMatches) issues only
 		// SELECTs (transaction_repository.go: GetMatchingTransactionStats,
 		// GetCategoryMatchBreakdown) and writes nothing — see
-		// TestPreviewCategoryMatches_WritesNothing_Integration. x-mcp-lazy-init is the
+		// TestPreviewCategoryMatches_WritesNothing_Integration. x-mcp-read-side-effect is the
 		// mirror-image problem (a GET that writes); this is a POST that doesn't. Tagging it
 		// here lets the MCP server's readExecute admit it WITHOUT inferring safety from the
 		// method or a comment — see apps/mcp-server/src/manifest/safe-post-extension.ts, which

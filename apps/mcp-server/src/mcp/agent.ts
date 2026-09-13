@@ -7,7 +7,7 @@
  *
  * Tools registered here:
  *   search        — Discover API operations from the spec index (no auth needed)
- *   readExecute   — Run read-only API calls (issue #1610b split of the old `execute`)
+ *   readExecute   — Run admitted non-destructive, caller-scoped API calls (#1610b)
  *   writeExecute  — Run any API calls, including confirmation-gated writes
  *   recipe.*      — Saved read-only workflow recipes (Phase 7)
  */
@@ -18,7 +18,11 @@ import { z } from 'zod'
 import { handleSearch } from './tools/search'
 import { buildReadExecuteHandler, buildWriteExecuteHandler, type ExecuteCall } from './tools/execute'
 import { executeCallSchema } from './tools/call-schema'
-import { buildRecipeTools } from './tools/recipes'
+import {
+  buildRecipeTools,
+  RECIPE_RESOLUTION_GUIDANCE,
+  RECIPE_TEMPLATE_USAGE_GUIDANCE,
+} from './tools/recipes'
 import { createHostProxy } from '../sandbox/host-proxy'
 import { createFetchMutator } from '../client/fetch-mutator'
 import { createRateLimiter } from '../limits/rate-limit'
@@ -171,8 +175,9 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
     // and MCP clients re-enumerate tools on connect, so a retained alias would leave the agent
     // three overlapping choices instead of two clear ones.
     //
-    // readExecute admits a call only when all three of class === 'read', a conventionally
-    // non-mutating HTTP method, and confirmationRequired === false hold — see the SECURITY POINT
+    // readExecute admits a call only when class === 'read', confirmationRequired === false, and
+    // the method is conventionally non-mutating or is the explicitly reviewed safe preview POST
+    // — see the SECURITY POINT
     // in tools/execute.ts for why `class` alone is not a safe gate (excluded() hard-codes
     // class:'read' onto a genuinely state-changing GET; runMCPRecipe is honestly class:'read'
     // and confirmationRequired:false yet its method is POST). It therefore has NO
@@ -181,24 +186,25 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
     // NOT "read-only by construction": that claim was corrected in tools/execute.ts and survived
     // here until #1609 Phase 4. Passing the gate proves an admitted call is non-destructive, not
     // confirmation-gated, and scoped to the authenticated user — it does NOT prove the call has
-    // no server-side side effect. `getPrivacySettings` and `getUserProfile` are admitted GETs
-    // that lazily create the caller's OWN default row on first access. See execute.ts's module
-    // doc for the full statement of the real guarantee.
+    // no server-side side effect. `getPrivacySettings` may create the caller's default privacy
+    // row on first access, while `getUserProfile` attempts a best-effort last-login update whose
+    // failure does not fail the read; its response retains the pre-update timestamp. See
+    // execute.ts's module doc for the full statement of the real guarantee.
     const readExecuteHandler = buildReadExecuteHandler(proxy, specIndex.entries)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see search tool comment above
     ;(this.server as any).registerTool(
       'readExecute',
       {
         description:
-          'Execute one or more READ-ONLY BoostedBudget API operations. ' +
+          'Execute one or more admitted non-destructive BoostedBudget API operations. ' +
           'Use search() first to find the right operationId, then call readExecute() ' +
           'with a list of operation calls to chain. Only operations that are non-destructive ' +
-          'and scoped to your own data are admitted here — a couple of them create your own ' +
-          'default settings row on first read. Use writeExecute() for anything else.',
+          'and scoped to your own data are admitted here — two documented GETs have ' +
+          'caller-scoped side effects. Use writeExecute() for anything else.',
         inputSchema: {
           calls: z.array(
             executeCallSchema,
-          ).max(25, 'Maximum 25 calls per readExecute() invocation').describe('Ordered list of read-only API calls to execute (max 25)'),
+          ).max(25, 'Maximum 25 calls per readExecute() invocation').describe('Ordered list of admitted non-destructive API calls to execute (max 25)'),
         },
       },
       async (input: {
@@ -233,7 +239,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           'NOTHING; one token covers every write in the batch. Re-invoke with the IDENTICAL ' +
           'calls array plus the provided confirmationToken to complete them. The token is bound ' +
           'to the exact batch, so changing any field means you must request a fresh token. ' +
-          'Prefer readExecute() for read-only calls.',
+          'Prefer readExecute() for calls it admits.',
         inputSchema: {
           calls: z.array(
             executeCallSchema,
@@ -285,7 +291,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       {
         description:
           'Save a named workflow recipe (read-only compositions only in v1). ' +
-          'Recipes can be run on-demand via recipe.run().',
+          RECIPE_RESOLUTION_GUIDANCE,
         // NOTE: the `schedule` cron field is intentionally absent from the v1 schema.
         // The backend scheduler is not yet built; it will be added in a follow-up issue.
         // The `schedule` column is preserved in the DB for future use.
@@ -340,7 +346,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
     this.server.registerTool(
       'recipe.templates',
       {
-        description: 'List available starter recipe templates. These are non-runnable; replace {{MONTH_START}}/{{MONTH_END}} with actual dates (e.g. 2025-01-01 / 2025-01-31), then use recipe.save() to instantiate one as a saved recipe. Use recipe.run() to execute it.',
+        description: `List available starter recipe templates. ${RECIPE_TEMPLATE_USAGE_GUIDANCE}`,
         inputSchema: {},
       },
       async () => {

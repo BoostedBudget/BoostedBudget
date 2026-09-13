@@ -6,7 +6,7 @@
  * RUNTIME, inside the Cloudflare Worker. Its sibling `safe-post-extension.ts` imports `node:fs`,
  * `node:path` and `node:url` to scan `api/openapi.yaml`, which is a BUILD-time concern — that is
  * why `tsconfig.json` excludes it, exactly as it excludes `spec/index-builder.ts` and
- * `manifest/lazy-init-extension.ts`. Importing the constant from there dragged `node:` modules
+ * `manifest/read-side-effect-extension.ts`. Importing the constant from there dragged `node:` modules
  * into the Worker's own import graph and broke `bun run typecheck` (#1630).
  *
  * Add nothing here that imports anything.
