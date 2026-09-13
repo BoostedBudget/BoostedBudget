@@ -274,7 +274,7 @@ test('Review uses shared editor, blocks pending dismissal and retains approve Un
 })
 
 for (const width of [1280, 390]) for (const theme of ['light', 'dark']) {
-  test(`shared editor and expanded mobile triage fit ${width}px ${theme}`, async ({ page }) => {
+  test(`shared editor and expanded mobile triage fit ${width}px ${theme}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 740 })
     await page.addInitScript(value => localStorage.setItem('bb-theme', value), theme)
     await fixture(page)
@@ -290,7 +290,9 @@ for (const width of [1280, 390]) for (const theme of ['light', 'dark']) {
     const footer = await save.boundingBox()
     expect(footer!.y + footer!.height).toBeLessThan(740)
     expect(await dialog.locator('.min-h-0.overflow-y-auto').evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true)
-    await page.screenshot({ path: `/private/tmp/1638-editor-${width}-${theme}.png` })
+    const editorScreenshot = testInfo.outputPath(`1638-editor-${width}-${theme}.png`)
+    await page.screenshot({ path: editorScreenshot })
+    await testInfo.attach('shared editor', { path: editorScreenshot, contentType: 'image/png' })
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
     if (width < 768) {
       await page.getByRole('button', { name: 'Recategorize transaction' }).click()
@@ -310,7 +312,9 @@ for (const width of [1280, 390]) for (const theme of ['light', 'dark']) {
       await reset.scrollIntoViewIfNeeded()
       await reset.click()
       await page.getByRole('button', { name: 'Apply', exact: true }).scrollIntoViewIfNeeded()
-      await page.screenshot({ path: `/private/tmp/1638-triage-${width}-${theme}.png` })
+      const triageScreenshot = testInfo.outputPath(`1638-triage-${width}-${theme}.png`)
+      await page.screenshot({ path: triageScreenshot })
+      await testInfo.attach('expanded mobile triage', { path: triageScreenshot, contentType: 'image/png' })
     }
   })
 }
