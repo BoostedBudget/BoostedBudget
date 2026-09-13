@@ -10,16 +10,31 @@ export interface AnalyticsLifecycleSnapshot {
 
 export interface AnalyticsClient {
   capture(event: string, properties?: Properties): unknown
+  clearQueuedEvents?(): void
   identify(distinctId: string, properties?: Properties): void
   init(key: string, config: Partial<PostHogConfig>): unknown
-  opt_in_capturing(options: { captureEventName: false }): void
-  opt_out_capturing(): void
   reset(resetDeviceId: boolean): void
   setPersonProperties(properties: Properties): void
   stopSessionRecording(): void
 }
 
+export interface AnalyticsCaptureGate {
+  isGranted(): boolean
+  setGranted(granted: boolean): void
+}
+
+export function createAnalyticsCaptureGate(): AnalyticsCaptureGate {
+  let granted = false
+  return {
+    isGranted: () => granted,
+    setGranted(next) {
+      granted = next
+    },
+  }
+}
+
 interface LifecycleDependencies {
+  captureGate: AnalyticsCaptureGate
   client: AnalyticsClient
   config: () => Partial<PostHogConfig>
   getHost: () => string
@@ -36,7 +51,7 @@ export interface ProductAnalyticsLifecycle {
   grantExplicitly(scope: string, distinctId?: string, personProperties?: Properties): void
   grantFromAuthority(scope: string, distinctId?: string, personProperties?: Properties): void
   init(): boolean
-  resetForTests(): void
+  resetForTests(preserveInitialization?: boolean): void
   setPersonProperties(properties: Properties): void
   setPending(): void
   setScope(scope: string): void
@@ -45,6 +60,7 @@ export interface ProductAnalyticsLifecycle {
 }
 
 export function createProductAnalyticsLifecycle({
+  captureGate,
   client,
   config,
   getHost,
@@ -74,6 +90,7 @@ export function createProductAnalyticsLifecycle({
 
   function init(): boolean {
     if (initialized) return true
+    if (!captureGate.isGranted()) return false
     const key = getKey()
     if (!key || isDoNotTrackEnabled()) return false
     client.init(key, {
@@ -86,11 +103,12 @@ export function createProductAnalyticsLifecycle({
   }
 
   function deny(): void {
+    captureGate.setGranted(false)
     setState('denied')
     if (!initialized) return
+    client.clearQueuedEvents?.()
     client.stopSessionRecording()
     client.reset(true)
-    client.opt_out_capturing()
   }
 
   function grantForScope(
@@ -103,19 +121,21 @@ export function createProductAnalyticsLifecycle({
     if (!isExplicitGrant && withdrawnScope === scope) return
     if (isExplicitGrant) withdrawnScope = null
     if (state === 'granted') return
+    captureGate.setGranted(true)
     if (isDoNotTrackEnabled() || !init()) {
+      captureGate.setGranted(false)
       setState('denied')
       return
     }
-    client.opt_in_capturing({ captureEventName: false })
     state = 'granted'
     if (distinctId) client.identify(distinctId, personProperties)
+    // Subscribers may capture the first pageview, so identity must be established first.
     notifyState()
   }
 
   return {
     capture(event, properties) {
-      if (state === 'granted') client.capture(event, properties)
+      if (state === 'granted' && captureGate.isGranted()) client.capture(event, properties)
     },
     deny,
     getSnapshot,
@@ -131,19 +151,26 @@ export function createProductAnalyticsLifecycle({
       grantForScope(scope, false, distinctId, personProperties)
     },
     init,
-    resetForTests() {
+    resetForTests(preserveInitialization = false) {
+      const keepInitialization = preserveInitialization && initialized
+      if (keepInitialization) {
+        client.stopSessionRecording()
+        client.reset(true)
+      }
       state = 'pending'
-      initialized = false
+      initialized = keepInitialization
       currentScope = null
       scopeGeneration = 0
       withdrawnScope = null
       listeners.clear()
+      captureGate.setGranted(false)
     },
     setPersonProperties(properties) {
-      if (state === 'granted') client.setPersonProperties(properties)
+      if (state === 'granted' && captureGate.isGranted()) client.setPersonProperties(properties)
     },
     setPending() {
       if (withdrawnScope === currentScope) return
+      captureGate.setGranted(false)
       setState('pending')
     },
     setScope(scope) {
@@ -162,6 +189,7 @@ export function createProductAnalyticsLifecycle({
     withdraw(scope) {
       if (scope !== currentScope) return
       withdrawnScope = scope
+      scopeGeneration += 1
       deny()
     },
   }

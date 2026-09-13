@@ -571,6 +571,7 @@ describe('PrivacyPolicy', () => {
     expect(screen.getByText(/no posthog persistence or capture occurs before/i)).toBeInTheDocument()
     expect(screen.getByText(/production session replay is disabled/i)).toBeInTheDocument()
     expect(screen.getByText(/do not track.*browser only/i)).toBeInTheDocument()
+    expect(screen.getByText(/tab-scoped sessionStorage/i)).toBeInTheDocument()
   })
 
   it('renders application-level encryption details (Section 4.2)', () => {

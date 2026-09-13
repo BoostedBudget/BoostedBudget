@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import type { CaptureResult, PostHogConfig } from 'posthog-js';
 import {
   capturePageView,
-  getAnalyticsLifecycleState,
-  grantProductAnalytics,
+  clearPostHogQueuedEvents,
   isAnonymousAnalyticsPath,
   isSensitiveAnalyticsPath,
   listenForAnalyticsWithdrawal,
@@ -13,11 +13,21 @@ import {
   sanitizeAnalyticsUrl,
   sanitizeCapturedNetworkRequest,
 } from './posthog';
-import { createProductAnalyticsLifecycle, type AnalyticsClient } from './analyticsLifecycle';
+import {
+  createAnalyticsCaptureGate,
+  createProductAnalyticsLifecycle,
+  type AnalyticsClient,
+} from './analyticsLifecycle';
 import * as posthogModule from './posthog';
 import { mockPosthogCapture } from '@/test/mocks/posthog';
 
 const minimumPostHogVersion = [1, 430, 2] as const;
+
+function applyBeforeSend(config: Partial<PostHogConfig>, event: CaptureResult): CaptureResult | null {
+  const beforeSend = config.before_send;
+  if (typeof beforeSend !== 'function') throw new Error('before_send must be configured');
+  return beforeSend(event);
+}
 
 function numericVersion(version: string): number[] {
   if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(version)) {
@@ -36,6 +46,20 @@ function isAtLeast(version: number[], minimum: readonly number[]): boolean {
 }
 
 describe('posthog config', () => {
+  test('withdrawal prevents a delayed request failure from refilling the retry queue', () => {
+    const retryQueue = {
+      _isPolling: true,
+      _queue: [] as unknown[],
+      _enqueue(request: unknown) { this._queue.push(request) },
+    };
+
+    clearPostHogQueuedEvents({ _retryQueue: retryQueue });
+    retryQueue._enqueue({ event: 'obsolete-authority-event' });
+
+    expect(retryQueue._queue).toEqual([]);
+    expect(retryQueue._isPolling).toBe(false);
+  });
+
   test.each(['/pricing/', '/Pricing', '/legal/privacy-policy/'])(
     'recognizes router-equivalent anonymous public route %s',
     route => {
@@ -117,9 +141,12 @@ describe('posthog config', () => {
       save_campaign_params: cfg.save_campaign_params,
       custom_campaign_params: cfg.custom_campaign_params,
       advanced_disable_flags: cfg.advanced_disable_flags,
+      persistence: cfg.persistence,
+      reuseAnonymousId: cfg.reuseAnonymousId,
+      request_batching: cfg.request_batching,
     }).toEqual({
-      opt_out_capturing_by_default: true,
-      opt_out_persistence_by_default: true,
+      opt_out_capturing_by_default: false,
+      opt_out_persistence_by_default: false,
       respect_dnt: true,
       capture_pageview: false,
       capture_pageleave: false,
@@ -139,11 +166,19 @@ describe('posthog config', () => {
       save_campaign_params: false,
       custom_campaign_params: [],
       advanced_disable_flags: true,
+      persistence: 'sessionStorage',
+      reuseAnonymousId: true,
+      request_batching: false,
     });
   });
 
+  test('before_send rejects every event while the injected local capture gate is denied', () => {
+    const cfg = posthogConfig(() => false);
+    expect(applyBeforeSend(cfg, { event: 'dashboard_viewed', properties: {} } as CaptureResult)).toBeNull();
+  });
+
   test('before_send strips known PII event properties', () => {
-    const cfg = posthogConfig();
+    const cfg = posthogConfig(() => true);
     const event = {
       event: 'spending_report_drilldown',
       properties: {
@@ -170,7 +205,7 @@ describe('posthog config', () => {
         total_saved: 500,
       },
     };
-    const out = cfg.before_send?.(event as Parameters<NonNullable<typeof cfg.before_send>>[0]);
+    const out = applyBeforeSend(cfg, event as unknown as CaptureResult);
     // PII properties must be stripped
     expect(out?.properties?.merchant).toBeUndefined();
     expect(out?.properties?.merchant_name).toBeUndefined();
@@ -208,7 +243,7 @@ describe('posthog config', () => {
     // camelCase fields sailed straight through even though Sentry's
     // `redactPii` caught the same fields via token matching. Now both paths
     // share `isPiiKey`.
-    const cfg = posthogConfig();
+    const cfg = posthogConfig(() => true);
     const event = {
       event: 'account_viewed',
       properties: {
@@ -217,25 +252,25 @@ describe('posthog config', () => {
         accountBalance: 500,
       },
     };
-    const out = cfg.before_send?.(event as Parameters<NonNullable<typeof cfg.before_send>>[0]);
+    const out = applyBeforeSend(cfg, event as unknown as CaptureResult);
     expect(out?.properties?.currentBalance).toBeUndefined();
     expect(out?.properties?.institutionName).toBeUndefined();
     expect(out?.properties?.accountBalance).toBeUndefined();
   });
 
   test('before_send passes event through when no PII properties present', () => {
-    const cfg = posthogConfig();
+    const cfg = posthogConfig(() => true);
     const event = {
       event: 'page_viewed',
       properties: { page: '/dashboard', user_id: 'u1' },
     };
-    const out = cfg.before_send?.(event as Parameters<NonNullable<typeof cfg.before_send>>[0]);
+    const out = applyBeforeSend(cfg, event as unknown as CaptureResult);
     expect(out?.properties?.page).toBe('/dashboard');
     expect(out?.properties?.user_id).toBe('u1');
   });
 
   test('before_send recursively removes PII and URL/referrer sentinels without mutating input', () => {
-    const cfg = posthogConfig();
+    const cfg = posthogConfig(() => true);
     const event = {
       event: 'page_viewed',
       properties: {
@@ -243,6 +278,9 @@ describe('posthog config', () => {
         $pathname: '/budgets/budget-secret?sentinel=yes#hidden',
         $referrer: 'https://search.example/?q=sentinel',
         $initial_referrer: 'https://search.example/?q=initial-sentinel',
+        $session_entry_url: 'https://app.example/accounts/session-account-sentinel?query=session-query-sentinel#session-hash-sentinel',
+        $session_entry_pathname: '/accounts/session-account-sentinel',
+        $session_entry_referrer: 'https://search.example/?q=session-referrer-sentinel',
         utm_source: 'https://campaign.example/?secret=sentinel',
         nested: {
           userEmail: 'nested@example.com',
@@ -257,13 +295,16 @@ describe('posthog config', () => {
     };
     const original = structuredClone(event);
 
-    const out = cfg.before_send?.(event as Parameters<NonNullable<typeof cfg.before_send>>[0]);
+    const out = applyBeforeSend(cfg, event as unknown as CaptureResult);
 
     expect(event).toEqual(original);
     expect(out?.properties?.$current_url).toBe('https://app.example/accounts/:accountId');
     expect(out?.properties?.$pathname).toBe('/budgets/:budgetId');
     expect(out?.properties?.$referrer).toBeUndefined();
     expect(out?.properties?.$initial_referrer).toBeUndefined();
+    expect(out?.properties?.$session_entry_url).toBe('https://app.example/accounts/:accountId');
+    expect(out?.properties?.$session_entry_pathname).toBe('/accounts/:accountId');
+    expect(out?.properties?.$session_entry_referrer).toBeUndefined();
     expect(out?.properties?.utm_source).toBeUndefined();
     expect((out?.properties?.nested as Record<string, unknown>).userEmail).toBeUndefined();
     expect((out?.properties?.nested as Record<string, unknown>).safe).toBe('kept');
@@ -271,6 +312,32 @@ describe('posthog config', () => {
     expect((out?.properties?.$set as Record<string, unknown>).safe_tier).toBe('premium');
     expect((out?.properties?.$set as Record<string, unknown>).$current_url).toBe('/boosts/:id');
     expect(JSON.stringify(out)).not.toContain('sentinel');
+  });
+
+  test('before_send sanitizes cyclic objects without recursion failure or input mutation', () => {
+    const cfg = posthogConfig(() => true);
+    const nested: Record<string, unknown> = { safe: 'kept', email: 'secret@example.com' };
+    nested.self = nested;
+    const event = { event: 'cyclic_event', properties: nested };
+
+    const out = applyBeforeSend(cfg, event as unknown as CaptureResult);
+
+    expect(out?.properties?.safe).toBe('kept');
+    expect(out?.properties?.email).toBeUndefined();
+    expect(out?.properties?.self).toBe(out?.properties);
+    expect(nested.email).toBe('secret@example.com');
+    expect(nested.self).toBe(nested);
+  });
+
+  test('before_send preserves SDK Date metadata while cloning the event', () => {
+    const cfg = posthogConfig(() => true);
+    const timestamp = new Date('2026-09-13T12:00:00.000Z');
+    const event = { event: 'sdk_event', properties: {}, timestamp };
+
+    const out = applyBeforeSend(cfg, event as unknown as CaptureResult);
+
+    expect(out?.timestamp).toEqual(timestamp);
+    expect(out?.timestamp).not.toBe(timestamp);
   });
 
   test.each([
@@ -350,6 +417,7 @@ describe('posthog lifecycle', () => {
   let key: string | undefined;
   let dnt: boolean;
   let client: AnalyticsClient;
+  let captureGate: ReturnType<typeof createAnalyticsCaptureGate>;
   let lifecycle: ReturnType<typeof createProductAnalyticsLifecycle>;
 
   beforeEach(() => {
@@ -359,17 +427,18 @@ describe('posthog lifecycle', () => {
     dnt = false;
     client = {
       capture: mock(() => {}),
+      clearQueuedEvents: mock(() => {}),
       identify: mock(() => {}),
       init: mock(() => {}),
-      opt_in_capturing: mock(() => {}),
-      opt_out_capturing: mock(() => {}),
       reset: mock(() => {}),
       setPersonProperties: mock(() => {}),
       stopSessionRecording: mock(() => {}),
     };
+    captureGate = createAnalyticsCaptureGate();
     lifecycle = createProductAnalyticsLifecycle({
+      captureGate,
       client,
-      config: posthogConfig,
+      config: () => posthogConfig(captureGate.isGranted),
       getHost: () => 'https://example.test',
       getKey: () => key,
       isDoNotTrackEnabled: () => dnt,
@@ -386,8 +455,7 @@ describe('posthog lifecycle', () => {
     lifecycle.grant('user-123', { subscription_tier: 'premium' });
 
     expect(client.init).toHaveBeenCalledTimes(1);
-    expect(client.opt_in_capturing).toHaveBeenCalledWith({ captureEventName: false });
-    expect(client.capture).not.toHaveBeenCalledWith('$opt_in');
+    expect(captureGate.isGranted()).toBe(true);
     expect(lifecycle.getState()).toBe('granted');
   });
 
@@ -407,40 +475,88 @@ describe('posthog lifecycle', () => {
     expect(lifecycle.getState()).toBe('denied');
   });
 
-  test('withdrawal stops recording, resets identity, then opts out', () => {
+  test('withdrawal closes the local gate before stopping recording and resetting tab state', () => {
     const order: string[] = [];
+    const setGranted = captureGate.setGranted;
+    captureGate.setGranted = mock((granted: boolean) => {
+      order.push(`gate:${granted}`);
+      setGranted(granted);
+    });
+    client.clearQueuedEvents = mock(() => { order.push('clear'); });
     client.stopSessionRecording = mock(() => { order.push('stop'); });
     client.reset = mock(() => { order.push('reset'); });
-    client.opt_out_capturing = mock(() => { order.push('opt-out'); });
     lifecycle.grant('user-123');
+    order.length = 0;
 
     lifecycle.deny();
 
-    expect(order).toEqual(['stop', 'reset', 'opt-out']);
+    expect(order).toEqual(['gate:false', 'clear', 'stop', 'reset']);
     expect(client.reset).toHaveBeenCalledWith(true);
     expect(lifecycle.getState()).toBe('denied');
   });
 
+  test('separate tab lifecycles do not share native consent or identity state', () => {
+    const tabBClient: AnalyticsClient = {
+      capture: mock(() => {}),
+      identify: mock(() => {}),
+      init: mock(() => {}),
+      reset: mock(() => {}),
+      setPersonProperties: mock(() => {}),
+      stopSessionRecording: mock(() => {}),
+    };
+    const tabBGate = createAnalyticsCaptureGate();
+    const tabB = createProductAnalyticsLifecycle({
+      captureGate: tabBGate,
+      client: tabBClient,
+      config: () => posthogConfig(tabBGate.isGranted),
+      getHost: () => 'https://example.test',
+      getKey: () => key,
+      isDoNotTrackEnabled: () => false,
+    });
+    lifecycle.setScope('user-a');
+    lifecycle.grantFromAuthority('user-a', 'user-a');
+    tabB.setScope('user-b');
+    tabB.grantFromAuthority('user-b', 'user-b');
+
+    lifecycle.withdraw('user-a');
+    tabB.capture('still_enabled');
+
+    expect(tabBGate.isGranted()).toBe(true);
+    expect(tabBClient.reset).not.toHaveBeenCalled();
+    expect(tabBClient.capture).toHaveBeenCalledWith('still_enabled', undefined);
+    expect(client).not.toHaveProperty('opt_in_capturing');
+    expect(client).not.toHaveProperty('opt_out_capturing');
+  });
+
+  test('test authority reset can preserve one physical SDK initialization', () => {
+    lifecycle.setScope('user-a');
+    lifecycle.grantFromAuthority('user-a', 'user-a');
+    (client.init as ReturnType<typeof mock>).mockClear();
+
+    lifecycle.resetForTests(true);
+    lifecycle.setScope('user-b');
+    lifecycle.grantFromAuthority('user-b', 'user-b');
+
+    expect(client.init).not.toHaveBeenCalled();
+    expect(client.reset).toHaveBeenCalledWith(true);
+  });
+
   test('a cross-tab withdrawal latches denial against stale authority and cleans up', () => {
-    posthogModule.setProductAnalyticsScope('user-123');
-    posthogModule.applyProductAnalyticsAuthority('user-123', 'user-123');
-    const cleanup = listenForAnalyticsWithdrawal();
+    const withdraw = mock((_scope: string) => {});
+    const cleanup = listenForAnalyticsWithdrawal(withdraw);
 
     window.dispatchEvent(new StorageEvent('storage', {
       key: 'boostedbudget:analytics-withdrawal',
       newValue: JSON.stringify({ scope: 'user-123', nonce: 1 }),
     }));
-    expect(getAnalyticsLifecycleState()).toBe('denied');
-    posthogModule.applyProductAnalyticsAuthority('user-123', 'user-123');
-    expect(getAnalyticsLifecycleState()).toBe('denied');
+    expect(withdraw).toHaveBeenCalledWith('user-123');
 
     cleanup();
-    grantProductAnalytics('user-123', 'user-123');
     window.dispatchEvent(new StorageEvent('storage', {
       key: 'boostedbudget:analytics-withdrawal',
       newValue: JSON.stringify({ scope: 'user-123', nonce: 2 }),
     }));
-    expect(getAnalyticsLifecycleState()).toBe('granted');
+    expect(withdraw).toHaveBeenCalledTimes(1);
   });
 
   test('exposes identity-scoped authority and withdrawal transitions', () => {
@@ -463,6 +579,7 @@ describe('posthog lifecycle', () => {
     lifecycle.setScope('user-a');
     lifecycle.grantFromAuthority('user-a', 'user-a');
     lifecycle.withdraw('user-a');
+    expect(lifecycle.getSnapshot().generation).toBe(2);
 
     lifecycle.setPending();
     lifecycle.grantFromAuthority('user-a', 'user-a');

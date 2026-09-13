@@ -4,7 +4,6 @@ import {
   getAnalyticsLifecycleSnapshot,
   isAnonymousAnalyticsPath,
   isSensitiveAnalyticsPath,
-  sanitizeAnalyticsUrl,
   subscribeToAnalyticsLifecycle,
   type AnalyticsLifecycleSnapshot,
 } from '../lib/posthog'
@@ -21,11 +20,19 @@ const defaultDependencies: PageViewDependencies = {
   subscribe: subscribeToAnalyticsLifecycle,
 }
 
+function rawPathname(url: string): string {
+  try {
+    return new URL(url, window.location.origin).pathname
+  } catch {
+    return url.split(/[?#]/, 1)[0] || '/'
+  }
+}
+
 function pageViewKey(url: string, snapshot: AnalyticsLifecycleSnapshot): string | null {
   if (snapshot.scope === null) return null
   if (isSensitiveAnalyticsPath(url)) return null
   if (snapshot.scope === 'anonymous' && !isAnonymousAnalyticsPath(url)) return null
-  return `${snapshot.generation}:${snapshot.scope}:${sanitizeAnalyticsUrl(url)}`
+  return `${snapshot.generation}:${snapshot.scope}:${rawPathname(url)}`
 }
 
 export function useConsentAwarePageViews(

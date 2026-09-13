@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'bun:test'
+import { beforeEach, describe, expect, it, mock } from 'bun:test'
 import { renderHook } from '@testing-library/react'
 import { createMockClerkUser, mockClerkUser, mockUseUser } from '@/test/mocks/clerk'
 import { mockUseGetPrivacySettings } from '@/test/mocks/privacy-api'
@@ -10,6 +10,7 @@ import {
   mockSetProductAnalyticsScope,
 } from '@/test/mocks/posthog'
 import { usePostHogIdentify } from './usePostHogIdentify'
+import { privacySettingsQueryKey } from '../privacy/privacyQueryKey'
 
 const lifecycle = {
   applyAuthority: mockApplyProductAnalyticsAuthority,
@@ -21,11 +22,11 @@ const lifecycle = {
 }
 
 type PrivacyResult = {
-  data?: { gdpr_analytics_consent?: boolean }
+  data?: Record<string, boolean | undefined>
   isLoading: boolean
   isFetching: boolean
   error: Error | null
-  refetch: () => Promise<void>
+  refetch: () => Promise<unknown>
 }
 
 function setSignedIn(userId = 'user-a'): void {
@@ -133,6 +134,12 @@ describe('usePostHogIdentify consent authority', () => {
     rerender()
 
     expect(calls).toEqual(['scope:user-a', 'grant:user-a', 'scope:user-b', 'grant:user-b'])
+    expect(mockUseGetPrivacySettings.mock.calls[0]?.[0]?.query?.queryKey).toEqual(
+      privacySettingsQueryKey('user-a'),
+    )
+    expect(mockUseGetPrivacySettings.mock.calls.at(-1)?.[0]?.query?.queryKey).toEqual(
+      privacySettingsQueryKey('user-b'),
+    )
   })
 
   it('tears down the user before reconsidering an anonymous grant on logout', () => {
@@ -151,12 +158,12 @@ describe('usePostHogIdentify consent authority', () => {
   })
 
   it('installs and cleans up the cross-tab withdrawal listener', () => {
-    const cleanup = () => {}
+    const cleanup = mock(() => {})
     mockListenForAnalyticsWithdrawal.mockReturnValue(cleanup)
     const { unmount } = renderHook(() => usePostHogIdentify(null, lifecycle))
 
     expect(mockListenForAnalyticsWithdrawal).toHaveBeenCalledTimes(1)
     unmount()
-    expect(mockListenForAnalyticsWithdrawal.mock.results[0]?.value).toBe(cleanup)
+    expect(cleanup).toHaveBeenCalledTimes(1)
   })
 })

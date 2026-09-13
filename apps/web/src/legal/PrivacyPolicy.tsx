@@ -203,8 +203,9 @@ export function PrivacyPolicy() {
           </p>
           <p>
             PostHog provides pseudonymous product analytics only after the applicable consent choice
-            resolves. No PostHog persistence or capture occurs before that point. Production session
-            replay is disabled. Do Not Track is enforced in the browser only; it does not rewrite your
+            resolves. No PostHog persistence or capture occurs before that point. After consent,
+            PostHog persistence uses tab-scoped sessionStorage so identity does not carry between tabs.
+            Production session replay is disabled. Do Not Track is enforced in the browser only; it does not rewrite your
             server-authoritative consent setting, so browser analytics can undercount consenting DNT users.
           </p>
         </section>
