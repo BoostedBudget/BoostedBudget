@@ -49,26 +49,32 @@ export function CookiePolicy() {
 
           <h3>2.2 Analytics Cookies (Optional — Requires Consent)</h3>
           <p>
-            We use <strong>PostHog</strong> to collect anonymized analytics data about how users
+            We use <strong>PostHog</strong> to collect pseudonymous analytics data about how users
             interact with BoostedBudget. This helps us identify usability issues, understand which
             features are most valuable, and improve the platform.
           </p>
           <p>
-            Analytics cookies and localStorage are <strong>not set until you opt in</strong> via
-            our consent banner. You can withdraw consent as easily as you gave it.
+            No PostHog persistence or capture occurs before the applicable consent choice resolves.
+            Signed-out visitors choose through our consent banner; signed-in users choose in
+            Profile → Privacy Settings. Signed-out visitors can withdraw through their browser
+            cookie controls; signed-in users can withdraw in Privacy Settings.
           </p>
           <p>PostHog analytics cookies collect:</p>
           <ul>
-            <li>Pages visited and features used (anonymized)</li>
+            <li>Sanitized route templates and features used (pseudonymous)</li>
             <li>General device and browser information</li>
             <li>Session duration and interaction patterns</li>
             <li>Error and performance data</li>
-            <li>Session recordings on error (all form inputs are masked; financial amounts and
-              sensitive data are redacted)</li>
+            <li>Production session replay is disabled</li>
           </ul>
           <p>
             PostHog uses both cookies and browser <strong>localStorage</strong> for persistence.
             Both are covered under this consent category.
+          </p>
+          <p>
+            Do Not Track is a browser-only hard stop: when your browser sends DNT, browser analytics
+            stay off even if your saved account preference permits them. Your server consent record
+            remains authoritative for the account, so aggregate browser analytics may undercount DNT users.
           </p>
           <p className="important-note">
             <strong>Privacy note:</strong> PostHog analytics are configured to respect GDPR requirements.
@@ -80,7 +86,7 @@ export function CookiePolicy() {
         <section>
           <h2>3. Managing Your Cookie Preferences</h2>
           <p>
-            You have full control over optional cookies. You can change your preferences at any time:
+            You have control over optional cookies through the controls available for your session:
           </p>
           <ul>
             <li>
@@ -93,7 +99,8 @@ export function CookiePolicy() {
             </li>
             <li>
               <strong>Browser Settings:</strong> You can also control cookies through your browser
-              settings, though blocking necessary cookies will prevent BoostedBudget from working.
+              settings. Signed-out visitors can remove the consent cookie there to withdraw
+              analytics consent; blocking necessary cookies will prevent BoostedBudget from working.
             </li>
           </ul>
           <p>

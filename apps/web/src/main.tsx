@@ -10,13 +10,12 @@ import { store } from './store/store'
 import { setAuthTokenProvider } from '@boostedbudget/api-client/client'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { initSentry } from './shared/lib/sentry'
-import { initPostHog, posthog } from './shared/lib/posthog'
+import { posthog } from './shared/lib/posthog'
 import { PostHogProvider } from 'posthog-js/react'
 import { ThemeProvider } from './shared/theme'
 import './index.css'
 
 initSentry()
-initPostHog()
 
 // Create React Query client with sensible defaults
 const queryClient = createAppQueryClient()

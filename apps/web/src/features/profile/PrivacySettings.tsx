@@ -1,10 +1,10 @@
 import { useState, useMemo } from 'react'
+import { useUser } from '@clerk/react-router'
 import {
   useGetPrivacySettings,
   useUpdatePrivacySettings,
 } from '@boostedbudget/api-client/endpoints/privacy/privacy'
-import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
-import { ANALYTICS_EVENTS } from '../../shared/analytics'
+import { grantProductAnalytics, withdrawProductAnalytics } from '../../shared/lib/posthog'
 import type { PrivacySettings as PrivacySettingsType, UpdatePrivacySettingsRequest } from './types'
 import { DeleteAccountSection } from '../deletion/components/DeleteAccountSection'
 import { DataExportSection } from './components/DataExportSection'
@@ -13,13 +13,27 @@ import { Card } from '../../components/ui/card'
 
 interface PrivacySettingsProps {
   onSettingsChange?: (settings: PrivacySettingsType) => void
+  analyticsActions?: AnalyticsActions
 }
 
-export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
+interface AnalyticsActions {
+  grant: typeof grantProductAnalytics
+  withdraw: typeof withdrawProductAnalytics
+}
+
+const defaultAnalyticsActions: AnalyticsActions = {
+  grant: grantProductAnalytics,
+  withdraw: withdrawProductAnalytics,
+}
+
+export function PrivacySettings({
+  onSettingsChange,
+  analyticsActions = defaultAnalyticsActions,
+}: PrivacySettingsProps) {
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [showCriticalConfirm, setShowCriticalConfirm] = useState(false)
-  const trackEvent = useTrackEvent()
+  const { user } = useUser()
 
   // Use generated query hook for loading settings
   const {
@@ -86,6 +100,9 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
       setSuccessMessage('No changes to save')
       return
     }
+    const withdrawingAnalytics = updates.gdpr_analytics_consent === false
+    if (withdrawingAnalytics) analyticsActions.withdraw()
+
     try {
       setSaveError(null)
       setSuccessMessage(null)
@@ -93,7 +110,12 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
       setModifications({})
       await refetch()
       setSuccessMessage('Settings saved successfully!')
-      trackEvent(ANALYTICS_EVENTS.PRIVACY_SETTINGS_CHANGED)
+      if (updates.gdpr_analytics_consent === true && user) {
+        analyticsActions.grant(user.id, {
+          subscription_tier: user.publicMetadata?.subscription_tier,
+          primary_region: user.publicMetadata?.primary_region,
+        })
+      }
       onSettingsChange?.(updatedSettings as PrivacySettingsType)
     } catch (err) {
       console.error('Failed to save privacy settings:', err)
@@ -184,7 +206,7 @@ export function PrivacySettings({ onSettingsChange }: PrivacySettingsProps) {
             <span className="text-base font-semibold">Analytics</span>
           </label>
           <p className="mt-2 ml-8 text-muted-foreground text-sm leading-relaxed">
-            Help us improve the app by collecting anonymous usage statistics.
+            Help us improve the app with pseudonymous usage statistics when you choose analytics.
           </p>
         </div>
 
