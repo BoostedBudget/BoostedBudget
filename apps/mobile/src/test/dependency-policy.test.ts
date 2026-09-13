@@ -2,8 +2,14 @@ const rootPackage = require('../../../../package.json')
 const webPackage = require('../../../web/package.json')
 const apiClientPackage = require('../../../../packages/api-client/package.json')
 const mobilePackage = require('../../package.json')
+const mobileAppConfig = require('../../app.json')
 
 describe('universal React dependency policy', () => {
+  it('installs Android system appearance support when automatic theming is enabled', () => {
+    expect(mobileAppConfig.expo.userInterfaceStyle).toBe('automatic')
+    expect(mobilePackage.dependencies['expo-system-ui']).toBeDefined()
+  })
+
   it('declares one explicit React runtime across applications and API-client development', () => {
     const expectedReact = mobilePackage.dependencies.react
 

@@ -2364,6 +2364,12 @@ jobs:
       - name: Check generated design tokens
         run: bun run --filter @boostedbudget/design-tokens check
 
+      - name: Test shared design tokens
+        run: bun run --filter @boostedbudget/design-tokens test
+
+      - name: Test portable API client
+        run: bun run --filter @boostedbudget/api-client test
+
       - name: Lint mobile application
         run: bun run --cwd apps/mobile lint
 
