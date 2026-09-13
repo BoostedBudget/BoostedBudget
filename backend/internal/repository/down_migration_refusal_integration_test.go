@@ -268,7 +268,7 @@ type downGuardCase struct {
 	seedRefusingRow func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture)
 	wantMsgContains []string
 	// beforeProceed runs (if set) after tc.tables are emptied but before the "proceeds when
-	// empty" subtest executes down.sql. Only 000051 needs it: its down.sql runs sequentially
+	// empty" subtest executes down.sql. For example, 000051 runs sequentially
 	// AFTER 000160's (000160 > 000051), so by the time it really executes, 000160's down has
 	// already DROPped holding_snapshots/liability_statements — but this test always runs
 	// migration 180's full schema in isolation, where those two tables still exist and still
@@ -289,6 +289,14 @@ type downGuardCase struct {
 // config158Tables are the four tables 000158's down migration counts tombstones in, in the order
 // its RAISE message names them.
 var config158Tables = []string{"savings_goals", "boosts", "budgets", "budget_categories"}
+
+// unwindGroupedBudgetDependencies reproduces the rollback order: 000205's
+// triggers must be removed before 000158/159 can drop the columns they reference.
+func unwindGroupedBudgetDependencies(t *testing.T, ctx context.Context, tx pgx.Tx) {
+	t.Helper()
+	_, err := tx.Exec(ctx, readDownMigration(t, "000205_budget_groups.down.sql"))
+	require.NoError(t, err, "unwind later grouped-budget migration before testing lifecycle-column rollback")
+}
 
 // clear158Tombstones clears the tombstone PREDICATE on all four of 000158's tables. It is the
 // "proceeds when empty" half for every one of the four cases: the guard refuses on deleted_at over
@@ -624,6 +632,7 @@ var downGuardCases = []downGuardCase{
 			require.NoError(t, err, "seed a TOMBSTONED savings_goal with a unique name")
 		},
 		clearRefusingState: clear158Tombstones,
+		beforeProceed:      unwindGroupedBudgetDependencies,
 		wantMsgContains:    []string{"refusing to roll back 000158", "1 savings_goals", "deleted_at"},
 	},
 	{
@@ -640,6 +649,7 @@ var downGuardCases = []downGuardCase{
 			require.NoError(t, err, "seed a TOMBSTONED boost with a unique name")
 		},
 		clearRefusingState: clear158Tombstones,
+		beforeProceed:      unwindGroupedBudgetDependencies,
 		wantMsgContains:    []string{"refusing to roll back 000158", "1 boosts", "deleted_at"},
 	},
 	{
@@ -655,6 +665,7 @@ var downGuardCases = []downGuardCase{
 			require.NoError(t, err, "seed a TOMBSTONED budget with a unique name")
 		},
 		clearRefusingState: clear158Tombstones,
+		beforeProceed:      unwindGroupedBudgetDependencies,
 		wantMsgContains:    []string{"refusing to roll back 000158", "1 budgets", "deleted_at"},
 	},
 	{
@@ -672,12 +683,14 @@ var downGuardCases = []downGuardCase{
 			require.NoError(t, err, "seed a TOMBSTONED budget_category")
 		},
 		clearRefusingState: clear158Tombstones,
+		beforeProceed:      unwindGroupedBudgetDependencies,
 		wantMsgContains:    []string{"refusing to roll back 000158", "1 budget_categories", "deleted_at"},
 	},
 	{
-		label:  "000159_custom_category_tombstones",
-		file:   "000159_soft_delete_custom_categories.down.sql",
-		tables: []string{"custom_categories"},
+		label:         "000159_custom_category_tombstones",
+		file:          "000159_soft_delete_custom_categories.down.sql",
+		tables:        []string{"custom_categories"},
+		beforeProceed: unwindGroupedBudgetDependencies,
 		seedRefusingRow: func(t *testing.T, ctx context.Context, tx pgx.Tx, f downGuardFixture) {
 			t.Helper()
 			// A name no live row shares, for the same reason as 000158's entry.

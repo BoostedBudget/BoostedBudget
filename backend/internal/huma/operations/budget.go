@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -16,6 +17,7 @@ import (
 // BudgetHandler handles budget-related HTTP requests.
 // Issue #28: Budget management
 type BudgetHandler struct {
+	planService          services.BudgetPlanService
 	service              services.BudgetService
 	syncService          services.BudgetSyncService
 	transactionService   services.TransactionService
@@ -27,6 +29,7 @@ type BudgetHandler struct {
 }
 
 type BudgetHandlerDeps struct {
+	PlanService          services.BudgetPlanService
 	IdempotencyRepo      repository.IdempotencyRepository
 	DB                   repository.DB
 	MCPAuditRepo         repository.MCPAuditRepository
@@ -44,6 +47,7 @@ func NewBudgetHandler(service services.BudgetService, syncService services.Budge
 		transactionService: transactionService,
 	}
 	if len(deps) > 0 {
+		h.planService = deps[0].PlanService
 		h.idempotencyRepo = deps[0].IdempotencyRepo
 		h.db = deps[0].DB
 		h.mcpAuditRepo = deps[0].MCPAuditRepo
@@ -424,14 +428,16 @@ func (h *BudgetHandler) GetCategoryTransactions(ctx context.Context, input *GetC
 			break
 		}
 	}
+	if category == nil && input.CategoryID == "unbudgeted" {
+		category = &domain.BudgetCategory{ID: "unbudgeted", BudgetID: budget.ID, CategoryKind: "unbudgeted"}
+	}
 	if category == nil {
 		return nil, huma.Error404NotFound("Category not found")
 	}
 
-	// Determine end date (use EndDate if set, otherwise use current time)
-	endDate := budget.StartDate // fallback
-	if budget.EndDate != nil {
-		endDate = *budget.EndDate
+	period := domain.CurrentBudgetActualsRange(budget, time.Now())
+	if !period.Eligible {
+		return &GetCategoryTransactionsOutput{Body: &domain.CategoryTransactionsResponse{Transactions: []*domain.Transaction{}}}, nil
 	}
 
 	// Get transactions matching the category
@@ -439,8 +445,8 @@ func (h *BudgetHandler) GetCategoryTransactions(ctx context.Context, input *GetC
 		ctx,
 		input.UserID,
 		category,
-		budget.StartDate,
-		endDate,
+		period.Start,
+		period.ActualThrough,
 		input.Limit,
 		input.Offset,
 	)
@@ -467,6 +473,7 @@ func (h *BudgetHandler) GetCategoryTransactions(ctx context.Context, input *GetC
 // RegisterBudgetRoutes registers budget routes with the Huma API.
 // Note: These routes require the Clerk middleware to be applied.
 func RegisterBudgetRoutes(api huma.API, handler *BudgetHandler) {
+	registerBudgetPlanRoute(api, handler)
 	// POST /api/v1/budgets - Create budget
 	huma.Register(api, huma.Operation{
 		OperationID:   "createBudget",

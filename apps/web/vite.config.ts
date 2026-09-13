@@ -231,6 +231,13 @@ export default defineConfig({
               priority: 5,
             },
             {
+              // Keep the detail-only activity panel behind its React.lazy boundary;
+              // the feature-wide budgets group would otherwise absorb it.
+              name: 'budget-plan',
+              test: /\/apps\/web\/src\/features\/budgets\/components\/(BudgetPlanActivityPanel|BudgetPlanFlowChart|buildBudgetFlow)\./,
+              priority: 6,
+            },
+            {
               name: 'budgets',
               test: /\/apps\/web\/src\/features\/budgets\//,
               priority: 5,

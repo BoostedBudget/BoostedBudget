@@ -448,16 +448,19 @@ func (m *mockTagIdempotencyRepository) DeleteExpired(_ context.Context) (int64, 
 // It satisfies both pgx.Tx and repository.DB so it can be passed to
 // repository.NewUserTagRepository(tx).
 type mockTx struct {
-	committed  bool
-	rolledBack bool
+	committed      bool
+	rolledBack     bool
+	queryRowResult pgx.Row
 }
 
 // Begin returns a fresh child mockTx (savepoint semantics).
 // Returning a new struct keeps the outer tx's committed/rolledBack flags independent
 // of inner tx commits (e.g. CreateWithCategories' internal Begin→Commit).
-func (m *mockTx) Begin(_ context.Context) (pgx.Tx, error) { return &mockTx{}, nil }
-func (m *mockTx) Commit(_ context.Context) error                { m.committed = true; return nil }
-func (m *mockTx) Rollback(_ context.Context) error              { m.rolledBack = true; return nil }
+func (m *mockTx) Begin(_ context.Context) (pgx.Tx, error) {
+	return &mockTx{queryRowResult: m.queryRowResult}, nil
+}
+func (m *mockTx) Commit(_ context.Context) error   { m.committed = true; return nil }
+func (m *mockTx) Rollback(_ context.Context) error { m.rolledBack = true; return nil }
 func (m *mockTx) Exec(_ context.Context, _ string, _ ...interface{}) (pgconn.CommandTag, error) {
 	return pgconn.CommandTag{}, nil
 }
@@ -465,13 +468,13 @@ func (m *mockTx) Query(_ context.Context, _ string, _ ...interface{}) (pgx.Rows,
 	return nil, nil
 }
 func (m *mockTx) QueryRow(_ context.Context, _ string, _ ...interface{}) pgx.Row {
-	return nil
+	return m.queryRowResult
 }
 func (m *mockTx) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults { return nil }
 func (m *mockTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, _ pgx.CopyFromSource) (int64, error) {
 	return 0, nil
 }
-func (m *mockTx) LargeObjects() pgx.LargeObjects                                            { return pgx.LargeObjects{} }
+func (m *mockTx) LargeObjects() pgx.LargeObjects { return pgx.LargeObjects{} }
 func (m *mockTx) Prepare(_ context.Context, _, _ string) (*pgconn.StatementDescription, error) {
 	return nil, nil
 }

@@ -456,4 +456,7 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 // nil — a claim about the Go mapping of a column the banking arm selects as NULL, not about the
 // driver tolerating a NULL the query never asked for — so it is clean under
 // TestNoUndisclosedPgxmockNullToleranceClaim above. No file was removed.
-const pgxmockSweepFileCount = 69
+// 69 -> 73 (#1637): added budget_plan_repository_test.go, budget_expense_rows_test.go,
+// budget_expense_snapshot_test.go, and savings_flow_provenance_test.go. They assert query shape,
+// transaction boundaries, and mapping, not driver NULL tolerance. No files removed.
+const pgxmockSweepFileCount = 73

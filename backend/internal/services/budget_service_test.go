@@ -33,6 +33,9 @@ func (m *MockBudgetRepository) GetByID(ctx context.Context, id string) (*domain.
 	return args.Get(0).(*domain.Budget), args.Error(1)
 }
 
+func (m *MockBudgetRepository) GetByUserIDInTx(ctx context.Context, _ repository.Transaction, id string) ([]*domain.Budget, error) {
+	return m.GetByUserID(ctx, id)
+}
 func (m *MockBudgetRepository) GetByUserID(ctx context.Context, userID string) ([]*domain.Budget, error) {
 	args := m.Called(ctx, userID)
 	if args.Get(0) == nil {
@@ -1469,12 +1472,12 @@ func TestBudgetService_CreateBudget_CarriesForwardSavingsCategories(t *testing.T
 		mockBudgetRepo.On("IsGoalDetachedForSeries", ctx, mock.AnythingOfType("string"), goalID1).Return(false, nil)
 		mockBudgetRepo.On("IsGoalDetachedForSeries", ctx, mock.AnythingOfType("string"), goalID2).Return(false, nil)
 		// CreateCategory called once per goal (savings kind)
-		mockBudgetRepo.On("CreateCategory", ctx, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
+		mockBudgetRepo.On("AddCategoryChecked", ctx, mock.AnythingOfType("string"), mock.MatchedBy(func(c *domain.BudgetCategory) bool {
 			return c.CategoryKind == "savings" && c.AutoCreated && c.SavingsGoalID != nil && *c.SavingsGoalID == goalID1
-		})).Return(nil)
-		mockBudgetRepo.On("CreateCategory", ctx, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
+		})).Return(nil, nil)
+		mockBudgetRepo.On("AddCategoryChecked", ctx, mock.AnythingOfType("string"), mock.MatchedBy(func(c *domain.BudgetCategory) bool {
 			return c.CategoryKind == "savings" && c.AutoCreated && c.SavingsGoalID != nil && *c.SavingsGoalID == goalID2
-		})).Return(nil)
+		})).Return(nil, nil)
 
 		budget, err := svc.CreateBudget(ctx, userID, req)
 
@@ -1518,9 +1521,9 @@ func TestBudgetService_CreateBudget_CarriesForwardSavingsCategories(t *testing.T
 		mockBudgetRepo.On("IsGoalDetachedForSeries", ctx, mock.AnythingOfType("string"), goalID1).Return(false, nil)
 		mockBudgetRepo.On("IsGoalDetachedForSeries", ctx, mock.AnythingOfType("string"), goalIDTombstoned).Return(true, nil)
 		// Only goalID1 gets a category; tombstoned goal is skipped
-		mockBudgetRepo.On("CreateCategory", ctx, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
+		mockBudgetRepo.On("AddCategoryChecked", ctx, mock.AnythingOfType("string"), mock.MatchedBy(func(c *domain.BudgetCategory) bool {
 			return c.CategoryKind == "savings" && *c.SavingsGoalID == goalID1
-		})).Return(nil)
+		})).Return(nil, nil)
 
 		budget, err := svc.CreateBudget(ctx, userID, req)
 
@@ -1663,11 +1666,11 @@ func TestBudgetService_BackfillManagedCategories(t *testing.T) {
 		// Tombstone check keyed on series_id (= budgetID for standalone budgets).
 		mockBudgetRepo.On("IsGoalDetachedForSeries", ctx, budgetID, goalID).Return(false, nil)
 		// Missing category → CreateCategory called
-		mockBudgetRepo.On("CreateCategory", ctx, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
+		mockBudgetRepo.On("AddCategoryChecked", ctx, mock.AnythingOfType("string"), mock.MatchedBy(func(c *domain.BudgetCategory) bool {
 			return c.CategoryKind == "savings" && c.AutoCreated &&
 				c.SavingsGoalID != nil && *c.SavingsGoalID == goalID &&
 				c.BudgetID == budgetID
-		})).Return(nil)
+		})).Return(nil, nil)
 
 		err := svc.BackfillManagedCategories(ctx, userID)
 
@@ -1847,10 +1850,10 @@ func TestBudgetService_CarryForward_DetachPersistsAcrossSeriesPeriods(t *testing
 		// Other goal is not tombstoned — add it.
 		mockBudgetRepo.On("IsGoalDetachedForSeries", ctx, mock.AnythingOfType("string"), goalIDOther).Return(false, nil)
 		// Only the non-tombstoned goal gets a category.
-		mockBudgetRepo.On("CreateCategory", ctx, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
+		mockBudgetRepo.On("AddCategoryChecked", ctx, mock.AnythingOfType("string"), mock.MatchedBy(func(c *domain.BudgetCategory) bool {
 			return c.CategoryKind == "savings" && c.AutoCreated &&
 				c.SavingsGoalID != nil && *c.SavingsGoalID == goalIDOther
-		})).Return(nil)
+		})).Return(nil, nil)
 
 		budget, err := svc.CreateBudget(ctx, userID, req)
 
@@ -1904,11 +1907,11 @@ func TestBudgetService_CarryForward_DetachPersistsAcrossSeriesPeriods(t *testing
 		mockBudgetRepo.On("IsGoalDetachedForSeries", ctx, seriesID, goalIDDetached).Return(true, nil).Times(2)
 		// goalIDOther is not tombstoned — gets a category in each budget.
 		mockBudgetRepo.On("IsGoalDetachedForSeries", ctx, seriesID, goalIDOther).Return(false, nil).Times(2)
-		mockBudgetRepo.On("CreateCategory", ctx, mock.MatchedBy(func(c *domain.BudgetCategory) bool {
+		mockBudgetRepo.On("AddCategoryChecked", ctx, mock.AnythingOfType("string"), mock.MatchedBy(func(c *domain.BudgetCategory) bool {
 			return c.CategoryKind == "savings" && c.AutoCreated &&
 				c.SavingsGoalID != nil && *c.SavingsGoalID == goalIDOther &&
 				(c.BudgetID == budgetA || c.BudgetID == budgetB)
-		})).Return(nil).Times(2)
+		})).Return(nil, nil).Times(2)
 
 		err := svc.BackfillManagedCategories(ctx, userID)
 
@@ -2084,8 +2087,8 @@ func TestBudgetService_CreateBudget_ValidatesCategories(t *testing.T) {
 			CurrencyCode: "USD",
 			Categories: []domain.CreateBudgetCategoryRequest{
 				{
-					// "unknown_kind" is not pfc/custom/savings and MatchLogic is not tag_only
-					// → Validate() returns "category_kind must be pfc, custom, or savings"
+					// "unknown_kind" is not pfc/custom/savings/group/remainder and MatchLogic
+					// is not tag_only, so Validate() returns the complete legal-kinds list.
 					CategoryKind:    "unknown_kind",
 					AllocatedAmount: 200.00,
 				},
@@ -2095,7 +2098,7 @@ func TestBudgetService_CreateBudget_ValidatesCategories(t *testing.T) {
 		_, err := svc.CreateBudget(ctx, "user-abc", req)
 
 		require.Error(t, err, "invalid category kind must cause CreateBudget to return an error")
-		assert.Contains(t, err.Error(), "category_kind must be pfc, custom, or savings")
+		assert.Contains(t, err.Error(), "category_kind must be pfc, custom, savings, group, or remainder")
 		// R5-2/R5-3: no DB write must occur when validation fails
 		mockBudgetRepo.AssertNotCalled(t, "CreateWithCategories", mock.Anything, mock.Anything, mock.Anything)
 	})

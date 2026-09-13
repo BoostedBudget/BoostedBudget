@@ -65,6 +65,8 @@ export const ANALYTICS_EVENTS = {
   BUDGET_EDITED: 'budget_edited',
   BUDGET_DELETED: 'budget_deleted',
   BUDGET_DETAIL_VIEWED: 'budget_detail_viewed',
+  BUDGET_PLAN_LINE_OPENED: 'budget_plan_line_opened',
+  BUDGET_PLAN_FULL_TABLE_VIEWED: 'budget_plan_full_table_viewed',
   BUDGET_CATEGORY_ADDED: 'budget_category_added',
   BUDGET_CATEGORY_UPDATED: 'budget_category_updated',
   BUDGET_CATEGORY_DELETED: 'budget_category_deleted',

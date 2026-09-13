@@ -2357,161 +2357,36 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 	if budgetCat == nil {
 		return 0, nil
 	}
-	matchLogic := budgetCat.MatchLogic
-	if matchLogic == "" {
-		matchLogic = domain.MatchLogicCategoryOnly
+	ledger, err := r.budgetCategoryLedger(ctx, userID, budgetCat, startDate, endDate)
+	if err != nil {
+		return 0, err
 	}
-	tags := budgetCat.Tags
-
-	var query string
-	var args []interface{}
-	baseArgs := []interface{}{userID, startDate, endDate}
-
-	switch matchLogic {
-	case domain.MatchLogicCategoryOnly:
-		catClause, catArgs := buildCategoryClause(budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4)
-		query = fmt.Sprintf(`
-			SELECT COALESCE(ABS(SUM(amount)), 0)
-			FROM transactions
-			WHERE user_id = $1 AND amount > 0
-			  AND deleted_at IS NULL
-			  AND date BETWEEN $2 AND $3
-			  AND (%s)
-		`, catClause)
-		args = append(baseArgs, catArgs...)
-
-	case domain.MatchLogicTagOnly:
-		query = `
-			SELECT COALESCE(ABS(SUM(amount)), 0)
-			FROM transactions
-			WHERE user_id = $1 AND amount > 0
-			  AND deleted_at IS NULL
-			  AND date BETWEEN $2 AND $3
-			  AND tags ?| $4
-		`
-		args = append(baseArgs, pq.Array(tags))
-
-	case domain.MatchLogicAnd:
-		catClause, catArgs := buildCategoryClause(budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4)
-		nextArg := 4 + len(catArgs)
-		query = fmt.Sprintf(`
-			SELECT COALESCE(ABS(SUM(amount)), 0)
-			FROM transactions
-			WHERE user_id = $1 AND amount > 0
-			  AND deleted_at IS NULL
-			  AND date BETWEEN $2 AND $3
-			  AND (%s)
-			  AND tags ?| $%d
-		`, catClause, nextArg)
-		args = append(baseArgs, catArgs...)
-		args = append(args, pq.Array(tags))
-
-	case domain.MatchLogicOr:
-		catClause, catArgs := buildCategoryClause(budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4)
-		nextArg := 4 + len(catArgs)
-		query = fmt.Sprintf(`
-			SELECT COALESCE(ABS(SUM(amount)), 0)
-			FROM transactions
-			WHERE user_id = $1 AND amount > 0
-			  AND deleted_at IS NULL
-			  AND date BETWEEN $2 AND $3
-			  AND (
-				(%s)
-				OR tags ?| $%d
-			  )
-		`, catClause, nextArg)
-		args = append(baseArgs, catArgs...)
-		args = append(args, pq.Array(tags))
-
-	default:
-		return 0, fmt.Errorf("unsupported match logic: %s", matchLogic)
+	line := ledger.Lines[budgetCat.ID]
+	if line.Amount == nil {
+		return 0, fmt.Errorf("budget actuals incomplete: %s", line.Reason)
 	}
-
-	var sum float64
-	if err := r.db.QueryRow(ctx, query, args...).Scan(&sum); err != nil {
-		return 0, fmt.Errorf("failed to get spent sum for budget category: %w", err)
-	}
-	return sum, nil
+	return *line.Amount, nil
 }
 
 // GetMatchingTransactionStats returns the count and sum of expenses matching the given
 // category configuration and/or tags based on match logic. Issue #497: preview feature.
 func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context, userID string, categoryKind string, pfcPrimary *string, pfcDetailed *string, customCategoryID *string, tags []string, matchLogic domain.MatchLogic, startDate, endDate time.Time) (int, float64, error) {
-	if matchLogic == "" {
-		matchLogic = domain.MatchLogicCategoryOnly
-	}
-
-	baseArgs := []interface{}{userID, startDate, endDate}
-
-	var query string
-	var args []interface{}
-
-	switch matchLogic {
-	case domain.MatchLogicCategoryOnly:
-		catClause, catArgs := buildCategoryClause(categoryKind, pfcPrimary, pfcDetailed, customCategoryID, 4)
-		query = fmt.Sprintf(`
-			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
-			FROM transactions
-			WHERE user_id = $1 AND amount > 0
-			  AND deleted_at IS NULL
-			  AND date BETWEEN $2 AND $3
-			  AND (%s)
-		`, catClause)
-		args = append(baseArgs, catArgs...)
-
-	case domain.MatchLogicTagOnly:
-		query = `
-			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
-			FROM transactions
-			WHERE user_id = $1 AND amount > 0
-			  AND deleted_at IS NULL
-			  AND date BETWEEN $2 AND $3
-			  AND tags ?| $4
-		`
-		args = append(baseArgs, pq.Array(tags))
-
-	case domain.MatchLogicAnd:
-		catClause, catArgs := buildCategoryClause(categoryKind, pfcPrimary, pfcDetailed, customCategoryID, 4)
-		nextArg := 4 + len(catArgs)
-		query = fmt.Sprintf(`
-			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
-			FROM transactions
-			WHERE user_id = $1 AND amount > 0
-			  AND deleted_at IS NULL
-			  AND date BETWEEN $2 AND $3
-			  AND (%s)
-			  AND tags ?| $%d
-		`, catClause, nextArg)
-		args = append(baseArgs, catArgs...)
-		args = append(args, pq.Array(tags))
-
-	case domain.MatchLogicOr:
-		catClause, catArgs := buildCategoryClause(categoryKind, pfcPrimary, pfcDetailed, customCategoryID, 4)
-		nextArg := 4 + len(catArgs)
-		query = fmt.Sprintf(`
-			SELECT COUNT(*), COALESCE(ABS(SUM(amount)), 0)
-			FROM transactions
-			WHERE user_id = $1 AND amount > 0
-			  AND deleted_at IS NULL
-			  AND date BETWEEN $2 AND $3
-			  AND (
-				(%s)
-				OR tags ?| $%d
-			  )
-		`, catClause, nextArg)
-		args = append(baseArgs, catArgs...)
-		args = append(args, pq.Array(tags))
-
-	default:
+	if matchLogic != "" && !matchLogic.IsValid() {
 		return 0, 0, fmt.Errorf("unsupported match logic: %s", matchLogic)
 	}
-
-	var count int
-	var sum float64
-	if err := r.db.QueryRow(ctx, query, args...).Scan(&count, &sum); err != nil {
-		return 0, 0, fmt.Errorf("failed to get matching transaction stats: %w", err)
+	category := domain.BudgetCategory{CategoryKind: categoryKind, PFCPrimary: pfcPrimary, PFCDetailed: pfcDetailed, CustomCategoryID: customCategoryID, Tags: tags, MatchLogic: matchLogic}
+	ledger, err := ReadBudgetExpenseLedger(ctx, r.db, userID, []domain.BudgetCategory{category}, startDate, endDate)
+	if err != nil {
+		return 0, 0, err
 	}
-	return count, sum, nil
+	line := ledger.Lines[""]
+	if _, err := budgetScalarCurrency(line.CurrencyCodes, ""); err != nil {
+		return 0, 0, err
+	}
+	if line.Amount == nil {
+		return 0, 0, fmt.Errorf("budget actuals incomplete: %s", line.Reason)
+	}
+	return len(line.TransactionIDs), *line.Amount, nil
 }
 
 // GetCategoryMatchBreakdown returns a real partition of the rolled-up total (category-
@@ -2521,139 +2396,24 @@ func (r *transactionRepository) GetCategoryMatchBreakdown(ctx context.Context, u
 	if matchLogic == "" {
 		matchLogic = domain.MatchLogicCategoryOnly
 	}
-
-	// A pfc_primary or a parent custom category can roll up nested custom children; a leaf
-	// pfc_detailed category or an unsupported kind cannot, so it never has a
-	// nested-descendant bucket.
-	isRollupEligible := (categoryKind == "pfc" && pfcPrimary != nil && (pfcDetailed == nil || *pfcDetailed == "")) ||
-		(categoryKind == "custom" && customCategoryID != nil)
-
-	// category_only against a non-rollup-eligible target has nothing to disclose: no tag
-	// clause is in play to pull in anything outside the category, and the total already
-	// equals what would be reported as "direct" — this preserves the pre-Task-B5 no-op
-	// contract for that specific combination exactly.
-	if !isRollupEligible && matchLogic == domain.MatchLogicCategoryOnly {
-		return nil, 0, 0, 0, 0, nil
-	}
-
-	catClause, catArgs := buildCategoryClause(categoryKind, pfcPrimary, pfcDetailed, customCategoryID, 4)
-	nextArg := 4 + len(catArgs)
-
-	baseArgs := []interface{}{userID, startDate, endDate}
-	var predicate string
-	var args []interface{}
-
-	// The predicate mirrors GetMatchingTransactionStats' own per-match_logic composition
-	// exactly, so this query's row set is the SAME set the total was computed over —
-	// the property that makes category-direct + nested-descendant + tag-only-outside a
-	// real partition of total_amount rather than an independently-computed number that
-	// happens to usually agree.
-	switch matchLogic {
-	case domain.MatchLogicCategoryOnly:
-		predicate = catClause
-		args = append(baseArgs, catArgs...)
-	case domain.MatchLogicTagOnly:
-		predicate = fmt.Sprintf("tags ?| $%d", nextArg)
-		args = append(baseArgs, catArgs...)
-		args = append(args, pq.Array(tags))
-	case domain.MatchLogicAnd:
-		predicate = fmt.Sprintf("(%s) AND tags ?| $%d", catClause, nextArg)
-		args = append(baseArgs, catArgs...)
-		args = append(args, pq.Array(tags))
-	case domain.MatchLogicOr:
-		predicate = fmt.Sprintf("((%s) OR tags ?| $%d)", catClause, nextArg)
-		args = append(baseArgs, catArgs...)
-		args = append(args, pq.Array(tags))
-	default:
+	if !matchLogic.IsValid() {
 		return nil, 0, 0, 0, 0, fmt.Errorf("unsupported match logic: %s", matchLogic)
 	}
-
-	query := fmt.Sprintf(`
-		SELECT
-			CASE WHEN t.category_override_kind = 'custom' THEN t.custom_category_override_id::text ELSE NULL END AS child_id,
-			cc.name AS child_name,
-			COUNT(*) AS cnt,
-			COALESCE(ABS(SUM(t.amount)), 0) AS total,
-			COALESCE((%s), false) AS in_category
-		FROM transactions t
-		LEFT JOIN custom_categories cc ON cc.id = t.custom_category_override_id /* tombstone-exempt(custom_categories cc): HISTORY FILTER (#1569 Task 9) — this join only resolves a display NAME for a transaction that already matched via buildCategoryClause's own exempted custom-category subquery; a since-deleted child category's own transactions must keep a legible label in the breakdown, the same reason that subquery admits them into the total in the first place. */
-		WHERE t.user_id = $1 AND t.amount > 0
-		  AND t.deleted_at IS NULL
-		  AND t.date BETWEEN $2 AND $3
-		  AND (%s)
-		GROUP BY child_id, child_name, in_category
-	`, catClause, predicate)
-
-	rows, err := r.db.Query(ctx, query, args...)
+	rollup := (categoryKind == "pfc" && pfcPrimary != nil && (pfcDetailed == nil || *pfcDetailed == "")) || (categoryKind == "custom" && customCategoryID != nil)
+	if !rollup && matchLogic == domain.MatchLogicCategoryOnly {
+		return nil, 0, 0, 0, 0, nil
+	}
+	facts, err := readBudgetExpenseFacts(ctx, r.db, userID, startDate, endDate)
 	if err != nil {
-		return nil, 0, 0, 0, 0, fmt.Errorf("failed to get category match breakdown: %w", err)
+		return nil, 0, 0, 0, 0, err
 	}
-	defer rows.Close()
-
-	var directCount, tagOnlyCount int
-	var directAmount, tagOnlyAmount float64
-	var children []domain.CategoryPreviewBreakdownItem
-
-	for rows.Next() {
-		var childID, childName *string
-		var cnt int
-		var total float64
-		var inCategory bool
-		if err := rows.Scan(&childID, &childName, &cnt, &total, &inCategory); err != nil {
-			return nil, 0, 0, 0, 0, fmt.Errorf("failed to scan category match breakdown row: %w", err)
-		}
-
-		// Bucket 3: the tag clause pulled this row in, but the category clause never
-		// matched it at all — not the target itself, not any nested descendant.
-		if !inCategory {
-			tagOnlyCount += cnt
-			tagOnlyAmount += total
-			continue
-		}
-
-		// No rollup concept for a leaf/unsupported target: every category-clause match is
-		// "direct" and there is never a nested-descendant bucket.
-		if !isRollupEligible {
-			directCount += cnt
-			directAmount += total
-			continue
-		}
-
-		if childID == nil {
-			directCount += cnt
-			directAmount += total
-			continue
-		}
-		// For the "custom" kind, a matched row can be the targeted parent category
-		// itself (custom_category_override_id == customCategoryID) — that is still
-		// "direct", not a nested child. The "pfc" kind never hits this: a custom
-		// category can never equal a pfc_primary value.
-		if categoryKind == "custom" && customCategoryID != nil && *childID == *customCategoryID {
-			directCount += cnt
-			directAmount += total
-			continue
-		}
-		name := ""
-		if childName != nil {
-			name = *childName
-		}
-		children = append(children, domain.CategoryPreviewBreakdownItem{
-			CategoryID:       *childID,
-			CategoryName:     name,
-			TransactionCount: cnt,
-			TotalAmount:      total,
-		})
+	category := domain.BudgetCategory{ID: "preview", CategoryKind: categoryKind, PFCPrimary: pfcPrimary, PFCDetailed: pfcDetailed, CustomCategoryID: customCategoryID, Tags: tags, MatchLogic: matchLogic}
+	resp, err := budgetExpensePreview([]domain.BudgetCategory{category}, category, facts)
+	if err != nil {
+		return nil, 0, 0, 0, 0, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, 0, 0, 0, fmt.Errorf("failed to iterate category match breakdown rows: %w", err)
-	}
-
-	return children, directCount, directAmount, tagOnlyCount, tagOnlyAmount, nil
+	return resp.Children, resp.DirectTransactionCount, resp.DirectAmount, resp.TagOnlyTransactionCount, resp.TagOnlyAmount, nil
 }
-
-// =============================================================================
-// Issue #499: Transaction-Budget Linking UI
-// =============================================================================
 
 // GetTransactionsForBudgetCategory returns paginated transactions matching the given category
 // and/or tags based on match logic, along with total count and amount.
@@ -2663,76 +2423,69 @@ func (r *transactionRepository) GetTransactionsForBudgetCategory(ctx context.Con
 	if budgetCat == nil {
 		return []domain.Transaction{}, 0, 0, nil
 	}
-	matchLogic := budgetCat.MatchLogic
-	if matchLogic == "" {
-		matchLogic = domain.MatchLogicCategoryOnly
+	if budgetCat.MatchLogic != "" && !budgetCat.MatchLogic.IsValid() {
+		return nil, 0, 0, fmt.Errorf("unsupported match logic: %s", budgetCat.MatchLogic)
 	}
-	tags := budgetCat.Tags
-
-	baseArgs := []interface{}{userID, startDate, endDate}
-
-	var whereClause string
-	var allBaseArgs []interface{}
-
-	switch matchLogic {
-	case domain.MatchLogicCategoryOnly:
-		catClause, catArgs := buildCategoryClause(budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4)
-		whereClause = fmt.Sprintf(`user_id = $1 AND amount > 0 AND date BETWEEN $2 AND $3 AND (%s)`, catClause)
-		allBaseArgs = append(baseArgs, catArgs...)
-
-	case domain.MatchLogicTagOnly:
-		whereClause = `user_id = $1 AND amount > 0 AND date BETWEEN $2 AND $3 AND tags ?| $4`
-		allBaseArgs = append(baseArgs, pq.Array(tags))
-
-	case domain.MatchLogicAnd:
-		catClause, catArgs := buildCategoryClause(budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4)
-		nextArg := 4 + len(catArgs)
-		whereClause = fmt.Sprintf(`user_id = $1 AND amount > 0 AND date BETWEEN $2 AND $3 AND (%s) AND tags ?| $%d`, catClause, nextArg)
-		allBaseArgs = append(baseArgs, catArgs...)
-		allBaseArgs = append(allBaseArgs, pq.Array(tags))
-
-	case domain.MatchLogicOr:
-		catClause, catArgs := buildCategoryClause(budgetCat.CategoryKind, budgetCat.PFCPrimary, budgetCat.PFCDetailed, budgetCat.CustomCategoryID, 4)
-		nextArg := 4 + len(catArgs)
-		whereClause = fmt.Sprintf(`user_id = $1 AND amount > 0 AND date BETWEEN $2 AND $3 AND ((%s) OR tags ?| $%d)`, catClause, nextArg)
-		allBaseArgs = append(baseArgs, catArgs...)
-		allBaseArgs = append(allBaseArgs, pq.Array(tags))
-
-	default:
-		return nil, 0, 0, fmt.Errorf("unsupported match logic: %s", matchLogic)
+	// Pools/connections can start an isolated transaction; an existing pgx.Tx
+	// deliberately has no BeginTx (only savepoint Begin) and keeps caller isolation.
+	if _, canSetIsolation := r.db.(interface {
+		BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
+	}); !canSetIsolation {
+		return r.getBudgetCategoryTransactions(ctx, userID, budgetCat, startDate, endDate, limit, offset)
 	}
-
-	// Get total count and sum
-	countQuery := fmt.Sprintf(`SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM transactions WHERE deleted_at IS NULL AND %s`, whereClause)
-	var totalCount int
-	var totalAmount float64
-	if err := r.db.QueryRow(ctx, countQuery, allBaseArgs...).Scan(&totalCount, &totalAmount); err != nil {
-		return nil, 0, 0, fmt.Errorf("failed to get transaction count: %w", err)
-	}
-
-	// Get paginated transactions
-	pagArgOffset := len(allBaseArgs) + 1
-	selectQuery := fmt.Sprintf(`
-		SELECT %s
-		FROM transactions
-		WHERE %s
-		  AND deleted_at IS NULL
-		ORDER BY date DESC, created_at DESC
-		LIMIT $%d OFFSET $%d
-	`, transactionSelectExpr, whereClause, pagArgOffset, pagArgOffset+1)
-
-	selectArgs := append(allBaseArgs, limit, offset)
-	rows, err := r.db.Query(ctx, selectQuery, selectArgs...)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("failed to query transactions: %w", err)
-	}
-	defer rows.Close()
-
-	transactions, err := r.scanTransactions(rows)
+	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	return transactions, totalCount, totalAmount, nil
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"); err != nil {
+		return nil, 0, 0, err
+	}
+	scoped := *r
+	scoped.db = tx
+	rows, count, amount, err := scoped.getBudgetCategoryTransactions(ctx, userID, budgetCat, startDate, endDate, limit, offset)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, 0, 0, err
+	}
+	return rows, count, amount, nil
+}
+
+func (r *transactionRepository) getBudgetCategoryTransactions(ctx context.Context, userID string, budgetCat *domain.BudgetCategory, startDate, endDate time.Time, limit, offset int) ([]domain.Transaction, int, float64, error) {
+	ledger, err := r.budgetCategoryLedger(ctx, userID, budgetCat, startDate, endDate)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	line := ledger.Lines[budgetCat.ID]
+	if line.Amount == nil {
+		return nil, 0, 0, fmt.Errorf("budget actuals incomplete: %s", line.Reason)
+	}
+	count := len(line.TransactionIDs)
+	if count == 0 || offset >= count {
+		return []domain.Transaction{}, count, *line.Amount, nil
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	pageEnd := offset + limit
+	if pageEnd > count {
+		pageEnd = count
+	}
+	rows, err := r.db.Query(ctx, fmt.Sprintf(`SELECT %s FROM transactions WHERE user_id=$1 AND id=ANY($2) AND deleted_at IS NULL ORDER BY date DESC,created_at DESC,id`, transactionSelectExpr), userID, line.TransactionIDs[offset:pageEnd])
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer rows.Close()
+	transactions, err := r.scanTransactions(rows)
+	for i := range transactions {
+		transactions[i].BudgetExpenseAmount = ledger.TransactionAmounts[transactions[i].ID]
+	}
+	return transactions, count, *line.Amount, err
 }
 
 // GetByUserAccountID retrieves all transactions for a specific user_account.

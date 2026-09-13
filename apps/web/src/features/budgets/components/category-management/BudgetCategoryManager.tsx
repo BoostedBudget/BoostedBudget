@@ -42,8 +42,11 @@ import type { CustomCategoryMap } from '../../utils/groupBudgetCategoriesByPrima
 import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 
 export interface BudgetCategoryManagerProps {
+  currencyCode?: string;
   /** Budget ID for API calls */
   budgetId: string;
+  periodStart?: string;
+  actualThrough?: string;
   /** List of budget categories to display */
   categories: BudgetCategory[];
   /** Total income for allocation breakdown */
@@ -77,6 +80,10 @@ interface DeleteDialogState {
 }
 
 export function BudgetCategoryManager({
+  currencyCode,
+  budgetId,
+  periodStart,
+  actualThrough,
   categories,
   totalIncome,
   onAddCategory,
@@ -332,6 +339,7 @@ export function BudgetCategoryManager({
       >
         <BudgetCategoryCard
           category={category}
+          currencyCode={currencyCode}
           variant={variant}
           customCategoryName={getCustomCategoryName(category.custom_category_id)}
           parentLabel={variant === 'child' ? parentLabel : undefined}
@@ -342,15 +350,15 @@ export function BudgetCategoryManager({
         />
       </div>
     ),
-    [handleKeyDown, handleOpenEditForm, handleOpenDeleteDialog, disabled, getCustomCategoryName]
+    [handleKeyDown, handleOpenEditForm, handleOpenDeleteDialog, disabled, getCustomCategoryName, currencyCode]
   );
 
   return (
     <div className="flex flex-col gap-6">
       {/* Header with add button */}
-      <div className="flex justify-between items-center gap-4">
+      <div className="flex flex-wrap justify-between items-center gap-4">
         <h2 className="text-lg font-semibold text-foreground m-0">Budget Categories</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => setManageOpen(true)}
@@ -453,6 +461,10 @@ export function BudgetCategoryManager({
 
       {/* Add/Edit Form Dialog */}
       <BudgetCategoryForm
+        currencyCode={currencyCode}
+        budgetId={budgetId}
+        budgetStartDate={periodStart}
+        budgetEndDate={actualThrough}
         isOpen={formDialog.isOpen}
         onClose={handleCloseForm}
         onSubmit={handleFormSubmit}
@@ -489,7 +501,7 @@ export function BudgetCategoryManager({
                 <>
                   {' '}Its {deleteDialogDirectChildren.length === 1 ? '1 child category' : `${deleteDialogDirectChildren.length} child categories`} will move up to the top level of
                   this budget, and the budget&apos;s total allocation will change by{' '}
-                  <span data-ph-mask>{formatCurrency(deleteDialogRemainder)}</span> (this
+                  <span data-ph-mask>{formatCurrency(deleteDialogRemainder, currencyCode)}</span> (this
                   category&apos;s own unallocated remainder).
                   {deleteDialogNestedGrandchildren.length > 0 && (
                     <>
