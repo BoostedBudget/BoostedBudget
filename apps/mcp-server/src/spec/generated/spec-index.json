@@ -4922,7 +4922,14 @@
         {
           "name": "categories[].category_kind",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "savings",
+            "group",
+            "remainder"
+          ]
         },
         {
           "name": "categories[].created_at",
@@ -5167,7 +5174,14 @@
         {
           "name": "categories[].category_kind",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "savings",
+            "group",
+            "remainder"
+          ]
         },
         {
           "name": "categories[].custom_category_id",
@@ -5314,7 +5328,14 @@
         {
           "name": "categories[].category_kind",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "savings",
+            "group",
+            "remainder"
+          ]
         },
         {
           "name": "categories[].created_at",
@@ -5559,7 +5580,13 @@
         {
           "name": "category_kind",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "group",
+            "remainder"
+          ]
         },
         {
           "name": "custom_category_id",
@@ -5589,7 +5616,14 @@
         {
           "name": "draft_categories[].category_kind",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "savings",
+            "group",
+            "remainder"
+          ]
         },
         {
           "name": "draft_categories[].created_at",
@@ -5848,7 +5882,14 @@
         {
           "name": "categories[].category_kind",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "savings",
+            "group",
+            "remainder"
+          ]
         },
         {
           "name": "categories[].created_at",
@@ -6111,7 +6152,14 @@
         {
           "name": "categories[].category_kind",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "savings",
+            "group",
+            "remainder"
+          ]
         },
         {
           "name": "categories[].created_at",
@@ -6449,7 +6497,14 @@
         {
           "name": "categories[].category_kind",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "savings",
+            "group",
+            "remainder"
+          ]
         },
         {
           "name": "categories[].created_at",
@@ -6713,7 +6768,14 @@
         {
           "name": "category_kind",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "savings",
+            "group",
+            "remainder"
+          ]
         },
         {
           "name": "custom_category_id",
@@ -6798,7 +6860,14 @@
         {
           "name": "category_kind",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "savings",
+            "group",
+            "remainder"
+          ]
         },
         {
           "name": "created_at",
@@ -7015,7 +7084,14 @@
         {
           "name": "category_kind",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "savings",
+            "group",
+            "remainder"
+          ]
         },
         {
           "name": "created_at",
@@ -7727,7 +7803,14 @@
         {
           "name": "categories[].category_kind",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "pfc",
+            "custom",
+            "savings",
+            "group",
+            "remainder"
+          ]
         },
         {
           "name": "categories[].created_at",
