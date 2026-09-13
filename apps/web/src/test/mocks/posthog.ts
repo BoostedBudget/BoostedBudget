@@ -32,7 +32,14 @@ export const mockCaptureProductEvent = mock((event: string, properties?: Record<
 })
 export const mockListenForAnalyticsWithdrawal = mock(() => () => {})
 
+const mockRetryQueue = {
+  _queue: [] as unknown[],
+  _enqueue(request: unknown) { this._queue.push(request) },
+  retriableRequest(request: unknown) { this._enqueue(request) },
+}
+
 export const mockPosthogInstance = {
+  _retryQueue: mockRetryQueue,
   config: { persistence_name: 'test', token: 'phc_test' },
   init: mockPosthogInit,
   capture: mockPosthogCapture,

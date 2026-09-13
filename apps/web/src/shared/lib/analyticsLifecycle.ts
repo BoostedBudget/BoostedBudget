@@ -168,8 +168,10 @@ export function createProductAnalyticsLifecycle({
     init,
     resetForTests(preserveInitialization = false) {
       const keepInitialization = preserveInitialization && initialized
-      if (keepInitialization) {
-        client.stopSessionRecording()
+      captureGate.setGranted(false)
+      if (initialized) {
+        suspendClient()
+        client.clearLegacyConsent()
         client.reset(true)
       }
       state = 'pending'
@@ -178,7 +180,6 @@ export function createProductAnalyticsLifecycle({
       scopeGeneration = 0
       withdrawnScope = null
       listeners.clear()
-      captureGate.setGranted(false)
     },
     setPersonProperties(properties) {
       if (state === 'granted' && captureGate.isGranted()) client.setPersonProperties(properties)

@@ -51,8 +51,15 @@ const CAMPAIGN_CLICK_ID_PROPERTIES = new Set([
 ])
 
 const WITHDRAWAL_STORAGE_KEY = 'boostedbudget:analytics-withdrawal'
+const YES_LIKE_PRIVACY_SIGNAL_VALUES = new Set<unknown>([true, 'true', 1, '1', 'yes'])
 
 export interface ClearablePostHogQueue {
+  // Pinned 1.430.2 ESM names: enqueue Ls, interval ca, polling ha, queue ia, timeout ma.
+  Ls?: (request: unknown) => unknown
+  ca?: number
+  ha?: boolean
+  ia?: unknown[]
+  ma?: ReturnType<typeof setTimeout>
   _enqueue?: (request: unknown) => unknown
   _flushTimeout?: ReturnType<typeof setTimeout>
   _isPolling?: boolean
@@ -62,6 +69,8 @@ export interface ClearablePostHogQueue {
 }
 
 export interface PostHogWithQueues {
+  // `Du` is `_retryQueue` in the pinned 1.430.2 ESM bundle.
+  Du?: ClearablePostHogQueue
   __request_queue?: unknown[]
   _requestQueue?: ClearablePostHogQueue
   _retryQueue?: ClearablePostHogQueue
@@ -99,7 +108,7 @@ export function clearPostHogQueuedEvents(
 ): void {
   // posthog-js 1.430.2 has no public queue-discard API. Clear both pinned SDK
   // queues so withdrawal cannot later transmit an event accepted beforehand.
-  for (const queue of [sdk._requestQueue, sdk._retryQueue]) {
+  for (const queue of [sdk._requestQueue, sdk._retryQueue ?? sdk.Du]) {
     if (!queue) continue
     if (queue._flushTimeout) clearTimeout(queue._flushTimeout)
     if (queue._poller) clearTimeout(queue._poller)
@@ -107,6 +116,10 @@ export function clearPostHogQueuedEvents(
     queue._poller = undefined
     queue._isPolling = false
     queue._queue = []
+    if (queue.ma) clearTimeout(queue.ma)
+    queue.ma = undefined
+    queue.ha = false
+    queue.ia = []
   }
   sdk.__request_queue = []
 }
@@ -123,13 +136,21 @@ export function guardPostHogRetryQueue(
   getGeneration: () => number,
   isGranted: () => boolean,
 ): () => void {
-  const queue = sdk._retryQueue
-  if (!queue) return () => {}
+  const queue = sdk._retryQueue ?? sdk.Du
+  if (!queue) {
+    throw new Error('Initialized PostHog retry queue is unavailable; pinned SDK compatibility failed')
+  }
   const installedCleanup = retryGuardCleanups.get(queue)
   if (installedCleanup) return installedCleanup
-  const originalEnqueue = queue._enqueue
+  const enqueueKey = queue._enqueue ? '_enqueue' : 'Ls'
+  const originalEnqueue = queue[enqueueKey]
   const originalRetriableRequest = queue.retriableRequest
-  if (!originalEnqueue || !originalRetriableRequest) return () => {}
+  if (!originalEnqueue) {
+    throw new Error('Initialized PostHog retry queue is missing _enqueue/Ls; pinned SDK compatibility failed')
+  }
+  if (!originalRetriableRequest) {
+    throw new Error('Initialized PostHog retry queue is missing retriableRequest; pinned SDK compatibility failed')
+  }
   const requestGenerations = new WeakMap<object, number>()
 
   function getRequestGeneration(request: unknown): number {
@@ -150,7 +171,7 @@ export function guardPostHogRetryQueue(
     requestGenerations.set(tagged, generation)
     return originalRetriableRequest.call(this, tagged)
   }
-  queue._enqueue = function guardedEnqueue(request) {
+  queue[enqueueKey] = function guardedEnqueue(request) {
     const generation = getRequestGeneration(request)
     if (!isGranted() || generation !== getGeneration()) return undefined
     return originalEnqueue.call(this, request)
@@ -158,7 +179,7 @@ export function guardPostHogRetryQueue(
 
   const cleanup = () => {
     queue.retriableRequest = originalRetriableRequest
-    queue._enqueue = originalEnqueue
+    queue[enqueueKey] = originalEnqueue
     retryGuardCleanups.delete(queue)
   }
   retryGuardCleanups.set(queue, cleanup)
@@ -310,8 +331,17 @@ export function isPostHogConfigured(): boolean {
 }
 
 export function isDoNotTrackEnabled(): boolean {
-  return navigator.doNotTrack === '1'
-    || (window as Window & { doNotTrack?: string }).doNotTrack === '1'
+  const privacyNavigator = navigator as Navigator & {
+    globalPrivacyControl?: boolean | number | string
+    msDoNotTrack?: boolean | number | string
+  }
+  const privacyWindow = window as Window & { doNotTrack?: boolean | number | string }
+  return [
+    navigator.doNotTrack,
+    privacyNavigator.msDoNotTrack,
+    privacyWindow.doNotTrack,
+    privacyNavigator.globalPrivacyControl,
+  ].some(value => YES_LIKE_PRIVACY_SIGNAL_VALUES.has(value))
 }
 
 export function getAnalyticsLifecycleState(): AnalyticsLifecycleState {
