@@ -8,7 +8,7 @@ GUARD="$REPO_ROOT/scripts/check-mobile-ci.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-TOTAL=48
+TOTAL=60
 case_no=0
 pass=0
 fail=0
@@ -62,6 +62,29 @@ elif action == 'replace-command':
     matches = [s for s in jobs['mobile-test']['steps'] if old in str(s.get('run', ''))]
     assert len(matches) == 1, (old, len(matches))
     matches[0]['run'] = str(matches[0]['run']).replace(old, new)
+elif action in ('echo-command', 'comment-command', 'dead-command', 'disable-command'):
+    matches = [s for s in jobs['mobile-test']['steps'] if value in str(s.get('run', ''))]
+    assert len(matches) == 1, (value, len(matches))
+    if action == 'echo-command':
+        matches[0]['run'] = 'echo ' + value
+    elif action == 'comment-command':
+        matches[0]['run'] = '# ' + value + '\necho no-op'
+    elif action == 'dead-command':
+        matches[0]['run'] = 'if false; then ' + value + '; fi'
+    else:
+        matches[0]['if'] = False
+elif action == 'doctor-working-directory':
+    matches = [s for s in jobs['mobile-test']['steps'] if 'doctor' in str(s.get('run', ''))]
+    assert len(matches) == 1, len(matches)
+    matches[0]['working-directory'] = value
+elif action == 'doctor-unpinned':
+    matches = [s for s in jobs['mobile-test']['steps'] if 'doctor' in str(s.get('run', ''))]
+    assert len(matches) == 1, len(matches)
+    matches[0]['run'] = 'bunx expo-doctor'
+elif action == 'float-action':
+    matches = [s for s in jobs['mobile-test']['steps'] if str(s.get('uses', '')).startswith(value + '@')]
+    assert len(matches) == 1, (value, len(matches))
+    matches[0]['uses'] = value + '@v4'
 elif action == 'host-needs':
     jobs['e2e-test']['needs'] = value
 elif action == 'host-if':
@@ -69,6 +92,21 @@ elif action == 'host-if':
 else:
     raise AssertionError(action)
 path.write_text(yaml.safe_dump(doc, sort_keys=False))
+PY
+}
+
+mutate_mobile_package() {
+  python3 - "$1" "$2" <<'PY'
+import json, pathlib, sys
+path, action = pathlib.Path(sys.argv[1]), sys.argv[2]
+doc = json.loads(path.read_text())
+if action == 'remove-doctor':
+    doc['devDependencies'].pop('expo-doctor', None)
+elif action == 'range-doctor':
+    doc['devDependencies']['expo-doctor'] = '^1.20.4'
+else:
+    raise AssertionError(action)
+path.write_text(json.dumps(doc, indent=2) + '\n')
 PY
 }
 
@@ -90,6 +128,10 @@ elif action == 'group-major-only':
     groups['expo-react-native-compatibility']['update-types'] = ['major']
 elif action == 'remove-required-pattern':
     groups['expo-react-native-compatibility']['patterns'].remove('nativewind')
+elif action == 'exclude-doctor-from-group':
+    patterns = groups['expo-react-native-compatibility']['patterns']
+    patterns.remove('expo-*')
+    patterns.extend(['expo-constants', 'expo-linking', 'expo-router', 'expo-status-bar'])
 elif action == 'generic-overlap':
     groups['frontend-framework']['exclude-patterns'].remove('react-dom')
 elif action == 'remove-expo-major-ignore':
@@ -119,6 +161,14 @@ reject_dependabot() {
   announce "$label"
   copy_fixture "$dir"
   mutate_dependabot "$dir/.github/dependabot.yml" "$action"
+  if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
+}
+
+reject_mobile_package() {
+  local label="$1" action="$2" dir="$TMP/case-$((case_no + 1))"
+  announce "$label"
+  copy_fixture "$dir"
+  mutate_mobile_package "$dir/apps/mobile/package.json" "$action"
   if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
 }
 
@@ -163,10 +213,24 @@ reject_workflow "design-token generated check is missing" "replace-command" "bun
 reject_workflow "mobile lint is missing" "replace-command" "bun run --cwd apps/mobile lint|echo skipped-lint"
 reject_workflow "mobile typecheck is missing" "replace-command" "bun run --cwd apps/mobile typecheck|echo skipped-typecheck"
 reject_workflow "Jest line floor drops below 82" "replace-command" '"global":{"lines":82}|"global":{"lines":81}'
-reject_workflow "Expo Doctor is missing" "replace-command" "bunx expo-doctor|echo skipped-expo-doctor"
+reject_workflow "Expo Doctor is missing" "replace-command" "bun run doctor|echo skipped-expo-doctor"
 reject_workflow "web export is missing" "replace-command" "bun run --cwd apps/mobile export:web|echo skipped-web-export"
 reject_workflow "iOS export is missing" "replace-command" "bun run --cwd apps/mobile export:ios|echo skipped-ios-export"
 reject_workflow "Android export is missing" "replace-command" "bun run --cwd apps/mobile export:android|echo skipped-android-export"
+
+# These retain the required command as inert text. A global substring scan accepts every one.
+reject_workflow "echo masquerades as mobile lint" "echo-command" "bun run --cwd apps/mobile lint"
+reject_workflow "comment masquerades as mobile typecheck" "comment-command" "bun run --cwd apps/mobile typecheck"
+reject_workflow "dead shell branch masquerades as web export" "dead-command" "bun run --cwd apps/mobile export:web"
+reject_workflow "required design-token step is disabled" "disable-command" "bun run --filter @boostedbudget/design-tokens check"
+reject_workflow "Expo Doctor runs from the wrong working directory" "doctor-working-directory" "."
+reject_workflow "checkout action floats on a tag" "float-action" "actions/checkout"
+reject_workflow "setup-node action floats on a tag" "float-action" "actions/setup-node"
+reject_workflow "setup-bun action floats on a tag" "float-action" "oven-sh/setup-bun"
+
+reject_mobile_package "Expo Doctor is absent from the mobile manifest" "remove-doctor"
+reject_mobile_package "Expo Doctor uses a non-exact version range" "range-doctor"
+reject_workflow "CI invokes unpinned Expo Doctor through bunx" "doctor-unpinned" "unused"
 
 reject_workflow "guard host gains paths-filter needs" "host-needs" "detect-changes"
 reject_workflow "guard host is disabled" "host-if" "unused"
@@ -183,6 +247,7 @@ if guard_passes "$lock_dir"; then bad "mobile lockfile accepted"; else ok "rejec
 reject_dependabot "Expo compatibility group is not first" "group-last"
 reject_dependabot "Expo compatibility group loses minor/patch update types" "group-major-only"
 reject_dependabot "Expo compatibility group drops a required runtime pattern" "remove-required-pattern"
+reject_dependabot "Expo compatibility group excludes Expo Doctor" "exclude-doctor-from-group"
 reject_dependabot "generic frontend group competes for React DOM" "generic-overlap"
 reject_dependabot "Expo major updates are no longer held" "remove-expo-major-ignore"
 reject_dependabot "React Native major updates are no longer held" "remove-react-native-major-ignore"
