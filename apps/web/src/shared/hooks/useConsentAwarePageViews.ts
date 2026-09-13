@@ -1,21 +1,31 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import {
   capturePageView,
-  getAnalyticsLifecycleState,
+  getAnalyticsLifecycleSnapshot,
+  isAnonymousAnalyticsPath,
+  isSensitiveAnalyticsPath,
+  sanitizeAnalyticsUrl,
   subscribeToAnalyticsLifecycle,
-  type AnalyticsLifecycleState,
+  type AnalyticsLifecycleSnapshot,
 } from '../lib/posthog'
 
 export interface PageViewDependencies {
   capture: (url: string) => void
-  getState: () => AnalyticsLifecycleState
-  subscribe: (listener: (state: AnalyticsLifecycleState) => void) => () => void
+  getSnapshot: () => AnalyticsLifecycleSnapshot
+  subscribe: (listener: (snapshot: AnalyticsLifecycleSnapshot) => void) => () => void
 }
 
 const defaultDependencies: PageViewDependencies = {
   capture: capturePageView,
-  getState: getAnalyticsLifecycleState,
+  getSnapshot: getAnalyticsLifecycleSnapshot,
   subscribe: subscribeToAnalyticsLifecycle,
+}
+
+function pageViewKey(url: string, snapshot: AnalyticsLifecycleSnapshot): string | null {
+  if (snapshot.scope === null) return null
+  if (isSensitiveAnalyticsPath(url)) return null
+  if (snapshot.scope === 'anonymous' && !isAnonymousAnalyticsPath(url)) return null
+  return `${snapshot.generation}:${snapshot.scope}:${sanitizeAnalyticsUrl(url)}`
 }
 
 export function useConsentAwarePageViews(
@@ -23,18 +33,29 @@ export function useConsentAwarePageViews(
   dependencies: PageViewDependencies = defaultDependencies,
 ): void {
   const latestUrl = useRef(url)
-  const lastCapturedUrl = useRef<string | null>(null)
+  const lastCapturedKey = useRef<string | null>(null)
   latestUrl.current = url
 
-  useEffect(() => {
-    if (dependencies.getState() !== 'granted' || lastCapturedUrl.current === url) return
-    dependencies.capture(url)
-    lastCapturedUrl.current = url
-  }, [dependencies, url])
+  const captureOnce = useCallback((
+    candidateUrl: string,
+    snapshot: AnalyticsLifecycleSnapshot,
+  ): void => {
+    if (snapshot.state !== 'granted') return
+    const key = pageViewKey(candidateUrl, snapshot)
+    if (key === null) {
+      lastCapturedKey.current = null
+      return
+    }
+    if (lastCapturedKey.current === key) return
+    dependencies.capture(candidateUrl)
+    lastCapturedKey.current = key
+  }, [dependencies])
 
-  useEffect(() => dependencies.subscribe(state => {
-    if (state !== 'granted') return
-    dependencies.capture(latestUrl.current)
-    lastCapturedUrl.current = latestUrl.current
-  }), [dependencies])
+  useEffect(() => {
+    captureOnce(url, dependencies.getSnapshot())
+  }, [captureOnce, dependencies, url])
+
+  useEffect(() => dependencies.subscribe(snapshot => {
+    captureOnce(latestUrl.current, snapshot)
+  }), [captureOnce, dependencies])
 }

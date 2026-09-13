@@ -6,9 +6,13 @@ import posthog, {
 import { redactCapabilityUrlPath } from '@boostedbudget/api-client/client'
 import { ANALYTICS_EVENTS } from '../analytics'
 import { isPiiKey } from './piiScrubbing'
-import { createProductAnalyticsLifecycle, type AnalyticsLifecycleState } from './analyticsLifecycle'
+import {
+  createProductAnalyticsLifecycle,
+  type AnalyticsLifecycleSnapshot,
+  type AnalyticsLifecycleState,
+} from './analyticsLifecycle'
 
-export type { AnalyticsLifecycleState } from './analyticsLifecycle'
+export type { AnalyticsLifecycleSnapshot, AnalyticsLifecycleState } from './analyticsLifecycle'
 
 const SENSITIVE_PATHS = [
   /^\/billing\/(?:manage|success)(?:\/|$)/,
@@ -17,6 +21,15 @@ const SENSITIVE_PATHS = [
   /^\/household\/invite(?:\/|$)/,
 ]
 const CALLBACK_SEGMENT = /\/(?:oauth-)?callback(?:\/|$)/
+const ANONYMOUS_PAGE_PATHS = new Set([
+  '/',
+  '/legal/privacy-policy',
+  '/privacy',
+  '/legal/terms',
+  '/legal/cookie-policy',
+  '/pricing',
+  '/mcp',
+])
 const ENTITY_ROUTES: ReadonlyArray<[RegExp, string]> = [
   [/^(.*\/accounts)\/[^/]+(\/.*)?$/, '$1/:accountId$2'],
   [/^(.*\/budgets)\/[^/]+(\/.*)?$/, '$1/:budgetId$2'],
@@ -51,6 +64,11 @@ export function isSensitiveAnalyticsPath(value: string): boolean {
   return redactCapabilityUrlPath(pathname) !== pathname
     || CALLBACK_SEGMENT.test(pathname)
     || SENSITIVE_PATHS.some(pattern => pattern.test(pathname))
+}
+
+export function isAnonymousAnalyticsPath(value: string): boolean {
+  const pathname = pathFromUrl(value).pathname.toLowerCase().replace(/\/+$/, '') || '/'
+  return ANONYMOUS_PAGE_PATHS.has(pathname)
 }
 
 export function sanitizeAnalyticsUrl(value: string): string {
@@ -166,6 +184,10 @@ export function getAnalyticsLifecycleState(): AnalyticsLifecycleState {
   return analyticsLifecycle.getState()
 }
 
+export function getAnalyticsLifecycleSnapshot(): AnalyticsLifecycleSnapshot {
+  return analyticsLifecycle.getSnapshot()
+}
+
 export function setAnalyticsLifecyclePending(): void {
   analyticsLifecycle.setPending()
 }
@@ -224,7 +246,7 @@ export function listenForAnalyticsWithdrawal(): () => void {
 }
 
 export function subscribeToAnalyticsLifecycle(
-  listener: (state: AnalyticsLifecycleState) => void,
+  listener: (snapshot: AnalyticsLifecycleSnapshot) => void,
 ): () => void {
   return analyticsLifecycle.subscribe(listener)
 }

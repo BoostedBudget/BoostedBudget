@@ -1,44 +1,107 @@
 import { describe, expect, it, mock } from 'bun:test'
 import { renderHook } from '@testing-library/react'
-import type { AnalyticsLifecycleState } from '../lib/posthog'
+import type { AnalyticsLifecycleSnapshot } from '../lib/posthog'
 import { useConsentAwarePageViews } from './useConsentAwarePageViews'
 
-describe('useConsentAwarePageViews', () => {
-  it('captures a pending route once when consent becomes granted', () => {
-    let state: AnalyticsLifecycleState = 'pending'
-    let listener: ((next: AnalyticsLifecycleState) => void) | undefined
-    const capture = mock((_url: string) => {})
-    const dependencies = {
+function createDependencies(initialSnapshot: AnalyticsLifecycleSnapshot) {
+  let snapshot = initialSnapshot
+  let listener: ((next: AnalyticsLifecycleSnapshot) => void) | undefined
+  const capture = mock((_url: string) => {})
+
+  return {
+    capture,
+    dependencies: {
       capture,
-      getState: () => state,
-      subscribe: (next: (value: AnalyticsLifecycleState) => void) => {
+      getSnapshot: () => snapshot,
+      subscribe: (next: (value: AnalyticsLifecycleSnapshot) => void) => {
         listener = next
         return () => { listener = undefined }
       },
-    }
+    },
+    publish(next: AnalyticsLifecycleSnapshot) {
+      snapshot = next
+      listener?.(next)
+    },
+  }
+}
+
+describe('useConsentAwarePageViews', () => {
+  it('captures a pending route once when consent becomes granted', () => {
+    const lifecycle = createDependencies({ state: 'pending', scope: 'user-a', generation: 1 })
     const { rerender } = renderHook(
-      ({ url }) => useConsentAwarePageViews(url, dependencies),
+      ({ url }) => useConsentAwarePageViews(url, lifecycle.dependencies),
       { initialProps: { url: '/dashboard?sentinel=query#sentinel-hash' } },
     )
-    expect(capture).not.toHaveBeenCalled()
+    expect(lifecycle.capture).not.toHaveBeenCalled()
 
-    state = 'granted'
-    listener?.('granted')
-    expect(capture).toHaveBeenCalledWith('/dashboard?sentinel=query#sentinel-hash')
+    lifecycle.publish({ state: 'granted', scope: 'user-a', generation: 1 })
+    expect(lifecycle.capture).toHaveBeenCalledWith('/dashboard?sentinel=query#sentinel-hash')
 
     rerender({ url: '/dashboard?sentinel=query#sentinel-hash' })
-    expect(capture).toHaveBeenCalledTimes(1)
+    expect(lifecycle.capture).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not recapture the unchanged route after a same-scope privacy refetch', () => {
+    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1 })
+    renderHook(() => useConsentAwarePageViews('/dashboard', lifecycle.dependencies))
+    expect(lifecycle.capture).toHaveBeenCalledTimes(1)
+
+    lifecycle.publish({ state: 'pending', scope: 'user-a', generation: 1 })
+    lifecycle.publish({ state: 'granted', scope: 'user-a', generation: 1 })
+
+    expect(lifecycle.capture).toHaveBeenCalledTimes(1)
+  })
+
+  it('deduplicates query and hash variants by their sanitized route', () => {
+    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1 })
+    const { rerender } = renderHook(
+      ({ url }) => useConsentAwarePageViews(url, lifecycle.dependencies),
+      { initialProps: { url: '/accounts/account-secret?query=sentinel' } },
+    )
+
+    rerender({ url: '/accounts/other-secret#hash-sentinel' })
+
+    expect(lifecycle.capture).toHaveBeenCalledTimes(1)
+  })
+
+  it('suppresses a protected route on logout until the anonymous public redirect', () => {
+    const lifecycle = createDependencies({ state: 'granted', scope: 'anonymous', generation: 1 })
+    const { rerender } = renderHook(
+      ({ url }) => useConsentAwarePageViews(url, lifecycle.dependencies),
+      { initialProps: { url: '/' } },
+    )
+
+    rerender({ url: '/dashboard' })
+    lifecycle.publish({ state: 'pending', scope: 'user-a', generation: 2 })
+    lifecycle.publish({ state: 'granted', scope: 'user-a', generation: 2 })
+    lifecycle.publish({ state: 'pending', scope: 'anonymous', generation: 3 })
+    lifecycle.publish({ state: 'granted', scope: 'anonymous', generation: 3 })
+    expect(lifecycle.capture.mock.calls.map(call => call[0])).toEqual(['/', '/dashboard'])
+
+    rerender({ url: '/' })
+    expect(lifecycle.capture.mock.calls.map(call => call[0])).toEqual(['/', '/dashboard', '/'])
+  })
+
+  it('captures the same route once for each identified user scope', () => {
+    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1 })
+    renderHook(() => useConsentAwarePageViews('/legal/privacy-policy', lifecycle.dependencies))
+
+    lifecycle.publish({ state: 'pending', scope: 'user-b', generation: 2 })
+    lifecycle.publish({ state: 'granted', scope: 'user-b', generation: 2 })
+
+    expect(lifecycle.capture.mock.calls.map(call => call[0])).toEqual([
+      '/legal/privacy-policy',
+      '/legal/privacy-policy',
+    ])
   })
 
   it('captures each granted navigation once and cleans up its subscriber', () => {
-    let listener: ((next: AnalyticsLifecycleState) => void) | undefined
     const capture = mock((_url: string) => {})
     const cleanup = mock(() => {})
     const dependencies = {
       capture,
-      getState: () => 'granted' as const,
-      subscribe: (next: (value: AnalyticsLifecycleState) => void) => {
-        listener = next
+      getSnapshot: () => ({ state: 'granted', scope: 'user-a', generation: 1 }) as const,
+      subscribe: (_next: (value: AnalyticsLifecycleSnapshot) => void) => {
         return cleanup
       },
     }
@@ -54,9 +117,24 @@ describe('useConsentAwarePageViews', () => {
       '/dashboard',
       '/accounts/account-sentinel?secret=query',
     ])
-
-    expect(listener).toBeFunction()
     unmount()
     expect(cleanup).toHaveBeenCalledTimes(1)
+  })
+
+  it('captures a new visit when navigation returns to a previously visited route', () => {
+    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1 })
+    const { rerender } = renderHook(
+      ({ url }) => useConsentAwarePageViews(url, lifecycle.dependencies),
+      { initialProps: { url: '/dashboard' } },
+    )
+
+    rerender({ url: '/planning' })
+    rerender({ url: '/dashboard' })
+
+    expect(lifecycle.capture.mock.calls.map(call => call[0])).toEqual([
+      '/dashboard',
+      '/planning',
+      '/dashboard',
+    ])
   })
 })

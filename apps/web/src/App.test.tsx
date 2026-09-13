@@ -14,6 +14,7 @@ import { ThemeProvider } from './shared/theme'
 import Cookies from 'js-cookie'
 import { COOKIE_CONSENT_NAME } from './privacy'
 import {
+  getAnalyticsLifecycleSnapshot,
   getAnalyticsLifecycleState,
   resetAnalyticsLifecycleForTests,
   subscribeToAnalyticsLifecycle,
@@ -145,7 +146,7 @@ describe('App', () => {
       const Wrapper = createMemoryWrapper(['/'])
       const analyticsPageViews = {
         capture: mockPosthogCapture,
-        getState: getAnalyticsLifecycleState,
+        getSnapshot: getAnalyticsLifecycleSnapshot,
         subscribe: subscribeToAnalyticsLifecycle,
       }
       const { rerender } = render(<App analyticsPageViews={analyticsPageViews} />, { wrapper: Wrapper })
@@ -167,9 +168,9 @@ describe('App', () => {
       rerender(<App analyticsPageViews={analyticsPageViews} />)
 
       await waitFor(() => expect(getAnalyticsLifecycleState()).toBe('granted'))
-      expect(mockPosthogCapture.mock.calls.map(call => call[0])).toEqual(['/', '/dashboard', '/'])
+      expect(mockPosthogCapture.mock.calls.map(call => call[0])).toEqual(['/', '/'])
       rerender(<App analyticsPageViews={analyticsPageViews} />)
-      expect(mockPosthogCapture.mock.calls.map(call => call[0])).toEqual(['/', '/dashboard', '/'])
+      expect(mockPosthogCapture.mock.calls.map(call => call[0])).toEqual(['/', '/'])
     })
   })
 
@@ -189,7 +190,7 @@ describe('App', () => {
     const Wrapper = createMemoryWrapper(['/legal/cookie-policy'])
     const analyticsPageViews = {
       capture: mockPosthogCapture,
-      getState: getAnalyticsLifecycleState,
+      getSnapshot: getAnalyticsLifecycleSnapshot,
       subscribe: subscribeToAnalyticsLifecycle,
     }
     const { rerender } = render(<App analyticsPageViews={analyticsPageViews} />, { wrapper: Wrapper })
@@ -204,6 +205,25 @@ describe('App', () => {
     } as never)
     rerender(<App analyticsPageViews={analyticsPageViews} />)
     await waitFor(() => expect(mockPosthogCapture).toHaveBeenCalledTimes(1))
+
+    mockUseGetPrivacySettings.mockReturnValue({
+      data: { gdpr_analytics_consent: true },
+      isLoading: false,
+      isFetching: true,
+      error: null,
+      refetch: mock(() => Promise.resolve()),
+    } as never)
+    rerender(<App analyticsPageViews={analyticsPageViews} />)
+
+    mockUseGetPrivacySettings.mockReturnValue({
+      data: { gdpr_analytics_consent: true },
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch: mock(() => Promise.resolve()),
+    } as never)
+    rerender(<App analyticsPageViews={analyticsPageViews} />)
+    await waitFor(() => expect(getAnalyticsLifecycleState()).toBe('granted'))
 
     rerender(<App analyticsPageViews={analyticsPageViews} />)
     expect(mockPosthogCapture).toHaveBeenCalledTimes(1)
