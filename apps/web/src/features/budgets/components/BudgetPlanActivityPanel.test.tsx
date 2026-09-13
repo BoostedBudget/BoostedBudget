@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
+import type { PropsWithChildren } from 'react'
 import type { BudgetPlanVsActualResponse } from '@boostedbudget/api-client/models'
 import BudgetPlanActivityPanel from './BudgetPlanActivityPanel'
 
@@ -15,8 +16,25 @@ const report: BudgetPlanVsActualResponse = {
 
 describe('BudgetPlanActivityPanel', () => {
   function renderPanel(data = report) {
-    return render(<QueryClientProvider client={new QueryClient()}><MemoryRouter><BudgetPlanActivityPanel data={data} onRefresh={() => {}} /></MemoryRouter></QueryClientProvider>)
+    const client = new QueryClient()
+    const wrapper = ({ children }: PropsWithChildren) => <QueryClientProvider client={client}><MemoryRouter>{children}</MemoryRouter></QueryClientProvider>
+    return render(<BudgetPlanActivityPanel data={data} onRefresh={() => {}} />, { wrapper })
   }
+  it.each(['expense', 'unbudgeted'] as const)('closes open %s activity when refreshed actuals become unavailable', (kind) => {
+    const line = { ...report.lines[0]!, kind }
+    const { rerender } = renderPanel({ ...report, lines: [line] })
+    fireEvent.click(screen.getByRole('button', { name: 'View allocation 1 activity' }))
+    expect(screen.getByRole('dialog', { name: 'Allocation activity' })).toBeInTheDocument()
+
+    const refreshed: BudgetPlanVsActualResponse = {
+      ...report, as_of: '2026-09-12T12:01:00Z', completeness: 'partial',
+      lines: [{ ...line, actual: null, variance: null, completeness: 'unavailable', reasons: ['mixed_currency'] }],
+    }
+    rerender(<BudgetPlanActivityPanel data={refreshed} onRefresh={() => {}} />)
+
+    expect(screen.queryAllByRole('dialog', { name: 'Allocation activity' })).toHaveLength(0)
+    expect(screen.getByText('Activity unavailable')).toBeInTheDocument()
+  })
   it('provides a privacy toggle and opens the matching allocation activity dialog', () => {
     renderPanel()
     fireEvent.click(screen.getByRole('button', { name: 'Hide amounts' }))
@@ -26,5 +44,18 @@ describe('BudgetPlanActivityPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View allocation 1 activity' }))
     expect(screen.getByRole('dialog', { name: 'Allocation activity' })).toBeInTheDocument()
     expect(screen.getByText(/Posted spending from 2026-09-01 through 2026-09-12/)).toBeInTheDocument()
+  })
+  it('keeps savings full history open when period activity becomes unknown', () => {
+    const line = { ...report.lines[0]!, kind: 'savings' as const, savings_goal_id: 'goal-1' }
+    const { rerender } = renderPanel({ ...report, lines: [line] })
+    fireEvent.click(screen.getByRole('button', { name: 'View allocation 1 full savings history' }))
+    expect(screen.getByRole('dialog', { name: /Contributions/ })).toBeInTheDocument()
+
+    const refreshed: BudgetPlanVsActualResponse = {
+      ...report, completeness: 'partial',
+      lines: [{ ...line, actual: null, variance: null, completeness: 'unavailable', reasons: ['legacy_savings_origin'] }],
+    }
+    rerender(<BudgetPlanActivityPanel data={refreshed} onRefresh={() => {}} />)
+    expect(screen.getByRole('dialog', { name: /Contributions/ })).toBeInTheDocument()
   })
 })
