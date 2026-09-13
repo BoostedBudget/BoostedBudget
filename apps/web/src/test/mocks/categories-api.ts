@@ -3,6 +3,8 @@
 
 import { mock } from 'bun:test'
 import * as RealCategoriesModule from '@boostedbudget/api-client/endpoints/categories/categories'
+import type { Detailed } from '@boostedbudget/api-client/models/detailed'
+import type { Primary } from '@boostedbudget/api-client/models/primary'
 
 // === useCreateCategory ===
 export const mockCreateCategoryMutateAsync = mock(() => Promise.resolve())
@@ -41,14 +43,14 @@ export const mockUseGetPlaidCategories = mock(() => ({
 }))
 
 // === useGetPlaidPrimaryCategories ===
-export const mockUseGetPlaidPrimaryCategories = mock(() => ({
+export const mockUseGetPlaidPrimaryCategories = mock((): { data: Primary[]; isLoading: boolean; error: Error | null; refetch?: () => Promise<unknown> } => ({
   data: [],
   isLoading: false,
   error: null,
 }))
 
 // === useGetPlaidDetailedCategories ===
-export const mockUseGetPlaidDetailedCategories = mock(() => ({
+export const mockUseGetPlaidDetailedCategories = mock((): { data: Detailed[]; isLoading: boolean; error: Error | null; refetch?: () => Promise<unknown> } => ({
   data: [],
   isLoading: false,
   error: null,

@@ -32,4 +32,7 @@
  */
 import type { AccountTypeBalance } from './accountTypeBalance';
 
+/**
+ * Account type totals and individual balances use the same signed contributions as total_balance
+ */
 export type BalanceSummaryResponseByType = {[key: string]: AccountTypeBalance};

@@ -176,7 +176,6 @@ export function TransactionsPage() {
     isFetchingNextPage,
     isLoading,
     isError,
-    updateTransaction,
   } = useInfiniteTransactions({ filters, limit: 50, sortBy: sortColumn, sortDir: sortDirection })
 
   // Track successful infinite scroll load-more
@@ -203,7 +202,8 @@ export function TransactionsPage() {
   const handleOpenEditor = useCallback((transaction: Transaction) => {
     setSelectedTransaction(transaction)
     setIsEditorOpen(true)
-  }, [])
+    trackEvent(ANALYTICS_EVENTS.TRANSACTION_EDITOR_OPENED, { source: 'transactions' })
+  }, [trackEvent])
 
   // T2: handleRowClick now takes FeedRow directly — no double-cast needed.
   const handleRowClick = useCallback((row: FeedRow) => {
@@ -221,6 +221,13 @@ export function TransactionsPage() {
     setIncludeInvestmentActivity(enabled)
     trackEvent(ANALYTICS_EVENTS.INVESTMENT_ACTIVITY_FILTER_TOGGLED, { enabled })
   }, [setIncludeInvestmentActivity, trackEvent])
+
+  const handleReviewedChange = useCallback((value: boolean | undefined) => {
+    setFilter('reviewed', value)
+    trackEvent(ANALYTICS_EVENTS.TRANSACTION_REVIEW_FILTER_CHANGED, {
+      state: value === undefined ? 'all' : value ? 'reviewed' : 'unreviewed',
+    })
+  }, [setFilter, trackEvent])
 
   // Issue #1569 T12: reversals are opt-in, so the toggle is a user decision worth recording.
   const handleIncludeReversedChange = useCallback((enabled: boolean) => {
@@ -245,10 +252,11 @@ export function TransactionsPage() {
     setSelectedTransaction(null)
   }, [])
 
-  const handleEditorSave = useCallback((updatedTransaction: Transaction) => {
-    updateTransaction(updatedTransaction as unknown as import('@boostedbudget/api-client/models/transaction').Transaction)
+  const handleEditorSave = useCallback(() => {
+    // The editor owns merging mutation responses before invalidating queries.
+    // Updating here would cancel the authoritative filtered refetch.
     handleEditorClose()
-  }, [updateTransaction, handleEditorClose])
+  }, [handleEditorClose])
 
   const handleTagCreated = useCallback(
     (_tag: UserTag) => {
@@ -322,6 +330,7 @@ export function TransactionsPage() {
         onDatePresetChange={setDatePreset}
         onCustomDateChange={setCustomDateRange}
         onStatusFilterChange={setStatusFilter}
+        onReviewedChange={handleReviewedChange}
         onIncludeInvestmentActivityChange={handleIncludeInvestmentChange}
         onActivityTypesChange={handleActivityTypesChange}
         onIncludeReversedChange={handleIncludeReversedChange}
@@ -413,6 +422,7 @@ export function TransactionsPage() {
       {selectedTransaction && (
         <TransactionEditor
           transaction={selectedTransaction}
+          account={accountsMap[selectedTransaction.account_id]}
           availableTags={availableTags}
           availableCategories={availableCategories}
           plaidPrimaries={plaidPrimaries}

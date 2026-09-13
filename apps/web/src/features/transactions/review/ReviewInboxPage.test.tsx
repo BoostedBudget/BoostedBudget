@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router'
 import type { ReactNode } from 'react'
@@ -13,9 +13,13 @@ import {
   mockUseBulkSetTransactionReviewed,
   mockBulkUpdateTransactionCategoryMutateAsync,
   mockUseBulkUpdateTransactionCategory,
+  mockUpdateTransactionTagsMutateAsync,
+  mockUseUpdateTransactionTags,
 } from '@/test/mocks/transactions-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { mockToastSuccess } from '@/test/mocks/sonner'
+import { mockUseGetPlaidDetailedCategories } from '@/test/mocks/categories-api'
+import { mockUseGetAccounts, mockRefetchAccounts } from '@/test/mocks/accounts-api'
 
 const REVIEW_ANALYTICS_EVENTS = {
   REVIEW_INBOX_VIEWED: 'review_inbox_viewed',
@@ -65,8 +69,7 @@ const mockTx2: Transaction = {
   updated_at: '2026-05-02T10:00:00Z',
 }
 
-function createWrapper() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+function createWrapper(qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={qc}>
@@ -110,7 +113,200 @@ function configureBase(transactions: Transaction[] = []) {
 }
 
 describe('ReviewInboxPage', () => {
+  it('renders complete masked row context and opens the real editor from triage', async () => {
+    configureBase([{ ...mockTx, amount: -25, tags: ['Holiday'], pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_COFFEE' }])
+    mockUseGetAccounts.mockReturnValue({ data: { accounts: [{ id: 'acct-1', name: 'Closed checking', status: 'removed' }] }, isLoading: false, isError: false, error: null, refetch: mockRefetchAccounts } as never)
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    const merchant = await screen.findByRole('cell', { name: /Starbucks Coffee/ })
+    for (const value of ['Closed checking', 'Food & Drink', 'Coffee', '+$25.00']) {
+      expect(screen.getByRole('cell', { name: value })).toHaveAttribute('data-ph-mask')
+    }
+    expect(within(merchant).getByText('Holiday')).toBeInTheDocument()
+    fireEvent.click(merchant)
+    expect(screen.getByRole('button', { name: /approve/i })).toBeInTheDocument()
+    const edit = screen.getByRole('button', { name: 'Edit details' })
+    fireEvent.keyDown(edit, { key: 'Enter' })
+    expect(mockSetTransactionReviewedMutateAsync).not.toHaveBeenCalled()
+    fireEvent.click(edit)
+    expect(screen.getByRole('dialog', { name: 'Edit Transaction' })).toBeInTheDocument()
+    expect(mockTrackEvent).toHaveBeenCalledWith('transaction_editor_opened', { source: 'review' })
+    fireEvent.keyDown(document, { key: 'e' })
+    expect(mockSetTransactionReviewedMutateAsync).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['reorder', [mockTx2, mockTx], 'Starbucks Coffee'],
+    ['first removal', [mockTx2], 'Amazon'],
+    ['empty', [], null],
+  ] as const)('reconciles selected identity on %s', async (_case, next, expected) => {
+    configureBase([mockTx, mockTx2])
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+    render(<ReviewInboxPage />, { wrapper: createWrapper(qc) })
+    fireEvent.click(await screen.findByRole('cell', { name: 'Starbucks Coffee' }))
+    mockGetTransactions.mockResolvedValue({ transactions: next, limit: 30 })
+    await act(async () => { await qc.invalidateQueries() })
+    if (expected) {
+      await waitFor(() => expect(screen.getAllByText(expected)).toHaveLength(2))
+      if (_case === 'reorder') await waitFor(() => expect(screen.getByText('2 / 2')).toBeInTheDocument())
+      expect(screen.getByRole('button', { name: 'Edit details' })).toBeInTheDocument()
+    } else await waitFor(() => expect(screen.queryByRole('button', { name: /approve/i })).toBeNull())
+  })
+
+  it('holds the editor snapshot through a refetch that removes its row', async () => {
+    configureBase([mockTx, mockTx2])
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+    render(<ReviewInboxPage />, { wrapper: createWrapper(qc) })
+    fireEvent.click(await screen.findByRole('cell', { name: 'Starbucks Coffee' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit details' }))
+    mockGetTransactions.mockResolvedValue({ transactions: [mockTx2], limit: 30 })
+    await act(async () => { await qc.invalidateQueries() })
+    expect(within(screen.getByRole('dialog')).getByText('Starbucks Coffee')).toBeInTheDocument()
+    expect(within(screen.getByRole('dialog')).queryByText('Amazon')).toBeNull()
+  })
+
+  it('restores Edit details focus on Escape and retains letter shortcuts without Enter approval', async () => {
+    configureBase([mockTx])
+    mockSetTransactionReviewedMutateAsync.mockResolvedValue({})
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    fireEvent.click(await screen.findByRole('cell', { name: 'Starbucks Coffee' }))
+    const edit = screen.getByRole('button', { name: 'Edit details' })
+    edit.focus()
+    fireEvent.click(edit)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(edit))
+    fireEvent.keyDown(edit, { key: 'Enter' })
+    expect(mockSetTransactionReviewedMutateAsync).not.toHaveBeenCalled()
+    fireEvent.keyDown(edit, { key: 'e' })
+    await waitFor(() => expect(mockSetTransactionReviewedMutateAsync).toHaveBeenCalledTimes(1))
+  })
+
+  it.each(['middle', 'last'])('selects the successor or previous row after %s removal', async position => {
+    const third = { ...mockTx, id: 'tx-3', name: 'Third', merchant_name: 'Third' }
+    configureBase([mockTx, mockTx2, third])
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<ReviewInboxPage />, { wrapper: createWrapper(qc) })
+    fireEvent.click(await screen.findByRole('cell', { name: position === 'middle' ? 'Amazon' : 'Third' }))
+    mockGetTransactions.mockResolvedValue({ transactions: position === 'middle' ? [mockTx, third] : [mockTx, mockTx2], limit: 30 })
+    await act(async () => { await qc.invalidateQueries() })
+    await waitFor(() => expect(screen.getAllByText(position === 'middle' ? 'Third' : 'Amazon')).toHaveLength(2))
+  })
+
+  it('saves the original editor ID after pending refetch removal and restores safe focus', async () => {
+    configureBase([{ ...mockTx, tags: ['Trip'] }, mockTx2])
+    let resolve!: (value: Transaction) => void
+    mockUpdateTransactionTagsMutateAsync.mockImplementationOnce(() => new Promise<Transaction>(r => { resolve = r }))
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<ReviewInboxPage />, { wrapper: createWrapper(qc) })
+    fireEvent.click(await screen.findByRole('cell', { name: /Starbucks Coffee/ }))
+    const edit = screen.getByRole('button', { name: 'Edit details' })
+    edit.focus()
+    fireEvent.click(edit)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Trip' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    mockGetTransactions.mockResolvedValue({ transactions: [mockTx2], limit: 30 })
+    await act(async () => { await qc.invalidateQueries() })
+    await waitFor(() => expect(screen.queryByRole('cell', { name: /Starbucks Coffee/ })).toBeNull())
+    expect(within(screen.getByRole('dialog')).getByText('Starbucks Coffee')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+    fireEvent.keyDown(document, { key: 'Enter' })
+    expect(mockSetTransactionReviewedMutateAsync).not.toHaveBeenCalled()
+    expect(mockUpdateTransactionTagsMutateAsync).toHaveBeenCalledWith({ id: 'tx-1', data: { tags: [] } })
+    await act(async () => resolve({ ...mockTx, tags: [] }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(edit))
+    fireEvent.keyDown(edit, { key: 'Enter' })
+    expect(mockSetTransactionReviewedMutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('prevents duplicate approve requests before a mutation hook rerenders', async () => {
+    configureBase([mockTx])
+    let resolve!: () => void
+    mockSetTransactionReviewedMutateAsync.mockImplementation(() => new Promise<void>(r => { resolve = r }) as never)
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    fireEvent.click(await screen.findByRole('cell', { name: 'Starbucks Coffee' }))
+    fireEvent.keyDown(document, { key: 'e' })
+    fireEvent.keyDown(document, { key: 'e' })
+    expect(mockSetTransactionReviewedMutateAsync).toHaveBeenCalledTimes(1)
+    await act(async () => resolve())
+  })
+
+  it.each(['Next transaction', 'Previous transaction', 'Close triage'])('guards same-tick approve then %s', async name => {
+    configureBase([mockTx, mockTx2, { ...mockTx, id: 'tx-3', name: 'Third', merchant_name: 'Third' }])
+    let resolve!: () => void
+    mockSetTransactionReviewedMutateAsync.mockImplementationOnce(() => new Promise<void>(r => { resolve = r }) as never)
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    fireEvent.click(await screen.findByRole('cell', { name: 'Amazon' }))
+    const approve = screen.getByRole('button', { name: /approve/i })
+    const navigate = screen.getByRole('button', { name })
+    act(() => { approve.click(); navigate.click() })
+    expect(screen.getByText('2 / 3')).toBeInTheDocument()
+    expect(screen.getAllByText('Amazon')).toHaveLength(2)
+    await act(async () => resolve())
+  })
+
+  it('retains paging and clears selection when switching presets', async () => {
+    configureBase([mockTx])
+    mockGetTransactions.mockResolvedValueOnce({ transactions: [mockTx], next_cursor: 'next-page', limit: 30 })
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    await screen.findByRole('cell', { name: 'Starbucks Coffee' })
+    fireEvent.click(screen.getAllByRole('checkbox')[1])
+    mockGetTransactions.mockResolvedValueOnce({ transactions: [mockTx2], limit: 30 })
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    await screen.findByRole('cell', { name: 'Amazon' })
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+    expect(mockGetTransactions).toHaveBeenCalledWith(expect.objectContaining({ cursor: 'next-page' }), undefined, expect.anything())
+    fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }))
+    await waitFor(() => expect(mockGetTransactions).toHaveBeenLastCalledWith(expect.objectContaining({ reviewed: 'true' }), undefined, expect.anything()))
+    expect(screen.queryByText('1 selected')).toBeNull()
+  })
+
+  it('bounds mobile triage to a scrollable viewport area', async () => {
+    configureBase([mockTx])
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    const edit = await screen.findByRole('button', { name: 'Edit details' })
+    const wrapper = edit.closest('.fixed')
+    expect(wrapper).toHaveClass('max-h-[calc(100dvh-8rem)]', 'overflow-y-auto', 'md:max-h-none')
+  })
+
+  it.each(['triage', 'bulk'])('gates stale %s undo while editing and serializes undo retries', async mode => {
+    configureBase([mockTx])
+    mockSetTransactionReviewedMutateAsync.mockResolvedValue({})
+    mockBulkSetTransactionReviewedMutateAsync.mockResolvedValue({})
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    const cell = await screen.findByRole('cell', { name: 'Starbucks Coffee' })
+    if (mode === 'bulk') {
+      fireEvent.click(screen.getAllByRole('checkbox')[1])
+      fireEvent.click(screen.getByRole('button', { name: 'Mark selected as reviewed' }))
+    } else {
+      fireEvent.click(cell)
+      fireEvent.click(screen.getByRole('button', { name: /approve/i }))
+    }
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalled())
+    const [, options] = mockToastSuccess.mock.calls[0] as unknown as [string, { action: { onClick: () => Promise<void> } }]
+    const undo = options.action.onClick
+    fireEvent.click(cell)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit details' }))
+    const mutation = mode === 'bulk' ? mockBulkSetTransactionReviewedMutateAsync : mockSetTransactionReviewedMutateAsync
+    mutation.mockClear()
+    await act(async () => undo())
+    expect(mutation).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    let resolve!: () => void
+    mutation.mockImplementationOnce(() => new Promise<void>(r => { resolve = r }) as never)
+    let pending!: Promise<void>
+    act(() => { pending = undo(); void undo() })
+    expect(mutation).toHaveBeenCalledTimes(1)
+    await act(async () => { resolve(); await pending })
+  })
+
   beforeEach(() => {
+    mockUpdateTransactionTagsMutateAsync.mockReset()
+    mockUseUpdateTransactionTags.mockReturnValue({ mutateAsync: mockUpdateTransactionTagsMutateAsync, isPending: false })
+    mockUseGetAccounts.mockReturnValue({ data: undefined, isLoading: false, isError: false, error: null, refetch: mockRefetchAccounts })
+    mockUseGetPlaidDetailedCategories.mockReturnValue({ data: [], isLoading: false, error: null })
     setDesktopViewport()
     mockGetTransactions.mockReset()
     mockUseGetTransactionReviewSummary.mockReset()
@@ -310,6 +506,11 @@ describe('ReviewInboxPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Recategorize selected' }))
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
     expect(screen.getByText('Recategorize 1 transaction')).toBeInTheDocument()
+    expect(screen.getByText('Bank category')).toBeInTheDocument()
+    expect(within(screen.getByRole('dialog')).queryByText('Uncategorized')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Change category' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset category override' }))
+    expect(screen.getByText('Bank category')).toBeInTheDocument()
   })
 
   it('closes bulk recategorize dialog on Cancel', async () => {
@@ -324,6 +525,65 @@ describe('ReviewInboxPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('bulk Apply stays disabled during search and submits both selected bank enums', async () => {
+    configureBase([mockTx])
+    mockBulkUpdateTransactionCategoryMutateAsync.mockResolvedValue({})
+    mockUseGetPlaidDetailedCategories.mockReturnValue({ data: [{ enum: 'RENT_AND_UTILITIES_TELEPHONE', display: 'Telephone', primary_enum: 'RENT_AND_UTILITIES', primary_display: 'Rent & Utilities' }], isLoading: false, error: null })
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    await waitFor(() => expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument())
+    fireEvent.click(screen.getAllByRole('checkbox')[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Recategorize selected' }))
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Change category' }))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'telephone' } })
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    await waitFor(() => expect(mockBulkUpdateTransactionCategoryMutateAsync).toHaveBeenCalledWith({ data: { transaction_ids: ['tx-1'], kind: 'pfc', pfc_primary: 'RENT_AND_UTILITIES', pfc_detailed: 'RENT_AND_UTILITIES_TELEPHONE' } }))
+  })
+
+  for (const target of ['search', 'new category name'] as const) {
+    it(`Escape from bulk category ${target} preserves the pending selection`, async () => {
+      configureBase([mockTx])
+      mockBulkUpdateTransactionCategoryMutateAsync.mockResolvedValue({ requested: 1, updated: 1 })
+      mockUseGetPlaidDetailedCategories.mockReturnValue({ data: [{ enum: 'RENT_AND_UTILITIES_TELEPHONE', display: 'Telephone', primary_enum: 'RENT_AND_UTILITIES', primary_display: 'Rent & Utilities' }], isLoading: false, error: null })
+      render(<ReviewInboxPage />, { wrapper: createWrapper() })
+      await waitFor(() => expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument())
+      fireEvent.click(screen.getAllByRole('checkbox')[1])
+      fireEvent.click(screen.getByRole('button', { name: 'Recategorize selected' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Change category' }))
+      fireEvent.click(screen.getByRole('option', { name: 'Telephone' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Change category' }))
+      const search = screen.getByRole('combobox', { name: 'Search categories' })
+      await waitFor(() => expect(search).toHaveFocus())
+      let input = search
+      if (target === 'new category name') {
+        fireEvent.click(screen.getByRole('button', { name: /create new category/i }))
+        input = screen.getByRole('textbox', { name: 'Category name' })
+        input.focus()
+      }
+      fireEvent.keyDown(input, { key: 'Escape' })
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.queryByRole('combobox', { name: 'Search categories' })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Change category' })).toHaveFocus()
+      expect(screen.getByText('Rent & Utilities › Telephone')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled()
+      expect(mockBulkUpdateTransactionCategoryMutateAsync).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+      await waitFor(() => expect(mockBulkUpdateTransactionCategoryMutateAsync).toHaveBeenCalledWith({ data: { transaction_ids: ['tx-1'], kind: 'pfc', pfc_primary: 'RENT_AND_UTILITIES', pfc_detailed: 'RENT_AND_UTILITIES_TELEPHONE' } }))
+    })
+  }
+
+  it('Escape dismisses the bulk dialog when the category picker is closed', async () => {
+    configureBase([mockTx])
+    render(<ReviewInboxPage />, { wrapper: createWrapper() })
+    await waitFor(() => expect(screen.getByText('Starbucks Coffee')).toBeInTheDocument())
+    fireEvent.click(screen.getAllByRole('checkbox')[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Recategorize selected' }))
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Change category' }), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
   it('shows effective_merchant_name in the merchant column when override is present', async () => {

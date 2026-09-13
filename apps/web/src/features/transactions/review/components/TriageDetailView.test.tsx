@@ -1,7 +1,15 @@
-import { describe, it, expect, mock } from 'bun:test'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TriageDetailView } from './TriageDetailView'
 import type { Transaction } from '../../types'
+import { mockUseGetUserCategories, mockUseGetPlaidPrimaryCategories, mockUseGetPlaidDetailedCategories } from '@/test/mocks/categories-api'
+
+beforeEach(() => {
+  mockUseGetUserCategories.mockReturnValue({ data: undefined, isLoading: false, error: null, refetch: mock(async () => {}) })
+  mockUseGetPlaidPrimaryCategories.mockReturnValue({ data: [], isLoading: false, error: null })
+  mockUseGetPlaidDetailedCategories.mockReturnValue({ data: [], isLoading: false, error: null })
+})
 
 const mockTx: Transaction = {
   id: 'tx-1',
@@ -36,14 +44,52 @@ function renderTriage(overrides?: Partial<Parameters<typeof TriageDetailView>[0]
     isPending: false,
     ...overrides,
   }
-  return { ...render(<TriageDetailView {...props} />), props }
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return { ...render(<TriageDetailView {...props} />, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> }), props }
 }
 
 describe('TriageDetailView', () => {
+  it('shows masked context, pending status and a signed inflow', () => {
+    renderTriage({ transaction: { ...mockTx, amount: -42.5, pending: true, tags: ['Holiday'], pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_COFFEE' }, account: { name: 'Closed checking' } })
+    for (const text of ['Coffee Shop', 'Closed checking', 'Holiday', '+$42.50', 'Food & Drink › Coffee']) {
+      expect(screen.getByText(text).closest('[data-ph-mask]')).not.toBeNull()
+    }
+    expect(screen.getByText('Pending')).toBeInTheDocument()
+  })
+
+  it('does not approve on Enter from an interactive control', () => {
+    const { props } = renderTriage()
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Close triage' }), { key: 'Enter' })
+    expect(props.onApprove).not.toHaveBeenCalled()
+    fireEvent.keyDown(document, { key: 'Enter' })
+    expect(props.onApprove).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables triage controls behind an overlay', () => {
+    renderTriage({ currentIndex: 1, externalOverlayOpen: true })
+    for (const name of [/approve/i, /skip/i, /previous transaction/i, /next transaction/i, /close triage/i, /recategorize transaction/i]) {
+      expect(screen.getByRole('button', { name })).toBeDisabled()
+    }
+  })
+
+  it('blocks navigation while preserving a pending category write', async () => {
+    let resolve!: () => void
+    const onRecategorize = mock(() => new Promise<void>(r => { resolve = r }))
+    renderTriage({ transaction: { ...mockTx, pfc_primary: 'FOOD_AND_DRINK' }, onRecategorize })
+    fireEvent.click(screen.getByRole('button', { name: 'Recategorize transaction' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reset category override' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(onRecategorize).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Next transaction' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+    resolve()
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Apply' })).toBeNull())
+  })
   it('renders merchant name, amount, and date', () => {
     renderTriage()
     expect(screen.getByText('Blue Bottle Coffee')).toBeInTheDocument()
-    expect(screen.getByText('$42.50')).toBeInTheDocument()
+    expect(screen.getByText('-$42.50')).toBeInTheDocument()
     // #1631: formatted through the shared formatDate rather than printed raw. Asserting the
     // formatted form AND the absence of the raw one, because getByText('2026-05-01') passed
     // against the unformatted render and so proved nothing about formatting.
@@ -240,21 +286,15 @@ describe('#1625 recategorize panel seeding', () => {
   it('shows the existing PFC category, not "Uncategorized"', () => {
     openPanel({ transaction: pfcTx, plaidPrimaries })
     expect(screen.queryByText('Uncategorized')).not.toBeInTheDocument()
-    expect(screen.getByText('Food and Drink')).toBeInTheDocument()
+    expect(screen.getAllByText(/Food.*Drink › Coffee/)).toHaveLength(2)
   })
 
   it('does NOT clear the category when Apply is pressed without touching it', () => {
     const { props } = openPanel({ transaction: pfcTx, plaidPrimaries })
     fireEvent.click(screen.getByRole('button', { name: /apply/i }))
 
-    expect(props.onRecategorize).toHaveBeenCalledTimes(1)
-    const req = (props.onRecategorize as ReturnType<typeof mock>).mock.calls[0][0]
-    expect(req.kind).not.toBe('clear')
-    expect(req).toEqual({
-      kind: 'pfc',
-      pfc_primary: 'FOOD_AND_DRINK',
-      pfc_detailed: 'FOOD_AND_DRINK_COFFEE',
-    })
+    expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled()
+    expect(props.onRecategorize).not.toHaveBeenCalled()
   })
 
   it('round-trips an untouched CUSTOM category as custom, not as a PFC enum', () => {
@@ -269,16 +309,28 @@ describe('#1625 recategorize panel seeding', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: /apply/i }))
 
-    const req = (props.onRecategorize as ReturnType<typeof mock>).mock.calls[0][0]
-    expect(req).toEqual({ kind: 'custom', custom_category_id: 'cat-99' })
+    expect(screen.getAllByText('Coffee Budget')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled()
+    expect(props.onRecategorize).not.toHaveBeenCalled()
   })
 
-  it('still clears when the user explicitly clears the category', () => {
+  it('keeps failed recategorization open with its selected draft', async () => {
+    const onRecategorize = mock(async () => { throw new Error('offline') })
+    openPanel({ transaction: pfcTx, plaidPrimaries, onRecategorize })
+    fireEvent.click(screen.getByRole('button', { name: /reset category override/i }))
+    fireEvent.click(screen.getByRole('button', { name: /apply/i }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Failed to recategorize'))
+    expect(screen.getByText('Uses the bank category when available.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /apply/i })).toBeEnabled()
+  })
+
+  it('still clears when the user explicitly clears the category', async () => {
     const { props } = openPanel({ transaction: pfcTx, plaidPrimaries })
-    fireEvent.click(screen.getByRole('button', { name: /clear category/i }))
+    fireEvent.click(screen.getByRole('button', { name: /reset category override/i }))
     fireEvent.click(screen.getByRole('button', { name: /apply/i }))
 
     expect((props.onRecategorize as ReturnType<typeof mock>).mock.calls[0][0]).toEqual({ kind: 'clear' })
+    await waitFor(() => expect(screen.queryByRole('button', { name: /apply/i })).not.toBeInTheDocument())
   })
 
   it('re-seeds when the transaction changes underneath an open panel', () => {
@@ -292,7 +344,8 @@ describe('#1625 recategorize panel seeding', () => {
     rerender(<TriageDetailView {...props} transaction={nextTx} plaidPrimaries={plaidPrimaries} />)
     fireEvent.click(screen.getByRole('button', { name: /apply/i }))
 
-    const req = (props.onRecategorize as ReturnType<typeof mock>).mock.calls[0][0]
-    expect(req).toEqual({ kind: 'pfc', pfc_primary: 'TRANSPORTATION', pfc_detailed: undefined })
+    expect(screen.getAllByText('Transportation')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled()
+    expect(props.onRecategorize).not.toHaveBeenCalled()
   })
 })

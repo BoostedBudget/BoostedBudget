@@ -11,6 +11,7 @@ import { useBudgetTransactions } from '../../hooks/useBudgetTransactions';
 import { TransactionCard } from '../../../transactions/components/TransactionCard';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
+import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 
 interface BudgetTransactionListProps {
   snapshotVersion?: string;
@@ -23,6 +24,7 @@ interface BudgetTransactionListProps {
  * Displays transactions matching a budget category with pagination.
  */
 export function BudgetTransactionList({ budgetId, categoryId, currencyCode = 'USD', snapshotVersion }: BudgetTransactionListProps) {
+  const { data: customCategories } = useGetUserCategories();
   const {
     transactions,
     totalCount,
@@ -90,7 +92,7 @@ export function BudgetTransactionList({ budgetId, categoryId, currencyCode = 'US
       <ul className="list-none m-0 p-0" role="list">
         {transactions.map((transaction) => (
           <li key={transaction.id} className="border-b border-border last:border-b-0">
-            <TransactionCard transaction={transaction} currencyCode={currencyCode} />
+            <TransactionCard transaction={transaction} customCategories={Array.isArray(customCategories) ? customCategories : undefined} currencyCode={currencyCode} />
             {transaction.budget_expense_amount != null && <div className="px-4 pb-3 text-sm">
               <div data-ph-mask>Expense counted: {formatAmount(transaction.budget_expense_amount)}</div>
               <div data-ph-mask>Allocated to savings: {formatAmount(transaction.amount - transaction.budget_expense_amount)}</div>

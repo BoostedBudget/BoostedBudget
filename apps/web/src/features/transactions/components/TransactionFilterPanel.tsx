@@ -23,6 +23,7 @@ import {
   TransactionInvestmentFilter,
   TransactionReversedFilter,
   TransactionStatusFilter,
+  TransactionReviewFilter,
   FilterPill,
 } from './filters'
 
@@ -34,6 +35,7 @@ interface TransactionFilterPanelProps {
   onDatePresetChange: (preset: DatePreset) => void
   onCustomDateChange: (startDate: string, endDate: string) => void
   onStatusFilterChange: (status: StatusFilter) => void
+  onReviewedChange?: (value: boolean | undefined) => void
   onIncludeInvestmentActivityChange: (val: boolean) => void
   onActivityTypesChange: (types: ActivityType[]) => void
   /** Issue #1569 T12: opt in to bank-reversed transactions. Optional so existing callers and
@@ -49,6 +51,8 @@ interface TransactionFilterPanelProps {
 
 // Props interface for FilterPillsSection component
 interface FilterPillsSectionProps {
+  reviewedDisplayValue: string | null
+  onReviewedChange?: (value: boolean | undefined) => void
   dateDisplayValue: string | null
   statusDisplayValue: string | null
   investmentDisplayValue: string | null
@@ -65,6 +69,8 @@ interface FilterPillsSectionProps {
 
 // Extracted module-level component for filter pills
 function FilterPillsSection({
+  reviewedDisplayValue,
+  onReviewedChange,
   dateDisplayValue,
   statusDisplayValue,
   investmentDisplayValue,
@@ -79,6 +85,7 @@ function FilterPillsSection({
   onUncategorizedChange,
 }: FilterPillsSectionProps) {
   const pills: Array<{ show: string | null, label: string, value: string | null, onRemove: () => void }> = [
+    { show: reviewedDisplayValue, label: 'Review status', value: reviewedDisplayValue, onRemove: () => onReviewedChange?.(undefined) },
     { show: dateDisplayValue, label: 'Date', value: dateDisplayValue, onRemove: () => onDatePresetChange('all') },
     { show: statusDisplayValue, label: 'Status', value: statusDisplayValue, onRemove: () => onStatusFilterChange('all') },
     { show: investmentDisplayValue, label: 'Investments', value: investmentDisplayValue, onRemove: () => onIncludeInvestmentActivityChange(true) },
@@ -114,6 +121,7 @@ function useIsMobile(breakpoint = 640) {
 }
 
 export function TransactionFilterPanel({
+  onReviewedChange,
   filters,
   datePreset,
   statusFilter,
@@ -154,6 +162,7 @@ export function TransactionFilterPanel({
     onActivityTypesChange([])
     onIncludeReversedChange?.(false)
     onUncategorizedChange?.(false)
+    onReviewedChange?.(undefined)
   }
 
   const filterPillsProps = useMemo<FilterPillsSectionProps>(() => {
@@ -184,6 +193,8 @@ export function TransactionFilterPanel({
     }
 
     return {
+      reviewedDisplayValue: filters.reviewed === undefined ? null : filters.reviewed ? 'Reviewed' : 'Unreviewed',
+      onReviewedChange,
       dateDisplayValue: getDateDisplayValue(),
       statusDisplayValue: getStatusDisplayValue(),
       investmentDisplayValue: getInvestmentDisplayValue(),
@@ -197,14 +208,14 @@ export function TransactionFilterPanel({
       onIncludeReversedChange,
       onUncategorizedChange,
     }
-  }, [datePreset, filters.start_date, filters.end_date, filters.activity_types, statusFilter, includeInvestmentActivity, includeReversed, uncategorized, onDatePresetChange, onStatusFilterChange, onIncludeInvestmentActivityChange, onActivityTypesChange, onIncludeReversedChange, onUncategorizedChange])
+  }, [datePreset, filters.start_date, filters.end_date, filters.activity_types, filters.reviewed, onReviewedChange, statusFilter, includeInvestmentActivity, includeReversed, uncategorized, onDatePresetChange, onStatusFilterChange, onIncludeInvestmentActivityChange, onActivityTypesChange, onIncludeReversedChange, onUncategorizedChange])
 
   // Calculate active count for date/status/investment filters
   const investmentActiveCount = (!includeInvestmentActivity ? 1 : 0) + (activityTypes.length > 0 ? 1 : 0)
   // ⚠ uncategorized belongs in this count and not only in the badge: hasDateStatusFilters gates
   // whether the pills section renders at all, so leaving it out would mean arriving from the
   // Sankey with only this filter set renders no pill and no way to clear it (#1626).
-  const dateStatusActiveCount = (datePreset !== 'all' ? 1 : 0) + (statusFilter !== 'all' ? 1 : 0) + investmentActiveCount + (includeReversed ? 1 : 0) + (uncategorized ? 1 : 0)
+  const dateStatusActiveCount = (datePreset !== 'all' ? 1 : 0) + (statusFilter !== 'all' ? 1 : 0) + investmentActiveCount + (includeReversed ? 1 : 0) + (uncategorized ? 1 : 0) + (filters.reviewed !== undefined ? 1 : 0)
   const hasDateStatusFilters = dateStatusActiveCount > 0
 
   // Mobile: Bottom sheet
@@ -253,6 +264,7 @@ export function TransactionFilterPanel({
                   pendingCount={pendingCount}
                   disabled={disabled}
                 />
+                {onReviewedChange && <TransactionReviewFilter value={filters.reviewed} onChange={onReviewedChange} disabled={disabled} />}
                 <TransactionInvestmentFilter
                   includeInvestmentActivity={includeInvestmentActivity}
                   activityTypes={activityTypes}
@@ -341,7 +353,7 @@ export function TransactionFilterPanel({
       {/* Expanded filter controls */}
       {isExpanded && (
         <div className="px-4 pb-4 border-t border-border/50">
-          <div className="flex flex-col gap-4 pt-4 lg:flex-row lg:items-start">
+          <div className="flex flex-col gap-4 pt-4 lg:flex-row lg:flex-wrap lg:items-start">
             {/* Date Filter */}
             <TransactionDateFilter
               preset={datePreset}
@@ -359,6 +371,8 @@ export function TransactionFilterPanel({
               pendingCount={pendingCount}
               disabled={disabled}
             />
+
+            {onReviewedChange && <TransactionReviewFilter value={filters.reviewed} onChange={onReviewedChange} disabled={disabled} />}
 
             {/* Investment Activity Filter */}
             <TransactionInvestmentFilter

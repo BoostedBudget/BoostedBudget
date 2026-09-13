@@ -16,6 +16,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -98,6 +99,47 @@ func seedAsOfSnapshot(ctx context.Context, t *testing.T, db repository.DB, f asO
 		VALUES ($1, $2, $3, $4, $5, 'USD', $6, 'sync')`,
 		uuid.New(), f.AccountID, f.UserAccountID, f.UserID, balance, at)
 	require.NoError(t, err, "seed balance snapshot")
+}
+
+func TestDashboard_SignedDebtSummary_PreservesRawSnapshots_Integration(t *testing.T) {
+	pool := setupDashboardAsOfDB(t)
+	for _, accountType := range []string{"credit", "loan"} {
+		for _, currentRaw := range []float64{90000, -100} {
+			t.Run(fmt.Sprintf("%s/current_%g", accountType, currentRaw), func(t *testing.T) {
+				ctx := context.Background()
+				tx, err := pool.Begin(ctx)
+				require.NoError(t, err)
+				defer tx.Rollback(ctx) //nolint:errcheck
+				f := seedAsOfAccount(ctx, t, tx, "signed-debt")
+				_, err = tx.Exec(ctx, "UPDATE accounts SET type = $2 WHERE id = $1", f.AccountID, accountType)
+				require.NoError(t, err)
+				_, err = tx.Exec(ctx, "UPDATE user_accounts SET primary_type = $2 WHERE id = $1", f.UserAccountID, accountType)
+				require.NoError(t, err)
+				now := time.Now().UTC()
+				backdateActiveInterval(ctx, t, tx, f.AccountID, now.AddDate(0, 0, -90))
+				householdID := seedAsOfHouseholdAccount(ctx, t, tx, f, now.AddDate(0, 0, -90))
+				seedAsOfSnapshot(ctx, t, tx, f, 100000, now.AddDate(0, 0, -31))
+				seedAsOfSnapshot(ctx, t, tx, f, currentRaw, now)
+				svc := NewDashboardService(repository.NewBalanceSnapshotRepository(tx), repository.NewAccountRepository(tx, dashboardAsOfEncryptor(t)))
+				for _, filters := range []*domain.DashboardFilters{nil, {HouseholdScope: &domain.HouseholdScope{HouseholdID: householdID, MemberUserIDs: []string{f.UserID.String()}}}} {
+					result, err := svc.GetBalanceSummary(ctx, f.UserID.String(), filters)
+					require.NoError(t, err)
+					assert.Equal(t, -currentRaw, result.TotalBalance)
+					require.Contains(t, result.ByType, accountType)
+					assert.Equal(t, -currentRaw, result.ByType[accountType].Balance)
+					require.Len(t, result.ByType[accountType].Accounts, 1)
+					assert.Equal(t, -currentRaw, result.ByType[accountType].Accounts[0].Balance)
+					require.NotNil(t, result.PeriodComparison)
+					assert.Equal(t, -100000.0, result.PeriodComparison.PreviousBalance)
+					assert.Equal(t, 100000-currentRaw, result.PeriodComparison.ChangeAmount)
+					assert.InDelta(t, (100000-currentRaw)/100000*100, result.PeriodComparison.ChangePercent, 0.0001)
+				}
+				var raw []float64
+				require.NoError(t, tx.QueryRow(ctx, "SELECT array_agg(current_balance ORDER BY snapshot_at) FROM balance_snapshots WHERE account_id = $1", f.AccountID).Scan(&raw))
+				assert.Equal(t, []float64{100000, currentRaw}, raw, "summary presentation must not change stored history")
+			})
+		}
+	}
 }
 
 // backdateActiveInterval makes the account look as though it has been live since `from`, the way a

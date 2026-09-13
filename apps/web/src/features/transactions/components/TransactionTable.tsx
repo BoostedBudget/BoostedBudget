@@ -9,8 +9,9 @@ import { investmentSubcategoryLabel } from '../investmentSubcategory'
 import { ActivityTypeChip } from '@/shared/components/ActivityTypeChip'
 import type { Account } from '../../accounts/types'
 import { getCategoryColor, DEFAULT_CATEGORY_COLOR } from '@/lib/category-colors'
-import { getEffectiveCategory, getEffectiveCategoryLabel, getEffectiveDetailedCategory } from '@/shared/categories/getEffectiveCategory'
-import { getDetailedLabel, getPfcDetailedFilterOptions } from '@/shared/categories/pfcOptions'
+import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
+import { getCategoryPresentation, type CategoryMetadata } from '@/shared/categories/getCategoryPresentation'
+import { getPfcDetailedFilterOptions } from '@/shared/categories/pfcOptions'
 import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect'
 import type { CustomCategoryOption } from '@/shared/components/HierarchicalCategoryTreeSelect/HierarchicalCategoryTreeSelect'
 import { CategoryIcon } from '@/shared/components/IconPicker'
@@ -58,7 +59,7 @@ export interface TransactionTableProps {
   selectedDetaileds?: string[]
   onDetailedsChange?: (values: string[]) => void
   /** Custom categories + selection for the hierarchical category filter (#1203) */
-  customCategories?: CustomCategoryOption[]
+  customCategories?: (CustomCategoryOption & CategoryMetadata)[]
   selectedCustomIds?: string[]
   onCustomIdsChange?: (ids: string[]) => void
   /** Infinite scroll: called when user scrolls near the bottom */
@@ -260,7 +261,7 @@ export function TransactionTable({
         }
         const txn = row as unknown as Transaction
         const eff = getEffectiveCategory(txn)
-        const categoryLabel = getEffectiveCategoryLabel(eff)
+        const { categoryLabel } = getCategoryPresentation(eff, customCategories)
         // For a custom category, show its icon + color (Issue #1203) when we can
         // resolve it from the loaded custom categories; otherwise fall back to the
         // generic color dot.
@@ -286,7 +287,7 @@ export function TransactionTable({
           <span className="inline-flex items-center gap-1.5">
             <span
               className="h-2 w-2 shrink-0 rounded-full"
-              style={{ backgroundColor: getCategoryColor(categoryLabel) }}
+              style={{ backgroundColor: getCategoryColor(eff?.kind === 'pfc' ? eff.pfc_primary : categoryLabel) }}
             />
             {categoryLabel}
           </span>
@@ -330,9 +331,8 @@ export function TransactionTable({
           return <span className="text-sm text-muted-foreground">{label}</span>
         }
         const txn = row as unknown as Transaction
-        const detailed = getEffectiveDetailedCategory(txn)
-        if (!detailed) return <span className="text-sm text-muted-foreground/40">—</span>
-        const label = getDetailedLabel(detailed) ?? detailed
+        const { subcategoryLabel: label } = getCategoryPresentation(getEffectiveCategory(txn), customCategories)
+        if (label === '—') return <span className="text-sm text-muted-foreground/40">—</span>
         return <span className="text-sm text-muted-foreground">{label}</span>
       },
       filter: onDetailedsChange
@@ -446,7 +446,7 @@ export function TransactionTable({
         )
       }
       className={cn(loading && 'transaction-table--loading', className)}
-      maskedColumnIds={['amount', 'merchant', 'account']}
+      maskedColumnIds={['amount', 'merchant', 'account', 'category', 'sub_category']}
       virtualization={onScrollEnd ? {
         enabled: true,
         estimateRowHeight: 56,
