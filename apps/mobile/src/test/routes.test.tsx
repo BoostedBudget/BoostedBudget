@@ -1,13 +1,23 @@
 import { fireEvent, render, screen } from '@testing-library/react-native'
-import RootLayout from '../../app/_layout'
+import { useQueryClient } from '@tanstack/react-query'
+import { Text } from 'react-native'
+import { MobileAppProviders } from '../../app/_layout'
 import HomeScreen from '../../app/index'
 import ReadinessScreen from '../../app/readiness'
 
 describe('universal app routes', () => {
-  it('mounts the root provider and route stack', () => {
-    render(<RootLayout />)
-    expect(screen.getByText('index')).toBeOnTheScreen()
-    expect(screen.getByText('readiness')).toBeOnTheScreen()
+  it('provides a real TanStack Query client to route content', () => {
+    function QueryClientProbe() {
+      const client = useQueryClient()
+      return <Text>{String(client.getDefaultOptions().queries?.staleTime)}</Text>
+    }
+
+    render(
+      <MobileAppProviders>
+        <QueryClientProbe />
+      </MobileAppProviders>,
+    )
+    expect(screen.getByText('30000')).toBeOnTheScreen()
   })
 
   it('renders an accessible foundation-only home surface', () => {
@@ -31,5 +41,10 @@ describe('universal app routes', () => {
       .getAllByText('API URL: missing or invalid')
       .find((element) => element.props.accessibilityLiveRegion === 'polite')
     expect(liveStatus).toBeDefined()
+  })
+
+  it('renders an explicit fallback instead of crashing on an unsupported platform', () => {
+    render(<ReadinessScreen environment={{}} platform="windows" />)
+    expect(screen.getByText('Billing adapter: unavailable on this platform')).toBeOnTheScreen()
   })
 })

@@ -11,10 +11,13 @@ function parseApiUrl(value: string | undefined): string | undefined {
 
   try {
     const url = new URL(value)
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+    const localHttp = url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname)
+    const secure = url.protocol === 'https:' || localHttp
+    const originOnly = url.pathname === '/' && !url.search && !url.hash
+    if (!secure || !originOnly || url.username || url.password) {
       return undefined
     }
-    return url.toString().replace(/\/$/, '')
+    return url.origin
   } catch {
     return undefined
   }

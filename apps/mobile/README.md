@@ -24,8 +24,9 @@ bun run export:android
 ```
 
 `test:ci` enforces at least 82% branches, functions, lines, and statements for
-mobile-owned TypeScript. The three export commands validate deterministic
-Metro bundles; they do not sign or publish an application.
+mobile-owned TypeScript. The three export commands validate that Metro can
+produce each platform bundle; they do not prove reproducible output, sign, or
+publish an application.
 
 ## Runtime configuration
 
