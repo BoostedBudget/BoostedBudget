@@ -10,7 +10,11 @@ import {
 } from '../src/tokens'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const generatedDir = resolve(packageRoot, 'generated')
+const generatedDirArgument = process.argv.indexOf('--generated-dir')
+const generatedDir =
+  generatedDirArgument === -1
+    ? resolve(packageRoot, 'generated')
+    : resolve(process.argv[generatedDirArgument + 1] ?? '')
 
 function declarations(tokens: CssTokenMap, indentation = '  '): string {
   return Object.entries(tokens)

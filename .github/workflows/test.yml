@@ -2334,6 +2334,11 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bun install --frozen-lockfile
 
+      - name: Check generated design tokens
+        if: always() && !cancelled()
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bun run --filter @boostedbudget/design-tokens check
+
       # Runs BEFORE the suite on purpose: it asserts the suite will run with a usable per-test
       # timeout. bunfig.toml's `[test] timeout = 30000` was not taking effect, so the 362-file suite
       # ran at bun's 5000ms default and a 441ms test that took 9910ms on a loaded runner reddened

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
-import { existsSync, readFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -73,5 +74,30 @@ describe('generated design-token CSS', () => {
     expect(web).not.toContain('prefers-color-scheme')
     expect(nativewind).toContain('@media (prefers-color-scheme: dark)')
     expect(nativewind).not.toContain('.dark {')
+  })
+
+  it('reports a stale NativeWind artifact', () => {
+    const fixtureDir = mkdtempSync(resolve(tmpdir(), 'boostedbudget-design-tokens-'))
+    try {
+      cpSync(resolve(packageRoot, 'generated'), fixtureDir, { recursive: true })
+      writeFileSync(resolve(fixtureDir, 'nativewind.css'), 'stale native tokens\n')
+
+      const result = Bun.spawnSync({
+        cmd: [
+          process.execPath,
+          'run',
+          'scripts/generate.ts',
+          '--check',
+          '--generated-dir',
+          fixtureDir,
+        ],
+        cwd: packageRoot,
+      })
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr.toString()).toContain('nativewind.css is stale')
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
   })
 })
