@@ -5,6 +5,7 @@ import {
   capturePageView,
   getAnalyticsLifecycleState,
   grantProductAnalytics,
+  isAnonymousAnalyticsPath,
   isSensitiveAnalyticsPath,
   listenForAnalyticsWithdrawal,
   posthogConfig,
@@ -35,6 +36,13 @@ function isAtLeast(version: number[], minimum: readonly number[]): boolean {
 }
 
 describe('posthog config', () => {
+  test.each(['/pricing/', '/Pricing', '/legal/privacy-policy/'])(
+    'recognizes router-equivalent anonymous public route %s',
+    route => {
+      expect(isAnonymousAnalyticsPath(route)).toBe(true);
+    },
+  );
+
   test.each([
     ['1.430.1', false],
     ['1.430.2', true],
@@ -479,18 +487,30 @@ describe('posthog lifecycle', () => {
   });
 
   test('notifies subscribers only when authority newly transitions to granted', () => {
-    const states: string[] = [];
+    const states: Array<{ state: string; scope: string | null; generation: number }> = [];
     lifecycle.setScope('anonymous');
     const cleanup = lifecycle.subscribe(state => states.push(state));
 
     lifecycle.grantFromAuthority('anonymous');
     lifecycle.grantFromAuthority('anonymous');
-    expect(states).toEqual(['granted']);
+    expect(states).toEqual([{ state: 'granted', scope: 'anonymous', generation: 1 }]);
 
     cleanup();
     lifecycle.withdraw('anonymous');
     lifecycle.grantExplicitly('anonymous');
-    expect(states).toEqual(['granted']);
+    expect(states).toEqual([{ state: 'granted', scope: 'anonymous', generation: 1 }]);
+  });
+
+  test('includes the new identity scope in pending and granted notifications', () => {
+    const snapshots: Array<{ state: string; scope: string | null; generation: number }> = [];
+    lifecycle.subscribe(snapshot => snapshots.push(snapshot));
+
+    lifecycle.setScope('user-a');
+    lifecycle.grantFromAuthority('user-a', 'user-a');
+    lifecycle.setScope('user-b');
+
+    expect(snapshots).toContainEqual({ state: 'granted', scope: 'user-a', generation: 1 });
+    expect(snapshots).toContainEqual({ state: 'pending', scope: 'user-b', generation: 2 });
   });
 
   test('identifies a signed-in grant before notifying pageview subscribers', () => {

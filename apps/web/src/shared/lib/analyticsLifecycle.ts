@@ -2,6 +2,12 @@ import type { PostHogConfig, Properties } from 'posthog-js'
 
 export type AnalyticsLifecycleState = 'pending' | 'granted' | 'denied'
 
+export interface AnalyticsLifecycleSnapshot {
+  generation: number
+  state: AnalyticsLifecycleState
+  scope: string | null
+}
+
 export interface AnalyticsClient {
   capture(event: string, properties?: Properties): unknown
   identify(distinctId: string, properties?: Properties): void
@@ -24,6 +30,7 @@ interface LifecycleDependencies {
 export interface ProductAnalyticsLifecycle {
   capture(event: string, properties?: Properties): void
   deny(): void
+  getSnapshot(): AnalyticsLifecycleSnapshot
   getState(): AnalyticsLifecycleState
   grant(distinctId?: string, personProperties?: Properties): void
   grantExplicitly(scope: string, distinctId?: string, personProperties?: Properties): void
@@ -33,7 +40,7 @@ export interface ProductAnalyticsLifecycle {
   setPersonProperties(properties: Properties): void
   setPending(): void
   setScope(scope: string): void
-  subscribe(listener: (state: AnalyticsLifecycleState) => void): () => void
+  subscribe(listener: (snapshot: AnalyticsLifecycleSnapshot) => void): () => void
   withdraw(scope: string): void
 }
 
@@ -47,11 +54,16 @@ export function createProductAnalyticsLifecycle({
   let state: AnalyticsLifecycleState = 'pending'
   let initialized = false
   let currentScope: string | null = null
+  let scopeGeneration = 0
   let withdrawnScope: string | null = null
-  const listeners = new Set<(state: AnalyticsLifecycleState) => void>()
+  const listeners = new Set<(snapshot: AnalyticsLifecycleSnapshot) => void>()
+
+  function getSnapshot(): AnalyticsLifecycleSnapshot {
+    return { generation: scopeGeneration, state, scope: currentScope }
+  }
 
   function notifyState(): void {
-    for (const listener of listeners) listener(state)
+    for (const listener of listeners) listener(getSnapshot())
   }
 
   function setState(nextState: AnalyticsLifecycleState): void {
@@ -106,6 +118,7 @@ export function createProductAnalyticsLifecycle({
       if (state === 'granted') client.capture(event, properties)
     },
     deny,
+    getSnapshot,
     getState: () => state,
     grant(distinctId, personProperties) {
       if (currentScope === null) currentScope = 'legacy'
@@ -122,6 +135,7 @@ export function createProductAnalyticsLifecycle({
       state = 'pending'
       initialized = false
       currentScope = null
+      scopeGeneration = 0
       withdrawnScope = null
       listeners.clear()
     },
@@ -136,8 +150,10 @@ export function createProductAnalyticsLifecycle({
       if (scope === currentScope) return
       if (currentScope !== null) deny()
       currentScope = scope
+      scopeGeneration += 1
       withdrawnScope = null
-      setState('pending')
+      state = 'pending'
+      notifyState()
     },
     subscribe(listener) {
       listeners.add(listener)
