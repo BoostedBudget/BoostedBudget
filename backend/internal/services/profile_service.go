@@ -45,11 +45,10 @@ var (
 	ErrInvalidTimezoneSource = errors.New("invalid timezone_source")
 )
 
-
 // ProfileService defines the interface for user profile business logic
 type ProfileService interface {
-	// GetProfile retrieves a user's profile by their internal user UUID
-	// If the user doesn't exist, creates a new user (first login scenario)
+	// GetProfile retrieves an existing user's profile by internal UUID, then attempts a best-effort
+	// last-login update. The returned profile contains the timestamp fetched before that update.
 	// NOTE: After PR #197, this accepts internal UUID, not Clerk ID
 	GetProfile(ctx context.Context, userID string, email string) (*domain.User, error)
 
@@ -95,7 +94,8 @@ func (s *profileService) SetJobQueue(jq queue.JobQueue) {
 	s.jobQueue = jq
 }
 
-// GetProfile retrieves a user's profile or creates one if it doesn't exist
+// GetProfile retrieves an existing user profile, then attempts a best-effort last-login update.
+// The returned profile contains the timestamp fetched before that update.
 // NOTE: After PR #197, this method receives internal user UUID, not Clerk ID
 func (s *profileService) GetProfile(ctx context.Context, userID string, email string) (*domain.User, error) {
 	user, err := s.repo.GetUserByID(ctx, userID)
@@ -103,7 +103,7 @@ func (s *profileService) GetProfile(ctx context.Context, userID string, email st
 		return nil, err
 	}
 
-	// Update last login timestamp (non-critical, log errors but don't fail request)
+	// Update last login timestamp on a best-effort basis; a failure does not fail the read.
 	_ = s.repo.UpdateLastLogin(ctx, user.ClerkUserID)
 
 	return user, nil

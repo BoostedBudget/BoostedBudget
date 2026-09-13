@@ -548,14 +548,15 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excludedWrite('repairLinkedItem', REASON_PLAID_LINKING, 'bank-connections'),
 
   // ── Privacy / Profile ────────────────────────────────────────────────────
-  // ⚠ #1610: both admitted by readExecute (class 'read', method GET, confirmationRequired
-  // false) yet each lazily `repo.Create`s the caller's OWN default row on first access
-  // (privacy_service.go / user profile equivalent; see each op's OpenAPI description) — a
-  // real, acknowledged write. Left admitted rather than excluded because it's scoped to the
-  // caller, idempotent after the first call, and destroys nothing. The backend tags each
-  // huma.Operation literal `Extensions: {"x-mcp-lazy-init": true}` (privacy.go, profile.go),
-  // which flows into api/openapi.yaml; manifest/lazy-init-extension.ts's
-  // ACKNOWLEDGED_LAZY_INIT_OPERATIONS is the reviewed list, and
+  // ⚠ #1610: both are admitted by readExecute (class 'read', method GET,
+  // confirmationRequired false) yet have acknowledged caller-scoped side effects.
+  // getPrivacySettings may create the caller's default row on first access; getUserProfile
+  // attempts a best-effort last-login update whose failure does not fail the read and whose
+  // response retains the pre-update timestamp. Both destroy nothing and remain admitted. The
+  // backend tags each huma.Operation literal with
+  // `Extensions: {"x-mcp-read-side-effect": true}` (privacy.go, profile.go), which flows into
+  // api/openapi.yaml; manifest/read-side-effect-extension.ts's
+  // ACKNOWLEDGED_READ_SIDE_EFFECT_OPERATIONS is the reviewed list, and
   // scripts/check-manifest-completeness.ts fails the build if the spec ever tags a THIRD
   // operation nobody has added to that list — see that module's doc comment.
   read('getPrivacySettings'),

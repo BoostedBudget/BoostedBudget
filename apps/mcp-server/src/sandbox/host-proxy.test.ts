@@ -402,6 +402,35 @@ describe('confirmBatch (#1625)', () => {
   const A = { operationId: ALLOWED_WRITE_OP, args: { url: '/a', method: 'POST', data: { n: 1 } } }
   const B = { operationId: ALLOWED_WRITE_OP, args: { url: '/b', method: 'POST', data: { n: 2 } } }
 
+  it('binds explicit original call input separately from normalized request args', async () => {
+    const proxy = createHostProxy({ mutator: makeMutator(), userId: 'u1', grantId: 'g1' })
+    const challenged = [{
+      ...A,
+      confirmationInput: { operationId: ALLOWED_WRITE_OP, pathParams: { ignored: 'A' } },
+    }]
+    const { token } = await proxy.confirmBatch(challenged)
+
+    await expect(proxy.confirmBatch([{
+      ...A,
+      confirmationInput: { operationId: ALLOWED_WRITE_OP },
+    }], token)).rejects.toMatchObject({ code: 'invalid_confirmation' })
+  })
+
+  it('does not let direct invoke bypass exact-input validation for a batch-issued token', async () => {
+    const mutator = makeMutator()
+    const proxy = createHostProxy({ mutator, userId: 'u1', grantId: 'g1' })
+    const challenged = [{
+      ...A,
+      confirmationInput: { operationId: ALLOWED_WRITE_OP, pathParams: { ignored: 'A' } },
+    }]
+    const { token } = await proxy.confirmBatch(challenged)
+
+    await expect(proxy.invoke(A.operationId, A.args, {
+      confirmationToken: token,
+    })).rejects.toMatchObject({ code: 'invalid_confirmation' })
+    expect(mutator).not.toHaveBeenCalled()
+  })
+
   it('issues ONE token covering every gated call in the batch', async () => {
     const proxy = createHostProxy({ mutator: makeMutator(), userId: 'u1', grantId: 'g1' })
     const decision = await proxy.confirmBatch([A, B])
@@ -418,6 +447,29 @@ describe('confirmBatch (#1625)', () => {
     await expect(proxy.confirmBatch([A, B], token)).resolves.toMatchObject({ needsConfirmation: false })
     await expect(proxy.invoke(A.operationId, A.args, { confirmationToken: token! })).resolves.toBeDefined()
     await expect(proxy.invoke(B.operationId, B.args, { confirmationToken: token! })).resolves.toBeDefined()
+  })
+
+  it('assigns each identical confirmed write occurrence its own stable idempotency key', async () => {
+    const forwardedKeys: string[] = []
+    const capturingMutator: FetchMutator = mock((_config, opts) => {
+      const keyAtRequestStart = opts?.headers?.['Idempotency-Key']
+      expect(keyAtRequestStart).toBeDefined()
+      // A retry performed by the request layer for this occurrence receives the same immutable
+      // request options; the proxy must allocate only once, before handing the request off.
+      expect(opts?.headers?.['Idempotency-Key']).toBe(keyAtRequestStart)
+      forwardedKeys.push(keyAtRequestStart!)
+      return Promise.resolve({})
+    }) as unknown as FetchMutator
+    const proxy = createHostProxy({ mutator: capturingMutator, userId: 'u1', grantId: 'g1' })
+    const duplicateBatch = [A, A]
+    const { token } = await proxy.confirmBatch(duplicateBatch)
+    await proxy.confirmBatch(duplicateBatch, token)
+
+    await proxy.invoke(A.operationId, A.args, { confirmationToken: token! })
+    await proxy.invoke(A.operationId, A.args, { confirmationToken: token! })
+
+    expect(forwardedKeys).toHaveLength(2)
+    expect(forwardedKeys[0]).not.toBe(forwardedKeys[1])
   })
 
   it('consumes each slot exactly once, so a call cannot be replayed within the batch', async () => {

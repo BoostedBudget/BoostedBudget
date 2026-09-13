@@ -11,7 +11,7 @@
 import { z } from 'zod'
 import { getCapability } from '../../manifest/capability-manifest'
 import { searchSpec, listSpecEntries, responseFields } from '../../spec/search-runtime'
-import type { SpecEntry, SpecIndex } from '../../spec/search-runtime'
+import type { SpecEntry, SpecIndex, SpecResponseShape } from '../../spec/search-runtime'
 import { isReadExecuteAdmitted } from './read-execute-admission'
 import type { ResponseDetail } from '../../responses/projection'
 
@@ -51,6 +51,16 @@ export interface McpContent {
 export type McpToolResult = {
   content: McpContent[]
   [key: string]: unknown
+}
+
+function renderResponseShape(shape: SpecResponseShape): string {
+  let rendered: string
+  if (shape.type === 'array') {
+    rendered = `array<${renderResponseShape(shape.items)}>`
+  } else {
+    rendered = shape.type
+  }
+  return shape.nullable ? `${rendered} | null` : rendered
 }
 
 /**
@@ -115,12 +125,13 @@ export function buildSearchResult(entries: SpecEntry[], detail: ResponseDetail =
     // RETURNS without having to call it first. See the `f.type ?? 'any'` note above — the same
     // ambiguity applies here.
     const responseBody = responseFields(e, detail)
-    if (responseBody?.length) {
-      const returnLines = responseBody.map(
+    if (e.responseShape) {
+      const returnLines = responseBody?.map(
         (f) =>
           `    ${f.name} (${f.type ?? 'any'}${f.format ? `, format: ${f.format}` : ''}${f.required ? ', required' : ''})${f.enum ? ` [${f.enum.join('|')}]` : ''}${f.description ? ` — ${f.description}` : ''}`
       )
-      parts.push(`  returns:\n${returnLines.join('\n')}`)
+      const fields = returnLines?.length ? `\n${returnLines.join('\n')}` : ''
+      parts.push(`  returns: ${renderResponseShape(e.responseShape)}${fields}`)
     }
     parts.push(`  tags: ${e.tags.join(', ')}`)
     return parts.join('\n')
