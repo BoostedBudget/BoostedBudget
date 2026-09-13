@@ -106,7 +106,7 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
 };
 
 /**
- * Retrieves the authenticated user's profile, creating one if it's their first login.
+ * Retrieves the authenticated user's existing profile, then attempts a best-effort last-login timestamp update. An update failure does not fail the response, and returned last_login_at is the value fetched before that update.
  * @summary Get user profile
  */
 export const getUserProfile = (

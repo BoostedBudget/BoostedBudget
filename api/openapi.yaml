@@ -16832,7 +16832,7 @@ paths:
       summary: Get privacy settings
       tags:
         - Privacy
-      x-mcp-lazy-init: true
+      x-mcp-read-side-effect: true
     put:
       description: Updates the authenticated user's privacy settings with GDPR validation.
       operationId: updatePrivacySettings
@@ -16862,7 +16862,7 @@ paths:
         - Privacy
   /api/v1/user/profile:
     get:
-      description: Retrieves the authenticated user's profile, creating one if it's their first login.
+      description: Retrieves the authenticated user's existing profile, then attempts a best-effort last-login timestamp update. An update failure does not fail the response, and returned last_login_at is the value fetched before that update.
       operationId: getUserProfile
       responses:
         "200":
@@ -16882,7 +16882,7 @@ paths:
       summary: Get user profile
       tags:
         - Profile
-      x-mcp-lazy-init: true
+      x-mcp-read-side-effect: true
     put:
       description: Updates the authenticated user's profile with validated data.
       operationId: updateUserProfile

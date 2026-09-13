@@ -41,11 +41,25 @@ Follow your client's instructions for adding a remote MCP server at `https://mcp
 | Tool | Description |
 |------|-------------|
 | `search` | Discover available API operations by keyword, tag, or class |
-| `readExecute` | Chain READ-ONLY API calls against your account (no confirmationToken input) |
+| `readExecute` | Chain admitted non-destructive, caller-scoped API calls (no `confirmationToken` input) |
 | `writeExecute` | Chain any API calls against your account, including confirmation-gated writes |
 | `recipe.list` | List your saved workflow recipes |
 | `recipe.save` | Save a named read-only workflow recipe for later reuse |
 | `recipe.run` | Resolve a saved recipe's calls to pass to readExecute()/writeExecute() |
+
+### Migrating from `execute`
+
+The legacy `execute` tool was intentionally removed without an alias. If a client cached the old
+tool list, reconnect or restart its MCP session so it re-enumerates the current tools. Use
+`readExecute` for admitted non-destructive calls. Use `writeExecute` for writes and for ordered
+read-to-write calls that must remain in one ordered batch.
+
+`readExecute` refuses destructive, confirmation-gated, excluded, and ordinary mutating
+operations. It is scoped to the authenticated caller, but it is not literally side-effect-free:
+`getPrivacySettings` may lazily create that caller's default privacy settings on first access,
+while `getUserProfile` attempts a best-effort update of the existing caller's last-login timestamp.
+That update can fail without failing the read, and the returned `last_login_at` is the value fetched
+before the update attempt. These are the two acknowledged caller-scoped side-effecting GETs.
 
 ---
 
@@ -229,11 +243,11 @@ Agent: Done. 13 unreviewed transactions remain (next_cursor: "abc123" to continu
 
 ### 3. "Save a reusable cash flow summary recipe"
 
-The agent saves a named read-only recipe you can run on-demand anytime:
+The agent saves a named read-only recipe you can resolve on demand, then submit to an executor:
 
 ```
 You: Create a recipe called "Weekly Cash Flow" that summarizes my cash flow
-     for the last 7 days. I want to run it whenever I need it.
+     for the last 7 days. I want to resolve and execute its calls whenever I need it.
 
 Agent calls:
   recipe.save({
@@ -262,8 +276,9 @@ Agent calls:
 
 Agent responds:
   Saved "Weekly Cash Flow" recipe (id: rec_abc123).
-  Run it anytime with: recipe.run({ id: "rec_abc123" })
-  This will return the API calls to pass to readExecute() (or writeExecute() if any are writes).
+  Resolve it anytime with: recipe.run({ id: "rec_abc123" })
+  This returns, but does not execute, the API calls. Submit them to readExecute() where admitted,
+  or writeExecute() otherwise.
 ```
 
 ---
@@ -334,18 +349,22 @@ Agent: You have 1 transfer boost: "Monthly Savings" (savings_goal type, enabled)
 
 > **Note:** Scheduled recipe execution (running recipes automatically on a cron) is planned
 > for a future release — see [follow-up #1220](https://github.com/BoostedBudget/BoostedBudget/issues/1220).
-> In v1, recipes are saved and run on-demand.
+> In v1, recipes are saved and resolved on demand; submit the returned calls to
+> `readExecute` where admitted or `writeExecute` otherwise.
 
 ---
 
 ## Write Safety
 
-All write operations (categorize transactions, create budgets, etc.) require **explicit confirmation** before executing:
+All confirmation-gated write operations (categorize transactions, create budgets, etc.) require
+**explicit confirmation** before executing. `writeExecute` may also contain reads, including an
+ordered read-to-write batch. When confirmation is required, the token covers the exact complete
+`calls` array; the challenge round executes none of its calls.
 
 1. Agent calls `writeExecute` with a write operation
-2. Server returns a `confirmationToken` and describes what will happen
+2. Server returns a `confirmationToken` and describes what will happen; nothing executes yet
 3. Agent presents the confirmation to you
-4. You say yes → agent re-invokes with the `confirmationToken`
+4. You say yes → agent re-invokes with the identical `calls` array and `confirmationToken`
 5. Write executes and is recorded in the audit log
 
 Tokens are **one-time use** and expire in 5 minutes.
