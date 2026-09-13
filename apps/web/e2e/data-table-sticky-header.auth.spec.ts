@@ -16,6 +16,7 @@ import { test, expect } from '@playwright/test'
 import type { Page } from '@playwright/test'
 import { acceptCookieConsent } from './helpers/auth'
 import { mockAuthDependencies } from './helpers/api-mocks'
+import { navigateWithPrivacySync, rejectUnmockedPrivacy } from './helpers/privacy-consent'
 
 // ---------------------------------------------------------------------------
 // Mock helpers — transactions page
@@ -150,12 +151,14 @@ async function mockAccountsDependencies(page: Page) {
 test.describe('DataTable — Sticky Header', () => {
   test.beforeEach(async ({ page }) => {
     await acceptCookieConsent(page)
+    await rejectUnmockedPrivacy(page)
   })
 
   // ── Test 1: virtualized container (transactions page) ─────────────────────
   test('thead pins during vertical scroll on /transactions', async ({ page }) => {
     await mockTransactionsDependencies(page)
-    await page.goto('/transactions')
+    await navigateWithPrivacySync(page, () => page.goto('/transactions'))
+    await expect(page).toHaveURL(/\/transactions$/)
     await page.waitForSelector('[data-testid="virtual-scroll-container"]', { timeout: 15000 })
 
     const thead = page.locator('table thead').first()
@@ -178,7 +181,8 @@ test.describe('DataTable — Sticky Header', () => {
   // ── Test 2: non-virtualized document scroll (accounts page) ──────────────
   test('thead pins below global header on /accounts', async ({ page }) => {
     await mockAccountsDependencies(page)
-    await page.goto('/accounts')
+    await navigateWithPrivacySync(page, () => page.goto('/accounts'))
+    await expect(page).toHaveURL(/\/accounts$/)
 
     // Accounts page defaults to card view — switch to table view via the
     // ListViewToggle button (title="Table view", aria-pressed="false").
@@ -207,7 +211,8 @@ test.describe('DataTable — Sticky Header', () => {
   // ── Test 3: filter dropdown is not clipped by sticky thead ───────────────
   test('filter dropdown is visible when opened in a sticky-header table', async ({ page }) => {
     await mockTransactionsDependencies(page)
-    await page.goto('/transactions')
+    await navigateWithPrivacySync(page, () => page.goto('/transactions'))
+    await expect(page).toHaveURL(/\/transactions$/)
     await page.waitForSelector('[data-testid="virtual-scroll-container"]', { timeout: 15000 })
 
     // Find the first filter trigger button inside the table header.

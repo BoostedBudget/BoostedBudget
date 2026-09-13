@@ -36,6 +36,7 @@
 
 import { test, expect, type Page, type Request } from '@playwright/test'
 import { mockAuthDependencies } from './helpers/api-mocks'
+import { navigateWithPrivacySync, rejectUnmockedPrivacy } from './helpers/privacy-consent'
 
 const ITEM_ID = 'plaid-item-reconnect-1'
 const PLAID_LINK_SCRIPT = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js'
@@ -102,6 +103,7 @@ async function mockReconnectDependencies(
     document.cookie = `boostedbudget_cookie_consent=${encodeURIComponent(JSON.stringify(consent))}; path=/; SameSite=Strict`
   })
 
+  await rejectUnmockedPrivacy(page)
   await mockAuthDependencies(page)
 
   await page.route(PLAID_LINK_SCRIPT, (route) =>
@@ -170,7 +172,7 @@ test.describe('Reconnect presents the minted repair nonce (Issue #1620)', () => 
   test('carries the minted nonce into the repair call, and never into the URL', async ({ page }) => {
     const server = await mockReconnectDependencies(page)
 
-    await page.goto(`/accounts/reconnect?item_id=${ITEM_ID}`)
+    await navigateWithPrivacySync(page, () => page.goto(`/accounts/reconnect?item_id=${ITEM_ID}`))
 
     // The whole flow is automatic: mint on mount, Link opens when ready, the stub fires
     // onSuccess, the repair fires, and the page leaves for /accounts.
@@ -213,7 +215,8 @@ test.describe('Reconnect presents the minted repair nonce (Issue #1620)', () => 
   }) => {
     const server = await mockReconnectDependencies(page, { repairStatus: 403 })
 
-    await page.goto(`/accounts/reconnect?item_id=${ITEM_ID}`)
+    await navigateWithPrivacySync(page, () => page.goto(`/accounts/reconnect?item_id=${ITEM_ID}`))
+    await expect(page).toHaveURL(/\/accounts\/reconnect/)
 
     await expect(page.getByText("We couldn't reconnect your bank")).toBeVisible({ timeout: 15000 })
 
