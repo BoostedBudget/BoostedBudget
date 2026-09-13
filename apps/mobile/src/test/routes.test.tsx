@@ -1,11 +1,23 @@
 import { fireEvent, render, screen } from '@testing-library/react-native'
 import { useQueryClient } from '@tanstack/react-query'
+import { ThemeProvider } from 'expo-router'
+import { StatusBar } from 'expo-status-bar'
 import { Text } from 'react-native'
-import { MobileAppProviders } from '../../app/_layout'
+import RootLayout, { MobileAppProviders } from '../../app/_layout'
 import HomeScreen from '../../app/index'
 import ReadinessScreen from '../../app/readiness'
 
 describe('universal app routes', () => {
+  it('wires the system appearance into navigation chrome and the status bar', () => {
+    render(<RootLayout />)
+
+    expect(ThemeProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ value: expect.objectContaining({ dark: false }) }),
+      undefined,
+    )
+    expect(StatusBar).toHaveBeenCalledWith(expect.objectContaining({ style: 'dark' }), undefined)
+  })
+
   it('provides a real TanStack Query client to route content', () => {
     function QueryClientProbe() {
       const client = useQueryClient()

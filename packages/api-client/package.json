@@ -16,6 +16,7 @@
   "scripts": {
     "generate:api": "npm install --silent && npx orval && rm -rf node_modules && cd ../.. && bun install",
     "build": "tsc --noEmit",
+    "test": "bun test --timeout 30000",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {

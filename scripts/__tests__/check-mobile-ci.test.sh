@@ -8,7 +8,7 @@ GUARD="$REPO_ROOT/scripts/check-mobile-ci.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-TOTAL=63
+TOTAL=65
 case_no=0
 pass=0
 fail=0
@@ -214,6 +214,8 @@ reject_workflow "mobile job lowers Node below 22.13" "node-version" "22.12.x"
 reject_workflow "mobile job drifts from Bun 1.3.14" "bun-version" "latest"
 reject_workflow "mobile install is not frozen" "replace-command" "bun install --frozen-lockfile|bun install"
 reject_workflow "design-token generated check is missing" "replace-command" "bun run --filter @boostedbudget/design-tokens check|echo skipped-token-check"
+reject_workflow "design-token tests are missing" "replace-command" "bun run --filter @boostedbudget/design-tokens test|echo skipped-token-tests"
+reject_workflow "API-client tests are missing" "replace-command" "bun run --filter @boostedbudget/api-client test|echo skipped-api-client-tests"
 reject_workflow "mobile lint is missing" "replace-command" "bun run --cwd apps/mobile lint|echo skipped-lint"
 reject_workflow "mobile typecheck is missing" "replace-command" "bun run --cwd apps/mobile typecheck|echo skipped-typecheck"
 reject_workflow "Jest line floor drops below 82" "replace-command" '"global":{"lines":82}|"global":{"lines":81}'

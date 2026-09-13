@@ -122,6 +122,28 @@ export const darkSemanticTokens = {
   skeleton: 'oklch(0.371 0 0)',
 } as const satisfies CssTokenMap
 
+// React Navigation passes these values directly to native platform views, where CSS Color 4
+// syntax and custom properties are not universally supported. Keep the native-safe equivalents
+// beside the semantic CSS tokens so navigation chrome shares the same design source of truth.
+export const nativeNavigationTokens = {
+  light: {
+    primary: '#262626',
+    background: '#ffffff',
+    card: '#ffffff',
+    text: '#171717',
+    border: '#e5e5e5',
+    notification: '#e7000b',
+  },
+  dark: {
+    primary: '#e5e5e5',
+    background: '#171717',
+    card: '#262626',
+    text: '#fafafa',
+    border: '#ffffff1a',
+    notification: '#fb2c36',
+  },
+} as const
+
 export const tailwindThemeTokens = {
   'radius-sm': 'calc(var(--radius) - 4px)',
   'radius-md': 'calc(var(--radius) - 2px)',

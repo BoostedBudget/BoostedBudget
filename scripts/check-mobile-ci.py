@@ -55,6 +55,8 @@ NEGATIVE_PATHS = (
 REQUIRED_STEPS = (
     ("bun install --frozen-lockfile", "."),
     ("bun run --filter @boostedbudget/design-tokens check", "."),
+    ("bun run --filter @boostedbudget/design-tokens test", "."),
+    ("bun run --filter @boostedbudget/api-client test", "."),
     ("bun run --cwd apps/mobile lint", "."),
     ("bun run --cwd apps/mobile typecheck", "."),
     (
@@ -78,6 +80,7 @@ MOBILE_COMPATIBILITY_DEPS = {
     "expo-linking",
     "expo-router",
     "expo-status-bar",
+    "expo-system-ui",
     "expo-doctor",
     "jest-expo",
     "nativewind",
