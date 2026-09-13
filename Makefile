@@ -38,6 +38,8 @@ help:
 	@echo "  make validate-openapi     - Verify spec is up to date (for CI)"
 	@echo "  make generate-api-client  - Generate TypeScript client from OpenAPI (uses npm+orval)"
 	@echo "  make validate-api-client  - Verify TypeScript client is up to date"
+	@echo "  make generate-posthog-events - Generate TypeScript/Go analytics constants"
+	@echo "  make validate-posthog-events - Validate analytics contracts and generated constants"
 	@echo "  make generate-all         - Generate OpenAPI spec + TypeScript client"
 	@echo "  make validate-all         - Verify all generated code is up to date"
 	@echo "  make lint                 - Run linters"
@@ -423,7 +425,7 @@ validate-openapi: generate-openapi
 
 # TypeScript API client generation from OpenAPI spec
 # Uses bun install + npx orval (Node.js runtime needed for orval compatibility)
-.PHONY: generate-api-client validate-api-client generate-all validate-all
+.PHONY: generate-api-client validate-api-client generate-posthog-events validate-posthog-events generate-all validate-all
 generate-api-client:
 	@echo "Generating TypeScript API client from OpenAPI spec..."
 	@echo "📦 Installing dependencies with bun..."
@@ -444,12 +446,22 @@ validate-api-client: generate-api-client
 		exit 1; \
 	fi
 
-# Generate all (OpenAPI spec + TypeScript client + Go MCP manifest)
-generate-all: generate-openapi generate-api-client generate-mcp-manifest
+generate-posthog-events:
+	@echo "Generating PostHog event constants from the schema-backed catalog..."
+	@bun run generate:posthog
+	@echo "✅ Generated PostHog event constants"
+
+validate-posthog-events:
+	@echo "Validating PostHog event and product-metric contracts..."
+	@bun run validate:posthog
+	@echo "✅ PostHog contracts and generated constants are up to date"
+
+# Generate all (OpenAPI spec + TypeScript client + Go MCP manifest + PostHog contracts)
+generate-all: generate-openapi generate-api-client generate-mcp-manifest generate-posthog-events
 	@echo "✅ All code generation complete!"
 
 # Validate all generated code
-validate-all: validate-openapi validate-api-client validate-mcp-artifacts
+validate-all: validate-openapi validate-api-client validate-mcp-artifacts validate-posthog-events
 	@echo "✅ All generated code is up to date!"
 
 # Validate MCP Worker generated artifacts (facade + spec-index + capability summary)

@@ -64,6 +64,7 @@ import { LandingPage } from './features/landing'
 import { AdminRoute } from './features/admin/components/AdminRoute'
 import { AdminLayout } from './features/admin/components/AdminLayout'
 import { NotFoundPage } from './features/not-found/NotFoundPage'
+import { ANALYTICS_EVENTS } from './shared/analytics/events'
 
 // #1601 — see the AppFooter import note above for why this is lazy.
 const Header = lazy(() =>
@@ -210,7 +211,7 @@ function App() {
   usePostHogIdentify()
 
   useEffect(() => {
-    posthog.capture('$pageview')
+    posthog.capture(ANALYTICS_EVENTS.POSTHOG_PAGEVIEW)
   }, [location.pathname])
 
   // Issue #1411 (B1 fix): react-router's <Link> only performs client-side navigation
