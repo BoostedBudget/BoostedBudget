@@ -43,9 +43,10 @@ describe('useBudgetTransactions', () => {
     mockGetCategoryTransactionsQueryKey.mockClear()
   })
 
-  function mockQueryState(data?: unknown, isLoading = false, error: Error | null = null) {
+  function mockQueryState(data?: unknown, isLoading = false, error: Error | null = null, dataUpdatedAt = 1) {
     mockUseGetCategoryTransactions.mockReturnValue({
       data,
+      dataUpdatedAt,
       isLoading,
       error,
       refetch: mockRefetchCategoryTransactions,
@@ -253,6 +254,70 @@ describe('useBudgetTransactions', () => {
   })
 
   describe('load more', () => {
+    it('renders a same-key refreshed first page without painting accumulated rows', async () => {
+      const initial = {
+        transactions: [mockTransaction],
+        total_count: 2,
+        total_amount: 100,
+        has_more: true,
+      }
+      const refreshed = {
+        transactions: [{ ...mockTransaction, id: 'fresh-first-page' }],
+        total_count: 3,
+        total_amount: 300,
+        has_more: true,
+      }
+      mockQueryState(initial, false, null, 100)
+      mockGetCategoryTransactions.mockResolvedValueOnce({
+        ...initial,
+        transactions: [{ ...mockTransaction, id: 'old-second-page' }],
+        has_more: false,
+      })
+      let current!: ReturnType<typeof useBudgetTransactions>
+      const observed: Array<{ ids: string[]; totalCount: number; totalAmount: number }> = []
+      const client = new QueryClient()
+      function StateRecorder() {
+        current = useBudgetTransactions('budget-1', 'category-1')
+        observed.push({
+          ids: current.transactions.map(({ id }) => id),
+          totalCount: current.totalCount,
+          totalAmount: current.totalAmount,
+        })
+        return null
+      }
+      const { rerender } = render(
+        <QueryClientProvider client={client}>
+          <StateRecorder />
+        </QueryClientProvider>
+      )
+      await act(async () => { await current.loadMore() })
+      expect(current.transactions.map(({ id }) => id)).toEqual(['tx-1', 'old-second-page'])
+      observed.length = 0
+
+      mockQueryState(refreshed, false, null, 200)
+      rerender(
+        <QueryClientProvider client={client}>
+          <StateRecorder />
+        </QueryClientProvider>
+      )
+
+      expect(observed).not.toHaveLength(0)
+      expect(observed.every(({ ids }) => ids.length === 1 && ids[0] === 'fresh-first-page')).toBe(true)
+      expect(observed.every(({ totalCount, totalAmount }) => totalCount === 3 && totalAmount === 300)).toBe(true)
+
+      mockGetCategoryTransactions.mockResolvedValueOnce({
+        ...refreshed,
+        transactions: [{ ...mockTransaction, id: 'fresh-second-page' }],
+        has_more: false,
+      })
+      await act(async () => { await current.loadMore() })
+      expect(mockGetCategoryTransactions).toHaveBeenLastCalledWith('budget-1', 'category-1', {
+        limit: 20,
+        offset: 20,
+      })
+      expect(current.transactions.map(({ id }) => id)).toEqual(['fresh-first-page', 'fresh-second-page'])
+    })
+
     it('resets accumulated pagination and discards an older in-flight page when the snapshot changes', async () => {
       const initial = {
         transactions: [mockTransaction],
