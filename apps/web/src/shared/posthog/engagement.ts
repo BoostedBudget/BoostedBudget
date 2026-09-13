@@ -1,11 +1,12 @@
-import posthog, {
+import {
+  PostHog,
   type DisplaySurveyType,
-  type PostHog,
   type Survey,
 } from 'posthog-js'
 import {
   clearPostHogQueuedEvents,
   posthogConfig,
+  sanitizeAnalyticsUrl,
   type PostHogWithQueues,
 } from '../lib/posthog'
 
@@ -16,10 +17,25 @@ export interface VerifiedPostHogIdentity {
 
 const POPOVER_SURVEY_DISPLAY = 'popover' as typeof DisplaySurveyType.Popover
 
+const EXCLUDED_ENGAGEMENT_ROUTES = [
+  /^\/$/,
+  /^\/(?:oauth-)?callback(?:\/|$)/,
+  /^\/(?:pricing|mcp|privacy)(?:\/|$)/,
+  /^\/legal(?:\/|$)/,
+  /^\/sign-(?:in|up)(?:\/|$)/,
+  /^\/admin(?:\/|$)/,
+  /^\/cancel-deletion(?:\/|$)/,
+  /^\/households?\/invite(?:s)?(?:\/|$)/,
+]
+
+export function isPostHogEngagementRoute(pathname: string): boolean {
+  return !EXCLUDED_ENGAGEMENT_ROUTES.some(pattern => pattern.test(pathname))
+}
+
 export interface EngagementPostHogClient {
   setIdentity(distinctId: string, identityHash: string): void
   identify(distinctId: string): void
-  reset(resetDeviceId?: boolean): void
+  shutdown(): Promise<void>
   conversations: {
     hide(): void
     show(): void
@@ -41,6 +57,7 @@ export interface PostHogEngagementController {
   deactivateSupport(): void
   activateSurveys(identity: VerifiedPostHogIdentity): void
   deactivateSurveys(): void
+  suspendSurveys(): void
   getSupportClient(): EngagementPostHogClient | null
   isSupportAvailable(): boolean
   showSupport(): void
@@ -72,19 +89,61 @@ function sharedIsolatedConfig() {
   }
 }
 
-function adaptPostHogClient(client: PostHog): EngagementPostHogClient {
+type InternalRequest = { callback?: (response: unknown) => void } & Record<string, unknown>
+type InternalPostHog = PostHog & {
+  _send_request(options: InternalRequest): void
+  conversations: PostHog['conversations'] & {
+    _conversationsManager?: { _currentUrl?: () => string }
+  }
+}
+
+function guardTransport(client: PostHog): () => void {
+  const internal = client as InternalPostHog
+  const send = internal._send_request.bind(client)
+  let active = true
+  internal._send_request = (options) => {
+    if (!active) return
+    const callback = options.callback
+    send({
+      ...options,
+      callback: callback ? response => {
+        if (active) callback(response)
+      } : undefined,
+    })
+  }
+  return () => { active = false }
+}
+
+export function installConversationsPrivacyBoundary(client: PostHog): void {
+  const manager = (client as InternalPostHog).conversations._conversationsManager
+  if (!manager || typeof manager._currentUrl !== 'function') {
+    throw new Error('Unsupported posthog-js Conversations internals; expected 1.430.2 privacy boundary')
+  }
+  manager._currentUrl = () => sanitizeAnalyticsUrl(window.location.href)
+  client.get_session_id = () => undefined
+  client.get_session_replay_url = () => null
+}
+
+function adaptPostHogClient(client: PostHog, stopTransport: () => void): EngagementPostHogClient {
   return {
     setIdentity: (distinctId, hash) => client.setIdentity(distinctId, hash),
     identify: distinctId => client.identify(distinctId),
-    reset: resetDeviceId => {
+    shutdown: async () => {
+      stopTransport()
       clearPostHogQueuedEvents(client as unknown as PostHogWithQueues)
       client.set_config({ disable_persistence: true })
-      client.reset(resetDeviceId)
+      client.reset(true)
+      await client.shutdown()
+      clearPostHogQueuedEvents(client as unknown as PostHogWithQueues)
     },
     conversations: {
       hide: () => client.conversations.hide(),
       show: () => client.conversations.show(),
-      isAvailable: () => client.conversations.isAvailable(),
+      isAvailable: () => {
+        if (!client.conversations.isAvailable()) return false
+        installConversationsPrivacyBoundary(client)
+        return true
+      },
     },
     surveys: {
       dispose: () => client.surveys.dispose(),
@@ -96,20 +155,20 @@ function adaptPostHogClient(client: PostHog): EngagementPostHogClient {
 
 function resetSupportClient(client: EngagementPostHogClient): void {
   client.conversations.hide()
-  client.reset(true)
+  void client.shutdown()
 }
 
 function resetSurveyClient(client: EngagementPostHogClient): void {
   client.surveys.dispose()
-  client.reset(true)
+  void client.shutdown()
 }
-
-let clientSequence = 0
 
 export function createIsolatedSupportClient(): EngagementPostHogClient {
   const key = window.ENV?.POSTHOG_KEY || import.meta.env.VITE_POSTHOG_KEY
   if (!key) throw new Error('PostHog Support is not configured')
-  const client = posthog.init(key, {
+  const client = new PostHog()
+  const stopTransport = guardTransport(client)
+  client.init(key, {
     ...sharedIsolatedConfig(),
     api_host: window.ENV?.POSTHOG_HOST || import.meta.env.VITE_POSTHOG_HOST || 'https://us.i.posthog.com',
     disable_conversations: false,
@@ -117,26 +176,30 @@ export function createIsolatedSupportClient(): EngagementPostHogClient {
     disable_surveys_automatic_display: true,
     // Conversations is the only PostHog extension that this service client may load.
     disable_external_dependency_loading: false,
-  }, `authenticated_support_${++clientSequence}`)
-  return adaptPostHogClient(client)
+    persistence_name: 'boostedbudget_support',
+  })
+  return adaptPostHogClient(client, stopTransport)
 }
 
 export function createIsolatedSurveyClient(): EngagementPostHogClient {
   const key = window.ENV?.POSTHOG_KEY || import.meta.env.VITE_POSTHOG_KEY
   if (!key) throw new Error('PostHog Surveys are not configured')
   const consentedConfig = posthogConfig(() => true)
-  const client = posthog.init(key, {
+  const client = new PostHog()
+  const stopTransport = guardTransport(client)
+  client.init(key, {
     ...consentedConfig,
     api_host: window.ENV?.POSTHOG_HOST || import.meta.env.VITE_POSTHOG_HOST || 'https://us.i.posthog.com',
     disable_persistence: false,
     persistence: 'sessionStorage',
+    persistence_name: 'boostedbudget_surveys',
     disable_conversations: true,
     disable_surveys: false,
     // Never allow PostHog to auto-render a remotely-created free-text survey.
     disable_surveys_automatic_display: true,
     disable_external_dependency_loading: false,
-  }, `consented_surveys_${++clientSequence}`)
-  return adaptPostHogClient(client)
+  })
+  return adaptPostHogClient(client, stopTransport)
 }
 
 export function createPostHogEngagementController({
@@ -209,6 +272,10 @@ export function createPostHogEngagementController({
       })
     },
     deactivateSurveys,
+    suspendSurveys() {
+      surveyGeneration += 1
+      surveyClient?.surveys.dispose()
+    },
     getSupportClient: () => supportClient,
     isSupportAvailable: () => supportClient?.conversations.isAvailable() === true,
     showSupport() {

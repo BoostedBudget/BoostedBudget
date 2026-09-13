@@ -1,19 +1,11 @@
 import { Navigate, useLocation } from 'react-router'
 import { useAuth } from '@clerk/react-router'
-import { lazy, Suspense } from 'react'
-
-const AuthenticatedPostHogExperiences = lazy(() =>
-  import('../shared/posthog/AuthenticatedPostHogExperiences').then(module => ({
-    default: module.AuthenticatedPostHogExperiences,
-  })),
-)
 
 interface ProtectedRouteProps {
   children: React.ReactNode
-  postHogExperiences?: boolean
 }
 
-export function ProtectedRoute({ children, postHogExperiences = true }: ProtectedRouteProps) {
+export function ProtectedRoute({ children }: ProtectedRouteProps) {
   const { isSignedIn, isLoaded } = useAuth()
   const location = useLocation()
 
@@ -42,14 +34,5 @@ export function ProtectedRoute({ children, postHogExperiences = true }: Protecte
     return <Navigate to="/" state={{ from: location }} replace />
   }
 
-  return (
-    <>
-      {children}
-      {postHogExperiences && (
-        <Suspense fallback={null}>
-          <AuthenticatedPostHogExperiences />
-        </Suspense>
-      )}
-    </>
-  )
+  return <>{children}</>
 }

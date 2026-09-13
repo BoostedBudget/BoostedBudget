@@ -11,6 +11,7 @@ function controller(available = true) {
     deactivateSupport: mock(() => {}),
     activateSurveys: mock(() => {}),
     deactivateSurveys: mock(() => {}),
+    suspendSurveys: mock(() => {}),
     getSupportClient: mock(() => null),
     isSupportAvailable: mock(() => available),
     showSupport: mock(() => {}),
@@ -61,22 +62,28 @@ describe('AuthenticatedPostHogExperiences', () => {
     expect(screen.queryByRole('button', { name: /support/i })).toBeNull()
   })
 
-  test('activates verified support and consented surveys for the current user', () => {
+  test('activates consented surveys immediately but defers Support until the user clicks', async () => {
     const c = controller()
     render(<AuthenticatedPostHogExperiences controller={c} dependencies={deps()} />)
-    expect(c.activateSupport).toHaveBeenCalledWith({ distinct_id: 'user_A', identity_hash: 'signed-A' })
     expect(c.activateSurveys).toHaveBeenCalledWith({ distinct_id: 'user_A', identity_hash: 'signed-A' })
-    expect(screen.getByRole('button', { name: 'Support' })).toBeInTheDocument()
+    expect(c.activateSupport).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Support' }))
+    expect(c.activateSupport).toHaveBeenCalledWith({ distinct_id: 'user_A', identity_hash: 'signed-A' })
+    expect(c.showSupport).toHaveBeenCalled()
   })
 
-  test('support remains available without analytics consent while surveys stay disabled', () => {
+  test('support remains click-available without analytics consent while surveys stay disabled', async () => {
     const c = controller()
     render(<AuthenticatedPostHogExperiences controller={c} dependencies={deps({
       analytics: { generation: 2, state: 'denied', scope: 'user_A' },
     })} />)
-    expect(c.activateSupport).toHaveBeenCalled()
+    expect(c.activateSupport).not.toHaveBeenCalled()
     expect(c.activateSurveys).not.toHaveBeenCalled()
     expect(c.deactivateSurveys).toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Support' }))
+    expect(c.activateSupport).toHaveBeenCalled()
   })
 
   test('rejects a stale identity response after an A to B switch', () => {
@@ -91,12 +98,14 @@ describe('AuthenticatedPostHogExperiences', () => {
     expect(c.deactivateSupport).toHaveBeenCalled()
   })
 
-  test('shows authenticated loading and unavailable states without loading a widget', () => {
+  test('shows loading and unavailable states only after Support is requested', async () => {
     const c = controller()
     const { rerender } = render(<AuthenticatedPostHogExperiences controller={c} dependencies={deps({
       identity: null,
       identityLoading: true,
     })} />)
+    expect(screen.getByRole('button', { name: 'Support' })).toBeEnabled()
+    await userEvent.click(screen.getByRole('button', { name: 'Support' }))
     expect(screen.getByRole('button', { name: 'Support loading' })).toBeDisabled()
 
     rerender(<AuthenticatedPostHogExperiences controller={c} dependencies={deps({
@@ -115,6 +124,24 @@ describe('AuthenticatedPostHogExperiences', () => {
     expect(c.deactivateSurveys).toHaveBeenCalled()
   })
 
+  test('keeps one owner across product routes and suspends on admin before returning', () => {
+    const c = controller()
+    const dependencies = deps()
+    const { rerender } = render(
+      <AuthenticatedPostHogExperiences controller={c} dependencies={dependencies} routeEligible />,
+    )
+    expect(c.activateSurveys).toHaveBeenCalledTimes(1)
+
+    rerender(<AuthenticatedPostHogExperiences controller={c} dependencies={dependencies} routeEligible />)
+    expect(c.activateSurveys).toHaveBeenCalledTimes(1)
+
+    rerender(<AuthenticatedPostHogExperiences controller={c} dependencies={dependencies} routeEligible={false} />)
+    expect(c.suspendSurveys).toHaveBeenCalled()
+
+    rerender(<AuthenticatedPostHogExperiences controller={c} dependencies={dependencies} routeEligible />)
+    expect(c.activateSurveys).toHaveBeenCalledTimes(2)
+  })
+
   test('hands off from the single app button to the vendor widget', async () => {
     const c = controller()
     render(<AuthenticatedPostHogExperiences controller={c} dependencies={deps()} />)
@@ -123,12 +150,13 @@ describe('AuthenticatedPostHogExperiences', () => {
     expect(screen.queryByRole('button', { name: 'Support' })).toBeNull()
   })
 
-  test('cancels availability timers on cleanup', () => {
+  test('cancels availability timers on cleanup', async () => {
     const clearIntervalSpy = mock(() => {})
     const originalClearInterval = window.clearInterval
     window.clearInterval = clearIntervalSpy as typeof window.clearInterval
     const c = controller(false)
     const { unmount } = render(<AuthenticatedPostHogExperiences controller={c} dependencies={deps()} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Support' }))
     act(() => unmount())
     expect(clearIntervalSpy).toHaveBeenCalled()
     window.clearInterval = originalClearInterval
