@@ -289,7 +289,7 @@ describe('buildSearchResult', () => {
 
   // Issue #1610a: search() must render the response shape so a client can discover what an
   // operation RETURNS without calling it first.
-  it('renders a returns: block for an operation with a responseBody (#1610a)', () => {
+  it('renders an exact object root before its response fields (#1610)', () => {
     const result = buildSearchResult([
       {
         operationId: 'getAccount',
@@ -299,6 +299,7 @@ describe('buildSearchResult', () => {
         tags: ['Accounts'],
         manifestClass: 'read',
         excluded: false,
+        responseShape: { type: 'object' },
         responseBody: [
           { name: 'id', type: 'string', required: true },
           { name: 'name', type: 'string' },
@@ -307,12 +308,63 @@ describe('buildSearchResult', () => {
       },
     ])
     const text = result.content[0]?.text ?? ''
-    expect(text).toContain('returns:')
-    expect(text).toContain('id (string, required)')
-    expect(text).toContain('status (string) [active|removed]')
+    expect(text).toContain(
+      '  returns: object\n' +
+      '    id (string, required)\n' +
+      '    name (string)\n' +
+      '    status (string) [active|removed]\n' +
+      '  tags: Accounts',
+    )
   })
 
-  it('omits the returns: block entirely when there is no responseBody', () => {
+  it('renders a nullable primitive-array root on one line without fake fields', () => {
+    const result = buildSearchResult([{
+      operationId: 'getTags',
+      method: 'GET',
+      path: '/api/v1/tags',
+      summary: 'Get tags',
+      tags: ['Tags'],
+      manifestClass: 'read',
+      excluded: false,
+      responseShape: {
+        type: 'array',
+        nullable: true,
+        items: { type: 'string' },
+      },
+    }])
+
+    expect(result.content[0]?.text).toContain('  returns: array<string> | null\n  tags: Tags')
+  })
+
+  it('renders nested array nullability at the exact node where it is declared', () => {
+    const result = buildSearchResult([{
+      operationId: 'getMerchantGroups',
+      method: 'GET',
+      path: '/api/v1/merchant-groups',
+      summary: 'Get merchant groups',
+      tags: ['Merchants'],
+      manifestClass: 'read',
+      excluded: false,
+      responseShape: {
+        type: 'array',
+        nullable: true,
+        items: {
+          type: 'array',
+          nullable: true,
+          items: { type: 'object' },
+        },
+      },
+      responseBody: [{ name: 'merchant_name', type: 'string', required: true }],
+    }])
+
+    expect(result.content[0]?.text).toContain(
+      '  returns: array<array<object> | null> | null\n' +
+      '    merchant_name (string, required)\n' +
+      '  tags: Merchants',
+    )
+  })
+
+  it('keeps no-body operation output byte-identical', () => {
     const result = buildSearchResult([
       {
         operationId: 'getTransactions',
@@ -324,7 +376,14 @@ describe('buildSearchResult', () => {
         excluded: false,
       },
     ])
-    expect(result.content[0]?.text).not.toContain('returns:')
+    expect(result.content[0]?.text).toBe(
+      'Response detail: compact. Set top-level detail: "full" on search to describe the other view; set detail on each readExecute/writeExecute call to request it. Discovery omits tooling $schema fields in both views. Compact may fall back to full with a warning if response shape changes.\n' +
+      'Found 1 operation(s):\n\n' +
+      'GET /api/v1/transactions (read)\n' +
+      '  operationId: getTransactions\n' +
+      '  summary: List transactions\n' +
+      '  tags: Transactions',
+    )
   })
 
   it('renders returns: AFTER body: and BEFORE tags: — parts.push order is render order', () => {
@@ -338,6 +397,7 @@ describe('buildSearchResult', () => {
         manifestClass: 'write',
         excluded: false,
         requestBody: [{ name: 'name', type: 'string', required: true }],
+        responseShape: { type: 'object' },
         responseBody: [{ name: 'id', type: 'string', required: true }],
       },
     ])

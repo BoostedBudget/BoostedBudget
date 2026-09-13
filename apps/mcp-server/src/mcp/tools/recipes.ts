@@ -20,8 +20,9 @@
  * `run` that isn't subject to the read/write split" is exactly the kind of thing an auditor
  * would otherwise flag as a gap.
  *
- * (Out of scope, note only: `recipe.run` is itself a POST audited as `operationClass: 'read'`
- * in agent.ts — a pre-existing mislabel unrelated to the above.)
+ * `recipe.run` is itself a POST audited as `operationClass: 'read'` in agent.ts. That
+ * classification is accurate: the handler only retrieves, validates, and returns the saved
+ * specification; its HTTP verb does not make it execute the resolved operations.
  */
 
 import { HostProxyError } from '../../sandbox/host-proxy'
@@ -49,8 +50,18 @@ export interface RecipeTemplate {
  * Starter recipe templates for common financial workflows.
  * These are non-runnable templates — the agent fills in {{MONTH_START}} /
  * {{MONTH_END}} with actual dates (e.g. 2025-01-01 / 2025-01-31) before
- * passing to recipe.save(), then recipe.run() to execute.
+ * passing them to recipe.save(). recipe.run() later resolves the saved recipe;
+ * the agent must submit the returned calls to readExecute() or writeExecute().
  */
+export const RECIPE_RESOLUTION_GUIDANCE =
+  'recipe.run() resolves the saved recipe to an ordered calls array; it does not execute those ' +
+  'calls. Submit the returned calls to readExecute() or writeExecute().'
+
+export const RECIPE_TEMPLATE_USAGE_GUIDANCE =
+  'These are non-runnable templates. Replace {{MONTH_START}}/{{MONTH_END}} with actual dates ' +
+  '(e.g. 2025-01-01 / 2025-01-31), then use recipe.save() to instantiate one as a saved recipe. ' +
+  RECIPE_RESOLUTION_GUIDANCE
+
 export const STARTER_RECIPE_TEMPLATES: RecipeTemplate[] = [
   {
     name: 'Monthly Financial Review',
@@ -277,7 +288,7 @@ export function buildRecipeTools(proxy: HostProxy): RecipeTools {
           type: 'text',
           text: JSON.stringify({
             templates: STARTER_RECIPE_TEMPLATES,
-            note: 'These are non-runnable templates. Replace {{MONTH_START}}/{{MONTH_END}} with actual dates (e.g. 2025-01-01 / 2025-01-31), then use recipe.save() to instantiate as a saved recipe. Use recipe.run() to execute it.',
+            note: RECIPE_TEMPLATE_USAGE_GUIDANCE,
           }, null, 2),
         }],
         isError: false,

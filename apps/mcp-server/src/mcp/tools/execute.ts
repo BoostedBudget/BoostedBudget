@@ -23,7 +23,7 @@
  *
  * The host-proxy enforces: manifest gate, write gating, credential injection, rate limits, and
  * error redaction. This tool only handles orchestration (plus, for readExecute, the additional
- * read-only admission gate below).
+ * readExecute admission gate below).
  *
  * ── THE SECURITY POINT: `capability.class === 'read'` alone is NOT a safe gate ──────────────
  * `excluded()` in capability-manifest.ts hard-codes `class: 'read'` onto EVERY excluded entry,
@@ -54,21 +54,19 @@
  *
  * ── readExecute's REAL guarantee (not "read-only by construction") ─────────────────────────
  * Passing all three checks proves an admitted call is non-destructive, not confirmation-gated,
- * scoped to the authenticated caller's own data, and made with a conventionally non-mutating
- * HTTP verb. It does NOT prove the call has no server-side side effect: `getPrivacySettings`
- * and `getUserProfile` (capability-manifest.ts, "Privacy / Profile" section) pass the gate —
- * class 'read', method GET, confirmationRequired false — yet their backend handlers
- * (privacy_service.go / user profile equivalent) lazily `repo.Create` the caller's own default
- * settings/profile row on first access, per their own OpenAPI descriptions. That write is
- * scoped to the caller, idempotent after the first call, and not destructive of anything — which
- * is why it was left admitted rather than excluded — but it is a write, and "readExecute cannot
- * write" is false. Do not build anything on a stronger claim than the one above; see
- * `readExecuteRefusal`'s test file for the two operations pinned by name.
+ * scoped to the authenticated caller's own data, and made with either a conventionally
+ * non-mutating HTTP verb or the explicitly reviewed safe preview POST. It does NOT prove the call
+ * has no server-side side effect. `getPrivacySettings` may create the caller's default privacy
+ * row on first access, while `getUserProfile` attempts a best-effort update of the existing caller's last-login timestamp;
+ * an update failure does not fail the read, and the response retains the pre-update timestamp.
+ * Both side effects are caller-scoped and non-destructive, which is why the operations remain
+ * admitted. Do not build anything on a stronger claim than the one above; the read-side-effect
+ * extension tests pin both operations by name.
  */
 
 import { getCapability } from '../../manifest/capability-manifest'
 import type { CapabilityEntry, OperationClass as AuditOperationClass } from '../../manifest/capability-manifest'
-import { HostProxyError } from '../../sandbox/host-proxy'
+import { HostProxyError, type ConfirmationCall } from '../../sandbox/host-proxy'
 import { projectResponse, responseCatalog, type ResponseDetail } from '../../responses/projection'
 import { isReadExecuteAdmitted, READ_ONLY_METHODS } from './read-execute-admission'
 import type { McpToolResult } from './search'
@@ -100,7 +98,7 @@ export interface HostProxy {
    * invoke() keep working — when absent, the per-call gate inside invoke() still applies.
    */
   confirmBatch?(
-    gated: Array<{ operationId: string; args: Record<string, unknown>; presentation?: { detail: ResponseDetail } }>,
+    calls: ConfirmationCall[],
     token?: string,
   ): Promise<{ needsConfirmation: boolean; token?: string; count: number }>
 }
@@ -183,6 +181,14 @@ function buildRequestArgs(
 export const MAX_RESULT_CHARS = 100_000
 
 /**
+ * Max characters of one fully composed result line. The extra allowance holds the operation
+ * prefix and the existing payload truncation/recovery guidance without changing normal output.
+ * A second bound is necessary because operation IDs, proxied error messages, and confirmation
+ * tokens are outside renderResult()'s JSON payload cap.
+ */
+export const MAX_EMITTED_RESULT_CHARS = MAX_RESULT_CHARS + 1_000
+
+/**
  * Max characters of the WHOLE BATCH's rendered output, across every call in one
  * readExecute()/writeExecute() invocation (issue #1612).
  *
@@ -195,7 +201,33 @@ export const MAX_RESULT_CHARS = 100_000
  * list responses still fit in one batch, while still bounding the worst case
  * far below the uncapped 2.5 MB.
  */
-const MAX_BATCH_RESULT_CHARS = 300_000
+export const MAX_BATCH_RESULT_CHARS = 300_000
+
+/**
+ * Bound a fully composed result without leaking any omitted content in the marker.
+ * JavaScript string length and slice operate on UTF-16 code units, so the marker names that
+ * unit explicitly. Its own variable-width counts are included in the limit.
+ */
+function truncationMarker(shownLength: number, fullLength: number): string {
+  return `\n… [output truncated: showing ${shownLength} of ${fullLength} UTF-16 code units. ` +
+    'Split the batch or narrow the request to receive the complete output.]'
+}
+
+const MIN_USEFUL_EMITTED_RESULT_CHARS = truncationMarker(0, Number.MAX_SAFE_INTEGER).length
+
+function boundEmittedResult(text: string, maxChars = MAX_EMITTED_RESULT_CHARS): string {
+  const limit = Math.min(maxChars, MAX_EMITTED_RESULT_CHARS)
+  if (text.length <= limit) return text
+  if (limit < truncationMarker(0, text.length).length) return text.slice(0, Math.max(0, limit))
+
+  const fullLength = text.length
+  let shownLength = Math.max(0, limit - truncationMarker(0, fullLength).length)
+  while (shownLength + truncationMarker(shownLength, fullLength).length > limit) {
+    shownLength--
+  }
+
+  return text.slice(0, shownLength) + truncationMarker(shownLength, fullLength)
+}
 
 /**
  * Render a call's JSON result, truncating to MAX_RESULT_CHARS and appending an
@@ -382,6 +414,7 @@ function buildHandlerCore(
         operationId: call.operationId,
         args: buildRequestArgs(call, specEntries),
         ...(call.detail !== undefined ? { presentation: { detail: call.detail } } : {}),
+        confirmationInput: call,
       }))
       const gated = canonical.filter((c) => {
         const capability = getCapability(c.operationId)
@@ -393,15 +426,17 @@ function buildHandlerCore(
           const decision = await proxy.confirmBatch(canonical, confirmationToken)
           if (decision.needsConfirmation) {
             const plural = decision.count === 1 ? 'operation requires' : 'operations require'
+            const text = boundEmittedResult(
+              `⚠️ ${decision.count} ${plural} confirmation. Nothing has been executed.\n` +
+              `Re-invoke writeExecute() with the IDENTICAL calls array and ` +
+              `confirmationToken: "${decision.token}"`,
+            )
             return {
               toolResult: {
                 content: [
                   {
                     type: 'text',
-                    text:
-                      `⚠️ ${decision.count} ${plural} confirmation. Nothing has been executed.\n` +
-                      `Re-invoke writeExecute() with the IDENTICAL calls array and ` +
-                      `confirmationToken: "${decision.token}"`,
+                    text,
                   },
                 ],
               },
@@ -416,8 +451,9 @@ function buildHandlerCore(
           }
         } catch (err) {
           if (err instanceof HostProxyError) {
+            const text = boundEmittedResult(`❌ batch confirmation failed: ${err.message} (${err.code})`)
             return {
-              toolResult: { content: [{ type: 'text', text: `❌ batch confirmation failed: ${err.message} (${err.code})` }] },
+              toolResult: { content: [{ type: 'text', text }] },
               auditEvents: gated.map((g) => ({
                 operationId: g.operationId,
                 operationClass: getCapability(g.operationId)?.class ?? 'write',
@@ -430,37 +466,40 @@ function buildHandlerCore(
       }
     }
 
-    // Issue #1612 round 2: charge EVERY string that ends up in the returned text against the
-    // budget, not just the rendered payload. Previously only `rendered.length` was counted while
-    // the "✅ <operationId>: " prefixes, the ❌/⚠️ refusal and error lines, the '\n\n' separators
-    // and the exhaustion marker were all appended afterward and charged to nothing — so the text
-    // actually handed back could exceed MAX_BATCH_RESULT_CHARS. The `+ 2` is the separator
-    // join('\n\n') will insert; charging it on every push (rather than every push but the last)
-    // over-counts by exactly 2 characters per batch, which errs toward the cap, not past it.
-    //
-    // What this still does NOT make it: a hard cap on the returned string. The check is a
-    // PRE-check — it stops the batch before starting the next call, so the final text is bounded
-    // by MAX_BATCH_RESULT_CHARS + one call's rendered output (itself capped at MAX_RESULT_CHARS)
-    // + the exhaustion marker. Bounding it exactly would mean truncating a result mid-render,
-    // which would hand the model malformed JSON. State the real bound; do not claim the tighter one.
-    const pushResult = (text: string): void => {
-      batchCharsUsed += text.length + 2
-      results.push(text)
+    // Charge every emitted character, including separators and the exhaustion marker, against
+    // one hard aggregate limit. Callers can lower maxChars to reserve room for the marker before
+    // starting another call; this prevents a successful final call from overshooting the budget.
+    const pushResult = (text: string, maxChars = MAX_EMITTED_RESULT_CHARS): void => {
+      const separatorChars = results.length > 0 ? 2 : 0
+      const remainingChars = Math.max(0, MAX_BATCH_RESULT_CHARS - batchCharsUsed - separatorChars)
+      const bounded = boundEmittedResult(text, Math.min(maxChars, remainingChars))
+      if (bounded.length === 0) return
+      batchCharsUsed += bounded.length + separatorChars
+      results.push(bounded)
     }
 
-    for (const call of calls) {
-      // Issue #1612: the batch aggregate is unbounded per-call but was unbounded in total.
-      // Once the running total across this batch already exceeds the budget, stop — same
-      // self-describing marker style as renderResult (shown/full-equivalent sizes, actionable
-      // hint), and the same "break, not continue" idiom the manifest-denial path below uses:
-      // once the batch can no longer usefully surface more output, the rest is not run.
-      if (batchCharsUsed >= MAX_BATCH_RESULT_CHARS) {
-        pushResult(
-          `⚠️ Batch result budget exhausted after ${auditEvents.length} of ${calls.length} call(s) ` +
-            `(${batchCharsUsed} of ${MAX_BATCH_RESULT_CHARS} character budget used). ` +
-            `${calls.length - auditEvents.length} call(s) were not executed. Split this batch into ` +
-            `smaller invocations, or narrow filters/limits to reduce individual result sizes.`,
-        )
+    const exhaustionMessage = (completedCalls: number, usedChars: number): string =>
+      `⚠️ Batch result budget exhausted after ${completedCalls} of ${calls.length} call(s) ` +
+      `(${usedChars} of ${MAX_BATCH_RESULT_CHARS} character budget used). ` +
+      `${calls.length - completedCalls} call(s) were not executed. Split this batch into ` +
+      `smaller invocations, or narrow filters/limits to reduce individual result sizes.`
+
+    const pushExhaustion = (): void => {
+      pushResult(exhaustionMessage(auditEvents.length, batchCharsUsed))
+    }
+
+    for (const [callIndex, call] of calls.entries()) {
+      const separatorChars = results.length > 0 ? 2 : 0
+      const remainingCalls = calls.length - callIndex - 1
+      const markerReserve = remainingCalls > 0
+        ? 2 + exhaustionMessage(auditEvents.length + 1, MAX_BATCH_RESULT_CHARS).length
+        : 0
+      const resultAllowance = MAX_BATCH_RESULT_CHARS - batchCharsUsed - separatorChars - markerReserve
+
+      // A bounded result is only useful if it can retain a self-describing truncation marker.
+      // Stop before invoking when the remaining budget cannot hold that much output.
+      if (resultAllowance < MIN_USEFUL_EMITTED_RESULT_CHARS) {
+        pushExhaustion()
         break
       }
 
@@ -510,8 +549,14 @@ function buildHandlerCore(
         }
         const suffix = note ? `\n\n${note}` : ''
         const rendered = renderResult(projected.value, suffix.length)
-        pushResult(`✅ ${call.operationId}: ${rendered}${suffix}`)
+        const emitted = `✅ ${call.operationId}: ${rendered}${suffix}`
+        const aggregateWouldTruncate = boundEmittedResult(emitted).length > resultAllowance
+        pushResult(emitted, resultAllowance)
         auditEvents.push({ operationId: call.operationId, operationClass, result: 'success' })
+        if (remainingCalls > 0 && aggregateWouldTruncate) {
+          pushExhaustion()
+          break
+        }
       } catch (err) {
         if (err instanceof HostProxyError) {
           if (err.code === 'confirmation_required') {
