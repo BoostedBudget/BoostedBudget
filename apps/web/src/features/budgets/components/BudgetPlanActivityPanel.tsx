@@ -11,7 +11,7 @@ interface Props { data: BudgetPlanVsActualResponse; onRefresh: () => void }
 export default function BudgetPlanActivityPanel({ data, onRefresh }: Props) {
   const [privacyMode, setPrivacyMode] = useState(false)
   const [selected, setSelected] = useState<BudgetPlanFlowData['lines'][number] | null>(null)
-  const currentSelection = data.eligibility === 'eligible' && !privacyMode && selected && data.lines.find((line) => line.id === selected.id && (line.kind !== 'savings' || !line.reasons.some((reason) => reason === 'mixed_currency' || reason === 'unknown_currency')))
+  const currentSelection = data.eligibility === 'eligible' && !privacyMode && selected && data.lines.find((line) => line.id === selected.id && (line.kind === 'savings' ? !line.reasons.some((reason) => reason === 'mixed_currency' || reason === 'unknown_currency') : line.actual != null))
   return (
     <div className="space-y-3">
       <Button variant="outline" aria-pressed={privacyMode} onClick={() => { setPrivacyMode(!privacyMode); setSelected(null) }}>{privacyMode ? 'Show amounts' : 'Hide amounts'}</Button>
