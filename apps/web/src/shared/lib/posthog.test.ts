@@ -443,6 +443,7 @@ describe('posthog lifecycle', () => {
     dnt = false;
     client = {
       capture: mock(() => {}),
+      clearLegacyConsent: mock(() => {}),
       clearPersistence: mock(() => {}),
       clearQueuedEvents: mock(() => {}),
       identify: mock(() => {}),
@@ -468,11 +469,13 @@ describe('posthog lifecycle', () => {
     expect(client.init).not.toHaveBeenCalled();
     expect(client.capture).not.toHaveBeenCalled();
     expect(client.identify).not.toHaveBeenCalled();
+    expect(client.clearLegacyConsent).not.toHaveBeenCalled();
 
     lifecycle.grant('user-123', { subscription_tier: 'premium' });
     lifecycle.grant('user-123', { subscription_tier: 'premium' });
 
     expect(client.init).toHaveBeenCalledTimes(1);
+    expect(client.clearLegacyConsent).toHaveBeenCalledTimes(1);
     expect(captureGate.isGranted()).toBe(true);
     expect(lifecycle.getState()).toBe('granted');
   });
@@ -526,6 +529,7 @@ describe('posthog lifecycle', () => {
 
   test('pending disables persistence before any reset and grant restores it before identity', () => {
     const order: string[] = [];
+    client.clearLegacyConsent = mock(() => { order.push('clear-legacy-consent'); });
     client.setPersistenceEnabled = mock((enabled: boolean) => { order.push(`persistence:${enabled}`); });
     client.clearPersistence = mock(() => { order.push('clear-persistence'); });
     client.identify = mock(() => { order.push('identify'); });
@@ -537,12 +541,19 @@ describe('posthog lifecycle', () => {
     expect(order).toEqual(['persistence:false', 'clear-persistence']);
 
     lifecycle.grantFromAuthority('user-a', 'user-a');
-    expect(order).toEqual(['persistence:false', 'clear-persistence', 'persistence:true', 'identify']);
+    expect(order).toEqual([
+      'persistence:false',
+      'clear-persistence',
+      'clear-legacy-consent',
+      'persistence:true',
+      'identify',
+    ]);
   });
 
   test('separate tab lifecycles do not share native consent or identity state', () => {
     const tabBClient: AnalyticsClient = {
       capture: mock(() => {}),
+      clearLegacyConsent: mock(() => {}),
       clearPersistence: mock(() => {}),
       identify: mock(() => {}),
       init: mock(() => {}),

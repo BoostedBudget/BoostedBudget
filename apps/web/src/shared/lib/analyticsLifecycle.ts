@@ -10,6 +10,7 @@ export interface AnalyticsLifecycleSnapshot {
 
 export interface AnalyticsClient {
   capture(event: string, properties?: Properties): unknown
+  clearLegacyConsent(): void
   clearPersistence(): void
   clearQueuedEvents?(): void
   identify(distinctId: string, properties?: Properties): void
@@ -139,6 +140,7 @@ export function createProductAnalyticsLifecycle({
       deny()
       return
     }
+    client.clearLegacyConsent()
     client.setPersistenceEnabled(true)
     state = 'granted'
     if (distinctId) client.identify(distinctId, personProperties)
