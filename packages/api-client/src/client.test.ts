@@ -232,6 +232,65 @@ describe('portable API client runtime', () => {
     ])
     expect(unauthorized).toEqual(['second', 'first'])
   })
+
+  test('overlapping direct axios requests retain their runtime ownership', async () => {
+    const releaseFirst = deferred<void>()
+    const firstStarted = deferred<void>()
+    const requests: Array<{ baseUrl: string | undefined; url: string | undefined }> = []
+    const unauthorized: string[] = []
+    AXIOS_INSTANCE.defaults.adapter = async (config) => {
+      requests.push({ baseUrl: config.baseURL, url: config.url })
+      const internalConfig = requestConfig(config)
+      if (config.url === '/prime') {
+        return {
+          data: { ok: true },
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config: internalConfig,
+        }
+      }
+      if (config.baseURL === 'https://first.example.com') {
+        firstStarted.resolve()
+        await releaseFirst.promise
+      }
+      throw new AxiosError('Unauthorized', undefined, internalConfig, undefined, {
+        data: {},
+        status: 401,
+        statusText: 'Unauthorized',
+        headers: {},
+        config: internalConfig,
+      })
+    }
+
+    configureApiClient({
+      baseUrl: 'https://first.example.com',
+      getAccessToken: async () => 'first-token',
+      onUnauthorized: () => { unauthorized.push('first') },
+    })
+    await customInstance({ url: '/prime' })
+    const firstRequest = AXIOS_INSTANCE({ url: '/overlap' })
+    await firstStarted.promise
+
+    configureApiClient({
+      baseUrl: 'https://second.example.com',
+      getAccessToken: async () => 'second-token',
+      onUnauthorized: () => { unauthorized.push('second') },
+    })
+    await customInstance({ url: '/prime' })
+    await expect(AXIOS_INSTANCE({ url: '/overlap' })).rejects.toBeInstanceOf(AxiosError)
+
+    releaseFirst.resolve()
+    await expect(firstRequest).rejects.toBeInstanceOf(AxiosError)
+
+    expect(requests).toEqual([
+      { baseUrl: 'https://first.example.com', url: '/prime' },
+      { baseUrl: 'https://first.example.com', url: '/overlap' },
+      { baseUrl: 'https://second.example.com', url: '/prime' },
+      { baseUrl: 'https://second.example.com', url: '/overlap' },
+    ])
+    expect(unauthorized).toEqual(['second', 'first'])
+  })
 })
 
 describe('redactCapabilityUrlPath', () => {
