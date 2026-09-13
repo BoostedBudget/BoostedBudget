@@ -36,6 +36,6 @@ export interface PostHogSupportIdentity {
   readonly $schema?: string;
   /** Canonical authenticated Clerk user ID */
   distinct_id: string;
-  /** Short-lived transport of the server-computed PostHog identity signature */
+  /** Server-computed PostHog identity signature; valid until secret rotation */
   identity_hash: string;
 }

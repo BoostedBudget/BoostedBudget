@@ -24,7 +24,7 @@ type GetPostHogSupportIdentityInput struct {
 
 type PostHogSupportIdentity struct {
 	DistinctID   string `json:"distinct_id" doc:"Canonical authenticated Clerk user ID"`
-	IdentityHash string `json:"identity_hash" doc:"Short-lived transport of the server-computed PostHog identity signature"`
+	IdentityHash string `json:"identity_hash" doc:"Server-computed PostHog identity signature; valid until secret rotation"`
 }
 
 type GetPostHogSupportIdentityOutput struct {
