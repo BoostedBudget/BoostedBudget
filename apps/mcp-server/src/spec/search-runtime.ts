@@ -38,6 +38,18 @@ export interface SpecBodyField {
   description?: string
 }
 
+/** Explicit JSON response-root container, preserving nullability at every array level. */
+export type SpecResponseShape =
+  | {
+      type: 'array'
+      items: SpecResponseShape
+      nullable?: true
+    }
+  | {
+      type: 'object' | 'string' | 'number' | 'integer' | 'boolean' | 'null'
+      nullable?: true
+    }
+
 export interface SpecEntry {
   operationId: string
   method: string
@@ -60,6 +72,8 @@ export interface SpecEntry {
    * matching on response field names would make almost every query match almost everything.
    */
   responseBody?: SpecBodyField[]
+  /** Recursive JSON response-root shape for an eligible 200/201 success response. */
+  responseShape?: SpecResponseShape
   /** Compact projection fields, including conditional derived values. Absent for passthrough operations. */
   compactResponseBody?: (string | SpecBodyField)[]
 }

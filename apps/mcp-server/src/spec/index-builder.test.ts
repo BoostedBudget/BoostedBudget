@@ -17,8 +17,76 @@ import { fileURLToPath } from 'node:url'
 import { buildSpecIndex, indexFromSpec } from './index-builder'
 import type { SpecEntry } from './search-runtime'
 import { responseFields } from './search-runtime'
+import { getCapability } from '../manifest/capability-manifest'
 
 let entries: SpecEntry[]
+
+interface RawOracleOperation {
+  operationId?: string
+  responses?: Record<string, {
+    content?: Record<string, { schema?: RawOracleSchema }>
+  }>
+}
+
+interface RawOracleSchema {
+  $ref?: string
+  type?: string | string[]
+  nullable?: boolean
+  items?: RawOracleSchema
+  properties?: Record<string, RawOracleSchema>
+  additionalProperties?: unknown
+}
+
+type OracleResponseShape =
+  | { type: 'array'; items: OracleResponseShape; nullable?: true }
+  | { type: 'object' | 'string' | 'number' | 'integer' | 'boolean' | 'null'; nullable?: true }
+
+function withOracleNullability(shape: OracleResponseShape, nullable: boolean): OracleResponseShape {
+  return nullable ? { ...shape, nullable: true } : shape
+}
+
+/** Independent test oracle: deliberately does not import or call the production root analyzer. */
+function expectedResponseShape(
+  schema: RawOracleSchema,
+  components: Record<string, RawOracleSchema>,
+  seenRefs: Set<string> = new Set(),
+): OracleResponseShape {
+  const nullable = schema.nullable === true || (Array.isArray(schema.type) && schema.type.includes('null'))
+  if (schema.$ref) {
+    const name = schema.$ref.replace(/^#\/components\/schemas\//, '')
+    if (seenRefs.has(name)) throw new Error(`oracle cycle at ${schema.$ref}`)
+    const target = components[name]
+    if (!target) throw new Error(`oracle unresolved ref ${schema.$ref}`)
+    return withOracleNullability(
+      expectedResponseShape(target, components, new Set([...seenRefs, name])),
+      nullable,
+    )
+  }
+
+  const declaredTypes = new Set(Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [])
+  const nonNullTypes = [...declaredTypes].filter((candidate) => candidate !== 'null')
+  if (nonNullTypes.length > 1) {
+    throw new Error(`oracle unsupported response union ${nonNullTypes.join('|')}`)
+  }
+  const type = nonNullTypes[0]
+    ?? (declaredTypes.has('null') ? 'null' : undefined)
+    ?? (schema.properties || schema.additionalProperties ? 'object' : undefined)
+  if (!type) throw new Error('oracle response root has no type')
+
+  if (type === 'array') {
+    if (!schema.items) throw new Error('oracle response array has no items')
+    return withOracleNullability({
+      type: 'array',
+      items: expectedResponseShape(schema.items, components, seenRefs),
+    }, nullable)
+  }
+  if (!['object', 'string', 'number', 'integer', 'boolean', 'null'].includes(type)) {
+    throw new Error(`oracle unsupported response type ${type}`)
+  }
+  return withOracleNullability({
+    type: type as Exclude<OracleResponseShape['type'], 'array'>,
+  }, nullable && type !== 'null')
+}
 
 describe('#1634 projection-aware discovery', () => {
   it('expands only projected response paths and documents conditional derived fields', () => {
@@ -597,6 +665,372 @@ describe('issue #1610a: response body extraction', () => {
   })
 })
 
+describe('issue #1610: explicit response-root shapes', () => {
+  const operationSpec = (responses: Record<string, unknown>, operationId = 'getAccounts') => ({
+    paths: {
+      '/test': {
+        get: { operationId, summary: 'Synthetic response shape', responses },
+      },
+    },
+  })
+
+  it('records a $ref-resolved JSON 200 object root', () => {
+    const spec = {
+      ...operationSpec({
+        '200': {
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/AccountRoot' } },
+          },
+        },
+      }),
+      components: {
+        schemas: {
+          AccountRoot: {
+            type: 'object',
+            properties: { id: { type: 'string' } },
+          },
+        },
+      },
+    }
+
+    expect(indexFromSpec(spec).entries[0]?.responseShape).toEqual({ type: 'object' })
+  })
+
+  it('preserves nullable on a selected $ref sibling after resolving the root', () => {
+    const spec = {
+      ...operationSpec({
+        '200': {
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/AccountRoot', nullable: true },
+            },
+          },
+        },
+      }),
+      components: {
+        schemas: {
+          AccountRoot: { type: 'object', properties: { id: { type: 'string' } } },
+        },
+      },
+    }
+
+    expect(indexFromSpec(spec).entries[0]?.responseShape).toEqual({
+      type: 'object',
+      nullable: true,
+    })
+  })
+
+  it('uses JSON 201 when it is the only eligible success schema', () => {
+    const index = indexFromSpec(operationSpec({
+      '201': {
+        content: { 'application/json': { schema: { type: 'string' } } },
+      },
+    }))
+
+    expect(index.entries[0]?.responseShape).toEqual({ type: 'string' })
+  })
+
+  it('records a null-only response root exactly', () => {
+    const index = indexFromSpec(operationSpec({
+      '200': {
+        content: { 'application/json': { schema: { type: ['null'] } } },
+      },
+    }))
+
+    expect(index.entries[0]?.responseShape).toEqual({ type: 'null' })
+    expect(expectedResponseShape({ type: ['null'] }, {})).toEqual({ type: 'null' })
+  })
+
+  it('rejects multiple distinct non-null root types and names the operationId', () => {
+    const spec = operationSpec({
+      '200': {
+        content: {
+          'application/json': { schema: { type: ['string', 'number', 'null'] } },
+        },
+      },
+    })
+
+    expect(() => indexFromSpec(spec)).toThrow(/getAccounts.*unsupported.*string.*number/i)
+    expect(() => expectedResponseShape({ type: ['string', 'number', 'null'] }, {}))
+      .toThrow(/unsupported response union string\|number/i)
+  })
+
+  it('does not spend the array nesting budget while following a valid ref chain', () => {
+    const schemas = Object.fromEntries(Array.from({ length: 32 }, (_, index) => [
+      `Root${index}`,
+      index === 31
+        ? { type: 'array', items: { type: 'string' } }
+        : { $ref: `#/components/schemas/Root${index + 1}` },
+    ]))
+    const spec = {
+      ...operationSpec({
+        '200': {
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/Root0' } },
+          },
+        },
+      }),
+      components: { schemas },
+    }
+
+    expect(indexFromSpec(spec).entries[0]?.responseShape).toEqual({
+      type: 'array',
+      items: { type: 'string' },
+    })
+  })
+
+  it('rejects 33 response-root ref hops and names the operationId', () => {
+    const schemas = Object.fromEntries(Array.from({ length: 33 }, (_, index) => [
+      `Root${index}`,
+      index === 32
+        ? { type: 'object' }
+        : { $ref: `#/components/schemas/Root${index + 1}` },
+    ]))
+    const spec = {
+      ...operationSpec({
+        '200': {
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/Root0' } },
+          },
+        },
+      }),
+      components: { schemas },
+    }
+
+    expect(() => indexFromSpec(spec)).toThrow(/getAccounts.*exceeds 32 ref hops/i)
+  })
+
+  it('rejects 33 nested response-root arrays and names the operationId', () => {
+    let root: RawOracleSchema = { type: 'string' }
+    for (let depth = 0; depth < 33; depth += 1) {
+      root = { type: 'array', items: root }
+    }
+    const spec = operationSpec({
+      '200': {
+        content: { 'application/json': { schema: root } },
+      },
+    })
+
+    expect(() => indexFromSpec(spec)).toThrow(/getAccounts.*exceeds 32 nested arrays/i)
+  })
+
+  it('prefers a JSON 200 schema over a JSON 201 schema', () => {
+    const index = indexFromSpec(operationSpec({
+      '200': {
+        content: { 'application/json': { schema: { type: 'object' } } },
+      },
+      '201': {
+        content: { 'application/json': { schema: { type: 'string' } } },
+      },
+    }))
+
+    expect(index.entries[0]?.responseShape).toEqual({ type: 'object' })
+  })
+
+  it('falls back to JSON 201 when 200 has no JSON schema', () => {
+    const index = indexFromSpec(operationSpec({
+      '200': {
+        content: { 'text/plain': { schema: { type: 'string' } } },
+      },
+      '201': {
+        content: { 'application/json': { schema: { type: 'array', items: { type: 'integer' } } } },
+      },
+    }))
+
+    expect(index.entries[0]?.responseShape).toEqual({
+      type: 'array',
+      items: { type: 'integer' },
+    })
+  })
+
+  it('records a nullable array<string> root without inventing response fields', () => {
+    const index = indexFromSpec(operationSpec({
+      '200': {
+        content: {
+          'application/json': {
+            schema: { type: ['array', 'null'], items: { type: 'string' } },
+          },
+        },
+      },
+    }))
+    const entry = index.entries[0]
+
+    expect(entry?.responseShape).toEqual({
+      type: 'array',
+      nullable: true,
+      items: { type: 'string' },
+    })
+    expect(entry?.responseBody).toBeUndefined()
+  })
+
+  it('preserves nullability at every nested array node and flattens the innermost object', () => {
+    const spec = {
+      ...operationSpec({
+        '200': {
+          content: {
+            'application/json': {
+              schema: {
+                type: ['array', 'null'],
+                items: {
+                  type: ['array', 'null'],
+                  items: { $ref: '#/components/schemas/MerchantSummary' },
+                },
+              },
+            },
+          },
+        },
+      }, 'getBoosts'),
+      components: {
+        schemas: {
+          MerchantSummary: {
+            type: 'object',
+            required: ['merchant_name'],
+            properties: {
+              merchant_name: { type: 'string' },
+              total: { type: 'number' },
+            },
+          },
+        },
+      },
+    }
+    const entry = indexFromSpec(spec).entries[0]
+
+    expect(entry?.responseShape).toEqual({
+      type: 'array',
+      nullable: true,
+      items: {
+        type: 'array',
+        nullable: true,
+        items: { type: 'object' },
+      },
+    })
+    expect(entry?.responseBody?.map((field) => field.name)).toEqual(['merchant_name', 'total'])
+  })
+
+  it('omits shape and returns metadata for excluded or ineligible responses', () => {
+    const spec = {
+      paths: {
+        '/excluded': { get: {
+          operationId: 'checkRole', summary: 'Excluded',
+          responses: { '200': { content: { 'application/json': { schema: { type: 'object' } } } } },
+        } },
+        '/non-json': { get: {
+          operationId: 'getAccounts', summary: 'Non JSON',
+          responses: { '200': { content: { 'text/plain': { schema: { type: 'string' } } } } },
+        } },
+        '/accepted': { get: {
+          operationId: 'getBoosts', summary: 'Accepted only',
+          responses: { '202': { content: { 'application/json': { schema: { type: 'object' } } } } },
+        } },
+        '/no-content': { get: {
+          operationId: 'getCashFlowSummary', summary: 'No content', responses: { '204': {} },
+        } },
+        '/bodyless': { post: {
+          operationId: 'createBudget', summary: 'Bodyless', responses: { '200': { description: 'OK' } },
+        } },
+      },
+    }
+    const entries = indexFromSpec(spec).entries
+
+    for (const entry of entries) {
+      expect(entry.responseShape, entry.operationId).toBeUndefined()
+      expect(entry.responseBody, entry.operationId).toBeUndefined()
+      expect(entry.compactResponseBody, entry.operationId).toBeUndefined()
+    }
+  })
+
+  it('fails a selected unresolved response root and names the operationId', () => {
+    const spec = operationSpec({
+      '200': {
+        content: {
+          'application/json': { schema: { $ref: '#/components/schemas/MissingRoot' } },
+        },
+      },
+    })
+
+    expect(() => indexFromSpec(spec)).toThrow(/getAccounts.*unresolved/i)
+  })
+
+  it('fails a selected cyclic response root and names the operationId', () => {
+    const spec = {
+      ...operationSpec({
+        '200': {
+          content: {
+            'application/json': { schema: { $ref: '#/components/schemas/CycleA' } },
+          },
+        },
+      }),
+      components: {
+        schemas: {
+          CycleA: { $ref: '#/components/schemas/CycleB' },
+          CycleB: { $ref: '#/components/schemas/CycleA' },
+        },
+      },
+    }
+
+    expect(() => indexFromSpec(spec)).toThrow(/getAccounts.*cyclic/i)
+  })
+
+  it('pins representative real primitive and nested-array root shapes', () => {
+    const available = entries.find((entry) => entry.operationId === 'getAvailableCategories')
+    const plaid = entries.find((entry) => entry.operationId === 'getPlaidCategories')
+    const duplicates = entries.find((entry) => entry.operationId === 'getMerchantDuplicateSuggestions')
+
+    const nullableStringArray = {
+      type: 'array',
+      items: { type: 'string' },
+      nullable: true,
+    }
+    expect(available?.responseShape).toEqual(nullableStringArray)
+    expect(plaid?.responseShape).toEqual(nullableStringArray)
+    expect(duplicates?.responseShape).toEqual({
+      type: 'array',
+      items: {
+        type: 'array',
+        items: { type: 'object' },
+        nullable: true,
+      },
+      nullable: true,
+    })
+    expect(duplicates?.responseBody?.map((field) => field.name)).toEqual([
+      'dominant_category',
+      'effective_display_name',
+      'has_override',
+      'is_merged',
+      'merchant_id',
+      'merged_into_merchant_id',
+      'normalized_name',
+      'raw_variants',
+      'total_spend',
+      'transaction_count',
+    ])
+  })
+
+  it('covers every allowed raw OpenAPI operation with an eligible JSON 200/201 schema', async () => {
+    const rawSpec = parse(readFileSync(resolve(import.meta.dir, '../../../../api/openapi.yaml'), 'utf8'))
+    const built = await buildSpecIndex()
+    const components = rawSpec.components?.schemas as Record<string, RawOracleSchema>
+    let eligibleCount = 0
+
+    for (const pathItem of Object.values(rawSpec.paths ?? {}) as Record<string, unknown>[]) {
+      for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
+        const operation = pathItem[method] as RawOracleOperation | undefined
+        if (!operation?.operationId || getCapability(operation.operationId)?.excluded) continue
+        const selected = operation.responses?.['200']?.content?.['application/json']?.schema
+          ?? operation.responses?.['201']?.content?.['application/json']?.schema
+        if (!selected) continue
+
+        eligibleCount += 1
+        const expected = expectedResponseShape(selected, components)
+        const shape = built.entries.find((entry) => entry.operationId === operation.operationId)?.responseShape
+        expect(shape, operation.operationId).toEqual(expected)
+      }
+    }
+
+    expect(eligibleCount).toBeGreaterThan(0)
+  })
+})
+
 // Artifact drift and size are separate guarantees: deterministic output can still bloat.
 describe('issue #1610a: spec-index.json byte budget', () => {
   const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -605,10 +1039,9 @@ describe('issue #1610a: spec-index.json byte budget', () => {
   it('bounds artifact size after selective expansion and compact metadata deduplication', () => {
     const raw = readFileSync(COMMITTED_INDEX_PATH, 'utf-8')
     const bytes = Buffer.byteLength(raw, 'utf-8')
-    // #1634: explicit profile paths expand from 375,602 to 526,611 bytes. The initial
-    // duplicate-rich-view experiment cost 653,461. A 560 KB ceiling
-    // allows ~6% headroom while rejecting duplicate rich views. Selective-depth tests
-    // above separately guard opaque payloads and passthrough; request depth stays two.
+    // #1610: the current response-root artifact is 550,483 bytes, leaving 9,517 bytes
+    // (~1.7%) below this ceiling. Keep the assertion threshold-based so harmless JSON
+    // ordering or description edits do not create a brittle exact-size pin.
     expect(bytes).toBeLessThan(560_000)
   })
 })
