@@ -58,12 +58,40 @@ export interface ClearablePostHogQueue {
   _isPolling?: boolean
   _poller?: ReturnType<typeof setTimeout>
   _queue?: unknown[]
+  retriableRequest?: (request: unknown) => unknown
 }
 
 export interface PostHogWithQueues {
   __request_queue?: unknown[]
   _requestQueue?: ClearablePostHogQueue
   _retryQueue?: ClearablePostHogQueue
+}
+
+interface PersistenceConfigurablePostHog {
+  config: Pick<PostHogConfig, 'persistence_name' | 'token'>
+  set_config(config: Partial<PostHogConfig>): void
+}
+
+export function clearPostHogSessionPersistence(persistenceName: string): void {
+  const prefix = `ph_${persistenceName}`
+  try {
+    for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+      const key = sessionStorage.key(index)
+      if (key === prefix || key?.startsWith(`${prefix}_`)) sessionStorage.removeItem(key)
+    }
+  } catch {
+    // The SDK already has persistence disabled; inaccessible storage cannot be used by it.
+  }
+}
+
+export function setPostHogPersistenceEnabled(
+  sdk: PersistenceConfigurablePostHog,
+  enabled: boolean,
+): void {
+  sdk.set_config({ disable_persistence: !enabled })
+  if (enabled) return
+  const persistenceName = sdk.config.persistence_name || sdk.config.token
+  if (persistenceName) clearPostHogSessionPersistence(persistenceName)
 }
 
 export function clearPostHogQueuedEvents(
@@ -80,8 +108,61 @@ export function clearPostHogQueuedEvents(
     queue._isPolling = false
     queue._queue = []
   }
-  if (sdk._retryQueue) sdk._retryQueue._enqueue = () => undefined
   sdk.__request_queue = []
+}
+
+const retryGuardCleanups = new WeakMap<object, () => void>()
+const RETRY_AUTHORITY_GENERATION = Symbol('analytics-authority-generation')
+
+type GenerationTaggedRequest = Record<PropertyKey, unknown> & {
+  [RETRY_AUTHORITY_GENERATION]?: number
+}
+
+export function guardPostHogRetryQueue(
+  sdk: PostHogWithQueues,
+  getGeneration: () => number,
+  isGranted: () => boolean,
+): () => void {
+  const queue = sdk._retryQueue
+  if (!queue) return () => {}
+  const installedCleanup = retryGuardCleanups.get(queue)
+  if (installedCleanup) return installedCleanup
+  const originalEnqueue = queue._enqueue
+  const originalRetriableRequest = queue.retriableRequest
+  if (!originalEnqueue || !originalRetriableRequest) return () => {}
+  const requestGenerations = new WeakMap<object, number>()
+
+  function getRequestGeneration(request: unknown): number {
+    if (!request || typeof request !== 'object') return getGeneration()
+    return (request as GenerationTaggedRequest)[RETRY_AUTHORITY_GENERATION]
+      ?? requestGenerations.get(request)
+      ?? getGeneration()
+  }
+
+  queue.retriableRequest = function guardedRetriableRequest(request) {
+    const generation = getRequestGeneration(request)
+    if (!isGranted() || generation !== getGeneration()) return undefined
+    if (!request || typeof request !== 'object') {
+      return originalRetriableRequest.call(this, request)
+    }
+    requestGenerations.set(request, generation)
+    const tagged = { ...(request as Record<PropertyKey, unknown>), [RETRY_AUTHORITY_GENERATION]: generation }
+    requestGenerations.set(tagged, generation)
+    return originalRetriableRequest.call(this, tagged)
+  }
+  queue._enqueue = function guardedEnqueue(request) {
+    const generation = getRequestGeneration(request)
+    if (!isGranted() || generation !== getGeneration()) return undefined
+    return originalEnqueue.call(this, request)
+  }
+
+  const cleanup = () => {
+    queue.retriableRequest = originalRetriableRequest
+    queue._enqueue = originalEnqueue
+    retryGuardCleanups.delete(queue)
+  }
+  retryGuardCleanups.set(queue, cleanup)
+  return cleanup
 }
 
 function pathFromUrl(value: string): { origin: string; pathname: string } {
@@ -142,21 +223,19 @@ function containsSensitiveUrl(value: unknown, visited = new WeakSet<object>()): 
   return false
 }
 
-function sanitizeValue(value: unknown, seen = new WeakMap<object, unknown>()): unknown {
+function sanitizeValue(value: unknown, ancestors = new WeakSet<object>()): unknown {
   if (!value || typeof value !== 'object') return value
   if (value instanceof Date) return new Date(value.getTime())
-  const existing = seen.get(value)
-  if (existing !== undefined) return existing
+  if (ancestors.has(value)) return null
+  ancestors.add(value)
 
   if (Array.isArray(value)) {
-    const sanitized: unknown[] = []
-    seen.set(value, sanitized)
-    for (const child of value) sanitized.push(sanitizeValue(child, seen))
+    const sanitized = value.map(child => sanitizeValue(child, ancestors))
+    ancestors.delete(value)
     return sanitized
   }
 
   const sanitized: Record<string, unknown> = {}
-  seen.set(value, sanitized)
   for (const [key, child] of Object.entries(value)) {
     const normalized = key.toLowerCase()
     if (isPiiKey(key) || REFERRER_PROPERTIES.has(normalized) || isCampaignProperty(normalized)) continue
@@ -164,8 +243,9 @@ function sanitizeValue(value: unknown, seen = new WeakMap<object, unknown>()): u
       if (typeof child === 'string') sanitized[key] = sanitizeAnalyticsUrl(child)
       continue
     }
-    sanitized[key] = sanitizeValue(child, seen)
+    sanitized[key] = sanitizeValue(child, ancestors)
   }
+  ancestors.delete(value)
   return sanitized
 }
 
@@ -187,6 +267,7 @@ export function posthogConfig(
   return {
     opt_out_capturing_by_default: false,
     opt_out_persistence_by_default: false,
+    disable_persistence: true,
     persistence: 'sessionStorage',
     reuseAnonymousId: true,
     request_batching: false,
@@ -336,10 +417,27 @@ const analyticsCaptureGate = createAnalyticsCaptureGate()
 
 const analyticsClient = {
   capture: (event: string, properties?: Properties) => posthog.capture(event, properties),
+  clearPersistence: () => {
+    const persistenceName = posthog.config.persistence_name
+      || posthog.config.token
+      || window.ENV?.POSTHOG_KEY
+      || import.meta.env.VITE_POSTHOG_KEY
+    if (persistenceName) clearPostHogSessionPersistence(persistenceName)
+  },
   clearQueuedEvents: clearPostHogQueuedEvents,
   identify: (distinctId: string, properties?: Properties) => posthog.identify(distinctId, properties),
-  init: (key: string, config: Partial<PostHogConfig>) => posthog.init(key, config),
+  init: (key: string, config: Partial<PostHogConfig>) => {
+    clearPostHogSessionPersistence(config.persistence_name || key)
+    const initialized = posthog.init(key, config)
+    guardPostHogRetryQueue(
+      posthog as unknown as PostHogWithQueues,
+      analyticsCaptureGate.getGeneration,
+      analyticsCaptureGate.isGranted,
+    )
+    return initialized
+  },
   reset: (resetDeviceId: boolean) => posthog.reset(resetDeviceId),
+  setPersistenceEnabled: (enabled: boolean) => setPostHogPersistenceEnabled(posthog, enabled),
   setPersonProperties: (properties: Properties) => posthog.setPersonProperties(properties),
   stopSessionRecording: () => posthog.stopSessionRecording(),
 }

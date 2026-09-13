@@ -7,6 +7,7 @@ export const mockPosthogCapture = mock((_event?: string, _properties?: Record<st
 export const mockPosthogIdentify = mock(() => {})
 export const mockPosthogReset = mock(() => {})
 export const mockPosthogInit = mock(() => {})
+export const mockPosthogSetConfig = mock(() => {})
 // Issue #1413: server-authoritative tier/comp person-property sync (usePostHogIdentify)
 export const mockPosthogSetPersonProperties = mock(() => {})
 export const mockPosthogStopSessionRecording = mock(() => {})
@@ -31,10 +32,12 @@ export const mockCaptureProductEvent = mock((event: string, properties?: Record<
 export const mockListenForAnalyticsWithdrawal = mock(() => () => {})
 
 export const mockPosthogInstance = {
+  config: { persistence_name: 'test', token: 'phc_test' },
   init: mockPosthogInit,
   capture: mockPosthogCapture,
   identify: mockPosthogIdentify,
   reset: mockPosthogReset,
+  set_config: mockPosthogSetConfig,
   setPersonProperties: mockPosthogSetPersonProperties,
   stopSessionRecording: mockPosthogStopSessionRecording,
 }

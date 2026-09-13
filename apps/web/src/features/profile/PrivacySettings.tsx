@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useUser } from '@clerk/react-router'
 import {
@@ -45,6 +45,14 @@ export function PrivacySettings({
   const [analyticsRecoveryPending, setAnalyticsRecoveryPending] = useState(false)
   const recoveryAttempt = useRef(0)
   const { user } = useUser()
+  const renderedOwner = useRef(user?.id)
+  const mutationOwner = useRef<string | undefined>(undefined)
+  const [localStateOwner, setLocalStateOwner] = useState(user?.id)
+  if (renderedOwner.current !== user?.id) {
+    renderedOwner.current = user?.id
+    recoveryAttempt.current += 1
+  }
+  const ownsLocalState = localStateOwner === user?.id
   const queryClient = useQueryClient()
   const privacyQueryKey = privacySettingsQueryKey(user?.id)
 
@@ -67,14 +75,29 @@ export function PrivacySettings({
   // Track only user modifications (not the full state)
   const [modifications, setModifications] = useState<Partial<PrivacySettingsType>>({})
 
+  useEffect(() => {
+    setModifications({})
+    setAnalyticsRecoveryNeeded(false)
+    setAnalyticsRecoveryPending(false)
+    setSaveError(null)
+    setSuccessMessage(null)
+    setShowCriticalConfirm(false)
+    setLocalStateOwner(user?.id)
+  }, [user?.id])
+
   // Derive form state from settings merged with user modifications
   const formState = useMemo<Partial<PrivacySettingsType>>(() => ({
     ...(settings as PrivacySettingsType | undefined),
-    ...modifications,
-  }), [settings, modifications])
+    ...(ownsLocalState ? modifications : {}),
+  }), [settings, modifications, ownsLocalState])
 
   // Compute loading error message
-  const error = queryError ? 'Failed to load privacy settings. Please try again.' : saveError
+  let error: string | null = null
+  if (queryError) {
+    error = 'Failed to load privacy settings. Please try again.'
+  } else if (ownsLocalState) {
+    error = saveError
+  }
 
   function handleToggle(field: keyof PrivacySettingsType) {
     setModifications(prev => ({
@@ -132,7 +155,8 @@ export function PrivacySettings({
       const isSameAuthority = analyticsActions.getSnapshot().generation === authorityGeneration
       const consentConfirmed = confirmation.error == null
         && confirmation.data?.gdpr_analytics_consent === true
-      if (!isCurrentAttempt || !isSameAuthority || !consentConfirmed) {
+      if (!isCurrentAttempt) return
+      if (!isSameAuthority || !consentConfirmed) {
         setSaveError('Could not confirm analytics consent. Please try again.')
         return
       }
@@ -141,6 +165,7 @@ export function PrivacySettings({
       setModifications({})
       setSuccessMessage('Analytics resumed successfully!')
     } catch {
+      if (attempt !== recoveryAttempt.current) return
       setSaveError('Could not confirm analytics consent. Please try again.')
     } finally {
       if (attempt === recoveryAttempt.current) setAnalyticsRecoveryPending(false)
@@ -148,9 +173,10 @@ export function PrivacySettings({
   }
 
   async function performSave() {
+    const identityAttempt = recoveryAttempt.current
     const updates = buildUpdates()
     if (Object.keys(updates).length === 0) {
-      if (analyticsRecoveryNeeded && formState.gdpr_analytics_consent === true) {
+      if (ownsLocalState && analyticsRecoveryNeeded && formState.gdpr_analytics_consent === true) {
         await reconcileFailedWithdrawal()
         return
       }
@@ -166,20 +192,27 @@ export function PrivacySettings({
     try {
       setSaveError(null)
       setSuccessMessage(null)
+      mutationOwner.current = user?.id
       const updatedSettings = await updateMutation.mutateAsync({ data: updates })
       queryClient.setQueryData(privacyQueryKey, updatedSettings)
+      void queryClient.invalidateQueries({
+        queryKey: privacyQueryKey,
+        exact: true,
+        refetchType: 'none',
+      })
+      if (identityAttempt !== recoveryAttempt.current) return
       setModifications({})
-      await refetch()
-      setSuccessMessage('Settings saved successfully!')
       const grantIsCurrent = grantGeneration !== null
         && analyticsActions.getSnapshot().generation === grantGeneration
       if (updates.gdpr_analytics_consent === true && user && grantIsCurrent) {
         grantAnalytics()
         setAnalyticsRecoveryNeeded(false)
       }
+      setSuccessMessage('Settings saved successfully!')
       onSettingsChange?.(updatedSettings as PrivacySettingsType)
     } catch (err) {
       console.error('Failed to save privacy settings:', err)
+      if (identityAttempt !== recoveryAttempt.current) return
       setSaveError('Failed to save privacy settings. Please try again.')
       if (withdrawingAnalytics) setAnalyticsRecoveryNeeded(true)
     }
@@ -197,7 +230,8 @@ export function PrivacySettings({
   }
 
   // Derive submitting state from mutation
-  const submitting = updateMutation.isPending || analyticsRecoveryPending
+  const submitting = (mutationOwner.current === user?.id && updateMutation.isPending)
+    || (ownsLocalState && analyticsRecoveryPending)
 
   if (loading) {
     return (
@@ -367,7 +401,7 @@ export function PrivacySettings({
       </Card>
 
       {/* Status Messages */}
-      {successMessage && (
+      {ownsLocalState && successMessage && (
         <p className="text-success bg-success/10 px-4 py-3 rounded-md mb-4 font-medium">{successMessage}</p>
       )}
       {error && (

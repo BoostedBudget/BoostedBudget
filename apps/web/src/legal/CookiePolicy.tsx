@@ -63,14 +63,14 @@ export function CookiePolicy() {
           <ul>
             <li>Sanitized route templates and features used (pseudonymous)</li>
             <li>General device and browser information</li>
-            <li>Session duration and interaction patterns</li>
-            <li>Error and performance data</li>
-            <li>Production session replay is disabled</li>
+            <li>Session duration and navigation patterns</li>
+            <li>Production session replay remains disabled</li>
           </ul>
           <p>
-            After consent, PostHog persistence is limited to tab-scoped sessionStorage.
-            The anonymous consent cookie remains the cross-session authority, but PostHog identity
-            and event state do not carry between tabs.
+            After consent, locally persisted PostHog SDK state is limited to the current tab session.
+            The anonymous consent cookie remains the cross-session authority. Signed-in tabs identify
+            as the same account after server consent resolves. Duplicating a tab may copy sessionStorage,
+            so BoostedBudget clears inherited SDK identity before enabling persistence for that tab.
           </p>
           <p>
             Do Not Track is a browser-only hard stop: when your browser sends DNT, browser analytics
@@ -79,8 +79,9 @@ export function CookiePolicy() {
           </p>
           <p className="important-note">
             <strong>Privacy note:</strong> PostHog analytics are configured to respect GDPR requirements.
-            Financial amounts, account numbers, and other sensitive data displayed in the app are masked
-            in session recordings and analytics. We do not sell analytics data to third parties.
+            Analytics properties and URLs are sanitized before capture. If session replay is separately
+            enabled in the future with consent, financial amounts, account numbers, and other sensitive
+            displayed data will be masked. We do not sell analytics data to third parties.
           </p>
         </section>
 
@@ -143,7 +144,10 @@ export function CookiePolicy() {
             <li><strong>Session cookies:</strong> Deleted when you close your browser</li>
             <li><strong>Authentication cookies:</strong> Up to 30 days (or until you log out)</li>
             <li><strong>Cookie consent preferences:</strong> 365 days</li>
-            <li><strong>PostHog analytics state:</strong> Until the browser tab session ends</li>
+            <li>
+              <strong>PostHog analytics state:</strong> No longer than the current tab session;
+              cleared sooner on reload or an authority change
+            </li>
           </ul>
         </section>
 

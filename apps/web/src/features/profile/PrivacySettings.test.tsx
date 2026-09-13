@@ -231,6 +231,40 @@ describe('PrivacySettings', () => {
       expect(mockCaptureProductEvent).not.toHaveBeenCalledWith('privacy_settings_changed')
     })
 
+    it('treats a successful grant mutation as authority even when background refetch fails', async () => {
+      const refetch = mock(() => Promise.reject(new Error('offline after save')))
+      mockUseGetPrivacySettings.mockReturnValue({
+        data: { ...mockSettingsWithAlertsEnabled, gdpr_analytics_consent: false },
+        isLoading: false,
+        error: null,
+        refetch,
+      })
+      mockUpdatePrivacySettingsMutateAsync.mockResolvedValue({
+        ...mockSettingsWithAlertsEnabled,
+        gdpr_analytics_consent: true,
+      })
+      const { queryClient } = renderPrivacySettings()
+      const invalidate = mock(queryClient.invalidateQueries.bind(queryClient))
+      queryClient.invalidateQueries = invalidate
+
+      fireEvent.click(screen.getByLabelText(/analytics cookies/i))
+      fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
+
+      await waitFor(() => expect(mockGrantProductAnalytics).toHaveBeenCalledWith(
+        mockClerkUser.id,
+        mockClerkUser.id,
+        expect.any(Object),
+      ))
+      expect(screen.getByText(/settings saved successfully/i)).toBeInTheDocument()
+      expect(screen.queryByText(/failed to save privacy settings/i)).not.toBeInTheDocument()
+      expect(refetch).not.toHaveBeenCalled()
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: privacySettingsQueryKey(mockClerkUser.id),
+        exact: true,
+        refetchType: 'none',
+      })
+    })
+
     it('does not apply a late backend grant after a newer cross-tab withdrawal', async () => {
       let resolveSave!: (value: typeof mockSettingsWithAlertsEnabled) => void
       mockUseGetPrivacySettings.mockReturnValue({
@@ -376,6 +410,147 @@ describe('PrivacySettings', () => {
       expect(mockUseGetPrivacySettings.mock.calls[0]?.[0]?.query?.queryKey).toEqual(
         privacySettingsQueryKey(mockClerkUser.id),
       )
+    })
+
+    it('clears drafts, recovery, and messages when Clerk switches directly from A to B', async () => {
+      const refetchA = mock(() => Promise.resolve({ data: mockSettingsWithAlertsEnabled }))
+      mockUseGetPrivacySettings.mockReturnValue({
+        data: mockSettingsWithAlertsEnabled,
+        isLoading: false,
+        error: null,
+        refetch: refetchA,
+      })
+      mockUpdatePrivacySettingsMutateAsync.mockRejectedValue(new Error('offline'))
+      const rendered = renderPrivacySettings()
+
+      fireEvent.click(screen.getByLabelText(/analytics cookies/i))
+      fireEvent.click(screen.getByLabelText(/marketing emails/i))
+      fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
+      await screen.findByText(/failed to save privacy settings/i)
+
+      const userB = { ...mockClerkUser, id: 'user-b' }
+      mockUseUser.mockReturnValue(createMockClerkUser({
+        isLoaded: true,
+        isSignedIn: true,
+        user: userB,
+      }))
+      const refetchB = mock(() => Promise.resolve({ data: mockSettingsWithAlertsEnabled }))
+      mockUseGetPrivacySettings.mockReturnValue({
+        data: mockSettingsWithAlertsEnabled,
+        isLoading: false,
+        error: null,
+        refetch: refetchB,
+      })
+      rendered.rerender(
+        <QueryClientProvider client={rendered.queryClient}>
+          <PrivacySettings analyticsActions={{
+            grant: mockGrantProductAnalytics,
+            getSnapshot: () => ({ generation: analyticsGeneration, scope: userB.id, state: 'denied' }),
+            withdraw: mockWithdrawProductAnalytics,
+          }} />
+        </QueryClientProvider>,
+      )
+
+      await waitFor(() => {
+        expect(screen.queryByText(/failed to save privacy settings/i)).not.toBeInTheDocument()
+      })
+      expect(screen.getByLabelText(/analytics cookies/i)).toBeChecked()
+      expect(screen.getByLabelText(/marketing emails/i)).toBeChecked()
+      fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
+      expect(await screen.findByText(/no changes to save/i)).toBeInTheDocument()
+      expect(refetchB).not.toHaveBeenCalled()
+    })
+
+    it('ignores a late save result from user A after switching directly to user B', async () => {
+      let resolveSave!: (value: typeof mockSettingsWithAlertsEnabled) => void
+      mockUseGetPrivacySettings.mockReturnValue({
+        data: { ...mockSettingsWithAlertsEnabled, gdpr_analytics_consent: false },
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      mockUpdatePrivacySettingsMutateAsync.mockImplementation(() => new Promise(resolve => {
+        resolveSave = resolve
+      }))
+      const rendered = renderPrivacySettings()
+      fireEvent.click(screen.getByLabelText(/analytics cookies/i))
+      fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
+
+      const userB = { ...mockClerkUser, id: 'user-b' }
+      mockUseUser.mockReturnValue(createMockClerkUser({ isLoaded: true, isSignedIn: true, user: userB }))
+      mockUseGetPrivacySettings.mockReturnValue({
+        data: mockSettingsWithAlertsEnabled,
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      mockUseUpdatePrivacySettings.mockReturnValue({
+        mutate: mock(() => {}),
+        mutateAsync: mockUpdatePrivacySettingsMutateAsync,
+        isPending: true,
+        isError: false,
+        isSuccess: false,
+        error: null,
+        data: null,
+        reset: () => {},
+      })
+      rendered.rerender(
+        <QueryClientProvider client={rendered.queryClient}>
+          <PrivacySettings analyticsActions={{
+            grant: mockGrantProductAnalytics,
+            getSnapshot: () => ({ generation: analyticsGeneration, scope: userB.id, state: 'denied' }),
+            withdraw: mockWithdrawProductAnalytics,
+          }} />
+        </QueryClientProvider>,
+      )
+      const saveButton = screen.getByRole('button', { name: /save privacy settings/i })
+      expect(saveButton).not.toBeDisabled()
+      fireEvent.click(saveButton)
+      expect(await screen.findByText(/no changes to save/i)).toBeInTheDocument()
+      expect(saveButton).not.toBeDisabled()
+      resolveSave(mockSettingsWithAlertsEnabled)
+
+      await waitFor(() => expect(mockUpdatePrivacySettingsMutateAsync).toHaveBeenCalledTimes(1))
+      expect(mockGrantProductAnalytics).not.toHaveBeenCalled()
+      expect(screen.queryByText(/settings saved successfully/i)).not.toBeInTheDocument()
+    })
+
+    it('ignores a late withdrawal-recovery result from user A after switching to B', async () => {
+      let resolveRecovery!: (value: { data: typeof mockSettingsWithAlertsEnabled; error: null }) => void
+      const recovery = mock(() => new Promise(resolve => { resolveRecovery = resolve }))
+      mockUseGetPrivacySettings.mockReturnValue({
+        data: mockSettingsWithAlertsEnabled,
+        isLoading: false,
+        error: null,
+        refetch: recovery,
+      })
+      mockUpdatePrivacySettingsMutateAsync.mockRejectedValue(new Error('offline'))
+      const rendered = renderPrivacySettings()
+      fireEvent.click(screen.getByLabelText(/analytics cookies/i))
+      fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
+      await screen.findByText(/failed to save privacy settings/i)
+      fireEvent.click(screen.getByLabelText(/analytics cookies/i))
+      fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
+      await waitFor(() => expect(recovery).toHaveBeenCalledTimes(1))
+
+      const userB = { ...mockClerkUser, id: 'user-b' }
+      mockUseUser.mockReturnValue(createMockClerkUser({ isLoaded: true, isSignedIn: true, user: userB }))
+      mockUseGetPrivacySettings.mockReturnValue({
+        data: mockSettingsWithAlertsEnabled,
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+      rendered.rerender(
+        <QueryClientProvider client={rendered.queryClient}>
+          <PrivacySettings />
+        </QueryClientProvider>,
+      )
+      resolveRecovery({ data: mockSettingsWithAlertsEnabled, error: null })
+      await new Promise(resolve => setTimeout(resolve, 0))
+
+      expect(screen.queryByText(/could not confirm analytics consent/i)).not.toBeInTheDocument()
+      expect(screen.getByLabelText(/analytics cookies/i)).toBeChecked()
     })
   })
 })
