@@ -84,14 +84,34 @@ export interface PostHogEngagementController {
   showSupport(): void
 }
 
-export function isSupportedSurvey(survey: Survey): boolean {
-  return survey.questions.length > 0 && survey.questions.every(question => {
-    if (question.type === 'rating') return true
-    if (question.type === 'single_choice' || question.type === 'multiple_choice') {
-      return question.hasOpenChoice === undefined || question.hasOpenChoice === false
-    }
-    return false
-  })
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== ''
+}
+
+function isSupportedSurveyQuestion(question: unknown): boolean {
+  if (!isRecord(question) || !isNonEmptyString(question.question)) return false
+  if (question.type === 'rating') {
+    return (question.display === 'number' || question.display === 'emoji')
+      && [2, 3, 5, 7, 10].includes(question.scale as number)
+      && typeof question.lowerBoundLabel === 'string'
+      && typeof question.upperBoundLabel === 'string'
+  }
+  if (question.type !== 'single_choice' && question.type !== 'multiple_choice') return false
+  return Array.isArray(question.choices)
+    && question.choices.length > 0
+    && question.choices.every(isNonEmptyString)
+    && (!('hasOpenChoice' in question) || question.hasOpenChoice === false)
+}
+
+export function isSupportedSurvey(survey: unknown): survey is Survey {
+  if (!isRecord(survey) || !isNonEmptyString(survey.id)) return false
+  return Array.isArray(survey.questions)
+    && survey.questions.length > 0
+    && survey.questions.every(isSupportedSurveyQuestion)
 }
 
 function sharedIsolatedConfig() {
