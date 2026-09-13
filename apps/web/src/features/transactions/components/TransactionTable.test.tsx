@@ -168,10 +168,10 @@ describe('TransactionTable', () => {
     it('should display category labels', () => {
       renderTable()
 
-      // No display fields on these test transactions — formatPFCEnum fallback is used
-      expect(screen.getByText('Shopping › General Merchandise')).toBeInTheDocument()
-      expect(screen.getByText('Income › Wages')).toBeInTheDocument()
-      expect(screen.getByText('Food And Drink › Restaurants')).toBeInTheDocument()
+      // Category cells show the hierarchy root; details have their own column.
+      expect(screen.getByText('Shopping')).toBeInTheDocument()
+      expect(screen.getByText('Income')).toBeInTheDocument()
+      expect(screen.getByText('Food & Drink')).toBeInTheDocument()
     })
 
     it('should display pending badge for pending transactions', () => {
@@ -227,16 +227,16 @@ describe('TransactionTable', () => {
   })
 
   describe('PII Masking', () => {
-    it('should apply data-ph-mask to amount, merchant, and account <td>s via maskedColumnIds', () => {
+    it('should mask amount, merchant, account and category hierarchy cells', () => {
       const { container } = renderTable()
-      // maskedColumnIds={['amount', 'merchant', 'account']} — 3 columns × 3 rows = 9 masked tds
+      // Five potentially sensitive columns × three rows.
       const maskedTds = container.querySelectorAll('td[data-ph-mask]')
-      expect(maskedTds.length).toBe(9)
+      expect(maskedTds.length).toBe(15)
     })
 
-    it('should NOT apply data-ph-mask to date and category columns', () => {
+    it('leaves dates unmasked and masks category columns that can contain custom names', () => {
       const { container } = renderTable()
-      // date and category are MAY-leave-unmasked per PII policy; verify they have no mask
+      // Custom category names are user-entered free text.
       const ths = Array.from(container.querySelectorAll('th'))
       const dateColIdx = ths.findIndex((th) => th.textContent?.includes('Date'))
       const categoryColIdx = ths.findIndex((th) => th.textContent?.includes('Category'))
@@ -244,7 +244,7 @@ describe('TransactionTable', () => {
       rows.forEach((row) => {
         const tds = Array.from(row.querySelectorAll('td'))
         if (dateColIdx >= 0) expect(tds[dateColIdx]?.hasAttribute('data-ph-mask')).toBe(false)
-        if (categoryColIdx >= 0) expect(tds[categoryColIdx]?.hasAttribute('data-ph-mask')).toBe(false)
+        if (categoryColIdx >= 0) expect(tds[categoryColIdx]?.hasAttribute('data-ph-mask')).toBe(true)
       })
     })
   })
@@ -412,8 +412,8 @@ describe('TransactionTable', () => {
     it('PII mask retention: amount, merchant, account columns have data-ph-mask after feature wiring', () => {
       const { container } = renderTable()
       const maskedTds = container.querySelectorAll('td[data-ph-mask]')
-      // maskedColumnIds={['amount', 'merchant', 'account']} — 3 columns × 3 rows = 9
-      expect(maskedTds.length).toBe(9)
+      // Five masked columns × three rows.
+      expect(maskedTds.length).toBe(15)
     })
 
     it('Resize handles render on columns with resizable:true', () => {
@@ -778,8 +778,8 @@ describe('TransactionTable', () => {
     it('investment row merchant cell (ticker·name) still has data-ph-mask', () => {
       const { container } = renderFeedTable()
       const maskedTds = container.querySelectorAll('td[data-ph-mask]')
-      // 2 rows × 3 masked columns (amount, merchant, account) = 6 masked tds
-      expect(maskedTds.length).toBe(6)
+      // Two rows × five masked columns.
+      expect(maskedTds.length).toBe(10)
     })
   })
 

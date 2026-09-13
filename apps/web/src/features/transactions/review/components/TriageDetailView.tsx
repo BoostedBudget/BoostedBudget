@@ -15,8 +15,12 @@
  * Amounts are masked with data-ph-mask for PostHog session replay PII compliance.
  */
 
-import { useState, useCallback, useMemo } from 'react'
-import { effectiveCategoryToStringArray } from '@/shared/categories/getEffectiveCategory'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import type { Account } from '@/features/accounts/types'
+import { getCategoryPresentation } from '@/shared/categories/getCategoryPresentation'
+import { formatTransactionAmount } from '@/shared/transactions/amount'
+import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
+import { categorySelectionEqual, seedCategorySelection, type CategorySelection } from '@/shared/categories/categorySelection'
 import { ChevronLeft, ChevronRight, X, HelpCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -31,24 +35,21 @@ import type { Transaction } from '../../types'
 import type { CustomCategory } from '../../../categories/types'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
 
-const CURRENCY_FORMATTER = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-})
-
 const KEYBOARD_SHORTCUT_CLASS =
   'ml-1 hidden rounded border border-border px-1 text-[10px] text-muted-foreground opacity-70 sm:inline'
 
 interface TriageDetailViewProps {
   transaction: Transaction
+  account?: Pick<Account, 'name' | 'nickname'>
+  onEdit?: () => void
+  onInteractionBusyChange?: (busy: boolean) => void
   currentIndex: number
   total: number
   availableCategories?: CustomCategory[]
   plaidPrimaries?: Primary[]
   onApprove: () => void
   onSkip: () => void
-  onRecategorize: (categoryRequest: { kind: 'pfc' | 'custom' | 'clear'; pfc_primary?: string; pfc_detailed?: string; custom_category_id?: string }) => void
+  onRecategorize: (categoryRequest: CategorySelection) => void | Promise<void>
   onToggleSelect: () => void
   onNext: () => void
   onPrev: () => void
@@ -61,6 +62,9 @@ interface TriageDetailViewProps {
 
 export function TriageDetailView({
   transaction,
+  account,
+  onEdit,
+  onInteractionBusyChange,
   currentIndex,
   total,
   availableCategories = [],
@@ -80,12 +84,16 @@ export function TriageDetailView({
   const [showHelp, setShowHelp] = useState(false)
   const [showRecategorize, setShowRecategorize] = useState(false)
 
-  // #1625: seed from the transaction's effective category. Opening with [] rendered a
-  // well-categorized transaction as "Uncategorized" and, because handleSaveCategory reads an
-  // empty selection as { kind: 'clear' }, pressing Apply without touching it DESTROYED the
-  // category. TransactionEditor has always seeded this way; triage never did.
-  const seedCategory = useMemo(() => effectiveCategoryToStringArray(transaction), [transaction])
-  const [pendingCategory, setPendingCategory] = useState<string[]>(seedCategory)
+  const seedCategory = useMemo(() => seedCategorySelection(transaction), [transaction])
+  const [pendingCategory, setPendingCategory] = useState<CategorySelection>(seedCategory)
+  const [categoryError, setCategoryError] = useState(false)
+  const [savingCategory, setSavingCategory] = useState(false)
+  const categoryInFlight = useRef(false)
+  const blocked = isPending || savingCategory || externalOverlayOpen || showHelp || showRecategorize
+  useEffect(() => {
+    onInteractionBusyChange?.(showHelp || showRecategorize || savingCategory)
+    return () => onInteractionBusyChange?.(false)
+  }, [showHelp, showRecategorize, savingCategory, onInteractionBusyChange])
 
   // Re-seed when the triage queue advances to a different transaction under an open panel.
   // Adjusting state during render (rather than in an effect) is the React-recommended form and
@@ -99,6 +107,7 @@ export function TriageDetailView({
   const handleToggleHelp = useCallback(() => setShowHelp((v) => !v), [])
   const handleRecategorize = useCallback(() => {
     setShowRecategorize(true)
+    setCategoryError(false)
     setPendingCategory(seedCategory)
   }, [seedCategory])
   const handleClose = useCallback(() => {
@@ -122,30 +131,25 @@ export function TriageDetailView({
     onClose: handleClose,
     onUndo,
     // Disable shortcuts when any overlay is open or a mutation is in flight
-    enabled: !showHelp && !showRecategorize && !isPending && !externalOverlayOpen,
+    enabled: !blocked,
   })
 
   const displayName = getMerchantDisplayName(transaction)
+  const amount = formatTransactionAmount(transaction.amount)
+  const category = getCategoryPresentation(getEffectiveCategory(transaction), availableCategories)
   const hasPrev = currentIndex > 0
   const hasNext = currentIndex < total - 1
 
-  const handleSaveCategory = () => {
-    // #1625: the selection can arrive in EITHER convention — a display name (the user picked
-    // from the dropdown) or a raw UUID / PFC enum (seeded from the transaction). Match both, or
-    // an untouched custom category would be sent as `pfc_primary: "<uuid>"`.
-    const selected = pendingCategory[0]
-    const customCat = availableCategories.find((c) => c.id === selected || c.name === selected)
-    const plaidMatch = !customCat
-      ? plaidPrimaries?.find((p) => p.enum === selected || p.display === selected)
-      : null
-    const request =
-      pendingCategory.length === 0
-        ? { kind: 'clear' as const }
-        : customCat
-          ? { kind: 'custom' as const, custom_category_id: customCat.id }
-          : { kind: 'pfc' as const, pfc_primary: plaidMatch?.enum ?? selected, pfc_detailed: pendingCategory[1] }
-    onRecategorize(request)
-    setShowRecategorize(false)
+  const handleSaveCategory = async () => {
+    if (categoryInFlight.current || isPending || categorySelectionEqual(seedCategory, pendingCategory)) return
+    categoryInFlight.current = true
+    setCategoryError(false)
+    setSavingCategory(true)
+    try {
+      await onRecategorize(pendingCategory)
+      setShowRecategorize(false)
+    } catch { setCategoryError(true) }
+    finally { categoryInFlight.current = false; setSavingCategory(false) }
   }
 
   return (
@@ -157,7 +161,7 @@ export function TriageDetailView({
               variant="ghost"
               size="icon-sm"
               onClick={onPrev}
-              disabled={!hasPrev || isPending}
+              disabled={!hasPrev || blocked}
               aria-label="Previous transaction"
             >
               <ChevronLeft />
@@ -169,7 +173,7 @@ export function TriageDetailView({
               variant="ghost"
               size="icon-sm"
               onClick={onNext}
-              disabled={!hasNext || isPending}
+              disabled={!hasNext || blocked}
               aria-label="Next transaction"
             >
               <ChevronRight />
@@ -180,6 +184,7 @@ export function TriageDetailView({
               variant="ghost"
               size="icon-sm"
               onClick={handleToggleHelp}
+              disabled={blocked}
               aria-label="Keyboard shortcuts"
               aria-pressed={showHelp}
             >
@@ -189,6 +194,7 @@ export function TriageDetailView({
               variant="ghost"
               size="icon-sm"
               onClick={onClose}
+              disabled={blocked}
               aria-label="Close triage"
             >
               <X />
@@ -201,12 +207,17 @@ export function TriageDetailView({
             <p className="font-medium text-foreground" data-ph-mask>
               {displayName}
             </p>
-            <p className="shrink-0 font-semibold text-foreground" data-ph-mask>
-              {CURRENCY_FORMATTER.format(Math.abs(transaction.amount))}
+            <p className={`shrink-0 font-semibold ${amount.signClass}`} data-ph-mask>
+              {amount.text}
             </p>
           </div>
+          {transaction.name !== displayName && <p className="text-sm text-muted-foreground" data-ph-mask>{transaction.name}</p>}
+          <p className="text-sm text-muted-foreground" data-ph-mask>{account?.nickname || account?.name || 'Unknown account'}</p>
+          <p className="text-sm" data-ph-mask>{category.breadcrumb}</p>
+          {!!transaction.tags?.length && <div className="flex flex-wrap gap-1" data-ph-mask>{transaction.tags.map(tag => <span key={tag} className="rounded bg-muted px-2 text-xs">{tag}</span>)}</div>}
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">{formatDate(transaction.date)}</span>
+            {transaction.pending && <span className="text-xs text-muted-foreground">Pending</span>}
             <ReviewBadge variant={reviewBadgeVariantFromTransaction(transaction)} />
             {isSelected && (
               <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
@@ -223,16 +234,20 @@ export function TriageDetailView({
             </p>
             <CategoryEditor
               selectedCategory={pendingCategory}
+              currentCategory={getEffectiveCategory(transaction)}
+              bankCategory={getEffectiveCategory({ ...transaction, category_override_kind: null })}
+              disabled={isPending || savingCategory}
               availableCategories={availableCategories}
               plaidPrimaries={plaidPrimaries}
               onChange={setPendingCategory}
             />
+            {categoryError && <p role="alert" className="mt-2 text-sm text-destructive">Failed to recategorize. Please try again.</p>}
             <div className="mt-3 flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setShowRecategorize(false)}>
+              <Button variant="outline" size="sm" disabled={isPending || savingCategory} onClick={() => setShowRecategorize(false)}>
                 Cancel
               </Button>
               <ReadOnlyGuard message="Resubscribe to categorize transactions">
-                <Button size="sm" onClick={handleSaveCategory} disabled={isPending}>
+                <Button size="sm" onClick={handleSaveCategory} disabled={isPending || savingCategory || categorySelectionEqual(seedCategory, pendingCategory)}>
                   Apply
                 </Button>
               </ReadOnlyGuard>
@@ -240,12 +255,12 @@ export function TriageDetailView({
           </div>
         )}
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <ReadOnlyGuard message="Resubscribe to review transactions">
             <Button
               size="sm"
               onClick={onApprove}
-              disabled={isPending}
+              disabled={blocked}
               aria-label="Approve: mark reviewed and advance"
             >
               Approve
@@ -259,7 +274,7 @@ export function TriageDetailView({
             variant="outline"
             size="sm"
             onClick={handleRecategorize}
-            disabled={isPending}
+            disabled={blocked}
             aria-label="Recategorize transaction"
           >
             Recategorize
@@ -272,7 +287,7 @@ export function TriageDetailView({
             variant="ghost"
             size="sm"
             onClick={onSkip}
-            disabled={isPending}
+            disabled={blocked}
             aria-label="Skip: advance without marking"
           >
             Skip
@@ -285,6 +300,7 @@ export function TriageDetailView({
             variant="ghost"
             size="sm"
             onClick={onToggleSelect}
+            disabled={blocked}
             aria-pressed={isSelected}
             aria-label={isSelected ? 'Deselect transaction' : 'Select transaction for bulk action'}
           >
@@ -293,6 +309,7 @@ export function TriageDetailView({
               X
             </span>
           </Button>
+          {onEdit && <Button variant="outline" size="sm" onClick={onEdit} disabled={blocked}>Edit details</Button>}
         </div>
       </Card>
 

@@ -218,10 +218,10 @@ func TestGetBalanceSummary_MasklessPair_ClosedSiblingIsNotCountedThroughTheLiveT
 		"$500 here is the credit sibling's balance reported as a depository asset")
 
 	// The baseline is the OTHER universe on purpose: at the cutoff the card was still live, so its
-	// $100 counts there — and against its OWN type, not the twin's. That asymmetry is what makes a
-	// disconnection surface as a real decrease.
+	// $100 raw debt contributes -$100 there — against its OWN type, not the twin's. Removing that
+	// debt from the tracked universe raises the signed balance by $100.
 	require.NotNil(t, result.PeriodComparison)
-	assert.InDelta(t, 500.00, result.PeriodComparison.PreviousBalance, 0.001,
+	assert.InDelta(t, 300.00, result.PeriodComparison.PreviousBalance, 0.001,
 		"the baseline universe includes the account that was live at the cutoff")
 }
 

@@ -1,5 +1,6 @@
 export * from './formatPfc'
 export * from './getEffectiveCategory'
+export * from './getCategoryPresentation'
 export * from './pfcColors'
 export * from './pfcIcons'
 export * from './pfcOptions'
