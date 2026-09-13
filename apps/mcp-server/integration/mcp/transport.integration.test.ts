@@ -276,7 +276,14 @@ describe('MCP transport integration', () => {
     expect(listResult.status).not.toBe(503)
 
     const tools = (listResult.body?.result as Record<string, unknown> | undefined)?.tools as
-      | Array<{ name: string }>
+        | Array<{
+          name: string
+          description?: string
+          inputSchema: {
+            properties: Record<string, unknown>
+            required?: string[]
+          }
+        }>
       | undefined
 
     // The server exposes at least search, readExecute, and writeExecute tools
@@ -286,6 +293,23 @@ describe('MCP transport integration', () => {
     expect(toolNames).toContain('search')
     expect(toolNames).toContain('readExecute')
     expect(toolNames).toContain('writeExecute')
+    expect(toolNames).not.toContain('execute')
+
+    const readExecuteSchema = tools!.find((tool) => tool.name === 'readExecute')!.inputSchema
+    expect(readExecuteSchema.properties).not.toHaveProperty('confirmationToken')
+    expect(readExecuteSchema.required ?? []).not.toContain('confirmationToken')
+
+    const writeExecuteSchema = tools!.find((tool) => tool.name === 'writeExecute')!.inputSchema
+    expect(writeExecuteSchema.properties).toHaveProperty('confirmationToken')
+    expect(writeExecuteSchema.required ?? []).not.toContain('confirmationToken')
+
+    const writeExecuteDescription = tools!.find((tool) => tool.name === 'writeExecute')!.description
+    expect(writeExecuteDescription).toContain('Prefer readExecute() for calls it admits.')
+
+    const recipeSaveDescription = tools!.find((tool) => tool.name === 'recipe.save')!.description
+    expect(recipeSaveDescription).toContain('recipe.run() resolves')
+    expect(recipeSaveDescription).toContain('readExecute() or writeExecute()')
+    expect(recipeSaveDescription).not.toContain('run on-demand')
 
     // Step 3: tools/call — readExecute getCashFlowSummary (a read-only operation)
     const callResult = await sendMcp(

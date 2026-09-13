@@ -16,8 +16,9 @@ import { ACKNOWLEDGED_SAFE_POST_OPERATIONS } from '../../manifest/safe-post-oper
 /**
  * HTTP methods readExecute treats as conventionally non-mutating. This is a convention the gate
  * requires, not proof that no method in this set can produce a server-side write — see
- * execute.ts's module doc for `getPrivacySettings` / `getUserProfile`, which are GET yet lazily
- * write on first access.
+ * execute.ts's module doc: `getPrivacySettings` may create caller-owned defaults on first access,
+ * while `getUserProfile` attempts a best-effort last-login update whose response retains the
+ * timestamp fetched before the update.
  */
 export const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 

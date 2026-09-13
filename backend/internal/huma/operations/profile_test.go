@@ -182,6 +182,21 @@ func TestProfileRouteRegistration(t *testing.T) {
 	assert.Contains(t, body, "User not authenticated")
 }
 
+// TestGetUserProfileDescriptionExplainsBestEffortLastLoginUpdate pins the externally published
+// contract. GetProfile fetches the user before it attempts UpdateLastLogin, and deliberately
+// ignores an update error, so consumers must not mistake the returned timestamp for proof that
+// this request persisted a fresh login time.
+func TestGetUserProfileDescriptionExplainsBestEffortLastLoginUpdate(t *testing.T) {
+	mockService := &mockProfileService{user: createTestUser()}
+	_, api := humatest.New(t)
+	RegisterProfileRoutes(api, NewProfileHandler(mockService))
+
+	op := api.OpenAPI().Paths["/api/v1/user/profile"].Get
+	require.NotNil(t, op)
+	assert.Contains(t, op.Description, "best-effort")
+	assert.Contains(t, op.Description, "returned last_login_at is the value fetched before that update")
+}
+
 // TestProfileResponseJSON tests JSON serialization of response.
 func TestProfileResponseJSON(t *testing.T) {
 	mockService := &mockProfileService{}

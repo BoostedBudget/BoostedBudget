@@ -14,10 +14,11 @@ import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
 import { getCapability } from '../src/manifest/capability-manifest'
 import {
-  ACKNOWLEDGED_LAZY_INIT_OPERATIONS,
-  extractLazyInitOperationIds,
-  findUnacknowledgedLazyInitOperations,
-} from '../src/manifest/lazy-init-extension'
+  ACKNOWLEDGED_READ_SIDE_EFFECT_OPERATIONS,
+  extractLegacyLazyInitOccurrences,
+  extractReadSideEffectOperationIds,
+  findUnacknowledgedReadSideEffectOperations,
+} from '../src/manifest/read-side-effect-extension'
 import {
   ACKNOWLEDGED_SAFE_POST_OPERATIONS,
   extractSafePostOperations,
@@ -32,7 +33,12 @@ const rawYaml = readFileSync(OPENAPI_PATH, 'utf-8')
 const spec = parseYaml(rawYaml) as {
   paths?: Record<
     string,
-    Record<string, { operationId?: string; 'x-mcp-lazy-init'?: unknown; 'x-mcp-safe-post'?: unknown }>
+    Record<string, {
+      operationId?: string
+      'x-mcp-read-side-effect'?: unknown
+      'x-mcp-lazy-init'?: unknown
+      'x-mcp-safe-post'?: unknown
+    }>
   >
 }
 
@@ -59,21 +65,34 @@ if (missing.length > 0) {
   process.exit(1)
 }
 
-// #1610: scan for a NEW admitted-read-that-writes operation. A GET tagged x-mcp-lazy-init in
-// api/openapi.yaml that isn't in ACKNOWLEDGED_LAZY_INIT_OPERATIONS is a lazy-init write nobody
-// has reviewed yet — see src/manifest/lazy-init-extension.ts for the full mechanism.
-const lazyInitTagged = extractLazyInitOperationIds(spec)
-const unacknowledged = findUnacknowledgedLazyInitOperations(lazyInitTagged, ACKNOWLEDGED_LAZY_INIT_OPERATIONS)
+const legacyLazyInitOccurrences = extractLegacyLazyInitOccurrences(spec)
+if (legacyLazyInitOccurrences.length > 0) {
+  console.error('❌ Manifest completeness check FAILED — removed x-mcp-lazy-init extension found:')
+  for (const occurrence of legacyLazyInitOccurrences) {
+    console.error(`   ${occurrence.method} ${occurrence.path} → ${occurrence.operationId}`)
+  }
+  console.error('')
+  console.error('Replace x-mcp-lazy-init with x-mcp-read-side-effect, then review and add the')
+  console.error('operation to ACKNOWLEDGED_READ_SIDE_EFFECT_OPERATIONS if it remains admitted.')
+  process.exit(1)
+}
+
+// #1610: scan for a newly tagged admitted operation with a caller-scoped read side effect.
+const readSideEffectTagged = extractReadSideEffectOperationIds(spec)
+const unacknowledged = findUnacknowledgedReadSideEffectOperations(
+  readSideEffectTagged,
+  ACKNOWLEDGED_READ_SIDE_EFFECT_OPERATIONS,
+)
 
 if (unacknowledged.length > 0) {
-  console.error('❌ Manifest completeness check FAILED — unacknowledged lazy-init operation(s):')
+  console.error('❌ Manifest completeness check FAILED — unacknowledged read-side-effect operation(s):')
   for (const id of unacknowledged) {
     console.error(`   ${id}`)
   }
   console.error('')
-  console.error('This operation is tagged x-mcp-lazy-init: true in api/openapi.yaml (it lazily')
-  console.error('writes on an admitted GET) but is not in ACKNOWLEDGED_LAZY_INIT_OPERATIONS')
-  console.error('(apps/mcp-server/src/manifest/lazy-init-extension.ts). Review it, then add it')
+  console.error('This operation is tagged x-mcp-read-side-effect: true in api/openapi.yaml but')
+  console.error('is not in ACKNOWLEDGED_READ_SIDE_EFFECT_OPERATIONS')
+  console.error('(apps/mcp-server/src/manifest/read-side-effect-extension.ts). Review it, then add it')
   console.error('to that list AND to execute.test.ts\'s pinned expectation.')
   process.exit(1)
 }
@@ -115,5 +134,7 @@ if (safePostDrift.stale.length > 0) {
 }
 
 console.log(`✅ Manifest completeness check passed — all OpenAPI operations are classified`)
-console.log(`✅ Lazy-init scan passed — ${lazyInitTagged.length} tagged operation(s), all acknowledged`)
+console.log(
+  `✅ Read-side-effect scan passed — ${readSideEffectTagged.length} tagged operation(s), all acknowledged`,
+)
 console.log(`✅ Safe-POST scan passed — ${safePostTagged.length} tagged operation(s), all acknowledged, no drift`)
