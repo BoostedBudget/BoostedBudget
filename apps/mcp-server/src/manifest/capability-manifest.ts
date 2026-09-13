@@ -443,6 +443,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('getAvailableCategories'),
   read('getCurrentBudget'),
   read('getBudget'),
+  excluded('getBudgetPlanVsActual', 'Frontend-only composite budget report; MCP exposure is outside issue #1637 scope'),
   read('getCategoryTransactions'),
   write('createBudget'),
   write('updateBudget', { idempotent: true }),

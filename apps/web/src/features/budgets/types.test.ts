@@ -42,6 +42,10 @@ function budget(categories: BudgetCategory[]): Budget {
 }
 
 describe('formatBudgetCategoryLabel — savings kind (#1300)', () => {
+  it('names shared groups and distinguishes automatic Other from Uncategorized', () => {
+    expect(formatBudgetCategoryLabel({ category_kind: 'group', group_name: 'Daily life' })).toBe('Daily life')
+    expect(formatBudgetCategoryLabel({ category_kind: 'remainder' })).toBe('Other')
+  })
   it('returns savings_goal_name when present', () => {
     const cat = {
       category_kind: 'savings',
@@ -59,6 +63,11 @@ describe('formatBudgetCategoryLabel — savings kind (#1300)', () => {
 })
 
 describe('computeBudgetMetrics — top-level-only totals', () => {
+  it('uses expected income, not observed income, for unallocated plans', () => {
+    const m = computeBudgetMetrics({ ...budget([]), income_amount: 200, expected_income: 1000 })
+    expect(m.unallocated_funds).toBe(1000)
+    expect(m.is_fully_allocated).toBe(false)
+  })
   it('excludes a PFC detailed sub-allocation when its primary is also budgeted', () => {
     const m = computeBudgetMetrics(
       budget([
