@@ -94,7 +94,40 @@ describe('PostHog authenticated experiences policy', () => {
         ...surveyQuestion('single_choice', false),
         hasOpenChoice: 'true',
       }],
-    } as never)).toBe(false)
+    })).toBe(false)
+  })
+
+  test('rejects malformed remote survey containers and entries without throwing', () => {
+    const validQuestion = surveyQuestion('rating', false)
+    const malformedSurveys: unknown[] = [
+      null,
+      undefined,
+      1,
+      'survey',
+      [],
+      {},
+      { id: '', questions: [validQuestion] },
+      { id: '   ', questions: [validQuestion] },
+      { id: 'survey-1' },
+      { id: 'survey-1', questions: null },
+      { id: 'survey-1', questions: {} },
+      { id: 'survey-1', questions: [] },
+      { id: 'survey-1', questions: [null] },
+      { id: 'survey-1', questions: ['rating'] },
+      { id: 'survey-1', questions: [validQuestion, null] },
+      { id: 'survey-1', questions: [{ type: 'rating' }] },
+      { id: 'survey-1', questions: [{ ...validQuestion, question: '' }] },
+      { id: 'survey-1', questions: [{ ...validQuestion, display: 'stars' }] },
+      { id: 'survey-1', questions: [{ ...validQuestion, scale: 4 }] },
+      { id: 'survey-1', questions: [{ type: 'single_choice', question: 'Choose' }] },
+      { id: 'survey-1', questions: [{ type: 'multiple_choice', question: 'Choose', choices: null }] },
+      { id: 'survey-1', questions: [{ type: 'single_choice', question: 'Choose', choices: [] }] },
+      { id: 'survey-1', questions: [{ type: 'single_choice', question: 'Choose', choices: ['A', 1] }] },
+    ]
+
+    for (const survey of malformedSurveys) {
+      expect(isSupportedSurvey(survey)).toBe(false)
+    }
   })
 
   test('the pinned SDK supplies reply polling with bounded cadence and generation cleanup', () => {
@@ -469,6 +502,26 @@ describe('PostHog engagement controller', () => {
       ignoreConditions: false,
       ignoreDelay: false,
     }))
+  })
+
+  test('malformed remote surveys never reach displaySurvey', () => {
+    const surveyClient = fakeClient()
+    surveyClient.surveys.getActiveMatchingSurveys.mockImplementation(callback => callback([
+      null,
+      { id: '', questions: [surveyQuestion('rating', false)] },
+      { id: 'survey-1', questions: [surveyQuestion('rating', false), null] },
+      { id: 'survey-1', questions: [{ type: 'rating' }] },
+    ] as never))
+    const controller = createPostHogEngagementController({
+      createSupportClient: () => fakeClient(),
+      createSurveyClient: () => surveyClient,
+    })
+
+    expect(() => controller.activateSurveys({
+      distinct_id: 'user_A',
+      identity_hash: 'signed-A',
+    })).not.toThrow()
+    expect(surveyClient.surveys.displaySurvey).not.toHaveBeenCalled()
   })
 
   test('survey withdrawal disposes rendered UI and creates a fresh client on regrant', () => {
