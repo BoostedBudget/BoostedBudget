@@ -44,6 +44,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "accounts",
@@ -265,6 +268,9 @@
           "required": true
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "success",
@@ -326,6 +332,9 @@
           "required": true
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "account",
@@ -564,6 +573,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "account_id",
@@ -1358,6 +1370,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "average_monthly_spend",
@@ -1411,6 +1426,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "budgets",
@@ -1497,6 +1515,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "end_date",
@@ -1580,6 +1601,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "end_date",
@@ -1702,6 +1726,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "direction",
@@ -1767,6 +1794,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "category",
@@ -1853,6 +1883,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "average_monthly_spend",
@@ -1934,6 +1967,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "end_date",
@@ -2015,6 +2051,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "end_date",
@@ -2087,6 +2126,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "categories",
@@ -2155,6 +2197,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "buckets",
@@ -2203,6 +2248,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "buckets",
@@ -2239,6 +2287,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Detects recurring subscription charges using heuristic analysis of the trailing 12-month transaction history. Returns merchants with monthly-cadence charges (≥3 occurrences, ~30-day gap). Designed as an AI-tool-callable function.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "as_of_date",
@@ -2280,6 +2331,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "end_date",
@@ -2386,6 +2440,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "categories",
@@ -2467,6 +2524,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "end_date",
@@ -2542,6 +2602,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "end_date",
@@ -2604,6 +2667,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "amount",
@@ -2678,6 +2744,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "end_date",
@@ -2715,6 +2784,13 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Retrieves all categorization rules for the authenticated user, ordered by priority.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "condition_logic",
@@ -2999,6 +3075,9 @@
           "type": "array of string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "condition_logic",
@@ -3166,6 +3245,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns every condition field, the operators each accepts, the value shape each operator requires, closed value sets inlined where practical, and the semantics that cannot be inferred from a type — notably that signed_amount is POSITIVE for money leaving the account. The two PFC fields (pfc_primary, pfc_detailed) have closed sets too, but each field's own notes name the endpoint that publishes it instead of duplicating ~120 values here. Derived from the same matrix the validator enforces, so it cannot drift from it.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "fields",
@@ -3307,6 +3389,9 @@
           "type": "array of string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "match_count",
@@ -3347,6 +3432,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "condition_logic",
@@ -3642,6 +3730,9 @@
           "type": "array of string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "condition_logic",
@@ -3846,6 +3937,9 @@
           "required": true
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "condition_logic",
@@ -4033,6 +4127,9 @@
           "type": "integer"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "executions",
@@ -4168,6 +4265,13 @@
           "type": "array"
         }
       ],
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "actions",
@@ -4381,6 +4485,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "actions",
@@ -4680,6 +4787,9 @@
           "type": "integer"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "executions",
@@ -4892,6 +5002,13 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Retrieves all budgets for the authenticated user.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "amount",
@@ -5298,6 +5415,9 @@
           "description": "Budget start date. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp."
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "amount",
@@ -5558,7 +5678,14 @@
       ],
       "manifestClass": "read",
       "excluded": false,
-      "description": "Returns the merged list of available categories (custom + Plaid)."
+      "description": "Returns the merged list of available categories (custom + Plaid).",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "nullable": true
+      }
     },
     {
       "operationId": "previewCategoryMatches",
@@ -5790,6 +5917,9 @@
           "type": "array of string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "children",
@@ -5852,6 +5982,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Retrieves the current active budget (where today is within the period).",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "amount",
@@ -6122,6 +6255,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "amount",
@@ -6467,6 +6603,9 @@
           "description": "Budget start date. Accepts YYYY-MM-DD (matching every read endpoint's date format) or a full RFC3339 timestamp."
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "amount",
@@ -6840,6 +6979,9 @@
           "type": "array of string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "allocated_amount",
@@ -7064,6 +7206,9 @@
           "type": "array of string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "allocated_amount",
@@ -7276,6 +7421,9 @@
           "type": "integer"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "has_more",
@@ -7773,6 +7921,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "amount",
@@ -8034,6 +8185,13 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Retrieves all custom categories for the authenticated user.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "color",
@@ -8180,6 +8338,9 @@
           "description": "The PFCv2 primary this custom category nests under. This is NOT a cosmetic label: budget roll-up counts the category's transactions under this primary, and analytics classifies them through it -- a category nested under TRANSFER_IN or TRANSFER_OUT makes its transactions TRANSFERS, so they are excluded from cash flow when include_transfers is false (Issue #1609). Leave unset for a category with no PFC parent. Send an empty string to clear it."
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "color",
@@ -8280,7 +8441,14 @@
       ],
       "manifestClass": "read",
       "excluded": false,
-      "description": "Returns distinct Plaid category names from the user's transactions."
+      "description": "Returns distinct Plaid category names from the user's transactions.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "nullable": true
+      }
     },
     {
       "operationId": "getPlaidDetailedCategories",
@@ -8293,6 +8461,13 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns the full PFCv2 detailed taxonomy (~120 entries) sorted by primary then detailed display name. Used only by the rule editor's existing_pfc_detailed condition.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "display",
@@ -8327,6 +8502,13 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns all 18 PFCv2 curated primary categories sorted alphabetically. Used by every PFC selection surface.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "display",
@@ -8360,6 +8542,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "color",
@@ -8514,6 +8699,9 @@
           "description": "The PFCv2 primary this custom category nests under. This is NOT a cosmetic label: budget roll-up counts the category's transactions under this primary, and analytics classifies them through it -- a category nested under TRANSFER_IN or TRANSFER_OUT makes its transactions TRANSFERS, so they are excluded from cash flow when include_transfers is false (Issue #1609). Leave unset for a category with no PFC parent. Send an empty string to clear it."
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "color",
@@ -8645,6 +8833,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "budget_count",
@@ -8683,6 +8874,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns available account types for the user with counts and totals.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "types",
@@ -8738,6 +8932,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "end_date",
@@ -8800,6 +8997,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "as_of_date",
@@ -8839,6 +9039,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns the default dashboard layout configuration. Public endpoint.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "version",
@@ -8888,6 +9091,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "as_of_date",
@@ -8972,6 +9178,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "end_date",
@@ -9010,6 +9219,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns the user's dashboard layout preferences (or default if none exist).",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "layout",
@@ -9078,6 +9290,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns all available widget types with their metadata for the widget catalog. Public endpoint.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "widgetTypes",
@@ -9126,6 +9341,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "expires_at",
@@ -9207,6 +9425,9 @@
       ],
       "manifestClass": "read",
       "excluded": false,
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "household",
@@ -9320,6 +9541,13 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns the caller's own accounts with their current household-share state. An account with no explicit grant yet (e.g. linked after joining) has a null visibility. Returns 404 if the caller is not an active member of a household.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "revoked_at",
@@ -9349,6 +9577,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns the authenticated user's effective subscription tier, seat counts, and coverage source, accounting for household membership.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "is_owner",
@@ -9395,6 +9626,13 @@
       ],
       "manifestClass": "read",
       "excluded": false,
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "accepted_at",
@@ -9511,6 +9749,13 @@
       ],
       "manifestClass": "read",
       "excluded": false,
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "avatar_url",
@@ -9589,6 +9834,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "count",
@@ -9749,6 +9997,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "account_id",
@@ -9843,6 +10094,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "limit",
@@ -10018,6 +10272,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "buckets",
@@ -10052,6 +10309,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns unrealized gain/loss totals and a per-account breakdown. realized_gain_loss_supported is always false — Plaid does not provide per-lot cost basis and the 2-year transaction lookback truncates buy history. Single DB round-trip; designed as an AI-tool-callable function.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "by_account",
@@ -10124,6 +10384,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "currency_code",
@@ -10168,6 +10431,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "by_type",
@@ -10216,6 +10482,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns live portfolio totals (value, cost basis, unrealized gain/loss) computed from current holdings. day_change is derived from the most recent prior portfolio snapshot; null when no prior snapshot exists.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "currency_code",
@@ -10295,6 +10564,9 @@
           "type": "integer"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "excluded_by_currency_count",
@@ -10464,6 +10736,13 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "List all saved MCP workflow recipes for the authenticated user.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "created_at",
@@ -10578,6 +10857,9 @@
           "type": "object"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "created_at",
@@ -10653,6 +10935,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "created_at",
@@ -10777,6 +11062,9 @@
           "type": "object"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "created_at",
@@ -10873,6 +11161,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "calls",
@@ -10902,6 +11193,13 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Lists all distinct merchants for the authenticated user with spend totals and override status.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "dominant_category",
@@ -10976,7 +11274,70 @@
       ],
       "manifestClass": "read",
       "excluded": false,
-      "description": "Returns groups of merchants that appear to be duplicates based on fuzzy name similarity."
+      "description": "Returns groups of merchants that appear to be duplicates based on fuzzy name similarity.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "nullable": true
+        },
+        "nullable": true
+      },
+      "responseBody": [
+        {
+          "name": "dominant_category",
+          "type": "string"
+        },
+        {
+          "name": "effective_display_name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "has_override",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "name": "is_merged",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "name": "merchant_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "merged_into_merchant_id",
+          "type": "string"
+        },
+        {
+          "name": "normalized_name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "raw_variants",
+          "type": "array of string",
+          "required": true
+        },
+        {
+          "name": "total_spend",
+          "type": "number",
+          "format": "double",
+          "required": true
+        },
+        {
+          "name": "transaction_count",
+          "type": "integer",
+          "format": "int64",
+          "required": true
+        }
+      ]
     },
     {
       "operationId": "mergeMerchants",
@@ -11003,6 +11364,13 @@
           "description": "Target merchant UUID to merge into (the canonical)"
         }
       ],
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "created_at",
@@ -11058,6 +11426,13 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns all per-user merchant name overrides, including renamed and merged merchants.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "created_at",
@@ -11134,6 +11509,13 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "created_at",
@@ -11210,6 +11592,9 @@
           "description": "Target merchant UUID to merge this merchant into"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "created_at",
@@ -11294,6 +11679,13 @@
           "type": "integer"
         }
       ],
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "action_label",
@@ -11389,6 +11781,9 @@
       "manifestClass": "write",
       "excluded": false,
       "description": "Marks all unread notifications as read for the authenticated user.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "count",
@@ -11414,6 +11809,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns the count of unread notifications for the authenticated user.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "count",
@@ -11443,6 +11841,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "message",
@@ -11578,6 +11979,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns all available data residency regions. Use this to populate region selectors. This is a public endpoint.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "default_region",
@@ -11624,6 +12028,9 @@
           "type": "integer"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "executions",
@@ -11717,6 +12124,13 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Retrieves all savings goals for the authenticated user.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "account",
@@ -12070,6 +12484,9 @@
           "description": "Target amount to save. Must be positive."
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "account",
@@ -12368,6 +12785,13 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Retrieves all active (not completed) savings goals for the authenticated user.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "account",
@@ -12666,6 +13090,13 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Lists savings goals the user has deleted. Deleting a goal retains it and every contribution STILL logged against it (Issue #1569) — a contribution the user explicitly deleted earlier via DELETE /savings-goals/{goalID}/contributions/{id} was destroyed then and does not come back here. This endpoint is how the client shows what was kept and offers POST /savings-goals/{id}/purge, which refuses unless the goal is already deleted. Each entry carries deleted_at.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "account",
@@ -12974,6 +13405,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "contributions",
@@ -13080,6 +13514,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns basis-aware savings progress for all active goals plus portfolio totals. Each goal exposes progress_basis, computed_from, freshness, and confirmed_contributions_total so AI/MCP consumers can interpret mixed-basis current_amount values correctly (Issue #1300 Codex C11).",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "completed_goal_count",
@@ -13139,6 +13576,13 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "amount",
@@ -13258,6 +13702,9 @@
           "format": "uuid"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "amount",
@@ -13394,6 +13841,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "amount",
@@ -13501,6 +13951,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "amount",
@@ -13600,6 +14053,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "account",
@@ -13949,6 +14405,9 @@
           "description": "Target amount to save. Must be positive."
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "account",
@@ -14289,6 +14748,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns platform-wide savings transfer automation impact. Published only when k-anonymity thresholds are met (≥10 users, ≥$1000 total). Public endpoint — no authentication required.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "completed_count",
@@ -14335,6 +14797,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns savings transfer automation impact totals for the authenticated user.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "completed_count",
@@ -14379,6 +14844,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns URL to Paddle billing portal where users can manage payment methods and view billing history.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "portal_url",
@@ -14444,6 +14912,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Fetches current subscription details from Paddle API with live status, billing info, and tier information.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "amount",
@@ -14568,6 +15039,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns all available subscription tiers with their limits, features, and pricing. This is a public endpoint for displaying pricing information.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "default_tier",
@@ -14644,6 +15118,13 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Retrieves all tags for the authenticated user.",
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "color",
@@ -14711,6 +15192,9 @@
           "required": true
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "color",
@@ -14776,6 +15260,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "color",
@@ -14851,6 +15338,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "color",
@@ -14942,6 +15432,9 @@
           "type": "integer"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "changes",
@@ -15198,6 +15691,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "limit",
@@ -15711,6 +16207,9 @@
           "description": "Transaction UUIDs to recategorize (max 500, owned by the caller)"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "requested",
@@ -15753,6 +16252,9 @@
           "description": "Transaction UUIDs to update (owned by the caller)"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "updated",
@@ -15788,6 +16290,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "avg_ingestion_to_review_seconds",
@@ -15855,6 +16360,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "account",
@@ -16333,6 +16841,9 @@
           "description": "PFC primary enum (required when kind=pfc)"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "account",
@@ -16791,6 +17302,9 @@
           "description": "true to mark reviewed, false to move back to the unreviewed inbox"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "updated",
@@ -16829,6 +17343,9 @@
           "description": "Array of tag names to set on the transaction"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "account",
@@ -17290,6 +17807,9 @@
           "type": "integer"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "items",
@@ -17507,6 +18027,9 @@
           "description": "Optional notes for accepting the suggestion"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "message",
@@ -17704,6 +18227,9 @@
           "description": "Optional notes for the cancellation"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "message",
@@ -17903,6 +18429,9 @@
           "description": "Actual amount transferred"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "message",
@@ -18093,6 +18622,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "message",
@@ -18290,6 +18822,9 @@
           "description": "Optional notes for rejecting the suggestion"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "message",
@@ -18479,6 +19014,13 @@
           "type": "boolean"
         }
       ],
+      "responseShape": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "nullable": true
+      },
       "responseBody": [
         {
           "name": "account_name_hint",
@@ -18587,6 +19129,9 @@
           "type": "string"
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "account_name_hint",
@@ -18733,6 +19278,9 @@
           "required": true
         }
       ],
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "account_name_hint",
@@ -18910,6 +19458,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Retrieves the authenticated user's privacy settings, creating defaults if none exist.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "created_at",
@@ -19050,6 +19601,9 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Retrieves the authenticated user's profile, creating one if it's their first login.",
+      "responseShape": {
+        "type": "object"
+      },
       "responseBody": [
         {
           "name": "clerk_user_id",
