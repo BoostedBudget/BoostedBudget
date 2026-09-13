@@ -61,6 +61,9 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
   server = new McpServer({
     name: 'boostedbudget',
     version: '0.1.0',
+  }, {
+    instructions:
+      'Analyze accounts, transactions, spending, net worth, and investments; manage envelope budgets, savings goals, categories, and tags. Boost definitions are read-only here; review their history, budget alerts, and transfer, rollover, or savings-goal suggestions. MCP writes require confirmation; BoostedBudget never moves money. Use search first, then readExecute or writeExecute.',
   })
 
   /**
