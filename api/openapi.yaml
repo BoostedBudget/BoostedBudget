@@ -5912,7 +5912,7 @@ components:
           description: Canonical authenticated Clerk user ID
           type: string
         identity_hash:
-          description: Short-lived transport of the server-computed PostHog identity signature
+          description: Server-computed PostHog identity signature; valid until secret rotation
           type: string
       required:
         - distinct_id

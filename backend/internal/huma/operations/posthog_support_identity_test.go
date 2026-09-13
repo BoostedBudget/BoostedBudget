@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2/humatest"
@@ -10,6 +11,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPostHogIdentityHashContractDescribesActualLifetime(t *testing.T) {
+	field, ok := reflect.TypeOf(PostHogSupportIdentity{}).FieldByName("IdentityHash")
+	require.True(t, ok)
+	assert.Equal(t,
+		"Server-computed PostHog identity signature; valid until secret rotation",
+		field.Tag.Get("doc"),
+	)
+}
 
 func TestComputePostHogIdentityHashKnownVector(t *testing.T) {
 	got := computePostHogIdentityHash("The quick brown fox jumps over the lazy dog", "key")
