@@ -6,7 +6,7 @@
  * Page component for viewing and managing a single budget's details and categories.
  */
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
 import { useTrackEvent } from '../../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../../shared/analytics'
@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/shared/transactions/dates';
 import { useBudgetDetail } from '../hooks/useBudgetDetail';
+import { useBudgetPlanVsActual } from '../hooks/useBudgetPlanVsActual';
 import { useAvailableCategories } from '../hooks/useAvailableCategories';
 import { useTags } from '../../tags/hooks/useTags';
 import {
@@ -32,6 +33,8 @@ import { BudgetCategoryManager } from './category-management/BudgetCategoryManag
 import { BudgetIncomeSection } from './budget-detail/BudgetIncomeSection';
 import { UnallocatedFundsCard } from './budget-detail/UnallocatedFundsCard';
 
+const BudgetPlanActivityPanel = lazy(() => import('./BudgetPlanActivityPanel'));
+
 function formatCurrency(amount: number, currencyCode = 'USD'): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -48,6 +51,7 @@ export function BudgetDetailPage() {
   const { budgetId } = useParams<{ budgetId: string }>();
   const navigate = useNavigate();
   const { budget, loading, error, refetch } = useBudgetDetail(budgetId || '');
+  const report = useBudgetPlanVsActual(budgetId || '');
   const { categories: availableCategories } = useAvailableCategories();
   const { tags: availableTags } = useTags();
 
@@ -171,7 +175,7 @@ export function BudgetDetailPage() {
   }
 
   return (
-    <div className="max-w-[1200px] mx-auto p-6">
+    <div className="w-full min-w-0 max-w-[1200px] mx-auto p-4 sm:p-6">
       {/* Header */}
       <header className="mb-8">
         <Link to="/budgets" className="inline-flex items-center gap-2 mb-4 text-sm text-primary no-underline hover:text-primary/80 transition-colors">
@@ -179,8 +183,8 @@ export function BudgetDetailPage() {
           Back to Budgets
         </Link>
 
-        <div className="flex items-center gap-3 mb-2">
-          <h1 className="m-0 text-3xl font-bold text-foreground"><span data-ph-mask>{budget.name}</span></h1>
+        <div className="flex flex-wrap items-center gap-3 mb-2">
+          <h1 className="m-0 min-w-0 break-words text-3xl font-bold text-foreground"><span data-ph-mask>{budget.name}</span></h1>
           {budget.is_active && (
             <Badge variant="success">Active</Badge>
           )}
@@ -209,14 +213,6 @@ export function BudgetDetailPage() {
               {formatCurrency(budget.expected_income ?? budget.amount, budget.currency_code)}
             </span>
           </div>
-          {budget.income_amount > 0 && (
-            <div className="flex flex-col gap-1">
-              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Income</span>
-              <span className="text-sm font-semibold text-foreground" data-ph-mask>
-                {formatCurrency(budget.income_amount, budget.currency_code)}
-              </span>
-            </div>
-          )}
         </div>
 
         {/* Issue #39: Quick-create automation rules */}
@@ -243,12 +239,12 @@ export function BudgetDetailPage() {
       {/* Issue #498: Income Section - shows expected vs actual income */}
       {(budget.income_sources?.length > 0 || incomeMetrics.expectedIncome > 0) && (
         <section className="mt-6">
-          <BudgetIncomeSection
+          {report.data?.income.observed != null ? <BudgetIncomeSection
             expectedIncome={incomeMetrics.expectedIncome}
-            actualIncome={incomeMetrics.actualIncome}
+            actualIncome={report.data.income.observed}
             incomeSources={budget.income_sources || []}
             currencyCode={budget.currency_code}
-          />
+          /> : <div role="region" aria-label="Income" className="rounded-lg border p-4"><p>Expected</p><p data-ph-mask>{formatCurrency(incomeMetrics.expectedIncome, budget.currency_code)}</p><p>Observed income</p><p>Unavailable</p><p className="text-sm text-muted-foreground">Manual declarations are not received income. Posted income appears when the activity report is available.</p></div>}
         </section>
       )}
 
@@ -264,8 +260,20 @@ export function BudgetDetailPage() {
 
       {/* Category Manager */}
       <section className="mt-8">
+        {report.isLoading ? <p role="status">Loading budget plan and activity...</p> : report.error ? (
+          <div role="alert"><p>Budget activity could not be refreshed.</p><Button variant="outline" onClick={() => { void report.refetch() }}>Retry budget activity</Button></div>
+        ) : report.data ? (
+          <Suspense fallback={<p role="status">Loading budget plan and activity...</p>}>
+            <BudgetPlanActivityPanel data={report.data} onRefresh={() => { void report.refetch(); void refetch() }} />
+          </Suspense>
+        ) : null}
+      </section>
+      <section className="mt-8">
         <BudgetCategoryManager
+          currencyCode={budget.currency_code}
           budgetId={budgetId || ''}
+          periodStart={report.data?.period_start ?? undefined}
+          actualThrough={report.data?.actual_through ?? undefined}
           categories={budget.categories || []}
           totalIncome={budget.expected_income ?? budget.amount}
           onAddCategory={handleAddCategory}

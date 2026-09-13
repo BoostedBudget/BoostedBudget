@@ -138,6 +138,14 @@ describe('recipe operations', () => {
 // ── Excluded operations (permanently non-MCP) ─────────────────────────────
 
 describe('excluded operations', () => {
+  it('keeps the frontend-only budget plan report outside MCP capabilities', () => {
+    const entry = getCapability('getBudgetPlanVsActual')
+    expect(entry?.class).toBe('read')
+    expect(entry?.excluded).toBe(true)
+    expect(entry?.excludedReason).toContain('Frontend-only')
+    expect(isAllowed('getBudgetPlanVsActual')).toBe(false)
+  })
+
   it('assigns public boundary metadata only to user-facing account actions', () => {
     expect(getCapability('createLinkToken')?.publicBoundary).toBe('bank-connections')
     expect(getCapability('disconnectInstitution')?.publicBoundary).toBe('bank-connections')
@@ -379,7 +387,8 @@ describe('completeness', () => {
     //   this branch took it to 209 and staging to 210, and the merge has all three new operations.
     //   Re-derive from `bun run src/spec/index-builder.ts`, which prints the entry count it wrote.
     // +1 from #1630 B7: listAdminBudgetHierarchyAudits, the hierarchy audit's operator surface.
-    expect(ALL_OPERATION_IDS.length).toBe(212)
+    // +1 from #1637: frontend-only budget plan report, explicitly excluded.
+    expect(ALL_OPERATION_IDS.length).toBe(213)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified

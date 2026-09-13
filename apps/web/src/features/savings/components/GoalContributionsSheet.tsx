@@ -41,8 +41,11 @@ import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { ErrorState } from '@/components/ui/error-state'
 import { LogContributionDialog } from './LogContributionDialog'
+import { createCurrencyDisplay } from '@/shared/utils/currency'
 
 export interface GoalContributionsSheetProps {
+  currencyCode?: string
+  contextNote?: string
   goalId: string
   goalName: string
   open: boolean
@@ -51,13 +54,8 @@ export interface GoalContributionsSheetProps {
   onContributionChanged: () => void
 }
 
-function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amount)
+function formatCurrency(amount: number, currencyCode: string): string {
+  return createCurrencyDisplay(currencyCode, 2).format(amount)
 }
 
 function formatDate(dateStr: string): string {
@@ -91,6 +89,7 @@ function sourceLabel(source: string): string {
 }
 
 interface ContributionRowProps {
+  currencyCode: string
   contribution: SavingsGoalContribution
   goalId: string
   onConfirmed: () => void
@@ -106,7 +105,7 @@ interface ContributionRowProps {
   disarmed?: boolean
 }
 
-function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDeleted, disarmed }: ContributionRowProps) {
+function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDeleted, disarmed, currencyCode }: ContributionRowProps) {
   const trackEvent = useTrackEvent()
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const { mutateAsync: confirmMutate, isPending: confirming } = useConfirmSavingsGoalContribution()
@@ -150,7 +149,7 @@ function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDele
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-foreground" data-ph-mask>
-            {formatCurrency(contribution.amount)}
+            {formatCurrency(contribution.amount, currencyCode)}
           </span>
           {/* Archived wins over Proposed/Confirmed: a closed-period row is never "live",
               whatever status it was left in when its period closed. */}
@@ -247,7 +246,7 @@ function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDele
           isArchived ? (
             <span>
               This permanently deletes the{' '}
-              <strong data-ph-mask>{formatCurrency(contribution.amount)}</strong> contribution
+              <strong data-ph-mask>{formatCurrency(contribution.amount, currencyCode)}</strong> contribution
               recorded on {formatDate(contribution.occurred_on)}. It already belongs to a closed
               tracking period and does not count toward this goal's current progress — but
               deleting it is still permanent. The amount is not kept anywhere afterwards, and
@@ -256,7 +255,7 @@ function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDele
           ) : (
             <span>
               This permanently deletes the{' '}
-              <strong data-ph-mask>{formatCurrency(contribution.amount)}</strong> contribution
+              <strong data-ph-mask>{formatCurrency(contribution.amount, currencyCode)}</strong> contribution
               recorded on {formatDate(contribution.occurred_on)}. The amount is not kept anywhere
               afterwards, and there is no way to bring it back.
             </span>
@@ -271,6 +270,8 @@ function ContributionRow({ contribution, goalId, onConfirmed, onRejected, onDele
 }
 
 export function GoalContributionsSheet({
+  currencyCode = 'USD',
+  contextNote,
   goalId,
   goalName,
   open,
@@ -307,6 +308,7 @@ export function GoalContributionsSheet({
         <SheetContent className="flex flex-col gap-0 w-full sm:max-w-md">
           <SheetHeader className="pb-4 border-b border-border">
             <SheetTitle>Contributions — <span data-ph-mask>{goalName}</span></SheetTitle>
+            {contextNote && <p className="text-sm text-muted-foreground">{contextNote}</p>}
           </SheetHeader>
 
           <div className="flex justify-end pt-4 pb-2">
@@ -389,6 +391,7 @@ export function GoalContributionsSheet({
                   })
                   .map((c) => (
                     <ContributionRow
+                      currencyCode={currencyCode}
                       key={c.id}
                       contribution={c}
                       goalId={goalId}
@@ -405,6 +408,7 @@ export function GoalContributionsSheet({
       </Sheet>
 
       <LogContributionDialog
+        currencyCode={currencyCode}
         goalId={goalId}
         isOpen={logDialogOpen}
         onClose={() => setLogDialogOpen(false)}

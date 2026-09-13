@@ -15,20 +15,24 @@ import {
 } from '@/components/ui/dialog';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import type { BudgetCategory, CreateBudgetCategoryRequest, UpdateBudgetCategoryRequest } from '../../types';
+import type { BudgetCategory, BudgetGroupMember, CreateBudgetCategoryRequest, UpdateBudgetCategoryRequest } from '../../types';
 import type { MatchLogic } from '@boostedbudget/shared-types/matching';
 import { DEFAULT_MATCH_LOGIC } from '@boostedbudget/shared-types/matching';
 import type { UserTag } from '@/features/tags/types';
 import { CategoryMatchConfig } from './CategoryMatchConfig';
-import { usePreviewCategories } from '../../hooks/usePreviewCategories';
+import { usePreviewCategories, type BudgetPreviewContext } from '../../hooks/usePreviewCategories';
 import { formatPFCPrimary } from '@/shared/categories/formatPfc';
-import { getDetailedLabel, getPrimaryLabel } from '@/shared/categories/pfcOptions';
+import { getDetailedLabel, getPrimaryLabel, useCuratedPfcDetailed } from '@/shared/categories/pfcOptions';
 import { HierarchicalCategoryTreeSelect } from '@/shared/components/HierarchicalCategoryTreeSelect';
 import { useGetUserCategories } from '@boostedbudget/api-client/endpoints/categories/categories';
 import { buildCategoryHierarchy } from '@/features/categories/utils/buildCategoryHierarchy';
 import { SavingsGoalSelect } from './SavingsGoalSelect';
+import type { CategoryPreviewRequest } from '@boostedbudget/api-client/models';
 
 export interface BudgetCategoryFormProps {
+  currencyCode?: string;
+  budgetId?: string;
+  draftCategories?: BudgetCategory[];
   isOpen: boolean;
   onClose: () => void;
   onSubmit: (data: CreateBudgetCategoryRequest | UpdateBudgetCategoryRequest) => Promise<void>;
@@ -47,7 +51,9 @@ export interface BudgetCategoryFormProps {
 }
 
 interface FormData {
-  category_kind: string;
+  category_kind: CreateBudgetCategoryRequest['category_kind'];
+  group_name: string;
+  members: BudgetGroupMember[];
   pfc_primary: string;
   pfc_detailed: string;
   custom_category_id: string;
@@ -65,6 +71,8 @@ interface FormErrors {
 
 const initialFormData: FormData = {
   category_kind: 'pfc',
+  group_name: '',
+  members: [],
   pfc_primary: '',
   pfc_detailed: '',
   custom_category_id: '',
@@ -74,7 +82,66 @@ const initialFormData: FormData = {
   match_logic: DEFAULT_MATCH_LOGIC,
 };
 
+function hasSelectedCategory(formData: FormData, retainedEmptyGroup: boolean): boolean {
+  switch (formData.category_kind) {
+    case 'remainder':
+      return true;
+    case 'group':
+      return !!formData.group_name.trim() && (formData.members.length > 0 || retainedEmptyGroup);
+    case 'pfc':
+      return !!formData.pfc_primary;
+    case 'savings':
+      return !!formData.savings_goal_id;
+    default:
+      return !!formData.custom_category_id;
+  }
+}
+
+function toPreviewDraftCategory(category: BudgetCategory): NonNullable<BudgetPreviewContext['draft_categories']>[number] {
+  return {
+    ...category,
+    auto_created: category.auto_created ?? false,
+    custom_parent_id: category.custom_parent_id ?? undefined,
+    custom_parent_pfc_primary: category.custom_parent_pfc_primary ?? undefined,
+    custom_grandparent_pfc_primary: category.custom_grandparent_pfc_primary ?? undefined,
+    managed_by_goal_id: category.managed_by_goal_id ?? undefined,
+    savings_goal_id: category.savings_goal_id ?? undefined,
+    savings_goal_name: category.savings_goal_name ?? undefined,
+  };
+}
+
+interface CurrencyDisplay {
+  marker: string;
+  format: (amount: number) => string;
+}
+
+function createCurrencyDisplay(currencyCode: string): CurrencyDisplay {
+  const normalizedCode = currencyCode.trim().toUpperCase() || 'USD';
+  try {
+    const formatter = new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: normalizedCode,
+    });
+    return {
+      marker: formatter.formatToParts(0).find((part) => part.type === 'currency')?.value ?? normalizedCode,
+      format: (amount) => formatter.format(amount),
+    };
+  } catch {
+    const numberFormatter = new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+    return {
+      marker: normalizedCode,
+      format: (amount) => `${normalizedCode} ${numberFormatter.format(amount)}`,
+    };
+  }
+}
+
 export function BudgetCategoryForm({
+  currencyCode = 'USD',
+  budgetId,
+  draftCategories,
   isOpen,
   onClose,
   onSubmit,
@@ -93,12 +160,15 @@ export function BudgetCategoryForm({
 
   // Fetch user's custom categories to get real UUIDs for the select
   const { data: userCategories } = useGetUserCategories();
+  const { data: pfcOptions } = useCuratedPfcDetailed();
 
   useEffect(() => {
     if (isOpen) {
       if (mode === 'edit' && initialData) {
         setFormData({
           category_kind: initialData.category_kind || 'pfc',
+          group_name: initialData.group_name || '',
+          members: initialData.members || [],
           pfc_primary: initialData.pfc_primary || '',
           pfc_detailed: initialData.pfc_detailed || '',
           custom_category_id: initialData.custom_category_id || '',
@@ -170,22 +240,25 @@ export function BudgetCategoryForm({
 
   const isEditMode = mode === 'edit';
   const isSavingsKind = formData.category_kind === 'savings';
-  const showTagPicker = !isSavingsKind && formData.match_logic !== 'category_only';
+  const isGroupKind = formData.category_kind === 'group';
+  const isRemainderKind = formData.category_kind === 'remainder';
+  const retainedEmptyGroup = isEditMode && isGroupKind && !initialData?.members?.length && formData.members.length === 0;
+  const supportsTags = !isSavingsKind && !isGroupKind && !isRemainderKind;
+  const showTagPicker = supportsTags && formData.match_logic !== 'category_only';
 
-  const hasCategory =
-    formData.category_kind === 'pfc'
-      ? !!formData.pfc_primary
-      : formData.category_kind === 'savings'
-        ? !!formData.savings_goal_id
-        : !!formData.custom_category_id;
+  const hasCategory = hasSelectedCategory(formData, retainedEmptyGroup);
 
   const previewEnabled = useMemo(() => {
     // Savings categories don't match transactions — skip preview
-    return isOpen && hasCategory && !isSavingsKind && !!budgetStartDate && !!budgetEndDate;
-  }, [isOpen, hasCategory, isSavingsKind, budgetStartDate, budgetEndDate]);
+    return isOpen && hasCategory && !isSavingsKind && !retainedEmptyGroup && !!budgetStartDate && !!budgetEndDate;
+  }, [isOpen, hasCategory, isSavingsKind, retainedEmptyGroup, budgetStartDate, budgetEndDate]);
+  // Savings has no preview contract, so keep the disabled hook call truthful instead of
+  // fabricating a PFC discriminator that could become unsafe if the enablement logic changes.
+  const previewCategoryKind: CategoryPreviewRequest['category_kind'] | undefined =
+    formData.category_kind === 'savings' ? undefined : formData.category_kind;
 
   const { preview, loading: previewLoading, error: previewError } = usePreviewCategories(
-    formData.category_kind,
+    previewCategoryKind,
     formData.pfc_primary || undefined,
     formData.pfc_detailed || undefined,
     formData.custom_category_id || undefined,
@@ -193,7 +266,13 @@ export function BudgetCategoryForm({
     formData.match_logic,
     budgetStartDate || '',
     budgetEndDate || '',
-    previewEnabled
+    previewEnabled,
+    {
+      budget_id: budgetId,
+      replace_category_id: isEditMode ? initialData?.id : undefined,
+      draft_categories: budgetId ? undefined : draftCategories?.map(toPreviewDraftCategory),
+      ...(isGroupKind && { group_name: formData.group_name, members: formData.members }),
+    }
   );
 
   const allocationOverage = useMemo(() => {
@@ -204,11 +283,9 @@ export function BudgetCategoryForm({
     return projected > expectedIncome ? projected - expectedIncome : null;
   }, [expectedIncome, totalAllocatedExcludingCurrent, formData.allocated_amount]);
 
-  const formatCurrency = (amount: number): string =>
-    new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-    }).format(amount);
+  const currencyDisplay = useMemo(() => createCurrencyDisplay(currencyCode), [currencyCode]);
+  const formatCurrency = (amount: number, currency = currencyCode): string =>
+    currency === currencyCode ? currencyDisplay.format(amount) : createCurrencyDisplay(currency).format(amount);
 
   // Clear error on category change (category_kind, PFC, or custom selection)
   const clearCategoryError = useCallback(
@@ -217,17 +294,18 @@ export function BudgetCategoryForm({
   );
 
   const handleCategoryKindChange = useCallback(
-    (kind: 'pfc' | 'custom' | 'savings') => {
+    (kind: 'pfc' | 'custom' | 'savings' | 'group' | 'remainder') => {
       setFormData((prev) => ({
         ...prev,
         category_kind: kind,
         // Clear fields that don't apply to the selected kind
         ...(kind === 'pfc' && { custom_category_id: '', savings_goal_id: '' }),
         ...(kind === 'custom' && { pfc_primary: '', pfc_detailed: '', savings_goal_id: '' }),
-        ...(kind === 'savings' && {
+        ...((kind === 'savings' || kind === 'group' || kind === 'remainder') && {
           pfc_primary: '',
           pfc_detailed: '',
           custom_category_id: '',
+          savings_goal_id: '',
           tags: [],
           match_logic: DEFAULT_MATCH_LOGIC,
         }),
@@ -304,7 +382,7 @@ export function BudgetCategoryForm({
     const newErrors: FormErrors = {};
 
     if (!hasCategory) {
-      newErrors.category = 'Category is required';
+      newErrors.category = isGroupKind ? 'Enter a group name and select at least one category.' : 'Category is required';
     }
 
     const amount = parseFloat(formData.allocated_amount);
@@ -323,7 +401,7 @@ export function BudgetCategoryForm({
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
-  }, [formData, hasCategory]);
+  }, [formData, hasCategory, isGroupKind]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -342,6 +420,7 @@ export function BudgetCategoryForm({
         if (mode === 'create') {
           const request: CreateBudgetCategoryRequest = {
             category_kind: formData.category_kind,
+            ...(isGroupKind && { group_name: formData.group_name.trim(), members: formData.members }),
             pfc_primary: formData.pfc_primary || undefined,
             pfc_detailed: formData.pfc_detailed || undefined,
             custom_category_id: formData.custom_category_id || undefined,
@@ -353,6 +432,7 @@ export function BudgetCategoryForm({
           await onSubmit(request);
         } else {
           const request: UpdateBudgetCategoryRequest = {
+            ...(isGroupKind && { group_name: formData.group_name.trim(), ...(!retainedEmptyGroup && { members: formData.members }) }),
             allocated_amount: amount,
             tags: formData.tags.length > 0 ? formData.tags : undefined,
             match_logic: formData.match_logic,
@@ -367,7 +447,7 @@ export function BudgetCategoryForm({
         setIsSubmitting(false);
       }
     },
-    [formData, mode, validate, onSubmit, onClose]
+    [formData, mode, validate, onSubmit, onClose, isGroupKind, retainedEmptyGroup]
   );
 
 
@@ -407,7 +487,7 @@ export function BudgetCategoryForm({
             </label>
 
             {/* Category kind toggle */}
-            <div className="flex rounded-md border border-border overflow-hidden mb-3">
+            <div className="flex flex-wrap rounded-md border border-border overflow-hidden mb-3">
               <button
                 type="button"
                 onClick={() => handleCategoryKindChange('pfc')}
@@ -449,7 +529,44 @@ export function BudgetCategoryForm({
               >
                 Savings Goal
               </button>
+              {([{ kind: 'group', label: 'Shared group' }, { kind: 'remainder', label: 'Other' }] as const).map(({ kind, label }) => (
+                <button key={kind} type="button" disabled={isEditMode}
+                  aria-pressed={formData.category_kind === kind}
+                  onClick={() => handleCategoryKindChange(kind)}
+                  className={cn('flex-1 px-3 py-1.5 text-sm font-medium', formData.category_kind === kind ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent')}>
+                  {label}
+                </button>
+              ))}
             </div>
+
+            {isGroupKind && (
+              <div className="space-y-3">
+                <label htmlFor="budget-group-name" className="block text-sm font-medium">Group name</label>
+                <input id="budget-group-name" data-ph-mask maxLength={100} className={inputBase}
+                  value={formData.group_name} onChange={(e) => { setFormData((prev) => ({ ...prev, group_name: e.target.value })); clearCategoryError(); }} />
+                <HierarchicalCategoryTreeSelect
+                  aria-label="Select group categories"
+                  selectedPrimaries={formData.members.flatMap((m) => m.category_kind === 'pfc' && m.pfc_primary && !m.pfc_detailed ? [m.pfc_primary] : [])}
+                  onPrimariesChange={(values) => setFormData((prev) => ({ ...prev, members: [...prev.members.filter((m) => m.category_kind !== 'pfc' || !!m.pfc_detailed), ...values.map((primary): BudgetGroupMember => ({ category_kind: 'pfc', pfc_primary: primary }))] }))}
+                  selectedDetaileds={formData.members.flatMap((m) => m.pfc_detailed ? [m.pfc_detailed] : [])}
+                  onDetailedsChange={(values) => setFormData((prev) => ({ ...prev, members: [...prev.members.filter((m) => !m.pfc_detailed), ...values.flatMap((detailed): BudgetGroupMember[] => {
+                    const primary = pfcOptions.find((p) => p.detailed.some((d) => d.value === detailed))?.primary;
+                    return primary ? [{ category_kind: 'pfc', pfc_primary: primary, pfc_detailed: detailed }] : [];
+                  })] }))}
+                  customCategories={userCategories ?? []}
+                  selectedCustomIds={formData.members.flatMap((m) => m.custom_category_id ? [m.custom_category_id] : [])}
+                  onCustomIdsChange={(values) => setFormData((prev) => ({ ...prev, members: [...prev.members.filter((m) => m.category_kind !== 'custom'), ...values.map((id): BudgetGroupMember => ({ category_kind: 'custom', custom_category_id: id }))] }))}
+                />
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={formData.members.some((m) => m.category_kind === 'uncategorized')}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, members: [...prev.members.filter((m) => m.category_kind !== 'uncategorized'), ...(e.target.checked ? [{ category_kind: 'uncategorized' as const }] : [])] }))} />
+                  Include Uncategorized
+                </label>
+                <p className="text-sm text-muted-foreground">These categories share one limit. Individual category and tag lines match first.</p>
+                {retainedEmptyGroup && <p className="text-sm text-muted-foreground">This group has no categories and currently matches no spending.</p>}
+              </div>
+            )}
+            {isRemainderKind && <p className="text-sm text-muted-foreground">Other automatically includes posted spending not matched by individual lines or shared groups. Transfers are excluded.</p>}
 
             {/* PFC section: hierarchical tree picker */}
             {formData.category_kind === 'pfc' && (
@@ -539,9 +656,12 @@ export function BudgetCategoryForm({
             >
               Amount
             </label>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
-                $
+            <div className="flex">
+              <span
+                aria-hidden="true"
+                className="inline-flex shrink-0 items-center rounded-l-lg border border-input bg-muted px-3 text-sm text-muted-foreground"
+              >
+                {currencyDisplay.marker}
               </span>
               <input
                 type="number"
@@ -550,7 +670,7 @@ export function BudgetCategoryForm({
                 onChange={handleAmountChange}
                 min="0"
                 step="0.01"
-                className={cn(inputBase, 'pl-7', errors.allocated_amount && inputError)}
+                className={cn(inputBase, 'min-w-0 rounded-l-none border-l-0', errors.allocated_amount && inputError)}
                 placeholder="0.00"
               />
             </div>
@@ -562,7 +682,7 @@ export function BudgetCategoryForm({
           </div>
 
           {/* Match Logic Config — hidden for savings (not transaction-based) */}
-          {!isSavingsKind && (
+          {supportsTags && (
             <CategoryMatchConfig
               value={formData.match_logic}
               onChange={handleMatchLogicChange}
@@ -632,7 +752,7 @@ export function BudgetCategoryForm({
                 <div className="flex flex-col gap-1">
                   <span>
                     Matches <strong>{preview.transaction_count}</strong> transaction{preview.transaction_count !== 1 ? 's' : ''} totaling{' '}
-                    <strong data-ph-mask>{formatCurrency(preview.total_amount)}</strong>
+                    <strong data-ph-mask>{formatCurrency(preview.total_amount, preview.currency_code)}</strong>
                   </span>
                   {/* Issue #1630 Task B5: total_amount is a REAL PARTITION of three buckets —
                       category-direct, nested-descendant (a pfc_primary or parent custom
@@ -649,20 +769,20 @@ export function BudgetCategoryForm({
                     >
                       {(preview.direct_transaction_count ?? 0) > 0 && (
                         <li data-ph-mask>
-                          <strong>{formatCurrency(preview.direct_amount ?? 0)}</strong> direct
+                          <strong>{formatCurrency(preview.direct_amount ?? 0, preview.currency_code)}</strong> direct
                           {' '}({preview.direct_transaction_count ?? 0} transaction{(preview.direct_transaction_count ?? 0) !== 1 ? 's' : ''})
                         </li>
                       )}
                       {preview.children?.map((child) => (
                         <li key={child.category_id} data-ph-mask>
-                          <strong>{formatCurrency(child.total_amount)}</strong> from your{' '}
+                          <strong>{formatCurrency(child.total_amount, preview.currency_code)}</strong> from your{' '}
                           <strong>{child.category_name}</strong> category
                           {' '}({child.transaction_count} transaction{child.transaction_count !== 1 ? 's' : ''})
                         </li>
                       ))}
                       {(preview.tag_only_transaction_count ?? 0) > 0 && (
                         <li data-testid="category-preview-tag-only" data-ph-mask>
-                          <strong>{formatCurrency(preview.tag_only_amount ?? 0)}</strong> matched only
+                          <strong>{formatCurrency(preview.tag_only_amount ?? 0, preview.currency_code)}</strong> matched only
                           by tag, outside this category
                           {' '}({preview.tag_only_transaction_count ?? 0} transaction{(preview.tag_only_transaction_count ?? 0) !== 1 ? 's' : ''})
                         </li>
@@ -682,7 +802,7 @@ export function BudgetCategoryForm({
               aria-live="polite"
             >
               Allocations exceed expected income by{' '}
-              <span data-ph-mask>{formatCurrency(allocationOverage)}</span>.{' '}
+              <span data-ph-mask>{currencyDisplay.format(allocationOverage)}</span>.{' '}
               You&apos;ll be dipping into savings or going over budget.
             </Alert>
           )}

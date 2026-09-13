@@ -1,7 +1,8 @@
 import ReactDOM from 'react-dom/client'
 import { StrictMode, useLayoutEffect, useRef } from 'react'
 import { ClerkProvider, useAuth } from '@clerk/react-router'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { createAppQueryClient } from './shared/lib/queryClient'
 import { Provider } from 'react-redux'
 import { BrowserRouter } from 'react-router'
 import App from './App'
@@ -18,15 +19,7 @@ initSentry()
 initPostHog()
 
 // Create React Query client with sensible defaults
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 5 * 60 * 1000, // 5 minutes
-      retry: 1,
-      refetchOnWindowFocus: false,
-    },
-  },
-})
+const queryClient = createAppQueryClient()
 
 // Get Clerk configuration from runtime config (injected by docker-entrypoint.sh)
 // Falls back to build-time env vars for local development

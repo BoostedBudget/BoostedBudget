@@ -178,6 +178,31 @@ async function nodeX(page: Page, label: string): Promise<number> {
   return box!.x
 }
 
+test('Uncategorized remains visible and navigates to posted uncategorized transactions (#1627)', async ({ page }) => {
+  await acceptCookieConsent(page)
+  await mockSankeyDependencies(page, 'positive')
+  await page.route('**/api/v1/analytics/category-hierarchy*', async (route) => {
+    const direction = new URL(route.request().url()).searchParams.get('direction')
+    const levels = direction === 'income' ? incomeTree('positive') : [{
+      category: 'UNCATEGORIZED', display: 'Uncategorized', total: 120, direct_total: 120,
+      percentage: 100, transaction_count: 2, children: null,
+    }]
+    await route.fulfill({ json: { direction, start_date: '2026-02-12', end_date: '2026-05-12', total: levels.reduce((sum, node) => sum + node.total, 0), levels } })
+  })
+  await page.goto('/reports')
+  const chart = await sankeyChart(page)
+  await expect(chart.locator('svg text', { hasText: 'Uncategorized' }).first()).toBeVisible()
+  await chart.getByRole('button', { name: /Total Income → Uncategorized/ }).focus()
+  await page.keyboard.press('Enter')
+  await expect(page).toHaveURL(/\/transactions\?/)
+  const params = new URL(page.url()).searchParams
+  expect(params.get('uncategorized')).toBe('true')
+  expect(params.get('pending')).toBe('false')
+  expect(params.has('pfc_primaries')).toBe(false)
+  expect(params.has('pfc_detaileds')).toBe(false)
+  expect(params.has('custom_category_ids')).toBe(false)
+})
+
 // ---------------------------------------------------------------------------
 // Layout direction: income -> Total Income -> expenses, left to right
 // ---------------------------------------------------------------------------

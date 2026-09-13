@@ -1629,10 +1629,10 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_CategoryOnly(t *test
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 250.50
 
-	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := budgetExpenseTestRows(budgetCat, expectedSum, 1)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
-		WithArgs(userID, startDate, endDate, pfcPrimary).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1665,13 +1665,13 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_PFCPrimaryRollsUpCus
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 320.00
 
-	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := budgetExpenseTestRows(budgetCat, expectedSum, 1)
 
 	// The PFC-primary clause must OR in custom categories whose parent_pfc_primary = $4 (the
 	// direct child) AND, two hops down (Issue #1630 Task B2), a custom grandchild nested via
 	// parent_id under that direct child.
-	mock.ExpectQuery(`custom_category_override_id IN \(\s*SELECT id FROM custom_categories WHERE user_id = \$1 AND parent_pfc_primary = \$4\s*UNION\s*SELECT g\.id FROM custom_categories g\s*JOIN custom_categories c ON c\.id = g\.parent_id AND c\.user_id = g\.user_id\s*WHERE g\.user_id = \$1 AND c\.parent_pfc_primary = \$4\s*\)`).
-		WithArgs(userID, startDate, endDate, pfcPrimary).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1700,10 +1700,10 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_TagOnly(t *testing.T
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 175.25
 
-	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := budgetExpenseTestRows(budgetCat, expectedSum, 1)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1738,10 +1738,10 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_And(t *testing.T) {
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 125.00
 
-	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := budgetExpenseTestRows(budgetCat, expectedSum, 1)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
-		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed, pgxmock.AnyArg()).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1774,10 +1774,10 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_Or(t *testing.T) {
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 89.97
 
-	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := budgetExpenseTestRows(budgetCat, expectedSum, 1)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
-		WithArgs(userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg()).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1811,12 +1811,12 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_CustomTagOnly(t *tes
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 60.00
 
-	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := budgetExpenseTestRows(budgetCat, expectedSum, 1)
 
 	// tag_only ignores the category entirely: args are user/start/end + tags only,
 	// and the custom category id is never bound.
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+tags \?\| \$4`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1848,11 +1848,11 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_CustomAnd(t *testing
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 45.00
 
-	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := budgetExpenseTestRows(budgetCat, expectedSum, 1)
 
 	// custom clause binds the id at $4 (id::text = $4 OR parent_id::text = $4) and tags at $5.
-	mock.ExpectQuery(`custom_category_override_id IN .+parent_id::text = \$4.+tags \?\| \$5`).
-		WithArgs(userID, startDate, endDate, customID, pgxmock.AnyArg()).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1882,10 +1882,10 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_EmptyMatchLogic(t *t
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 500.00
 
-	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := budgetExpenseTestRows(budgetCat, expectedSum, 1)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
-		WithArgs(userID, startDate, endDate, pfcPrimary).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1916,10 +1916,10 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_NoMatches(t *testing
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	rows := pgxmock.NewRows([]string{"sum"}).AddRow(0.0)
+	rows := budgetExpenseTestRows(budgetCat, 0.0, 1)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
-		WithArgs(userID, startDate, endDate, pfcPrimary).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -1950,14 +1950,14 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_DBError(t *testing.T
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4`).
-		WithArgs(userID, startDate, endDate, pfcPrimary).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnError(errors.New("connection done"))
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
 	assert.Error(t, err)
 	assert.Equal(t, 0.0, sum)
-	assert.Contains(t, err.Error(), "failed to get spent sum for budget category")
+	assert.Contains(t, err.Error(), "read budget expense facts")
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
@@ -1986,10 +1986,10 @@ func TestTransactionRepository_GetSpentSumForBudgetCategory_HierarchicalCategory
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 	expectedSum := 350.00
 
-	rows := pgxmock.NewRows([]string{"sum"}).AddRow(expectedSum)
+	rows := budgetExpenseTestRows(budgetCat, expectedSum, 1)
 
-	mock.ExpectQuery(`SELECT COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
-		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	sum, err := repo.GetSpentSumForBudgetCategory(ctx, userID, budgetCat, startDate, endDate)
@@ -2024,16 +2024,16 @@ func TestTransactionRepository_GetMatchingTransactionStats_SingleCategory(t *tes
 	expectedCount := 5
 	expectedSum := 250.00
 
-	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+	rows := budgetExpenseTestRows(&domain.BudgetCategory{CategoryKind: "pfc", PFCPrimary: &pfcPrimary, PFCDetailed: &pfcDetailed, CustomCategoryID: nil, Tags: tags, MatchLogic: matchLogic}, expectedSum, expectedCount)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
-		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, &pfcDetailed, nil, tags, matchLogic, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedCount, count)
-	assert.Equal(t, expectedSum, sum)
+	assert.InDelta(t, expectedSum, sum, 0.000001)
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
@@ -2058,16 +2058,16 @@ func TestTransactionRepository_GetMatchingTransactionStats_CustomCategory(t *tes
 	expectedCount := 12
 	expectedSum := 650.00
 
-	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+	rows := budgetExpenseTestRows(&domain.BudgetCategory{CategoryKind: "custom", PFCPrimary: nil, PFCDetailed: nil, CustomCategoryID: &customCategoryID, Tags: tags, MatchLogic: matchLogic}, expectedSum, expectedCount)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\).+custom_category_override_id IN \(SELECT id FROM custom_categories WHERE user_id = \$1 AND \(id::text = \$4 OR parent_id::text = \$4\)\)`).
-		WithArgs(userID, startDate, endDate, customCategoryID).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "custom", nil, nil, &customCategoryID, tags, matchLogic, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedCount, count)
-	assert.Equal(t, expectedSum, sum)
+	assert.InDelta(t, expectedSum, sum, 0.000001)
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
@@ -2091,16 +2091,16 @@ func TestTransactionRepository_GetMatchingTransactionStats_TagOnly(t *testing.T)
 	expectedCount := 8
 	expectedSum := 400.00
 
-	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+	rows := budgetExpenseTestRows(&domain.BudgetCategory{CategoryKind: "", PFCPrimary: nil, PFCDetailed: nil, CustomCategoryID: nil, Tags: tags, MatchLogic: matchLogic}, expectedSum, expectedCount)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "", nil, nil, nil, tags, matchLogic, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedCount, count)
-	assert.Equal(t, expectedSum, sum)
+	assert.InDelta(t, expectedSum, sum, 0.000001)
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
@@ -2126,16 +2126,16 @@ func TestTransactionRepository_GetMatchingTransactionStats_And(t *testing.T) {
 	expectedCount := 3
 	expectedSum := 150.00
 
-	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+	rows := budgetExpenseTestRows(&domain.BudgetCategory{CategoryKind: "pfc", PFCPrimary: &pfcPrimary, PFCDetailed: &pfcDetailed, CustomCategoryID: nil, Tags: tags, MatchLogic: matchLogic}, expectedSum, expectedCount)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
-		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed, pgxmock.AnyArg()).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, &pfcDetailed, nil, tags, matchLogic, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedCount, count)
-	assert.Equal(t, expectedSum, sum)
+	assert.InDelta(t, expectedSum, sum, 0.000001)
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
@@ -2161,16 +2161,16 @@ func TestTransactionRepository_GetMatchingTransactionStats_Or(t *testing.T) {
 	expectedCount := 10
 	expectedSum := 500.00
 
-	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(expectedCount, expectedSum)
+	rows := budgetExpenseTestRows(&domain.BudgetCategory{CategoryKind: "pfc", PFCPrimary: &pfcPrimary, PFCDetailed: &pfcDetailed, CustomCategoryID: nil, Tags: tags, MatchLogic: matchLogic}, expectedSum, expectedCount)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\).+effective_pfc_primary = \$4 AND effective_pfc_detailed = \$5`).
-		WithArgs(userID, startDate, endDate, pfcPrimary, pfcDetailed, pgxmock.AnyArg()).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, &pfcDetailed, nil, tags, matchLogic, startDate, endDate)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedCount, count)
-	assert.Equal(t, expectedSum, sum)
+	assert.InDelta(t, expectedSum, sum, 0.000001)
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
@@ -2193,10 +2193,10 @@ func TestTransactionRepository_GetMatchingTransactionStats_NoMatches(t *testing.
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	rows := pgxmock.NewRows([]string{"count", "sum"}).AddRow(0, 0)
+	rows := budgetExpenseTestRows(&domain.BudgetCategory{CategoryKind: "pfc", PFCPrimary: &pfcPrimary, PFCDetailed: nil, CustomCategoryID: nil, Tags: tags, MatchLogic: matchLogic}, 0, 0)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnRows(rows)
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, nil, nil, tags, matchLogic, startDate, endDate)
@@ -2225,15 +2225,15 @@ func TestTransactionRepository_GetMatchingTransactionStats_DBError(t *testing.T)
 	startDate := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(ABS\(SUM\(amount\)\), 0\)`).
-		WithArgs(userID, startDate, endDate, pgxmock.AnyArg()).
+	mock.ExpectQuery(`WITH contribution_weights`).
+		WithArgs(userID, startDate, endDate).
 		WillReturnError(errors.New("connection done"))
 
 	count, sum, err := repo.GetMatchingTransactionStats(ctx, userID, "pfc", &pfcPrimary, nil, nil, tags, matchLogic, startDate, endDate)
 	assert.Error(t, err)
 	assert.Equal(t, 0, count)
 	assert.Equal(t, 0.0, sum)
-	assert.Contains(t, err.Error(), "failed to get matching transaction stats")
+	assert.Contains(t, err.Error(), "read budget expense facts")
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
@@ -2612,14 +2612,7 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_PFC
 	limit, offset := 20, 0
 	now := time.Now()
 
-	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
-		mock,
-		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4`,
-		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4.+LIMIT \$5 OFFSET \$6`,
-		[]interface{}{userID, startDate, endDate, pfcPrimary},
-		[]interface{}{userID, startDate, endDate, pfcPrimary, limit, offset},
-	)
-	countRows.AddRow(2, 50.00)
+	selectRows := expectBudgetExpenseDrilldown(mock, budgetCat, userID, startDate, endDate, 50.00, 2)
 	selectRows.
 		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Coffee", 25.00, now)...).
 		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Restaurant", 25.00, now)...)
@@ -2652,14 +2645,7 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_Emp
 	limit, offset := 20, 0
 	now := time.Now()
 
-	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
-		mock,
-		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4`,
-		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4.+LIMIT \$5 OFFSET \$6`,
-		[]interface{}{userID, startDate, endDate, pfcPrimary},
-		[]interface{}{userID, startDate, endDate, pfcPrimary, limit, offset},
-	)
-	countRows.AddRow(1, 12.00)
+	selectRows := expectBudgetExpenseDrilldown(mock, budgetCat, userID, startDate, endDate, 12.00, 1)
 	selectRows.AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Lunch", 12.00, now)...)
 
 	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
@@ -2692,14 +2678,7 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_Hie
 	limit, offset := 20, 0
 	now := time.Now()
 
-	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
-		mock,
-		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4.+effective_pfc_detailed = \$5`,
-		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4.+effective_pfc_detailed = \$5.+LIMIT \$6 OFFSET \$7`,
-		[]interface{}{userID, startDate, endDate, pfcPrimary, pfcDetailed},
-		[]interface{}{userID, startDate, endDate, pfcPrimary, pfcDetailed, limit, offset},
-	)
-	countRows.AddRow(1, 8.50)
+	selectRows := expectBudgetExpenseDrilldown(mock, budgetCat, userID, startDate, endDate, 8.50, 1)
 	selectRows.AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Starbucks", 8.50, now)...)
 
 	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
@@ -2730,14 +2709,7 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_CategoryOnly_Cus
 	limit, offset := 20, 0
 	now := time.Now()
 
-	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
-		mock,
-		`SELECT COUNT\(\*\).+custom_category_override_id IN \(SELECT id FROM custom_categories WHERE user_id = \$1 AND \(id::text = \$4 OR parent_id::text = \$4\)\)`,
-		`SELECT (.+) FROM transactions WHERE.+custom_category_override_id IN \(SELECT id FROM custom_categories WHERE user_id = \$1 AND \(id::text = \$4 OR parent_id::text = \$4\)\).+LIMIT \$5 OFFSET \$6`,
-		[]interface{}{userID, startDate, endDate, customCategoryID},
-		[]interface{}{userID, startDate, endDate, customCategoryID, limit, offset},
-	)
-	countRows.AddRow(3, 120.00)
+	selectRows := expectBudgetExpenseDrilldown(mock, budgetCat, userID, startDate, endDate, 120.00, 3)
 	selectRows.
 		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Groceries", 40.00, now)...).
 		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Produce", 40.00, now)...).
@@ -2770,14 +2742,7 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_TagOnly(t *testi
 	limit, offset := 20, 0
 	now := time.Now()
 
-	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
-		mock,
-		`SELECT COUNT\(\*\).+tags \?\| \$4`,
-		`SELECT (.+) FROM transactions WHERE.+tags \?\| \$4.+LIMIT \$5 OFFSET \$6`,
-		[]interface{}{userID, startDate, endDate, pgxmock.AnyArg()},
-		[]interface{}{userID, startDate, endDate, pgxmock.AnyArg(), limit, offset},
-	)
-	countRows.AddRow(2, 75.00)
+	selectRows := expectBudgetExpenseDrilldown(mock, budgetCat, userID, startDate, endDate, 75.00, 2)
 	selectRows.
 		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Supermarket", 35.00, now)...).
 		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Pharmacy", 40.00, now)...)
@@ -2811,14 +2776,7 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_And_PFC(t *testi
 	limit, offset := 20, 0
 	now := time.Now()
 
-	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
-		mock,
-		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4.+AND tags \?\| \$5`,
-		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4.+AND tags \?\| \$5.+LIMIT \$6 OFFSET \$7`,
-		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg()},
-		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg(), limit, offset},
-	)
-	countRows.AddRow(1, 22.50)
+	selectRows := expectBudgetExpenseDrilldown(mock, budgetCat, userID, startDate, endDate, 22.50, 1)
 	selectRows.AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Tagged Food", 22.50, now)...)
 
 	transactions, totalCount, totalAmount, err := repo.GetTransactionsForBudgetCategory(ctx, userID, budgetCat, startDate, endDate, limit, offset)
@@ -2850,14 +2808,7 @@ func TestTransactionRepository_GetTransactionsForBudgetCategory_Or_PFC(t *testin
 	limit, offset := 20, 0
 	now := time.Now()
 
-	countRows, selectRows := expectGetTxForBudgetCategoryQueries(
-		mock,
-		`SELECT COUNT\(\*\).+effective_pfc_primary = \$4.+ OR tags \?\| \$5\)`,
-		`SELECT (.+) FROM transactions WHERE.+effective_pfc_primary = \$4.+ OR tags \?\| \$5\).+LIMIT \$6 OFFSET \$7`,
-		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg()},
-		[]interface{}{userID, startDate, endDate, pfcPrimary, pgxmock.AnyArg(), limit, offset},
-	)
-	countRows.AddRow(2, 30.00)
+	selectRows := expectBudgetExpenseDrilldown(mock, budgetCat, userID, startDate, endDate, 30.00, 2)
 	selectRows.
 		AddRow(testTxRow("tx-1", userID, "account-1", "item-1", "Netflix", 15.00, now)...).
 		AddRow(testTxRow("tx-2", userID, "account-1", "item-1", "Spotify", 15.00, now)...)

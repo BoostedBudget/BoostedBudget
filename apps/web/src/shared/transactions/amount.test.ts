@@ -30,6 +30,12 @@ describe('isInflow', () => {
 })
 
 describe('formatTransactionAmount', () => {
+  it('preserves malformed currency markers and transaction signs without throwing', () => {
+    expect(formatTransactionAmount(25.5, 'U$D').text).toBe('-U$D 25.50')
+    expect(formatTransactionAmount(-25.5, 'U$D').text).toBe('+U$D 25.50')
+    expect(formatTransactionAmount(0, 'U$D').text).toBe('U$D 0.00')
+  })
+
   it('formats outflow (positive amount) with minus sign, destructive class, expense arrow', () => {
     const result = formatTransactionAmount(25.5)
     expect(result.text).toBe('-$25.50')
