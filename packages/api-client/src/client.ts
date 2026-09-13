@@ -110,6 +110,21 @@ function safelyNotify(
   }
 }
 
+// Axios merges instance defaults into a request before running interceptors. A
+// synchronous interceptor therefore captures both the runtime owner and effective
+// base URL in the same call stack as every direct AXIOS_INSTANCE invocation. Calls
+// from customInstance arrive pre-stamped with the snapshot taken before token lookup.
+AXIOS_INSTANCE.interceptors.request.use(
+  (config) => {
+    const ownedConfig = config as RuntimeOwnedRequestConfig
+    ownedConfig[RUNTIME_STATE_KEY] ??= runtimeState
+    config.baseURL ??= ownedConfig[RUNTIME_STATE_KEY].config.baseUrl
+    return config
+  },
+  undefined,
+  { synchronous: true },
+)
+
 AXIOS_INSTANCE.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
