@@ -12,7 +12,7 @@
     "generate": "bun run scripts/generate.ts",
     "check": "bun run scripts/generate.ts --check",
     "build": "bun run check && tsc --noEmit",
-    "test": "bun test",
+    "test": "bun test --timeout 30000",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

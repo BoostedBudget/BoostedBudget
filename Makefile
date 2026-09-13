@@ -285,8 +285,9 @@ test-scripts:
 	@echo ""
 	@echo "11/27: test-migrations-target-guard.test.sh (#1589/#1569 — host + name + live-cluster gates on the DROP target; needs a live local Postgres)"
 	@if [ -n "$$GUARD_TEST_ADMIN_URL" ] || [ -n "$$DATABASE_URL" ] || \
-	    (command -v pg_isready >/dev/null 2>&1 && \
-	     (pg_isready -h localhost -p 5434 >/dev/null 2>&1 || pg_isready -h localhost -p 5432 >/dev/null 2>&1)); then \
+	    (command -v psql >/dev/null 2>&1 && \
+	     (psql 'postgres://devuser:devpass@localhost:5434/postgres?sslmode=disable' -tAc 'SELECT 1' >/dev/null 2>&1 || \
+	      psql 'postgres://devuser:devpass@localhost:5432/postgres?sslmode=disable' -tAc 'SELECT 1' >/dev/null 2>&1)); then \
 		bash scripts/__tests__/test-migrations-target-guard.test.sh; \
 	else \
 		echo "⚠️  SKIPPED — no live Postgres reachable (tried GUARD_TEST_ADMIN_URL, DATABASE_URL, localhost:5434, localhost:5432)."; \
@@ -296,8 +297,9 @@ test-scripts:
 	@echo ""
 	@echo "12/27: migrate-reset-target-guard.test.sh (#1569 round 12 task 7 — entry-point guard on 'make migrate-reset'; needs a live local Postgres)"
 	@if [ -n "$$GUARD_TEST_ADMIN_URL" ] || [ -n "$$DATABASE_URL" ] || \
-	    (command -v pg_isready >/dev/null 2>&1 && \
-	     (pg_isready -h localhost -p 5434 >/dev/null 2>&1 || pg_isready -h localhost -p 5432 >/dev/null 2>&1)); then \
+	    (command -v psql >/dev/null 2>&1 && \
+	     (psql 'postgres://devuser:devpass@localhost:5434/postgres?sslmode=disable' -tAc 'SELECT 1' >/dev/null 2>&1 || \
+	      psql 'postgres://devuser:devpass@localhost:5432/postgres?sslmode=disable' -tAc 'SELECT 1' >/dev/null 2>&1)); then \
 		bash scripts/__tests__/migrate-reset-target-guard.test.sh; \
 	else \
 		echo "⚠️  SKIPPED — no live Postgres reachable (tried GUARD_TEST_ADMIN_URL, DATABASE_URL, localhost:5434, localhost:5432)."; \
