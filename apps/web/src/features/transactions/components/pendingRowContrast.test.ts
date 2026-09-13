@@ -3,7 +3,7 @@
  *
  * `bg-warning/10` (hover `bg-warning/20`) is applied to a table ROW. Rows have no background of
  * their own — DataTable paints `bg-card` — so the tint composites straight onto the card and every
- * cell on the row is read against the tinted result. Measured against the real tokens in
+ * cell on the row is read against the tinted result. Measured against the real tokens imported by
  * src/index.css:
  *
  *   light   muted-foreground on card            4.73:1   (already thin)
@@ -22,15 +22,16 @@
  * applies here — tuning the alpha buys at most 4.55:1 at `/5`, and a 0.05 margin against a rounding
  * boundary is not a margin. Task 12 already rejected a 4.57:1 tint on exactly that ground.
  *
- * WHAT THIS TEST DOES, and why it is not a snapshot of a decision. It reads the tokens from
- * index.css and the pending class string from the components' own source, so it measures what those
- * files actually say. Re-adding any `bg-*` tint that pushes a state below 4.5:1 turns it red, in
- * either theme, whatever the alpha.
+ * WHAT THIS TEST DOES, and why it is not a snapshot of a decision. It follows index.css's design
+ * token import and reads the pending class string from the components' own source, so it measures
+ * what those files actually say. Re-adding any `bg-*` tint that pushes a state below 4.5:1 turns it
+ * red, in either theme, whatever the alpha.
  */
 
 import { describe, it, expect } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
 
 const SRC = join(import.meta.dir, '..', '..', '..')
 
@@ -73,7 +74,18 @@ function composite(fg: RGB, alpha: number, bg: RGB): RGB {
 
 // ── tokens, read from the real stylesheet ───────────────────────────────────────────────────────
 
-const css = readFileSync(join(SRC, 'index.css'), 'utf8')
+const indexCssPath = join(SRC, 'index.css')
+const indexCss = readFileSync(indexCssPath, 'utf8')
+const tokenImport = indexCss.match(
+  /@import\s+["'](@boostedbudget\/design-tokens\/web\.css)["'];/,
+)
+if (!tokenImport) {
+  throw new Error(`${indexCssPath} must import @boostedbudget/design-tokens/web.css`)
+}
+const tokenStylesheetPath = createRequire(join(dirname(indexCssPath), 'resolve-token.css')).resolve(
+  tokenImport[1],
+)
+const css = readFileSync(tokenStylesheetPath, 'utf8')
 
 /**
  * `.dark` redefines the same custom properties further down the file, so the LAST occurrence is the
@@ -83,7 +95,10 @@ const css = readFileSync(join(SRC, 'index.css'), 'utf8')
 function token(name: string, theme: 'light' | 'dark'): RGB {
   const re = new RegExp(`--${name}:\\s*oklch\\(([^)]+)\\)`, 'g')
   const hits = [...css.matchAll(re)]
-  expect(hits.length, `--${name} must be defined for both themes in index.css`).toBeGreaterThanOrEqual(2)
+  expect(
+    hits.length,
+    `--${name} must be defined for both themes in ${tokenStylesheetPath}`,
+  ).toBeGreaterThanOrEqual(2)
   const raw = (theme === 'light' ? hits[0] : hits[hits.length - 1])[1]
   const [L, C, H] = raw.trim().split(/\s+/).map(Number)
   return oklchToSrgb(L, C, H ?? 0)
@@ -113,6 +128,13 @@ function backgroundTints(classes: string): { label: string; token: string; alpha
 const AA_NORMAL_TEXT = 4.5
 
 describe('pending transaction row tint — WCAG AA (#1569 A3)', () => {
+  it('follows the design-token stylesheet imported by index.css', () => {
+    expect(tokenImport[1]).toBe('@boostedbudget/design-tokens/web.css')
+    expect(tokenStylesheetPath).toContain('/packages/design-tokens/generated/web.css')
+    expect(css).toContain('--card:')
+    expect(css).toContain('.dark {')
+  })
+
   // The positive control. If this drifts, every "PASS" below is a measurement of the wrong maths,
   // and the 4.38 figure this whole task rests on would be unverifiable.
   it('reproduces the reported failing ratios from the real tokens', () => {
