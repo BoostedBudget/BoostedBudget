@@ -39,6 +39,12 @@ describe('LogContributionDialog', () => {
   })
 
   describe('Rendering', () => {
+    it('renders a malformed currency as a literal input marker', () => {
+      renderWithQueryClient(<LogContributionDialog goalId={goalId} isOpen onClose={mockOnClose} onLogged={mockOnLogged} currencyCode="U$D" />)
+      expect(screen.getByRole('spinbutton', { name: 'Amount (U$D)' })).toBeInTheDocument()
+      expect(screen.getByText('U$D')).toBeInTheDocument()
+    })
+
     it('renders dialog title when open', () => {
       renderWithQueryClient(
         <LogContributionDialog

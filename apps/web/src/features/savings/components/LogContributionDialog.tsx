@@ -19,6 +19,7 @@ import { NumberField, DateField } from './form'
 import { useLogSavingsGoalContribution } from '@boostedbudget/api-client/endpoints/savings-goals/savings-goals'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
+import { createCurrencyDisplay } from '@/shared/utils/currency'
 
 export interface LogContributionDialogProps {
   currencyCode?: string
@@ -92,7 +93,7 @@ export function LogContributionDialog({ goalId, isOpen, onClose, onLogged, curre
             placeholder="0.00"
             min="0.01"
             step="0.01"
-            prefix={new Intl.NumberFormat('en-US', { style: 'currency', currency: currencyCode ?? 'USD' }).formatToParts(0).find((part) => part.type === 'currency')?.value}
+            prefix={createCurrencyDisplay(currencyCode).marker}
           />
 
           <DateField
