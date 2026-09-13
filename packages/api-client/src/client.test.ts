@@ -65,6 +65,14 @@ function respondWith(status: number, headers: Record<string, string> = {}) {
   }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 describe('portable API client runtime', () => {
   test('does not couple package source to browser or Vite globals', async () => {
     const source = await Bun.file(new URL('./client.ts', import.meta.url)).text()
@@ -179,6 +187,50 @@ describe('portable API client runtime', () => {
     expect(firstUnauthorizedCalls).toBe(1)
     expect(secondUnauthorizedCalls).toBe(0)
     expect(getApiUrl()).toBe('https://second.example.com')
+  })
+
+  test('overlapping requests retain their originating base URL and callbacks', async () => {
+    const firstToken = deferred<string | null>()
+    const requests: Array<{ baseUrl: string | undefined; authorization: unknown }> = []
+    const unauthorized: string[] = []
+    AXIOS_INSTANCE.defaults.adapter = async (config) => {
+      requests.push({
+        baseUrl: config.baseURL,
+        authorization: config.headers.Authorization,
+      })
+      const internalConfig = requestConfig(config)
+      throw new AxiosError('Unauthorized', undefined, internalConfig, undefined, {
+        data: {},
+        status: 401,
+        statusText: 'Unauthorized',
+        headers: {},
+        config: internalConfig,
+      })
+    }
+
+    configureApiClient({
+      baseUrl: 'https://first.example.com',
+      getAccessToken: () => firstToken.promise,
+      onUnauthorized: () => { unauthorized.push('first') },
+    })
+    const firstRequest = customInstance({ url: '/api/v1/accounts' })
+
+    configureApiClient({
+      baseUrl: 'https://second.example.com',
+      getAccessToken: async () => 'second-token',
+      onUnauthorized: () => { unauthorized.push('second') },
+    })
+    const secondRequest = customInstance({ url: '/api/v1/accounts' })
+    await expect(secondRequest).rejects.toBeInstanceOf(AxiosError)
+
+    firstToken.resolve('first-token')
+    await expect(firstRequest).rejects.toBeInstanceOf(AxiosError)
+
+    expect(requests).toEqual([
+      { baseUrl: 'https://second.example.com', authorization: 'Bearer second-token' },
+      { baseUrl: 'https://first.example.com', authorization: 'Bearer first-token' },
+    ])
+    expect(unauthorized).toEqual(['second', 'first'])
   })
 })
 
