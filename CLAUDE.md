@@ -88,9 +88,11 @@ make test-scripts           # The 26 shell guard suites: 24 in scripts/__tests__
                              # pushing the same commit would sail past — if a push is refused
                              # with a bundle-size or artifact failure, that hook is why.
                              # ⚠ **CI is not a single platform any more** (#1598). `e2e-test` and
-                             # `lighthouse-audit` run on ephemeral Ubuntu (`ubicloud-standard-2`);
-                             # the other 38 jobs stay on the macOS pool. A shell guard that runs
-                             # in e2e-test must therefore work under BOTH bash 3.2/BSD (the Mac,
+                             # `lighthouse-audit` run on ephemeral Ubuntu (`ubicloud-standard-2`).
+                             # #1668 also moves migration-tests to standard-2 and backend-integration-test
+                             # plus docker-image-scan to standard-4. Including the cache warmer, 6 of
+                             # 41 job definitions use Ubicloud; 35 remain on the macOS pool. Shell guards
+                             # in these Linux jobs must therefore work under BOTH bash 3.2/BSD (the Mac,
                              # and `make test-scripts` locally) and bash 5/GNU (the runner). This
                              # is one-directional and easy to ship broken: a bash-4 or GNU-only
                              # construct passes CI and fails only on a developer's machine, while

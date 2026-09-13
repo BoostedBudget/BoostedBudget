@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Guard: runner placement and Linux portability for migrated CI jobs (#1598, #614).
 
-Every job in this repo runs on one of exactly two runner targets, and which one is a decision
-with consequences -- so it is recorded here rather than left implicit across 40 `runs-on:` lines.
+Every job runs on the macOS pool or an ephemeral Ubicloud VM. Placement and VM size are
+recorded here because Docker jobs must not share the Mac's daemon or container state.
 
 MIGRATED_JOBS is reconciled in BOTH directions, and the second direction is easy to get wrong:
 iterating the workflow's jobs catches "on Ubicloud but unlisted", but a listed job that was
@@ -41,15 +41,19 @@ them would have kept passing on a developer's Mac:
   R6  `lighthouse-audit` must not be disabled with `if: false`
         It sat `if: false` from 2026-04-07 until this migration. #996 is the ticket that had to
         exist because nothing noticed for four months.
+  R10 Docker jobs use their assigned VM sizes, health-gated services, Linux migration tools,
+        and the pinned official Grype action (#1668). Service ports/IDs come from Actions;
+        integration test environment variables and serialized DB access remain mandatory.
+        Hand-managed Docker lifecycle commands are forbidden, including conditional cleanup;
+        Buildx/build and service-container exec remain valid.
 
-⚠ This guard deliberately says NOTHING about step names, `needs:`, or step order. That is
-scripts/check-ungated-guard-steps.py's job, and duplicating it here would create two places to
-update and one to forget.
+Whole-tree guard placement remains scripts/check-ungated-guard-steps.py's responsibility.
+R10 checks the named integration/migration execution steps because they consume service state.
 
 Parse assumptions, VERIFIED against all 8 workflow files before this was written, because each
 one silently turns an assertion into a no-op if it is wrong:
-  - `runs-on: [self-hosted, macOS, mac-mini]` loads as exactly that 3-element list in every one
-    of the 40 jobs. No job templates its runner from a matrix.
+  - `runs-on: [self-hosted, macOS, mac-mini]` loads as exactly that 3-element list in every
+    macOS job. No job templates its runner from a matrix.
   - `if: false` loads as the Python bool False, NOT the string "false" -- which is why R6 tests
     both. A job with no `if:` loads as None and matches neither.
   - No job uses `uses:` (a reusable-workflow call), and every job has a `steps:` list, so
@@ -61,6 +65,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import shlex
 import sys
 
 import yaml
@@ -85,15 +90,33 @@ MIGRATED_JOBS = {
         "Cannot run on the macOS pool at all: Chrome headless under LHCI shared a process group "
         "with the host's browser session, which LHCI then SIGKILLs. See #996."
     ),
+    ("test.yml", "backend-integration-test"): (
+        "#1668: compilation and Docker-backed integration tests get an isolated 4-vCPU VM; "
+        "Actions owns Postgres and the two Redis services instead of the shared Mac daemon."
+    ),
+    ("test.yml", "migration-tests"): (
+        "#1668: migration validation gets an isolated 2-vCPU VM and a Postgres service; "
+        "Linux psql runs queries and the service's own pg_dump supplies schema dumps."
+    ),
+    ("test.yml", "docker-image-scan"): (
+        "#1668: each backend/frontend matrix entry builds and scans on its own 4-vCPU VM, "
+        "using Buildx and the pinned Anchore action without a shared daemon or Homebrew."
+    ),
     ("warm-ci-cache.yml", "warm"): (
-        "Must run on the same runner and architecture as the two jobs above, or its cache keys "
-        "cannot match theirs (`runner.os`/`runner.arch` are baked into every key -- see R9). "
+        "Must share the Linux OS and architecture of its cache consumers; CPU size may differ. "
+        "`runner.os`/`runner.arch` are baked into every shared key -- see R9. "
         "It is no longer about writing a DEFAULT-BRANCH entry: this account has Ubicloud "
         "shared-branch caching (branch protection off), so any branch's save already serves "
         "every branch, and this workflow's own `push:` trigger is gone -- it is manual-only "
         "(workflow_dispatch), run by hand after a quiet week lets the shared pool's entries age "
         "out past Ubicloud's 7-day unaccessed-entry eviction."
     ),
+}
+
+DOCKER_JOB_RUNNERS = {
+    "backend-integration-test": "ubicloud-standard-4",
+    "migration-tests": "ubicloud-standard-2",
+    "docker-image-scan": "ubicloud-standard-4",
 }
 
 # Jobs that must NEVER migrate, with the reason.
@@ -198,6 +221,271 @@ def cache_keys_by_prefix(job):
     return keys
 
 
+def shell_command_bodies(text):
+    """Strip shell comments and expose executable $(...) bodies, even inside double quotes.
+
+    Single-quoted examples stay literal. Mask quoted/escaped operators before shlex removes their
+    quotes, so `echo ";" docker stop` cannot be mistaken for two commands. Keep newlines when
+    removing comments: shlex normally consumes a comment's newline too, hiding the next command
+    boundary. This is a static check, not an evaluator of aliases or dynamically generated code.
+    """
+    cleaned = list(text)
+    bodies = []
+    contexts = []
+    quote = None
+    depth = 0
+    start = 0
+    comment = False
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if comment:
+            if char == "\n":
+                comment = False
+            else:
+                cleaned[i] = " "
+        elif char == "\\" and quote != "'":
+            if text.startswith("\\\n", i):
+                # Bash removes continuations before tokenizing; they are not literal operators.
+                cleaned[i] = cleaned[i + 1] = ""
+            elif i + 1 < len(text) and text[i + 1] in ";&|()":
+                cleaned[i + 1] = "_"
+            i += 1
+        elif quote == "'":
+            if char == "'":
+                quote = None
+            elif char in "\n;&|()":
+                cleaned[i] = "_"
+        elif text.startswith("$(", i):
+            contexts.append((quote, depth, start))
+            quote, depth, start = None, 1, i + 2
+            i += 1
+        elif quote == '"':
+            if char == '"':
+                quote = None
+            elif char in "\n;&|()":
+                cleaned[i] = "_"
+        elif char in "\"'":
+            quote = char
+        elif char == "#" and (i == 0 or text[i - 1].isspace() or text[i - 1] in ";&|()"):
+            comment = True
+            cleaned[i] = " "
+        elif contexts and char == "(":
+            depth += 1
+        elif contexts and char == ")":
+            depth -= 1
+            if depth == 0:
+                bodies.append("".join(cleaned[start:i]))
+                quote, depth, start = contexts.pop()
+        i += 1
+    return ["".join(cleaned), *bodies]
+
+
+def docker_lifecycle_commands(text):
+    """Find forbidden Docker verbs only in command position, not echo arguments or prose."""
+    forbidden = {"stop", "rm", "pull", "inspect", "port"}
+    found = set()
+    for body in shell_command_bodies(text):
+        lexer = shlex.shlex(body, posix=True, punctuation_chars="\n;&|()")
+        lexer.whitespace = " \t\r"
+        lexer.commenters = ""
+        tokens = list(lexer)
+        command_start = True
+        wrapper = None
+        skip_option_value = False
+        for i, token in enumerate(tokens):
+            if token and all(char in "\n;&|()" for char in token):
+                command_start = True
+                wrapper = None
+                skip_option_value = False
+            elif command_start:
+                if skip_option_value:
+                    skip_option_value = False
+                    continue
+                if token in {"if", "then", "elif", "else", "while", "until", "do", "!", "{", "}"}:
+                    continue
+                executable = pathlib.PurePosixPath(token).name
+                if executable in {"env", "sudo", "command", "exec"}:
+                    wrapper = executable
+                    continue
+                if wrapper and token.startswith("-"):
+                    # Options such as sudo -u and env -u consume the next argument; that
+                    # argument is data even if it happens to be named "docker".
+                    skip_option_value = token in {
+                        "-u", "--user", "--unset", "-g", "--group", "-h", "--host",
+                        "-p", "--prompt", "-C", "--close-from", "-a",
+                    }
+                    continue
+                if re.match(r"^[A-Za-z_][A-Za-z_0-9]*=", token):
+                    continue
+                if executable == "docker" and i + 1 < len(tokens) and tokens[i + 1] in forbidden:
+                    found.add(tokens[i + 1])
+                command_start = False
+    return sorted(found)
+
+
+def has_pinned_checksum_pipeline(text):
+    """Require the executable pinned-checksum pipeline, not an echo of its source text.
+
+    The quote-aware pass masks literal pipe characters. Accept the standalone statement or
+    integration's directory-scoped subshell, not conditional prefixes or ignored failures.
+    """
+    command = (
+        r'echo[ \t]+"\$\{MIGRATE_SHA256\}  migrate\.tar\.gz"'
+        r'[ \t]*\|[ \t]*sha256sum[ \t]+-c[ \t]+-'
+    )
+    pipeline = re.compile(
+        r'^[ \t]*(?:' + command + r'|\(cd "\$RUNNER_TEMP" && ' + command + r'\))[ \t]*$',
+        re.MULTILINE,
+    )
+    return sum(len(pipeline.findall(body)) for body in shell_command_bodies(text)) == 1
+
+
+def exports_service_connections(text, expected):
+    """Accept the two deliberately simple export forms used by these jobs.
+
+    Each double-quoted echo either appends directly to GITHUB_ENV or belongs to one redirected
+    brace group. Checking the entire body prevents inert examples, stray redirections, or a
+    later reassignment from satisfying the contract. This is not a general shell evaluator.
+    """
+    lines = [line.strip() for line in shell_command_bodies(text)[0].splitlines() if line.strip()]
+    if lines and lines[0] == "set -euo pipefail":
+        lines = lines[1:]
+    suffix = ' >> "$GITHUB_ENV"'
+    if lines and lines[0] == "{" and lines[-1] == '}' + suffix:
+        lines = lines[1:-1]
+        suffix = ""
+    required = {f'echo "{name}={value}"{suffix}' for name, value in expected.items()}
+    return len(lines) == len(required) and set(lines) == required
+
+
+def check_docker_job(job_id, job):
+    """R10: deployment-independent contracts for #1668's Docker jobs."""
+    findings = []
+
+    def reject(message):
+        findings.append(f"R10 -- {job_id}: {message}")
+
+    if job.get("runs-on") != DOCKER_JOB_RUNNERS[job_id]:
+        reject(f"must run on {DOCKER_JOB_RUNNERS[job_id]}")
+    # Unlike required execution steps, forbidden lifecycle plumbing must also be caught in
+    # conditionally executed steps (especially `if: always()` cleanup).
+    for step in steps_of(job):
+        try:
+            for command in docker_lifecycle_commands(job_text({"steps": [step]})):
+                reject(f"hand-managed Docker lifecycle command `docker {command}` is forbidden; Actions owns services")
+        except ValueError as error:
+            reject(f"cannot inspect shell commands for hand-managed Docker lifecycle: {error}")
+    steps = [step for step in steps_of(job) if "if" not in step]
+    text = job_text({"steps": steps})
+    if re.search(r"\bbrew\b|/opt/homebrew", text):
+        reject("Homebrew is not available on the Linux runner")
+
+    if job_id == "docker-image-scan":
+        buildx = [step for step in steps if str(step.get("uses", "")).startswith("docker/setup-buildx-action@")]
+        if len(buildx) != 1 or not re.fullmatch(r"docker/setup-buildx-action@[a-f0-9]{40}", buildx[0]["uses"]):
+            reject("must configure one enabled Docker Buildx action pinned to a full commit SHA")
+        scans = [step for step in steps if str(step.get("uses", "")).startswith("anchore/scan-action@")]
+        if len(scans) != 1:
+            reject("must run one enabled official Anchore scan action")
+        else:
+            scan = scans[0]
+            if not re.fullmatch(r"anchore/scan-action@[a-f0-9]{40}", scan["uses"]):
+                reject("Anchore action must be pinned to a full commit SHA")
+            expected = {
+                "image": "test-${{ matrix.component }}:${{ github.sha }}",
+                "config": ".grype.yaml",
+                "fail-build": "true",
+                "severity-cutoff": "high",
+                "only-fixed": "true",
+                "output-format": "table",
+            }
+            for name, value in expected.items():
+                if str((scan.get("with") or {}).get(name, "")).lower() != value:
+                    reject(f"scan input {name} must be {value!r}")
+            if scan.get("continue-on-error") not in (None, False):
+                reject("scan failures must fail the job")
+        return findings
+
+    required_services = {"postgres": ("postgres:17", "5432")}
+    if job_id == "backend-integration-test":
+        required_services.update({name: ("redis:7-alpine", "6379") for name in ("cache_redis", "ratelimit_redis")})
+    connections = [step for step in steps if step.get("name") == "Configure service connections"]
+    if len(connections) != 1:
+        reject("must run one enabled Configure service connections step")
+    connection = connections[0] if len(connections) == 1 else {}
+    services = job.get("services") or {}
+    for name, (image, port) in required_services.items():
+        service = services.get(name) or {}
+        if not re.fullmatch(re.escape(image) + r"@sha256:[a-f0-9]{64}", str(service.get("image", ""))):
+            reject(f"service {name} must use digest-pinned {image}")
+        if service.get("ports") != [f"{port}/tcp"]:
+            reject(f"service {name} must publish an Actions-assigned {port}/tcp port")
+        try:
+            options = shlex.split(str(service.get("options", "")))
+        except ValueError:
+            options = []
+        probes = [options[i + 1] for i, option in enumerate(options[:-1]) if option == "--health-cmd"]
+        probes.extend(option.partition("=")[2] for option in options if option.startswith("--health-cmd="))
+        expected_probe = "pg_isready -U test -d test" if name == "postgres" else "redis-cli ping"
+        if probes != [expected_probe]:
+            reject(f"service {name} health check must be {expected_probe!r}")
+        port_expression = "${{ job.services." + name + ".ports['" + port + "'] }}"
+        if (connection.get("env") or {}).get(name.upper() + "_PORT") != port_expression:
+            reject(f"service {name} port must be bound in Configure service connections from the Actions service context")
+
+    exports = {
+        "POSTGRES_PORT": "$POSTGRES_PORT",
+        "DATABASE_URL": "postgres://test:test@127.0.0.1:$POSTGRES_PORT/test?sslmode=disable",
+    }
+    if job_id == "backend-integration-test":
+        exports.update({
+            "CACHE_REDIS_TEST_URL": "redis://127.0.0.1:$CACHE_REDIS_PORT/0",
+            "REDIS_TEST_URL": "redis://127.0.0.1:$RATELIMIT_REDIS_PORT/0",
+        })
+    if not exports_service_connections(str(connection.get("run", "")), exports):
+        reject("Configure service connections must export the expected ports and URLs into GITHUB_ENV")
+    consumer_name = "Run integration tests" if job_id == "backend-integration-test" else "Run comprehensive migration tests"
+    consumers = [step for step in steps if step.get("name") == consumer_name]
+    if connection and consumers and steps.index(connection) >= steps.index(consumers[0]):
+        reject("Configure service connections must precede the consuming test step")
+
+    migrate_steps = [step for step in steps if "migrate.linux-amd64.tar.gz" in job_text({"steps": [step]})]
+    if len(migrate_steps) != 1:
+        reject("must install the Linux amd64 migrate artifact in one enabled step")
+    else:
+        migrate = migrate_steps[0]
+        env = migrate.get("env") or {}
+        if (
+            not re.fullmatch(r"v\d+\.\d+\.\d+", str(env.get("MIGRATE_VERSION", "")))
+            or not re.fullmatch(r"[a-f0-9]{64}", str(env.get("MIGRATE_SHA256", "")))
+            or not has_pinned_checksum_pipeline(str(migrate.get("run", "")))
+        ):
+            reject("migrate requires a pinned release and SHA256 verification")
+
+    if job_id == "backend-integration-test":
+        tests = [step for step in steps if step.get("name") == "Run integration tests"]
+        if len(tests) != 1:
+            reject("must run one enabled integration test step")
+        else:
+            for name in ("DATABASE_URL", "CACHE_REDIS_TEST_URL", "REDIS_TEST_URL"):
+                if (tests[0].get("env") or {}).get(name) != "${{ env." + name + " }}":
+                    reject(f"integration tests must receive {name} to prevent silent skips")
+            if not re.search(r"\bgo test\b[^\n]*-p\s+1\b", job_text({"steps": tests})):
+                reject("integration tests must serialize shared-database packages with -p 1")
+    else:
+        if not re.search(r"(?:^|\n)\s*(?:sudo\s+)?apt-get\s+install\b[^\n]*\bpostgresql-client\b", text):
+            reject("must install the Linux postgresql-client for psql queries")
+        tests = [step for step in steps if step.get("name") == "Run comprehensive migration tests"]
+        if len(tests) != 1 or (tests[0].get("env") or {}).get("DATABASE_URL") != "${{ env.DATABASE_URL }}":
+            reject("migration tests must receive the exported DATABASE_URL")
+        if len(tests) != 1 or (tests[0].get("env") or {}).get("PG_DUMP_CONTAINER") != "${{ job.services.postgres.id }}":
+            reject("migration dumps must target the Actions Postgres service ID")
+        if len(tests) != 1 or 'PG_DUMP="$PWD/scripts/pg_dump-via-docker"' not in job_text({"steps": tests}):
+            reject("migration tests must use the service's pg_dump through the repository shim")
+    return findings
+
+
 def check_workflow(path, seen):
     findings = []
     doc = yaml.safe_load(path.read_text()) or {}
@@ -208,6 +496,8 @@ def check_workflow(path, seen):
             continue
         key = (path.name, job_id)
         seen.add(key)
+        if path.name == "test.yml" and job_id in DOCKER_JOB_RUNNERS:
+            findings.extend(check_docker_job(job_id, job))
         runs_on = job.get("runs-on")
         listed = key in MIGRATED_JOBS
         on_mac = runs_on == MAC_RUNNER

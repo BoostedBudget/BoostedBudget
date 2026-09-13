@@ -114,9 +114,8 @@ jobs:
     name: E2E Tests
     if: always() && !cancelled()
     runs-on: ubicloud-standard-2
-    # Least-privilege token, scoped to this job rather than the whole workflow (#1598). This is
-    # one of only two jobs that now run on an ephemeral cloud VM, which is the entire reason the
-    # restriction is worth stating -- and neither writes with GITHUB_TOKEN.
+    # Least-privilege token, scoped to this job rather than the whole workflow (#1598).
+    # This ephemeral VM needs repository reads and performs no GITHUB_TOKEN writes.
     #
     # ⚠ Declared PER JOB on purpose. A workflow-level block was tried first and broke
     # `detect-changes`: setting any `permissions:` drops every scope not listed, and
@@ -1768,61 +1767,52 @@ jobs:
     name: Backend Integration Tests
     needs: detect-changes
     if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.workflow == 'true'
-    runs-on: [self-hosted, macOS, mac-mini]
-    # This job is COMPILE-bound, not test-bound. The integration tests themselves run in
-    # ~8s against a warm local Postgres; the "Run integration tests" step spends almost all
-    # its time compiling every package's test binary with -tags integration from the
-    # job-local Go build cache configured below (deliberately job-local, to avoid
-    # cross-job contamination on the shared self-hosted runner). That compile time grows
-    # with the codebase: measured 9m24s → 11m12s → >15m over three days of #1413 work,
-    # which is what pushed it past the previous 15m limit.
-    # Raised to 25m as an unblock. #1446 added a persisted job-local GOCACHE (restore/save
-    # steps below, keyed separately from backend-test's since compile flags differ), so
-    # warm runs should compile much faster now. Re-measure actual wall-clock time across a
-    # few real CI runs before lowering this — don't drop it back to 15m without that data.
-    # #1531 Task 11e: raised 25m -> 30m. Compile time is unaffected (the Task 11b-d integration
-    # files already existed and were already compiled by this job before this change — they just
-    # silently t.Skip'd at runtime for lack of a real Redis). What changes here is that those
-    # tests — the full cache-parity harness (4 suites) and the fail-safe suite (FLUSHDB, eviction,
-    # 50x50 concurrency under -race, bump-failure) — now actually EXECUTE for the first time, plus
-    # two new `docker run`/health-wait blocks for the Redis containers below. All of that measured
-    # low single-digit seconds locally (see task-11e-report.md); the 5m margin is headroom for a
-    # cold `docker pull redis:7-alpine` on a runner that hasn't cached the image yet, not because
-    # execution time is expected to meaningfully grow. Re-measure across real CI runs before
-    # lowering, same as the note above.
-    #
-    # ⚠ RAISED 30 -> 45 ON 2026-09-01, same user authorisation as e2e-test above, and this one is
-    # measurement-driven rather than a concession: on run 33466644820 this job SUCCEEDED at 27m
-    # against the 30m cap -- three minutes of headroom -- and on the immediately preceding run it was
-    # cancelled at 32m under host load. A job that passes at 27/30 is one slow dependency pull away
-    # from a false red that looks like a test failure.
+    runs-on: ubicloud-standard-4
+    permissions:
+      contents: read
+    # #1668: the 45-minute ceiling was authorized for the shared Mac pool. Keep it until
+    # completed Linux runs establish the cold/warm compilation costs on this isolated VM.
     timeout-minutes: 45
-    env:
-      UNIQUE_WORKSPACE: workspace-backend-integration-test-${{ github.run_id }}
-      # Container names are unique per run AND per rerun attempt, so a killed
-      # prior attempt can never collide with this one.
-      PG_CONTAINER: test-postgres-integ-${{ github.run_id }}-${{ github.run_attempt }}
-      # #1531 Task 11e: two SEPARATE disposable Redis containers — one standing in for the app's
-      # cache backend, one for the rate-limit backend — exported as REDIS_TEST_URL /
-      # CACHE_REDIS_TEST_URL (see cachetest.ConnectTestRedis / redisclient's client_integration_test.go
-      # / ratelimitstore's redis_backend_integration_test.go). Deliberately two containers, not one
-      # shared instance: the fail-safe suite's FLUSHDB/eviction tests use their own fully disposable
-      # StartRedisContainer instances per-test anyway, but ConnectTestRedis-based parity tests share
-      # whichever single instance CACHE_REDIS_TEST_URL points at across the whole run, and giving
-      # cache and rate-limit tests independent instances keeps them from stepping on each other's
-      # keys/memory pressure.
-      CACHE_REDIS_CONTAINER: test-redis-cache-integ-${{ github.run_id }}-${{ github.run_attempt }}
-      RATELIMIT_REDIS_CONTAINER: test-redis-ratelimit-integ-${{ github.run_id }}-${{ github.run_attempt }}
+    # Actions health-gates these services and removes them with the VM. Separate Redis
+    # instances preserve cache/rate-limit isolation for the parity and fail-safe suites.
+    services:
+      postgres:
+        image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432/tcp
+        options: >-
+          --memory=512m
+          --shm-size=256m
+          --health-cmd "pg_isready -U test -d test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      cache_redis:
+        image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      ratelimit_redis:
+        image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
 
     steps:
-      - name: Clean workspace (fix permission issues)
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          path: ${{ env.UNIQUE_WORKSPACE }}
-          clean: false
 
       # #1569 round 15 task 1. Round 14 added two pieces of anti-vacuity tooling —
       # scripts/check-ci-env-drift.sh and scripts/summarize-go-test.sh — after a real regression hid
@@ -1843,15 +1833,14 @@ jobs:
       # download. It sets its own env vars per case under `env -i`, so it neither reads nor depends
       # on this job's DATABASE_URL/Redis URLs, and it starts nothing.
       - name: Test CI-env-drift checker (#1569 falsification suite)
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-ci-env-drift.test.sh
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
-        # Note: go clean -cache is intentionally omitted — it is destructive on
-        # a shared self-hosted runner when backend-test runs concurrently.
+          # Explicit restore/save steps below own both cache namespaces.
+          cache: false
 
       # Sibling of the step above, and the reason it is on THIS side of "Set up Go": this suite
       # drives scripts/summarize-go-test.sh against a throwaway two-file Go module in a temp dir
@@ -1861,7 +1850,6 @@ jobs:
       # clean `ok`. #1569 round 15 task 1 also made its "go not on PATH" branch fail closed when
       # $CI is set, so wiring it here cannot degrade into a step that silently exits 0.
       - name: Test go-test skip summarizer (#1569 falsification suite)
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/summarize-go-test.test.sh
 
       # Sibling of the step above and on this side of "Set up Go" for the same reason: it drives
@@ -1877,195 +1865,53 @@ jobs:
       # Like its sibling, its "go not on PATH" branch fails closed when $CI is set, so wiring it
       # here cannot degrade into a step that silently exits 0.
       - name: Test backend coverage-gate diagnostics (#1622 falsification suite)
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/check-coverage.test.sh
 
       - name: Configure job-local Go build cache
         # runner context is unavailable in job-level env blocks (GitHub Actions limitation),
         # so we export GOCACHE here where $RUNNER_TEMP is a real shell variable.
-        # This isolates this job's build cache from backend-test's concurrent go clean -cache.
+        # Keep integration compilation artifacts separate from the unit-test cache.
         run: echo "GOCACHE=$RUNNER_TEMP/gocache-integ" >> "$GITHUB_ENV"
 
       - name: Restore Go build cache
-        # Keyed distinctly from backend-test's build cache above: this job compiles
-        # WITH -tags integration, so the two jobs' compiled test binaries (and therefore
-        # build cache contents) differ. Sharing one key would race on save and each job
-        # would poison the other's cache. GOCACHE itself stays job-local (see step
-        # above) — only its contents are persisted across runs. This is the #1446 fix:
-        # the "Run integration tests" step below is compile-bound (see timeout-minutes
-        # comment), and a warm GOCACHE should cut most of that time.
-        #
-        # Primary key is a Go SOURCE hash, not github.sha (G4 follow-up used github.sha;
-        # this is the Codex review fix for that — see the "Save Go build cache" step
-        # below for the full rationale, identical to backend-test's above): keying on
-        # the commit SHA minted a brand-new cache entry on every commit, including
-        # doc-only/workflow-only ones that cannot change compiled output, risking
-        # eviction of a still-warm entry under GitHub's 10GB per-repository cache cap.
-        # restore-keys still falls back to the most recent cache for this Go version
-        # (any source hash), then to the most recent cache for this OS at all, so a
-        # commit that DOES change Go source still gets a warm (if imperfect) cache.
+        # Integration compilation has a separate source-keyed cache from unit tests. The
+        # Linux OS/architecture prefix prevents restoring Mac artifacts after the move.
         id: cache-go-build
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.GOCACHE }}
-          key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
+          key: gocache-backend-integration-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
           restore-keys: |
-            gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-
-            gocache-backend-integration-${{ runner.os }}-
+            gocache-backend-integration-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-
+            gocache-backend-integration-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Restore Go modules cache
         id: cache-go-modules
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/go/pkg/mod
-          key: go-modules-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
+          key: go-modules-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            go-modules-${{ runner.os }}-
+            go-modules-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Download Go dependencies
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        working-directory: backend
         run: go mod download
 
-      - name: Start PostgreSQL container (dynamic port)
+      - name: Configure service connections
+        env:
+          POSTGRES_PORT: ${{ job.services.postgres.ports['5432'] }}
+          CACHE_REDIS_PORT: ${{ job.services.cache_redis.ports['6379'] }}
+          RATELIMIT_REDIS_PORT: ${{ job.services.ratelimit_redis.ports['6379'] }}
         run: |
-          # Reap orphans from ANY prior attempt of this run (different run_attempt suffix).
-          # The container name is unique per run_id+run_attempt, so a hard-killed prior
-          # attempt leaves its container behind with a different suffix. Filter by run_id
-          # prefix so we never touch a concurrent other-PR container.
-          postgres_orphans=$(docker ps -aq --filter "name=test-postgres-integ-${{ github.run_id }}-" 2>/dev/null || true)
-          if [ -n "$postgres_orphans" ]; then
-            while IFS= read -r container; do [ -z "$container" ] || docker rm -f "$container" 2>/dev/null || true; done <<< "$postgres_orphans"
-          fi
-          # Also reap the exact name in case a prior step already set the container.
-          docker rm -f ${{ env.PG_CONTAINER }} 2>/dev/null || true
-
-          echo "Pulling PostgreSQL image..."
-          for i in 1 2 3; do
-            docker pull postgres:17 && break || {
-              echo "Pull attempt $i/3 failed"
-              [ $i -lt 3 ] && sleep 10
-            }
-          done
-
-          # -p 5432 (no host side) lets Docker pick any free port — prevents
-          # clashes with the migration-tests job running on the same runner.
-          docker run -d \
-            --name ${{ env.PG_CONTAINER }} \
-            -e POSTGRES_USER=test \
-            -e POSTGRES_PASSWORD=test \
-            -e POSTGRES_DB=test \
-            -p 5432 \
-            --memory=512m \
-            --shm-size=256m \
-            --health-cmd pg_isready \
-            --health-interval 10s \
-            --health-timeout 5s \
-            --health-retries 5 \
-            postgres:17
-
-          # Discover the OS-assigned host port.
-          sleep 2
-          POSTGRES_PORT=$(docker port ${{ env.PG_CONTAINER }} 5432 | cut -d: -f2)
-          echo "PostgreSQL running on dynamically assigned port: $POSTGRES_PORT"
-
-          echo "POSTGRES_PORT=$POSTGRES_PORT" >> $GITHUB_ENV
-          echo "DATABASE_URL=postgres://test:test@localhost:$POSTGRES_PORT/test?sslmode=disable" >> $GITHUB_ENV
-
-          echo "Waiting for PostgreSQL to be ready..."
-          for i in {1..30}; do
-            if docker exec ${{ env.PG_CONTAINER }} pg_isready -U test > /dev/null 2>&1; then
-              echo "PostgreSQL is ready!"
-              break
-            fi
-            if [ $i -eq 30 ]; then
-              echo "::error::Timeout waiting for PostgreSQL to start"
-              exit 1
-            fi
-            sleep 1
-          done
-
-      - name: Start Redis containers (dynamic ports)
-        run: |
-          # #1531 Task 11e: mirrors "Start PostgreSQL container (dynamic port)" above —
-          # same reap-orphans / dynamic-host-port / health-wait shape, same rationale.
-          # Two independent containers (see the CACHE_REDIS_CONTAINER / RATELIMIT_REDIS_CONTAINER
-          # env comment above for why two, not one).
-          cache_orphans=$(docker ps -aq --filter "name=test-redis-cache-integ-${{ github.run_id }}-" 2>/dev/null || true)
-          if [ -n "$cache_orphans" ]; then
-            while IFS= read -r container; do [ -z "$container" ] || docker rm -f "$container" 2>/dev/null || true; done <<< "$cache_orphans"
-          fi
-          ratelimit_orphans=$(docker ps -aq --filter "name=test-redis-ratelimit-integ-${{ github.run_id }}-" 2>/dev/null || true)
-          if [ -n "$ratelimit_orphans" ]; then
-            while IFS= read -r container; do [ -z "$container" ] || docker rm -f "$container" 2>/dev/null || true; done <<< "$ratelimit_orphans"
-          fi
-          docker rm -f ${{ env.CACHE_REDIS_CONTAINER }} 2>/dev/null || true
-          docker rm -f ${{ env.RATELIMIT_REDIS_CONTAINER }} 2>/dev/null || true
-
-          echo "Pulling Redis image..."
-          for i in 1 2 3; do
-            docker pull redis:7-alpine && break || {
-              echo "Pull attempt $i/3 failed"
-              [ $i -lt 3 ] && sleep 10
-            }
-          done
-
-          # -p 6379 (no host side) lets Docker pick a free port for each — same reason
-          # as Postgres above: avoids clashing with any other job/container on the runner.
-          docker run -d \
-            --name ${{ env.CACHE_REDIS_CONTAINER }} \
-            -p 6379 \
-            --health-cmd "redis-cli ping" \
-            --health-interval 5s \
-            --health-timeout 3s \
-            --health-retries 10 \
-            redis:7-alpine
-
-          docker run -d \
-            --name ${{ env.RATELIMIT_REDIS_CONTAINER }} \
-            -p 6379 \
-            --health-cmd "redis-cli ping" \
-            --health-interval 5s \
-            --health-timeout 3s \
-            --health-retries 10 \
-            redis:7-alpine
-
-          sleep 2
-          CACHE_REDIS_PORT=$(docker port ${{ env.CACHE_REDIS_CONTAINER }} 6379 | cut -d: -f2)
-          RATELIMIT_REDIS_PORT=$(docker port ${{ env.RATELIMIT_REDIS_CONTAINER }} 6379 | cut -d: -f2)
-          echo "Cache Redis running on dynamically assigned port: $CACHE_REDIS_PORT"
-          echo "Rate-limit Redis running on dynamically assigned port: $RATELIMIT_REDIS_PORT"
-
-          # Deliberately NOT the app's own CACHE_REDIS_URL / RATE_LIMIT_REDIS_URL — those would
-          # leak into every config.Load() unit test on this runner and silently change what they
-          # assert. See cachetest/redis.go and redisclient/client_integration_test.go doc comments.
-          echo "CACHE_REDIS_TEST_URL=redis://localhost:$CACHE_REDIS_PORT/0" >> $GITHUB_ENV
-          echo "REDIS_TEST_URL=redis://localhost:$RATELIMIT_REDIS_PORT/0" >> $GITHUB_ENV
-
-          echo "Waiting for cache Redis to be ready..."
-          for i in {1..30}; do
-            if docker exec ${{ env.CACHE_REDIS_CONTAINER }} redis-cli ping 2>/dev/null | grep -q PONG; then
-              echo "Cache Redis is ready!"
-              break
-            fi
-            if [ $i -eq 30 ]; then
-              echo "::error::Timeout waiting for cache Redis to start"
-              exit 1
-            fi
-            sleep 1
-          done
-
-          echo "Waiting for rate-limit Redis to be ready..."
-          for i in {1..30}; do
-            if docker exec ${{ env.RATELIMIT_REDIS_CONTAINER }} redis-cli ping 2>/dev/null | grep -q PONG; then
-              echo "Rate-limit Redis is ready!"
-              break
-            fi
-            if [ $i -eq 30 ]; then
-              echo "::error::Timeout waiting for rate-limit Redis to start"
-              exit 1
-            fi
-            sleep 1
-          done
+          set -euo pipefail
+          {
+            echo "POSTGRES_PORT=$POSTGRES_PORT"
+            echo "DATABASE_URL=postgres://test:test@127.0.0.1:$POSTGRES_PORT/test?sslmode=disable"
+            # Test-only variables keep config.Load unit tests independent of these services.
+            echo "CACHE_REDIS_TEST_URL=redis://127.0.0.1:$CACHE_REDIS_PORT/0"
+            echo "REDIS_TEST_URL=redis://127.0.0.1:$RATELIMIT_REDIS_PORT/0"
+          } >> "$GITHUB_ENV"
 
       - name: Guard — DATABASE_URL, CACHE_REDIS_TEST_URL, REDIS_TEST_URL must be set
         run: |
@@ -2100,20 +1946,19 @@ jobs:
           # executing the binary — the previous `releases/latest` URL was mutable and
           # unverified.
           MIGRATE_VERSION: v4.19.1
-          MIGRATE_SHA256: a8cc8657afd1c2c93c78e8b77fd2275d150c29ebc1fff0e8fe0be68751503468
+          MIGRATE_SHA256: 2ac648fbd1b127b69ab5a7b33cf96212178f71e22379fc50573630c6f4c7ce18
         run: |
-          # Install into a job-local dir under RUNNER_TEMP to avoid write-racing
-          # the migration-tests job which also installs migrate into $HOME/bin.
+          set -euo pipefail
+          # Use the same verified Linux artifact as the E2E job.
           mkdir -p "$RUNNER_TEMP/bin-integ"
-          curl -sSfL -o "$RUNNER_TEMP/migrate.tar.gz" "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.darwin-arm64.tar.gz"
-          (cd "$RUNNER_TEMP" && echo "${MIGRATE_SHA256}  migrate.tar.gz" | shasum -a 256 -c -)
+          curl -sSfL -o "$RUNNER_TEMP/migrate.tar.gz" "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz"
+          (cd "$RUNNER_TEMP" && echo "${MIGRATE_SHA256}  migrate.tar.gz" | sha256sum -c -)
           tar -xz -f "$RUNNER_TEMP/migrate.tar.gz" -C "$RUNNER_TEMP/bin-integ" migrate
           rm -f "$RUNNER_TEMP/migrate.tar.gz"
-          echo "$RUNNER_TEMP/bin-integ" >> $GITHUB_PATH
+          echo "$RUNNER_TEMP/bin-integ" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/bin-integ/migrate" --version
 
       - name: Apply migrations
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
         run: |
@@ -2121,7 +1966,7 @@ jobs:
 
       - name: Run integration tests
         id: run-integration-tests
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        working-directory: backend
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
           CACHE_REDIS_TEST_URL: ${{ env.CACHE_REDIS_TEST_URL }}
@@ -2221,87 +2066,31 @@ jobs:
         # gate, in another job). This step is independent of test pass/fail — it only needs the
         # profile file the previous step wrote — so it does not gate on that step's outcome.
         if: always() && !cancelled()
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        working-directory: backend
         run: |
           echo "::group::Checking integration coverage threshold"
-          bash ${{ github.workspace }}/${{ env.UNIQUE_WORKSPACE }}/scripts/check-coverage.sh \
+          bash ${{ github.workspace }}/scripts/check-coverage.sh \
             coverage-integration.out \
             77
           echo "::endgroup::"
 
       - name: Save Go build cache
-        # G4 fix: the old guard (`if: ... && steps.cache-go-build.outputs.cache-hit != 'true'`)
-        # was wrong. `cache-hit` is true ONLY on an exact primary-key match — and since the old
-        # key was scoped to just go.sum (which rarely changes while source changes on every
-        # commit), the first successful save for a given go.sum made every later run on that
-        # same go.sum hit exactly and skip this save, forever. The cache silently froze at
-        # whatever was compiled on that first run and never absorbed newly-compiled first-party
-        # packages from later commits — defeating the #1446 fix this cache exists for, on the
-        # one job (compile-bound, see timeout-minutes comment) that most needs it warm.
-        #
-        # The key above is now a compilation-input hash (Go source, go.mod, go.sum, embedded JSON),
-        # not github.sha — see backend-test's "Save Go build cache" step above for the full
-        # rationale: keying on github.sha (G4 follow-up) minted a new cache entry on every
-        # commit, including ones that cannot change compiled output, risking eviction of a
-        # still-warm entry under GitHub's per-repository cache cap. `continue-on-error: true`
-        # guards the one collision that can still happen: actions/cache/save fails outright if
-        # its exact key already exists — expected on a re-run of the SAME commit (retried job,
-        # manual re-run), or now also a second commit with an identical source hash (non-Go
-        # files only). That failure is harmless — the prior save is still valid — so it must not
-        # redden the job; it still surfaces as a workflow warning annotation (not a job
-        # failure), so a PERSISTENT save failure remains visible rather than being fully silent.
-        if: always()
+        # Save only successful compilation/test results. Source hashes let unchanged inputs
+        # reuse a warm entry; duplicate-key failures remain warnings on reruns.
+        if: ${{ !cancelled() && steps.run-integration-tests.outcome == 'success' }}
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.GOCACHE }}
-          key: gocache-backend-integration-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
+          key: gocache-backend-integration-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-${{ hashFiles('backend/**/*.go', 'backend/go.mod', '**/go.sum', 'backend/testdata/**/*.json') }}
 
-      - name: Cleanup PostgreSQL container
-        if: always()
-        run: |
-          cleanup_status=0
-          existing=$(docker ps -aq --filter "name=^${{ env.PG_CONTAINER }}$" 2>/dev/null || true)
-          if [ -z "$existing" ]; then exit 0; fi
-          for attempt in 1 2; do
-            if docker rm -f "${{ env.PG_CONTAINER }}" >/dev/null 2>&1; then break; fi
-            if [ "$attempt" -eq 2 ]; then cleanup_status=1; fi
-            [ "$attempt" -eq 2 ] || sleep 1
-          done
-          remaining=$(docker ps -aq --filter "name=^${{ env.PG_CONTAINER }}$" 2>/dev/null || true)
-          if [ -n "$remaining" ]; then cleanup_status=1; fi
-          if [ "$cleanup_status" -ne 0 ]; then
-            echo "::error::PostgreSQL container cleanup failed or container remains: ${{ env.PG_CONTAINER }}"
-            exit 1
-          fi
-
-      - name: Cleanup Redis containers
-        if: always()
-        run: |
-          cleanup_status=0
-          cleanup_container() {
-            local name="$1"
-            local existing
-            existing=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null || true)
-            [ -n "$existing" ] || return 0
-            for attempt in 1 2; do
-              if docker rm -f "$name" >/dev/null 2>&1; then break; fi
-              if [ "$attempt" -eq 2 ]; then return 1; fi
-              sleep 1
-            done
-            remaining=$(docker ps -aq --filter "name=^${name}$" 2>/dev/null || true)
-            [ -z "$remaining" ] || return 1
-          }
-          cleanup_container "${{ env.CACHE_REDIS_CONTAINER }}" || cleanup_status=1
-          cleanup_container "${{ env.RATELIMIT_REDIS_CONTAINER }}" || cleanup_status=1
-          if [ "$cleanup_status" -ne 0 ]; then
-            echo "::error::One or more integration Redis containers could not be de-provisioned"
-            exit 1
-          fi
-
-      - name: Final workspace cleanup
-        if: always()
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+      - name: Save Go modules cache
+        if: ${{ !cancelled() && steps.run-integration-tests.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/go/pkg/mod
+          key: go-modules-${{ runner.os }}-${{ runner.arch }}-go${{ env.GO_VERSION }}-${{ hashFiles('**/go.sum') }}
 
   # =============================================================================
   # Frontend Tests (Single job - no sharding)
@@ -2521,221 +2310,70 @@ jobs:
     name: Migration Tests
     needs: detect-changes
     if: needs.detect-changes.outputs.migrations == 'true' || needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.workflow == 'true'
-    runs-on: [self-hosted, macOS, mac-mini]
-    env:
-      UNIQUE_WORKSPACE: workspace-migration-tests-${{ github.run_id }}
+    runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+    # #1668: every run gets a dedicated Postgres service. Actions owns its lifetime.
+    services:
+      postgres:
+        image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432/tcp
+        options: >-
+          --memory=512m
+          --shm-size=256m
+          --health-cmd "pg_isready -U test -d test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
 
     steps:
-      - name: Clean workspace (fix permission issues)
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          path: ${{ env.UNIQUE_WORKSPACE }}
-          clean: false
 
       # Regression suites for the migration-tooling scripts this job depends on, run before
-      # any Postgres container/client setup so a broken checker fails fast instead of after
-      # several minutes of Docker pull + container startup. Both are pure shell (source the
+      # publishing the service connection or installing the SQL client. Both are pure shell (source the
       # real scripts' functions; pg_dump-via-docker.test.sh's subprocess part uses a fake
       # `docker` on PATH, never the real daemon) — no DATABASE_URL or running Postgres needed.
       # Were previously unwired from every runner — see each suite's own header comment.
       - name: Test migration rollback-residue comparison logic
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/rollback-residue.test.sh
 
       - name: Test pg_dump-via-docker
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/pg_dump-via-docker.test.sh
 
       # #1569 round 15 task 9: the replay loop must execute a CONCURRENTLY migration the way
       # golang-migrate does (no transaction). Its static half needs nothing; its live half is
-      # skipped here because this step runs BEFORE the Postgres container is started, exactly like
+      # skipped here because DATABASE_URL is not exported yet, exactly like
       # the two above — the live half is covered by "Run comprehensive migration tests" below,
       # which now replays 000182 for real.
       - name: Test migration replay transaction semantics
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/replay-concurrently-transaction.test.sh
 
       - name: Configure PostgreSQL client tools
         run: |
-          echo "::group::Configuring PostgreSQL client"
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+          # Host psql handles queries; schema dumps use the Postgres 17 service's pg_dump.
+          psql --version
 
-          # This job dumps/restores against a postgres:17 container (see "Start PostgreSQL
-          # container" below), and pg_dump REFUSES to dump a server whose major version is newer
-          # than the client's own. A >= 17 client is therefore PREFERRED, and both paths below —
-          # a client already on PATH, and one found via Homebrew search — are version-checked so
-          # an older major is never silently accepted as if it were current.
-          #
-          # It is NOT fatal, though, and an earlier version of this comment saying a <17 client is
-          # "useless here" was wrong: the "Run comprehensive migration tests" step sets
-          # PG_DUMP=scripts/pg_dump-via-docker, which execs the CONTAINER's pg_dump, so every
-          # schema dump is produced by the container's 17 no matter what the host client is. The
-          # host psql is used only for ordinary queries against that container, which an older
-          # major handles. Preferring 17 while warning-but-continuing below is the accurate
-          # policy; treating it as fatal gated the job on a binary it does not depend on.
-          REQUIRED_MAJOR=17
-
-          # This function PROBES candidates; it does not decide the outcome. Its failures must not
-          # be annotated as errors — the caller deliberately recovers and continues with a single
-          # ::warning:: when no >= $REQUIRED_MAJOR client is found. Emitting ::error:: here painted
-          # red annotations on runs that then succeeded on purpose, which is exactly the kind of
-          # misleading signal that makes a green build hard to trust.
-          check_client_version() {
-            local psql_bin="$1" version
-            version=$("$psql_bin" --version | grep -oE '[0-9]+' | head -1)
-            if [ -z "$version" ]; then
-              echo "::notice::Could not parse a version number from '$psql_bin --version' — skipping this candidate"
-              return 1
-            fi
-            if [ "$version" -lt "$REQUIRED_MAJOR" ]; then
-              echo "::notice::$psql_bin is PostgreSQL $version (< $REQUIRED_MAJOR) — skipping this candidate; the container's pg_dump is used for dumps regardless."
-              return 1
-            fi
-            return 0
-          }
-
-          # Fast path: tools already on PATH. Previously accepted unconditionally — on a
-          # runner whose default PATH resolves to an older Postgres (verified: a Homebrew
-          # install with only postgresql@14/@15 present resolves `psql`/`pg_dump` on PATH to
-          # 14 with no error), this silently proceeded with an incompatible client. Now checked
-          # the same way as the Homebrew-search path below.
-          if command -v psql &> /dev/null && command -v pg_dump &> /dev/null; then
-            if check_client_version "$(command -v psql)"; then
-              echo "✅ PostgreSQL client already in PATH ($(psql --version | cut -d' ' -f3))"
-              echo "::endgroup::"
-              exit 0
-            fi
-            echo "::notice::PATH's PostgreSQL client is below the required major version — searching Homebrew for >= $REQUIRED_MAJOR instead."
-          fi
-
-          find_postgres17_bin() {
-            local path
-            for path in \
-              "/opt/homebrew/opt/postgresql@$REQUIRED_MAJOR/bin" \
-              "/usr/local/opt/postgresql@$REQUIRED_MAJOR/bin"
-            do
-              if [ -d "$path" ] && [ -f "$path/psql" ] && [ -f "$path/pg_dump" ]; then
-                echo "$path"
-                return 0
-              fi
-            done
-            return 1
-          }
-
-          # Locate a PostgreSQL >= 17 Homebrew install. No <17 fallback (see comment above) —
-          # a runner with only an older Homebrew Postgres installed must not silently use it.
-          POSTGRES_BIN="$(find_postgres17_bin)" || true
-
-          # Self-heal rather than just failing: mirrors "Ensure lcov is installed" in the
-          # Frontend Tests job (brew install lcov if missing). Without this, dropping the <17
-          # fallback above would turn any runner that happens to have only postgresql@14/@15
-          # installed — which this job's PG_DUMP override (pg_dump-via-docker, used by "Run
-          # comprehensive migration tests" below) had been silently tolerating, since it runs
-          # the CONTAINER's own pg_dump regardless of the host client this step resolves — from
-          # a passing job into a hard failure with no remediation path. Attempting the install
-          # here keeps the fail-fast/no-silent-downgrade behavior for a genuinely broken runner
-          # (no Homebrew, no network) while not breaking a currently-working one over a version
-          # this step was never actually the load-bearing guard for.
-          if [ -z "$POSTGRES_BIN" ]; then
-            # `brew` is NOT on this runner's PATH (measured: "line 71: brew: command not found"
-            # on runner-4), so try its two standard locations explicitly rather than assuming
-            # the shim is resolvable. If none is present, skip the install attempt instead of
-            # emitting a misleading "attempting brew install" notice that cannot succeed.
-            BREW_BIN=""
-            for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
-              [ -x "$candidate" ] && BREW_BIN="$candidate" && break
-            done
-            if [ -n "$BREW_BIN" ]; then
-              echo "::notice::No PostgreSQL >= $REQUIRED_MAJOR client found — attempting $BREW_BIN install postgresql@$REQUIRED_MAJOR"
-              "$BREW_BIN" install "postgresql@$REQUIRED_MAJOR" || true
-              POSTGRES_BIN="$(find_postgres17_bin)" || true
-            else
-              echo "::notice::No PostgreSQL >= $REQUIRED_MAJOR client found and no brew executable at /opt/homebrew/bin/brew or /usr/local/bin/brew — skipping the install attempt."
-            fi
-          fi
-
-          # A host client BELOW $REQUIRED_MAJOR is a WARNING, not a failure — and this is the
-          # correction to a regression this workflow shipped once already. The reasoning that
-          # justified failing hard ("a <17 client is useless here") is wrong for THIS job: the
-          # "Run comprehensive migration tests" step sets PG_DUMP=scripts/pg_dump-via-docker,
-          # and that wrapper `exec docker exec`s into the CONTAINER's pg_dump (see its main()),
-          # so the pg_dump that produces every schema hash is always the container's 17 — the
-          # host client this step resolves is never the one dumping. The host `psql` is used
-          # only for ordinary queries against the container, which an older major does fine.
-          #
-          # Failing hard therefore gated the job on a binary it does not depend on, and did
-          # break it: this runner has no PostgreSQL >= 17 and no brew on PATH, so a previously
-          # green job went red. Warning keeps the property that actually mattered — no SILENT
-          # acceptance of an old client — without inventing a requirement.
-          #
-          # The genuine requirement is that SOME psql exists, since test-migrations.sh cannot
-          # run without one. That, and only that, is still fatal.
-          if [ -n "$POSTGRES_BIN" ]; then
-            echo "$POSTGRES_BIN" >> $GITHUB_PATH
-            echo "::notice::PostgreSQL client $("$POSTGRES_BIN/psql" --version | cut -d' ' -f3) at $POSTGRES_BIN"
-          elif command -v psql &> /dev/null; then
-            echo "::warning::No PostgreSQL >= $REQUIRED_MAJOR client on this runner; proceeding with $(psql --version | cut -d' ' -f3) on PATH. Schema dumps are unaffected — the migration-tests step overrides PG_DUMP to scripts/pg_dump-via-docker, which runs the container's own pg_dump $REQUIRED_MAJOR. Install postgresql@$REQUIRED_MAJOR to silence this."
-          else
-            # Only psql is required, matching the comment above. A host pg_dump is NOT: the
-            # migration-tests step sets PG_DUMP=scripts/pg_dump-via-docker, which execs the
-            # container's own pg_dump. The previous condition also demanded `command -v pg_dump`,
-            # so a runner with a working psql and no host pg_dump fell through to this fatal
-            # branch — contradicting the stated requirement directly above it.
-            echo "::error::No psql found at all — scripts/test-migrations.sh cannot run. Install postgresql@$REQUIRED_MAJOR."
-            exit 1
-          fi
-          echo "::endgroup::"
-
-      - name: Start PostgreSQL container
+      - name: Configure service connections
+        env:
+          POSTGRES_PORT: ${{ job.services.postgres.ports['5432'] }}
         run: |
-          docker stop test-postgres-${{ github.run_id }} 2>/dev/null || true
-          docker rm test-postgres-${{ github.run_id }} 2>/dev/null || true
+          set -euo pipefail
+          echo "POSTGRES_PORT=$POSTGRES_PORT" >> "$GITHUB_ENV"
+          echo "DATABASE_URL=postgres://test:test@127.0.0.1:$POSTGRES_PORT/test?sslmode=disable" >> "$GITHUB_ENV"
 
-          echo "Pulling PostgreSQL image..."
-          for i in 1 2 3; do
-            docker pull postgres:17 && break || {
-              echo "Pull attempt $i/3 failed"
-              [ $i -lt 3 ] && sleep 10
-            }
-          done
-
-          docker run -d \
-            --name test-postgres-${{ github.run_id }} \
-            -e POSTGRES_USER=test \
-            -e POSTGRES_PASSWORD=test \
-            -e POSTGRES_DB=test \
-            -p 5432 \
-            --memory=512m \
-            --shm-size=256m \
-            --health-cmd pg_isready \
-            --health-interval 10s \
-            --health-timeout 5s \
-            --health-retries 5 \
-            postgres:17
-
-          # Get the dynamically assigned port
-          sleep 2
-          POSTGRES_PORT=$(docker port test-postgres-${{ github.run_id }} 5432 | cut -d: -f2)
-          echo "PostgreSQL running on dynamically assigned port: $POSTGRES_PORT"
-
-          # Export for use in subsequent steps
-          echo "POSTGRES_PORT=$POSTGRES_PORT" >> $GITHUB_ENV
-          echo "DATABASE_URL=postgres://test:test@localhost:$POSTGRES_PORT/test?sslmode=disable" >> $GITHUB_ENV
-
-          echo "Waiting for PostgreSQL to be ready..."
-          for i in {1..30}; do
-            if docker exec test-postgres-${{ github.run_id }} pg_isready -U test > /dev/null 2>&1; then
-              echo "PostgreSQL is ready!"
-              break
-            fi
-            if [ $i -eq 30 ]; then
-              echo "::error::Timeout waiting for PostgreSQL to start"
-              exit 1
-            fi
-            sleep 1
-          done
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Install migration tools
         env:
@@ -2743,17 +2381,18 @@ jobs:
           # executing the binary — the previous `releases/latest` URL was mutable and
           # unverified.
           MIGRATE_VERSION: v4.19.1
-          MIGRATE_SHA256: a8cc8657afd1c2c93c78e8b77fd2275d150c29ebc1fff0e8fe0be68751503468
+          MIGRATE_SHA256: 2ac648fbd1b127b69ab5a7b33cf96212178f71e22379fc50573630c6f4c7ce18
         run: |
-          mkdir -p $HOME/bin
-          curl -sSfL -o migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.darwin-arm64.tar.gz"
-          echo "${MIGRATE_SHA256}  migrate.tar.gz" | shasum -a 256 -c -
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin-migrate"
+          curl -sSfL -o migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz"
+          echo "${MIGRATE_SHA256}  migrate.tar.gz" | sha256sum -c -
           tar -xz -f migrate.tar.gz migrate
           rm -f migrate.tar.gz
-          mv migrate $HOME/bin/
-          echo "$HOME/bin" >> $GITHUB_PATH
+          mv migrate "$RUNNER_TEMP/bin-migrate/"
+          echo "$RUNNER_TEMP/bin-migrate" >> "$GITHUB_PATH"
           npm install -g squawk-cli
-          $HOME/bin/migrate --version && squawk --version
+          "$RUNNER_TEMP/bin-migrate/migrate" --version && squawk --version
 
       # The glob is *.up.sql so the command matches the policy that .squawk.toml already
       # enforces. This step used to pass `migrations/*.sql` (366 files) and print "Found 0
@@ -2772,29 +2411,12 @@ jobs:
       # step's scope from its output count without reading .squawk.toml first: the count is
       # a consequence of that file, and a drop in it means an exclusion was ADDED there.
       - name: Lint migrations with Squawk
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
+        working-directory: backend
         run: squawk migrations/*.up.sql --pg-version=17
 
-      # PG_DUMP points at the server container's own pg_dump, regardless of what the "Configure
-      # PostgreSQL client tools" step above resolved on the host. That step PREFERS a host client
-      # >= 17 and never silently accepts an older one as if it were current — but it is a WARNING,
-      # not a failure: an older `psql` on PATH emits ::warning:: and the job proceeds (it used to
-      # silently fall back to whatever Homebrew postgresql@15 it could find, which is older than
-      # the postgres:17 container this job starts, and pg_dump refuses to dump a server newer than
-      # itself, which was the actual bug that step fixes). Only a TOTAL ABSENCE of any `psql` is
-      # fatal there, because scripts/test-migrations.sh cannot run without one at all. That warning
-      # is safe specifically because of the indirection below: PG_DUMP=scripts/pg_dump-via-docker
-      # execs the CONTAINER's own pg_dump, so the host client's major version never affects a
-      # schema hash — this indirection is kept as a second, independent guard: it is never wrong to run the
-      # container's own pg_dump against the container's own server, no matter which host client
-      # version was resolved above or how that resolution logic changes in the future.
-      #
-      # That mismatch was not merely inconvenient: test-migrations.sh discarded pg_dump's stderr and hashed
-      # its empty stdout, so the idempotency and up->down->up schema-identity suites compared an
-      # empty string with itself and reported PASSED. This job has therefore been green while
-      # verifying nothing about schema identity — on every run before this commit. The script now
-      # fails closed on both an unchecked `migrate` exit code and an empty dump, and checks
-      # client-vs-server major versions up front, so a future mismatch is loud rather than silent.
+      # Host psql is used for SQL queries only. Schema identity must use the service's own
+      # pg_dump: a host pg_dump older than PostgreSQL 17 can fail and produce an empty dump.
+      # The repository shim and migration suite both fail closed on dump errors.
       # #1569 Codex finding 1: the destructive-target guard's own suite. Runs HERE, after the
       # Postgres container is up, and not with the other pure-shell suites at the top of this job,
       # because half of its cases must point at a LIVE cluster: a suite that can only reach dead
@@ -2802,7 +2424,6 @@ jobs:
       # is exactly the blind spot that let a name-only guard admit `production_test`. It creates and
       # drops its own guardprobe_* databases on the container; it never touches DATABASE_URL's.
       - name: Test migration destructive-target guard
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
         run: bash scripts/__tests__/test-migrations-target-guard.test.sh
@@ -2814,7 +2435,6 @@ jobs:
       # observe the guard saying YES to a real (empty) database, not just refusing. It creates and
       # drops its own mrguard_* databases on the container; it never touches DATABASE_URL's.
       - name: Test migrate-reset entry-point guard
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
         run: bash scripts/__tests__/migrate-reset-target-guard.test.sh
@@ -2839,23 +2459,16 @@ jobs:
       # override DATABASE_URL with the sentinel, and the resolver cases run under `env -u
       # DATABASE_URL`.
       - name: Test root Makefile migrate delegation and dev-URL resolver
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/root-migrate-delegation.test.sh
 
       - name: Run comprehensive migration tests
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
-          PG_DUMP_CONTAINER: test-postgres-${{ github.run_id }}
+          PG_DUMP_CONTAINER: ${{ job.services.postgres.id }}
         run: |
-          cd ${{ env.UNIQUE_WORKSPACE }}
+          set -euo pipefail
           chmod +x scripts/test-migrations.sh scripts/pg_dump-via-docker
-          # PG_DUMP is set HERE, after the cd, and absolutised with $PWD rather than being declared
-          # in `env:` above. UNIQUE_WORKSPACE is a RELATIVE path (workspace-migration-tests-<run_id>),
-          # so an env-level `${{ env.UNIQUE_WORKSPACE }}/scripts/...` resolves against the wrong
-          # directory once this step cds into the workspace — the script then cannot find the shim.
-          # (That exact mistake failed this job once; the prerequisites guard reported
-          # "pg_dump not found: <relative path>" instead of silently continuing, which is what the
-          # guard exists for.)
+          # The shim rewrites the host-mapped URL to port 5432 inside this exact service.
           PG_DUMP="$PWD/scripts/pg_dump-via-docker" ./scripts/test-migrations.sh
 
       - name: Upload performance benchmarks
@@ -2865,7 +2478,7 @@ jobs:
         continue-on-error: true
         with:
           name: migration-performance-${{ github.run_id }}
-          path: ${{ env.UNIQUE_WORKSPACE }}/migration-performance.json
+          path: migration-performance.json
           retention-days: 1
           if-no-files-found: warn
 
@@ -2873,15 +2486,6 @@ jobs:
         if: steps.upload-migration-perf.outcome == 'failure'
         run: echo "::warning::Migration performance upload failed (storage quota/network). Test results valid."
 
-      - name: Cleanup PostgreSQL container
-        if: always()
-        run: |
-          docker stop test-postgres-${{ github.run_id }} 2>/dev/null || true
-          docker rm test-postgres-${{ github.run_id }} 2>/dev/null || true
-
-      - name: Final workspace cleanup
-        if: always()
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Security Scan - Native Tools (govulncheck, npm audit, Hadolint)
@@ -2983,22 +2587,16 @@ jobs:
       needs.detect-changes.outputs.frontend == 'true' ||
       needs.detect-changes.outputs.workflow == 'true' ||
       needs.detect-changes.outputs.scanconfig == 'true'
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubicloud-standard-4
+    permissions:
+      contents: read
     strategy:
       matrix:
         component: [backend, frontend]
-    env:
-      UNIQUE_WORKSPACE: workspace-docker-scan-${{ matrix.component }}-${{ github.run_id }}
 
     steps:
-      - name: Clean workspace
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
-
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          path: ${{ env.UNIQUE_WORKSPACE }}
-          clean: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
@@ -3007,16 +2605,16 @@ jobs:
         id: dockerfile
         run: |
           if [ "${{ matrix.component }}" = "frontend" ]; then
-            echo "path=apps/web/Dockerfile" >> $GITHUB_OUTPUT
+            echo "path=apps/web/Dockerfile" >> "$GITHUB_OUTPUT"
           else
-            echo "path=${{ matrix.component }}/Dockerfile" >> $GITHUB_OUTPUT
+            echo "path=${{ matrix.component }}/Dockerfile" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build Docker image (local only)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
-          context: ${{ env.UNIQUE_WORKSPACE }}
-          file: ${{ env.UNIQUE_WORKSPACE }}/${{ steps.dockerfile.outputs.path }}
+          context: .
+          file: ${{ steps.dockerfile.outputs.path }}
           platforms: linux/amd64
           push: false
           load: true
@@ -3026,29 +2624,17 @@ jobs:
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
 
-      - name: Ensure Grype is installed
-        run: |
-          if ! command -v grype &> /dev/null; then
-            echo "Installing Grype via Homebrew..."
-            brew install grype
-          fi
-          grype version
-
+      # #1668: pin the official scanner action; its inputs preserve the existing Grype gate.
       - name: Scan Docker image with Grype
-        run: |
-          grype test-${{ matrix.component }}:${{ github.sha }} \
-            --config ${{ env.UNIQUE_WORKSPACE }}/.grype.yaml \
-            --fail-on high \
-            --only-fixed \
-            --output table
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: test-${{ matrix.component }}:${{ github.sha }}
+          config: .grype.yaml
+          fail-build: true
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
 
-      - name: Cleanup Docker image
-        if: always()
-        run: docker rmi test-${{ matrix.component }}:${{ github.sha }} 2>/dev/null || true
-
-      - name: Final workspace cleanup
-        if: always()
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # Lighthouse CI Audit (Performance, Accessibility, Best Practices, SEO)
@@ -3073,9 +2659,8 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.workflow == 'true'
     runs-on: ubicloud-standard-2
-    # Least-privilege token, scoped to this job rather than the whole workflow (#1598). This is
-    # one of only two jobs that now run on an ephemeral cloud VM, which is the entire reason the
-    # restriction is worth stating -- and neither writes with GITHUB_TOKEN.
+    # Least-privilege token, scoped to this job rather than the whole workflow (#1598).
+    # This ephemeral VM needs repository reads and performs no GITHUB_TOKEN writes.
     #
     # ⚠ Declared PER JOB on purpose. A workflow-level block was tried first and broke
     # `detect-changes`: setting any `permissions:` drops every scope not listed, and

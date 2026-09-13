@@ -8,7 +8,8 @@
 #   - `mac-mini` — the self-hosted pool of four runners on one Mac Mini. See
 #     infra/runners/README.md for what that host actually is.
 #   - `ubicloud-standard-*` — Ubicloud's hosted runners. `e2e-test` and `lighthouse-audit` moved
-#     to these in #1598; the rest of #614 will move more. Listed explicitly rather than by
+#     to these in #1598; #1668 adds migration-tests on standard-2 and backend integration plus
+#     Docker scans on standard-4. Listed explicitly rather than by
 #     wildcard so a typo in a size still fails, and so this file stays a readable record of which
 #     sizes the repo has actually adopted.
 #

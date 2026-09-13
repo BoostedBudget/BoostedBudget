@@ -128,30 +128,56 @@ Builds and deploys to the QA environment (Mac Mini self-hosted runner).
 
 ## Runner placement
 
-Every job runs on one of exactly two runner targets. #614's acceptance criteria require
-documenting which stay self-hosted and why.
+Every job runs on the macOS pool or an ephemeral Ubicloud VM. #614's acceptance criteria require
+documenting placement; #1668 also pins the CPU sizes for the Docker-dependent jobs.
 
 | Job | Runner | Why |
 |---|---|---|
 | `test.yml` → `e2e-test` | `ubicloud-standard-2` | The heaviest job in the matrix, on a host whose memory is permanently saturated (`infra/runners/README.md:101-122`). Its last eleven runs on the Mac pool took 11–46 minutes and **every one ended `cancelled`**. Moving it is direct relief for #1489. |
 | `test.yml` → `lighthouse-audit` | `ubicloud-standard-2` | Cannot run on macOS at all: Chrome headless under LHCI shared a process group with the Mac Mini's own browser session, which LHCI SIGKILLs after an audit. Disabled 2026-04-07, re-enabled by #1598. See #996. |
-| `warm-ci-cache.yml` → `warm` | `ubicloud-standard-2` | Manual-only re-warm of the shared cache pool the two jobs above use, so it must run on the same runner *and architecture* or its cache keys cannot match. Runs no tests; **must never be a required check**; `push:` trigger removed in #1598 U2 so merges never re-kick it. |
-| Everything else (38 jobs) | `[self-hosted, macOS, mac-mini]` | Not yet migrated. Tracked in #614. |
+| `test.yml` → `backend-integration-test` | `ubicloud-standard-4` | #1668: isolates integration compilation and Docker-backed tests from the shared Mac daemon. Postgres and two independent Redis services are managed by Actions. |
+| `test.yml` → `migration-tests` | `ubicloud-standard-2` | #1668: a dedicated Postgres service, Linux migration tooling, and the service's own `pg_dump` remove shared container state and host-client version dependencies. |
+| `test.yml` → `docker-image-scan` | `ubicloud-standard-4` | #1668: each backend/frontend matrix entry gets its own Docker daemon for Buildx and the SHA-pinned official Anchore scan action. |
+| `warm-ci-cache.yml` → `warm` | `ubicloud-standard-2` | Manual-only re-warm of the Linux cache pool. OS and architecture must match its consumers; CPU size need not. Runs no tests; **must never be a required check**; `push:` trigger removed in #1598 U2 so merges never re-kick it. |
+| Everything else (35 job definitions) | `[self-hosted, macOS, mac-mini]` | Not yet migrated. Tracked in #614. Counts are job definitions, not expanded matrix entries: 41 total, 6 on Ubicloud. |
 | `deploy-qa.yml` → `deploy-to-mac-mini` | `[self-hosted, macOS, mac-mini]` | **Never migrates.** It deploys to the QA environment hosted *on* that machine; there is nothing to deploy to from a cloud VM. |
 
 Placement is enforced by `scripts/check-runner-portability.py`, whose `MIGRATED_JOBS` map is the
 authoritative record and is reconciled in **both** directions — a job on a Ubicloud label that
 isn't listed fails, and so does a listed job that was renamed, deleted, or moved back. It also
 enforces that a Linux job carries no macOS-only artefacts, no mac-pool workspace scaffolding, and
-no hand-rolled `docker run` containers.
+no hand-rolled `docker run` containers. Its R10 checks also pin #1668's VM sizes, service image
+digests and port bindings, migration tooling, integration anti-skip inputs, and scanner settings.
+R10 also rejects executable `docker stop`, `rm`, `pull`, `inspect`, and `port` commands in those
+three jobs, including conditional cleanup; Buildx/build and service-container `docker exec`
+remain allowed. Comments and literal diagnostic output do not count as commands.
 
 `.github/actionlint.yaml` declares `mac-mini` and the `ubicloud-*` labels so `actionlint` stops
 reporting them as unknown; it teaches actionlint that the labels exist and nothing more.
 
+### Docker infrastructure failures (#1668)
+
+The original shared Mac Docker Desktop failures included socket HTTP 500 errors, Buildx/BuildKit
+timeouts, container startup stalls, and read-only containerd metadata. `backend-integration-test`,
+`migration-tests`, and `docker-image-scan` no longer depend on Mac Docker, so repairing or restarting
+local Docker is not a recovery step for these jobs.
+
+Retry a transient Ubicloud VM or Actions service-provisioning failure once. If the same failure
+repeats, escalate with both run links and the relevant provisioning/build logs instead of repeatedly
+rerunning or attempting local Docker repair. Application/test failures still need diagnosis, not an
+infrastructure retry.
+
 ### Databases in CI
 
-The two migrated jobs provision Postgres and Redis as Actions **`services:`** containers,
-digest-pinned. Nothing in them calls `docker run`.
+`e2e-test` and `backend-integration-test` each provision Postgres and two Redis instances as
+digest-pinned Actions **`services:`** containers; `migration-tests` provisions Postgres only.
+Actions owns their health checks and lifetime. The jobs read assigned host ports from
+`job.services.<name>.ports`, with no container-name guessing, port parsing, or orphan cleanup.
+
+Migration SQL queries use Ubuntu's `postgresql-client`. Schema dumps pass the exact
+`job.services.postgres.id` as `PG_DUMP_CONTAINER` to `scripts/pg_dump-via-docker`, ensuring the
+dump client and server have the same major version. Both migration-consuming jobs verify the
+pinned Linux amd64 golang-migrate archive with `sha256sum` before execution.
 
 Local E2E is unchanged and still uses `apps/web/scripts/run-e2e-with-ports.sh`, which owns its
 own containers end to end. CI uses `apps/web/scripts/run-e2e-ci.sh`, which assumes the services
