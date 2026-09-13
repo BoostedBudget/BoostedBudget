@@ -42,15 +42,19 @@ func computePostHogIdentityHash(distinctID, secretToken string) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-func (h *PostHogSupportIdentityHandler) Get(_ context.Context, input *GetPostHogSupportIdentityInput) (*GetPostHogSupportIdentityOutput, error) {
+func (h *PostHogSupportIdentityHandler) Get(ctx context.Context, _ *GetPostHogSupportIdentityInput) (*GetPostHogSupportIdentityOutput, error) {
 	if h.projectToken == "" || h.secretToken == "" {
 		return nil, huma.Error503ServiceUnavailable("Support is unavailable")
+	}
+	clerkUserID, ok := ctx.Value(inputs.ClerkUserIDKey).(string)
+	if !ok || clerkUserID == "" {
+		return nil, huma.Error401Unauthorized("User not authenticated")
 	}
 	return &GetPostHogSupportIdentityOutput{
 		CacheControl: "no-store",
 		Body: PostHogSupportIdentity{
-			DistinctID:   input.UserID,
-			IdentityHash: computePostHogIdentityHash(input.UserID, h.secretToken),
+			DistinctID:   clerkUserID,
+			IdentityHash: computePostHogIdentityHash(clerkUserID, h.secretToken),
 		},
 	}, nil
 }

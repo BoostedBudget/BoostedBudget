@@ -20,7 +20,6 @@ function controller(available = true) {
 function deps({
   loaded = true,
   userId = 'user_A',
-  pathname = '/dashboard',
   identity = { distinct_id: 'user_A', identity_hash: 'signed-A' },
   identityLoading = false,
   identityError = false,
@@ -28,7 +27,6 @@ function deps({
 }: Partial<{
   loaded: boolean
   userId: string | null
-  pathname: string
   identity: { distinct_id: string; identity_hash: string } | null
   identityLoading: boolean
   identityError: boolean
@@ -36,7 +34,6 @@ function deps({
 }> = {}): EngagementDependencies {
   return {
     useAuthState: () => ({ isLoaded: loaded, userId }),
-    usePathname: () => pathname,
     useVerifiedIdentity: (_userId, enabled) => ({
       data: enabled ? identity ?? undefined : undefined,
       isLoading: enabled && identityLoading,
@@ -55,7 +52,7 @@ describe('AuthenticatedPostHogExperiences', () => {
   test('does not fetch, activate, or render on the logged-out homepage', () => {
     const c = controller()
     const useVerifiedIdentity = mock(() => ({ data: undefined, isLoading: false, isError: false }))
-    const dependencies = { ...deps({ userId: null, pathname: '/' }), useVerifiedIdentity }
+    const dependencies = { ...deps({ userId: null }), useVerifiedIdentity }
     render(<AuthenticatedPostHogExperiences controller={c} dependencies={dependencies} />)
 
     expect(useVerifiedIdentity).toHaveBeenCalledWith(null, false)
@@ -110,10 +107,10 @@ describe('AuthenticatedPostHogExperiences', () => {
     expect(c.activateSupport).not.toHaveBeenCalled()
   })
 
-  test('cleans both products on logout and on public routes', () => {
+  test('cleans both products on logout', () => {
     const c = controller()
     const { rerender } = render(<AuthenticatedPostHogExperiences controller={c} dependencies={deps()} />)
-    rerender(<AuthenticatedPostHogExperiences controller={c} dependencies={deps({ userId: null, pathname: '/' })} />)
+    rerender(<AuthenticatedPostHogExperiences controller={c} dependencies={deps({ userId: null })} />)
     expect(c.deactivateSupport).toHaveBeenCalled()
     expect(c.deactivateSurveys).toHaveBeenCalled()
   })
