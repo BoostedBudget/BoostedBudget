@@ -56,6 +56,17 @@ describe('BudgetTransactionList', () => {
     mockUseBudgetTransactions.mockClear()
   })
 
+  it('preserves malformed currency markers throughout the masked expense breakdown', () => {
+    mockUseBudgetTransactions.mockReturnValue(createMockHookState({
+      transactions: [{ ...mockTransaction, amount: 50, budget_expense_amount: 30 }], totalCount: 1, totalAmount: 30,
+    }))
+    renderWithRouter(<BudgetTransactionList budgetId="budget-1" categoryId="category-1" currencyCode="U$D" />)
+    expect(screen.queryByText('Total: U$D 30.00')).toHaveAttribute('data-ph-mask')
+    expect(screen.getByText('Expense counted: U$D 30.00')).toHaveAttribute('data-ph-mask')
+    expect(screen.getByText('Allocated to savings: U$D 20.00')).toHaveAttribute('data-ph-mask')
+    expect(screen.getByText('-U$D 50.00').closest('[data-ph-mask]')).not.toBeNull()
+  })
+
   describe('loading state', () => {
     it('should show loading spinner when loading', () => {
       mockUseBudgetTransactions.mockReturnValue(createMockHookState({ loading: true }))

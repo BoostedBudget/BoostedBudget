@@ -1,3 +1,5 @@
+import { createCurrencyDisplay } from '@/shared/utils/currency'
+
 export type TransactionAmountFormat = {
   text: string
   signClass: string
@@ -17,12 +19,7 @@ export function isInflow(amount: number): boolean {
 
 export function formatTransactionAmount(amount: number, currencyCode = 'USD'): TransactionAmountFormat {
   const absAmount = Math.abs(amount)
-  const formatted = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: currencyCode,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(absAmount)
+  const formatted = createCurrencyDisplay(currencyCode, 2).format(absAmount)
 
   if (amount === 0) {
     return {

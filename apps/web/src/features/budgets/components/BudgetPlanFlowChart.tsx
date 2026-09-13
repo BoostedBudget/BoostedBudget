@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { buildBudgetFlow, type BudgetFlowLine } from './buildBudgetFlow'
+import { createCurrencyDisplay } from '@/shared/utils/currency'
 
 export interface BudgetPlanFlowData {
   currency_code: string
@@ -45,16 +46,7 @@ export function BudgetPlanFlowChart({ data, privacyMode = false, onSelectLine }:
   const graph = useMemo(() => buildBudgetFlow(data.income.expected, data.lines, showActuals), [data.income.expected, data.lines, showActuals])
   const allocated = data.lines.reduce((sum, line) => sum + line.planned, 0)
   const actualTotal = showActuals ? data.lines.reduce((sum, line) => sum + (line.actual ?? 0), 0) : null
-  const formatMoney = useMemo(() => {
-    try {
-      const formatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: data.currency_code })
-      return (amount: number) => formatter.format(amount)
-    } catch {
-      // Preserve the supplied marker rather than imply conversion to another currency.
-      const formatter = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-      return (amount: number) => `${data.currency_code} ${formatter.format(amount)}`
-    }
-  }, [data.currency_code])
+  const formatMoney = useMemo(() => createCurrencyDisplay(data.currency_code).format, [data.currency_code])
   const money = (amount: number | null) => privacyMode ? 'Hidden' : amount == null ? 'Unavailable' : formatMoney(amount)
   const canSelect = (line: BudgetPlanFlowData['lines'][number]) => data.eligibility === 'eligible' && !privacyMode &&
     (line.kind === 'savings' ? !line.reasons.some((reason) => reason === 'mixed_currency' || reason === 'unknown_currency') : line.actual != null)

@@ -41,6 +41,7 @@ import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { ErrorState } from '@/components/ui/error-state'
 import { LogContributionDialog } from './LogContributionDialog'
+import { createCurrencyDisplay } from '@/shared/utils/currency'
 
 export interface GoalContributionsSheetProps {
   currencyCode?: string
@@ -54,12 +55,7 @@ export interface GoalContributionsSheetProps {
 }
 
 function formatCurrency(amount: number, currencyCode: string): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: currencyCode,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amount)
+  return createCurrencyDisplay(currencyCode, 2).format(amount)
 }
 
 function formatDate(dateStr: string): string {
