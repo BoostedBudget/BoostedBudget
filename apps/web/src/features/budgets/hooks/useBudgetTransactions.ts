@@ -104,6 +104,7 @@ export function useBudgetTransactions(
         (event.action.type === 'invalidate' || event.action.type === 'fetch')) {
         pageEpoch.current += 1;
         setLoadingMore(false);
+        setPaginationSource((source) => ({ ...source, queryHash: '' }));
       }
     });
   }, [pageOneQueryHash, queryClient]);
