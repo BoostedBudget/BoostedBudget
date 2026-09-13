@@ -4,7 +4,7 @@
  * Two color systems coexist in this codebase:
  *   1. CATEGORY_COLORS (colors.ts) — custom colorblind-safe hex palette,
  *      used by ECharts series via themes.ts. This is the ECharts source of truth.
- *   2. --chart-N CSS tokens (index.css) — Tailwind/shadcn-ui chart tokens,
+ *   2. --chart-N CSS tokens (design-tokens web.css) — Tailwind/shadcn-ui chart tokens,
  *      used by any shadcn component that reads CSS variables. They differ
  *      between light and dark themes, and differ from CATEGORY_COLORS by design.
  *
@@ -66,9 +66,12 @@ function extractChartTokens(css: string, block: 'light' | 'dark'): Record<string
 describe('CSS --chart-N token documentation (separate palette from CATEGORY_COLORS)', () => {
   let cssContent = ''
   try {
-    cssContent = readFileSync(join(import.meta.dirname, '../../index.css'), 'utf8')
+    cssContent = readFileSync(
+      join(import.meta.dirname, '../../../../../packages/design-tokens/generated/web.css'),
+      'utf8',
+    )
   } catch {
-    // index.css not present in all test environments — tests skip gracefully
+    // The generated artifact is not present in all test environments — tests skip gracefully.
   }
 
   it('CSS light --chart-1..5 tokens are parseable', () => {
