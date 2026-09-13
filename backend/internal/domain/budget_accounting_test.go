@@ -6,20 +6,81 @@ import (
 	"time"
 )
 
-func TestCurrentBudgetActualsRangeClipsUTCAndRejectsNoCurrentPeriod(t *testing.T) {
-	day := func(s string) time.Time { v, e := time.Parse("2006-01-02", s); require.NoError(t, e); return v }
-	end := day("2026-09-20")
-	b := &Budget{IsActive: true, Period: BudgetPeriodMonthly, StartDate: day("2026-09-05"), EndDate: &end}
-	got := CurrentBudgetActualsRange(b, time.Date(2026, 9, 13, 1, 0, 0, 0, time.FixedZone("east", 7200)))
-	require.True(t, got.Eligible)
-	require.Equal(t, day("2026-09-05"), got.Start)
-	require.Equal(t, day("2026-09-20"), got.End)
-	require.Equal(t, day("2026-09-12"), got.ActualThrough)
-	for _, now := range []string{"2026-09-01", "2026-09-21"} {
-		require.False(t, CurrentBudgetActualsRange(b, day(now)).Eligible)
+func TestCurrentBudgetActualsRangeExactContract(t *testing.T) {
+	day := func(s string) time.Time {
+		v, err := time.Parse("2006-01-02", s)
+		require.NoError(t, err)
+		return v
 	}
-	b.IsActive = false
-	require.False(t, CurrentBudgetActualsRange(b, day("2026-09-12")).Eligible)
+	ptrDay := func(s string) *time.Time {
+		v := day(s)
+		return &v
+	}
+	now := time.Date(2026, 9, 17, 1, 30, 0, 0, time.FixedZone("UTC+02", 2*60*60))
+
+	tests := []struct {
+		name                             string
+		budget                           Budget
+		start, end, through, eligibility string
+		eligible                         bool
+	}{
+		{
+			name:   "weekly",
+			budget: Budget{IsActive: true, Period: BudgetPeriodWeekly, StartDate: day("2020-01-01")},
+			start:  "2026-09-13", end: "2026-09-19", through: "2026-09-16", eligible: true, eligibility: "eligible",
+		},
+		{
+			name:   "monthly",
+			budget: Budget{IsActive: true, Period: BudgetPeriodMonthly, StartDate: day("2020-01-01")},
+			start:  "2026-09-01", end: "2026-09-30", through: "2026-09-16", eligible: true, eligibility: "eligible",
+		},
+		{
+			name:   "quarterly",
+			budget: Budget{IsActive: true, Period: BudgetPeriodQuarterly, StartDate: day("2020-01-01")},
+			start:  "2026-07-01", end: "2026-09-30", through: "2026-09-16", eligible: true, eligibility: "eligible",
+		},
+		{
+			name:   "yearly",
+			budget: Budget{IsActive: true, Period: BudgetPeriodYearly, StartDate: day("2020-01-01")},
+			start:  "2026-01-01", end: "2026-12-31", through: "2026-09-16", eligible: true, eligibility: "eligible",
+		},
+		{
+			name:   "custom",
+			budget: Budget{IsActive: true, Period: BudgetPeriodCustom, StartDate: day("2026-08-20"), EndDate: ptrDay("2026-10-05")},
+			start:  "2026-08-20", end: "2026-10-05", through: "2026-09-16", eligible: true, eligibility: "eligible",
+		},
+		{
+			name:   "recurring range is clipped to budget lifetime",
+			budget: Budget{IsActive: true, Period: BudgetPeriodMonthly, StartDate: day("2026-09-05"), EndDate: ptrDay("2026-09-20")},
+			start:  "2026-09-05", end: "2026-09-20", through: "2026-09-16", eligible: true, eligibility: "eligible",
+		},
+		{
+			name:   "inactive planned view has unavailable actuals",
+			budget: Budget{IsActive: false, Period: BudgetPeriodMonthly, StartDate: day("2026-09-01")},
+			start:  "2026-09-01", end: "2026-09-30", through: "2026-09-16", eligible: false, eligibility: "inactive",
+		},
+		{
+			name:   "future planned view has unavailable actuals",
+			budget: Budget{IsActive: true, Period: BudgetPeriodMonthly, StartDate: day("2026-09-20")},
+			start:  "2026-09-20", end: "2026-09-30", through: "2026-09-16", eligible: false, eligibility: "future",
+		},
+		{
+			name:   "ended planned view has unavailable actuals",
+			budget: Budget{IsActive: true, Period: BudgetPeriodMonthly, StartDate: day("2026-09-01"), EndDate: ptrDay("2026-09-10")},
+			start:  "2026-09-01", end: "2026-09-10", through: "2026-09-10", eligible: false, eligibility: "ended",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CurrentBudgetActualsRange(&tt.budget, now)
+			require.Equal(t, day(tt.start), got.Start)
+			require.Equal(t, day(tt.end), got.End)
+			require.Equal(t, day(tt.through), got.ActualThrough)
+			require.Equal(t, tt.eligible, got.Eligible)
+			require.Equal(t, tt.eligibility, got.Eligibility)
+		})
+	}
 }
 
 func TestBudgetExpenseLedgerPriorityAndPartialSavings(t *testing.T) {
