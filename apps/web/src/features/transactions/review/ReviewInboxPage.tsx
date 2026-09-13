@@ -1,3 +1,4 @@
+import type { CategorySelection } from '@/shared/categories/categorySelection'
 /**
  * ReviewInboxPage — transaction review/triage inbox (#1210).
  *
@@ -39,19 +40,20 @@ import { useGetUserCategories, useGetPlaidPrimaryCategories } from '@boostedbudg
 import type { CustomCategory } from '../../categories/types'
 import { formatDate } from '@/shared/transactions/dates'
 import type { Primary } from '@boostedbudget/api-client/models/primary'
+import { useAllAccounts } from '@/features/accounts/hooks'
+import { useGetUserTags } from '@boostedbudget/api-client/endpoints/tags/tags'
+import type { UserTag } from '../../tags/types'
+import { TransactionEditor } from '../components/TransactionEditor'
+import { getEffectiveCategory } from '@/shared/categories/getEffectiveCategory'
+import { getCategoryPresentation } from '@/shared/categories/getCategoryPresentation'
+import { formatTransactionAmount } from '@/shared/transactions/amount'
 
 const INBOX_PAGE_LIMIT = 30
 
 const formatTransactionCount = (count: number) =>
   `${count} unreviewed transaction${count === 1 ? '' : 's'}`
 
-const CURRENCY_FORMATTER = new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-})
-
-const REVIEW_INBOX_COLUMN_IDS = ['select', 'date', 'merchant', 'status', 'amount'] as const
+const REVIEW_INBOX_COLUMN_IDS = ['select', 'date', 'merchant', 'account', 'category', 'sub_category', 'status', 'amount'] as const
 
 export function ReviewInboxPage() {
   const trackEvent = useTrackEvent()
@@ -66,7 +68,7 @@ export function ReviewInboxPage() {
   // ── Transactions ──────────────────────────────────────────────────────────
   const { transactions: apiTransactions, isLoading, isError, hasNextPage, fetchNextPage, isFetchingNextPage } =
     useInfiniteTransactions({
-      filters,
+      filters: { ...filters, include_investment_activity: false },
       sortBy: 'date',
       sortDir: 'desc',
       limit: INBOX_PAGE_LIMIT,
@@ -89,11 +91,36 @@ export function ReviewInboxPage() {
   const { data: plaidPrimariesData } = useGetPlaidPrimaryCategories()
   const availableCategories = useMemo(() => (categoriesData as unknown as CustomCategory[]) ?? [], [categoriesData])
   const plaidPrimaries = useMemo(() => (plaidPrimariesData as unknown as Primary[]) ?? [], [plaidPrimariesData])
+  const { accounts } = useAllAccounts()
+  const accountsMap = useMemo(() => new Map((accounts ?? []).map(account => [account.id, account])), [accounts])
+  const { data: tagsData } = useGetUserTags()
+  const availableTags = (tagsData as unknown as UserTag[]) ?? []
+  // A dialog session owns this snapshot, independently of the filtered queue.
+  const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null)
+  const closeEditor = useCallback(() => setEditingTransaction(null), [setEditingTransaction])
+  const writeInFlight = useRef(false)
+  const [writing, setWriting] = useState(false)
+  const [triageBusy, setTriageBusy] = useState(false)
+  const interaction = useRef({ editor: false, bulk: false, triage: false, pending: false })
+  const beginWrite = useCallback((scope: 'review' | 'category' | 'bulk' = 'review') => {
+    const current = interaction.current
+    if (writeInFlight.current || current.pending || current.editor) return false
+    if (current.bulk && scope !== 'bulk') return false
+    if (current.triage && scope !== 'category') return false
+    writeInFlight.current = true
+    setWriting(true)
+    return true
+  }, [])
+  const endWrite = useCallback(() => {
+    writeInFlight.current = false
+    setWriting(false)
+  }, [])
 
   // ── Bulk recategorize state ───────────────────────────────────────────────
   const [showBulkRecategorize, setShowBulkRecategorize] = useState(false)
-  const [pendingBulkCategory, setPendingBulkCategory] = useState<string[]>([])
+  const [pendingBulkCategory, setPendingBulkCategory] = useState<CategorySelection>({ kind: 'clear' })
   const [bulkCategoryDirty, setBulkCategoryDirty] = useState(false)
+  interaction.current = { editor: !!editingTransaction, bulk: showBulkRecategorize, triage: triageBusy, pending: isPending }
 
   // ── Row selection ─────────────────────────────────────────────────────────
   const { selectedIds, selectedCount, isSelected, toggle, selectAll, clearSelection } =
@@ -104,7 +131,23 @@ export function ReviewInboxPage() {
     useTablePreferences('review-inbox', [...REVIEW_INBOX_COLUMN_IDS])
 
   // ── Triage ────────────────────────────────────────────────────────────────
-  const [triageIndex, setTriageIndex] = useState<number | null>(null)
+  const [triage, setTriage] = useState<{ id: string; index: number } | null>(null)
+  const foundIndex = triage ? transactions.findIndex(tx => tx.id === triage.id) : -1
+  let triageIndex: number | null = null
+  if (triage && transactions.length) {
+    triageIndex = foundIndex >= 0 ? foundIndex : Math.min(triage.index, transactions.length - 1)
+  }
+  if (!isLoading && triage && (triageIndex === null || triage.id !== transactions[triageIndex].id || triage.index !== triageIndex)) {
+    setTriage(triageIndex === null ? null : { id: transactions[triageIndex].id, index: triageIndex })
+  }
+  const setTriageIndex = useCallback((index: number | null) => {
+    setTriage(index === null || !transactions[index] ? null : { id: transactions[index].id, index })
+  }, [transactions, setTriage])
+  const navigateTriage = useCallback((index: number | null) => {
+    const current = interaction.current
+    if (writeInFlight.current || current.pending || current.editor || current.bulk || current.triage) return
+    setTriageIndex(index)
+  }, [setTriageIndex])
   const [announcement, setAnnouncement] = useState('')
   const lastTriageApprovedId = useRef<string | null>(null)
   const [isMobile, setIsMobile] = useState(() =>
@@ -122,14 +165,7 @@ export function ReviewInboxPage() {
     if (isMobile && transactions.length > 0 && triageIndex === null) {
       setTriageIndex(0)
     }
-  }, [isMobile, transactions.length, triageIndex])
-
-  // Clamp triageIndex when list shrinks (e.g. after approved item removed from filtered view)
-  useEffect(() => {
-    if (triageIndex === null) return
-    if (transactions.length === 0) setTriageIndex(null)
-    else if (triageIndex >= transactions.length) setTriageIndex(transactions.length - 1)
-  }, [transactions.length, triageIndex])
+  }, [isMobile, transactions.length, triageIndex, setTriageIndex])
 
   // ── Analytics ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -144,13 +180,14 @@ export function ReviewInboxPage() {
 
   const handlePresetChange = useCallback(
     (preset: ReviewPreset, presetFilters: Pick<TransactionFilters, 'reviewed' | 'category_sources'>) => {
+      if (writeInFlight.current || triageBusy) return
       setActivePreset(preset)
       setFilters(presetFilters)
       clearSelection()
       setTriageIndex(null)
       trackEvent(ANALYTICS_EVENTS.REVIEW_PRESET_CHANGED, { preset })
     },
-    [clearSelection, trackEvent],
+    [clearSelection, trackEvent, setTriageIndex, triageBusy],
   )
 
   const handleApprove = useCallback(async (tx: Transaction) => {
@@ -159,6 +196,7 @@ export function ReviewInboxPage() {
   }, [setReviewed, trackEvent])
 
   const handleBulkSetReviewed = useCallback(async (reviewed: boolean) => {
+    if (editingTransaction || triageBusy || !beginWrite()) return
     const ids = [...selectedIds]
     const count = ids.length
     const countLabel = `${count} transaction${count === 1 ? '' : 's'}`
@@ -171,9 +209,16 @@ export function ReviewInboxPage() {
           action: {
             label: 'Undo',
             onClick: async () => {
-              await bulkSetReviewed(ids, false)
-              setAnnouncement(`Moved ${countLabel} back to inbox`)
-              trackEvent(ANALYTICS_EVENTS.REVIEW_UNDO, { count })
+              if (!beginWrite()) return
+              try {
+                await bulkSetReviewed(ids, false)
+                setAnnouncement(`Moved ${countLabel} back to inbox`)
+                trackEvent(ANALYTICS_EVENTS.REVIEW_UNDO, { count })
+              } catch {
+                toast.error('Failed to undo. Please try again.')
+              } finally {
+                endWrite()
+              }
             },
           },
         })
@@ -184,8 +229,10 @@ export function ReviewInboxPage() {
     } catch {
       const action = reviewed ? 'marked as reviewed' : 'marked as unreviewed'
       toast.error(`Failed to ${action}. Please try again.`)
+    } finally {
+      endWrite()
     }
-  }, [selectedIds, bulkSetReviewed, clearSelection, trackEvent])
+  }, [selectedIds, bulkSetReviewed, clearSelection, trackEvent, editingTransaction, triageBusy, beginWrite, endWrite])
 
   const handleSelectAll = useCallback(() => {
     if (selectedCount === transactions.length) {
@@ -197,22 +244,30 @@ export function ReviewInboxPage() {
 
   // ── Triage helpers ─────────────────────────────────────────────────────────
   const triageTx = triageIndex !== null ? transactions[triageIndex] : null
+  const openEditor = useCallback(() => {
+    if (!triageTx || writeInFlight.current || triageBusy) return
+    setEditingTransaction(triageTx)
+    trackEvent(ANALYTICS_EVENTS.TRANSACTION_EDITOR_OPENED, { source: 'review' })
+  }, [triageTx, triageBusy, trackEvent, setEditingTransaction])
 
   const handleTriageRecategorize = useCallback(async (
     request: Parameters<typeof bulkRecategorize>[1]
   ) => {
-    if (!triageTx) return
+    if (!triageTx || !beginWrite('category')) return
     try {
       await bulkRecategorize([triageTx.id], request)
-    } catch {
+    } catch (error) {
       toast.error('Failed to recategorize. Please try again.')
+      throw error
+    } finally {
+      endWrite()
     }
-  }, [triageTx, bulkRecategorize])
+  }, [triageTx, bulkRecategorize, beginWrite, endWrite])
 
   // id is explicit for toast (closure-captured); falls back to ref for ⌘Z (most-recent approval)
   const handleTriageUndo = useCallback(async (id?: string) => {
     const targetId = id ?? lastTriageApprovedId.current
-    if (!targetId) return
+    if (!targetId || editingTransaction || !beginWrite()) return
     try {
       await setReviewed(targetId, false)
       lastTriageApprovedId.current = null
@@ -220,11 +275,13 @@ export function ReviewInboxPage() {
       trackEvent(ANALYTICS_EVENTS.REVIEW_UNDO, { count: 1 })
     } catch {
       toast.error('Failed to undo. Please try again.')
+    } finally {
+      endWrite()
     }
-  }, [setReviewed, trackEvent])
+  }, [setReviewed, trackEvent, editingTransaction, beginWrite, endWrite])
 
   const handleTriageApprove = useCallback(async () => {
-    if (!triageTx) return
+    if (!triageTx || editingTransaction || !beginWrite()) return
     try {
       await handleApprove(triageTx)
       const approvedId = triageTx.id
@@ -234,7 +291,7 @@ export function ReviewInboxPage() {
         action: { label: 'Undo', onClick: () => handleTriageUndo(approvedId) },
       })
       // When filter removes approved items (reviewed:false presets), the list refetch
-      // shrinks the array and the clamping effect handles index correction — don't advance.
+      // reconciles the selected ID to its successor — don't advance here.
       // For presets where items stay visible, advance to the next row.
       if (filters.reviewed !== false) {
         if (triageIndex !== null && triageIndex < transactions.length - 1) {
@@ -245,11 +302,13 @@ export function ReviewInboxPage() {
       }
     } catch {
       toast.error('Failed to mark as reviewed. Please try again.')
+    } finally {
+      endWrite()
     }
-  }, [triageTx, triageIndex, transactions.length, handleApprove, filters.reviewed, handleTriageUndo])
+  }, [triageTx, triageIndex, transactions.length, handleApprove, filters.reviewed, handleTriageUndo, editingTransaction, beginWrite, endWrite, setTriageIndex])
 
   const handleTriageSkip = useCallback(() => {
-    if (triageIndex === null) return
+    if (triageIndex === null || writeInFlight.current || editingTransaction) return
     if (triageIndex < transactions.length - 1) {
       setTriageIndex(triageIndex + 1)
     } else {
@@ -257,7 +316,7 @@ export function ReviewInboxPage() {
     }
     setAnnouncement('Skipped')
     if (triageTx) trackEvent(ANALYTICS_EVENTS.TRANSACTION_SKIPPED, { transaction_id: triageTx.id })
-  }, [triageIndex, transactions.length, triageTx, trackEvent])
+  }, [triageIndex, transactions.length, triageTx, trackEvent, editingTransaction, setTriageIndex])
 
   const handleLoadMore = useCallback(() => {
     if (hasNextPage && !isFetchingNextPage) {
@@ -267,25 +326,20 @@ export function ReviewInboxPage() {
 
   // ── Bulk recategorize apply ───────────────────────────────────────────────
   const handleApplyBulkRecategorize = useCallback(async () => {
+    if (!beginWrite('bulk')) return
     const ids = [...selectedIds]
-    const customCat = availableCategories.find((c) => c.name === pendingBulkCategory[0])
-    const plaidMatch = !customCat ? plaidPrimaries?.find((p) => p.display === pendingBulkCategory[0]) : null
-    const request =
-      pendingBulkCategory.length === 0
-        ? { kind: 'clear' as const }
-        : customCat
-          ? { kind: 'custom' as const, custom_category_id: customCat.id }
-          : { kind: 'pfc' as const, pfc_primary: plaidMatch?.enum ?? pendingBulkCategory[0], pfc_detailed: pendingBulkCategory[1] }
     try {
-      await bulkRecategorize(ids, request)
+      await bulkRecategorize(ids, pendingBulkCategory)
       setShowBulkRecategorize(false)
-      setPendingBulkCategory([])
+      setPendingBulkCategory({ kind: 'clear' })
       clearSelection()
       toast.success(`Recategorized ${ids.length} transaction${ids.length === 1 ? '' : 's'}`)
     } catch {
       toast.error('Failed to recategorize. Please try again.')
+    } finally {
+      endWrite()
     }
-  }, [selectedIds, availableCategories, plaidPrimaries, pendingBulkCategory, bulkRecategorize, clearSelection])
+  }, [selectedIds, pendingBulkCategory, bulkRecategorize, clearSelection, beginWrite, endWrite])
 
   // ── Column definitions ────────────────────────────────────────────────────
   const columns = useMemo((): ColumnDef<Transaction>[] => [
@@ -320,7 +374,19 @@ export function ReviewInboxPage() {
     {
       id: 'merchant',
       header: 'Transaction',
-      render: (tx) => <span className="font-medium text-foreground">{getMerchantDisplayName(tx)}</span>,
+      render: (tx) => <div><span className="font-medium text-foreground">{getMerchantDisplayName(tx)}</span>{!!tx.tags?.length && <div className="flex flex-wrap gap-1">{tx.tags.map(tag => <span key={tag} className="rounded bg-muted px-2 text-xs">{tag}</span>)}</div>}</div>,
+    },
+    {
+      id: 'account', header: 'Account',
+      render: (tx) => accountsMap.get(tx.account_id)?.nickname || accountsMap.get(tx.account_id)?.name || 'Unknown account',
+    },
+    {
+      id: 'category', header: 'Category',
+      render: (tx) => getCategoryPresentation(getEffectiveCategory(tx), availableCategories).categoryLabel,
+    },
+    {
+      id: 'sub_category', header: 'Subcategory',
+      render: (tx) => getCategoryPresentation(getEffectiveCategory(tx), availableCategories).subcategoryLabel,
     },
     {
       id: 'status',
@@ -331,9 +397,9 @@ export function ReviewInboxPage() {
       id: 'amount',
       header: 'Amount',
       align: 'right',
-      render: (tx) => CURRENCY_FORMATTER.format(Math.abs(tx.amount)),
+      render: (tx) => { const amount = formatTransactionAmount(tx.amount); return <span className={amount.signClass}>{amount.text}</span> },
     },
-  ], [selectedCount, transactions.length, handleSelectAll, isSelected, toggle])
+  ], [selectedCount, transactions.length, handleSelectAll, isSelected, toggle, accountsMap, availableCategories])
 
   return (
     <div className="flex flex-col gap-6">
@@ -383,12 +449,12 @@ export function ReviewInboxPage() {
             onSortChange={() => {}}
             filters={{}}
             onFiltersChange={() => {}}
-            onRowClick={(row) => setTriageIndex(transactions.indexOf(row))}
+            onRowClick={(row) => navigateTriage(transactions.findIndex(tx => tx.id === row.id))}
             columnSizing={sizing}
             onColumnSizingChange={onSizingChange}
             columnOrder={columnOrder}
             onColumnOrderChange={onColumnOrderChange}
-            maskedColumnIds={['merchant', 'amount']}
+            maskedColumnIds={['merchant', 'account', 'category', 'sub_category', 'amount']}
           />
 
           {hasNextPage && (
@@ -408,9 +474,12 @@ export function ReviewInboxPage() {
 
       {/* Triage detail view (desktop: sidebar/focus when row clicked; mobile: always) */}
       {triageTx && (
-        <div className="fixed inset-x-4 bottom-24 z-40 md:static md:inset-auto md:z-auto">
+        <div className="fixed inset-x-4 bottom-24 z-40 max-h-[calc(100dvh-8rem)] overflow-y-auto md:static md:inset-auto md:z-auto md:max-h-none md:overflow-visible">
           <TriageDetailView
             transaction={triageTx}
+            account={accountsMap.get(triageTx.account_id)}
+            onEdit={openEditor}
+            onInteractionBusyChange={setTriageBusy}
             currentIndex={triageIndex ?? 0}
             total={transactions.length}
             availableCategories={availableCategories}
@@ -419,16 +488,18 @@ export function ReviewInboxPage() {
             onSkip={handleTriageSkip}
             onRecategorize={handleTriageRecategorize}
             onToggleSelect={() => triageTx && toggle(triageTx.id)}
-            onNext={() => triageIndex !== null && setTriageIndex(Math.min(triageIndex + 1, transactions.length - 1))}
-            onPrev={() => triageIndex !== null && setTriageIndex(Math.max(0, triageIndex - 1))}
-            onClose={() => setTriageIndex(null)}
+            onNext={() => triageIndex !== null && navigateTriage(Math.min(triageIndex + 1, transactions.length - 1))}
+            onPrev={() => triageIndex !== null && navigateTriage(Math.max(0, triageIndex - 1))}
+            onClose={() => navigateTriage(null)}
             onUndo={handleTriageUndo}
             isSelected={triageTx ? isSelected(triageTx.id) : false}
-            isPending={isPending}
-            externalOverlayOpen={showBulkRecategorize}
+            isPending={isPending || writing}
+            externalOverlayOpen={showBulkRecategorize || !!editingTransaction}
           />
         </div>
       )}
+
+      {editingTransaction && <TransactionEditor transaction={editingTransaction} account={accountsMap.get(editingTransaction.account_id)} availableTags={availableTags} availableCategories={availableCategories} plaidPrimaries={plaidPrimaries} isOpen onClose={closeEditor} onSave={closeEditor} />}
 
       {/* Bulk action bar */}
       <ReviewBulkActionBar
@@ -436,17 +507,22 @@ export function ReviewInboxPage() {
         onMarkReviewed={() => handleBulkSetReviewed(true)}
         onMarkUnreviewed={() => handleBulkSetReviewed(false)}
         onBulkRecategorize={() => {
-          setPendingBulkCategory([])
+          if (writeInFlight.current || editingTransaction || triageBusy) return
+          setPendingBulkCategory({ kind: 'clear' })
           setBulkCategoryDirty(false)
           setShowBulkRecategorize(true)
         }}
         onClear={clearSelection}
-        isLoading={isPending}
+        isLoading={isPending || writing || !!editingTransaction || triageBusy}
       />
 
       {/* Bulk recategorize dialog */}
       <Dialog open={showBulkRecategorize} onOpenChange={setShowBulkRecategorize}>
-        <DialogContent aria-describedby={undefined}>
+        <DialogContent aria-describedby={undefined} onEscapeKeyDown={event => {
+          // Radix captures Escape before the picker bubbles it. Keep this dialog open
+          // while allowing the picker to close itself and restore focus to Change.
+          if (event.target instanceof Element && event.target.closest('[data-category-picker-panel]')) event.preventDefault()
+        }}>
           <DialogHeader>
             <DialogTitle>Recategorize {selectedCount} transaction{selectedCount === 1 ? '' : 's'}</DialogTitle>
           </DialogHeader>

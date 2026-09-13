@@ -11,7 +11,7 @@
 
 import { test, expect, type Page } from '@playwright/test'
 import { acceptCookieConsent } from '../helpers/auth'
-import { mockAuthDependencies, ALL_PFC_PRIMARIES } from '../helpers/api-mocks'
+import { mockAuthDependencies, ALL_PFC_PRIMARIES, FOOD_AND_DRINK_DETAILED } from '../helpers/api-mocks'
 
 // One transaction with only legacy category data (simulates a user whose
 // transaction history does NOT include Loan Payments or Government And Non Profit)
@@ -101,6 +101,7 @@ async function mockCategoryEditorAPIs(page: Page) {
 test.describe('Transaction Category Editor — PFC curated source', () => {
   test.beforeEach(async ({ page }) => {
     await acceptCookieConsent(page)
+    await page.route('**/api/v1/categories/plaid-detailed', route => route.fulfill({ json: FOOD_AND_DRINK_DETAILED }))
   })
 
   test('Change category dropdown shows all 18 PFCv2 primaries including unobserved ones', async ({
@@ -134,11 +135,11 @@ test.describe('Transaction Category Editor — PFC curated source', () => {
     // Assert curated primaries that the test user has ZERO transaction history for
     // (proving the curated source, not observed-only, is used)
     await expect(listbox.getByRole('option', { name: 'Loan Payments' })).toBeVisible()
-    await expect(listbox.getByRole('option', { name: 'Government And Non Profit' })).toBeVisible()
+    await expect(listbox.getByRole('option', { name: 'Government And Non Profit', exact: true })).toBeVisible()
     await expect(listbox.getByRole('option', { name: 'Loan Disbursements' })).toBeVisible()
 
-    // Uncategorized sentinel should be present
-    await expect(listbox.getByRole('option', { name: 'Uncategorized' })).toBeVisible()
+    // Reset is an explicit action, outside selectable category identities.
+    await expect(page.getByRole('button', { name: 'Reset category override' })).toBeVisible()
   })
 
   test('Change category dropdown shows custom categories merged with curated primaries', async ({
@@ -166,7 +167,7 @@ test.describe('Transaction Category Editor — PFC curated source', () => {
       })
     })
 
-    // Two custom categories — one overlaps with a PFC primary (should not duplicate).
+    // Equal display names retain distinct bank/custom identities.
     // Orval's useGetUserCategories hits GET /api/v1/categories (not /categories/user).
     await page.route('**/api/v1/categories', (route) => {
       if (route.request().method() === 'GET') {
@@ -204,8 +205,7 @@ test.describe('Transaction Category Editor — PFC curated source', () => {
     // Custom category is present
     await expect(listbox.getByRole('option', { name: 'My Custom' })).toBeVisible()
 
-    // Overlapping "Food And Drink" appears only once (custom wins over curated)
-    const foodOptions = await listbox.getByRole('option', { name: 'Food And Drink' }).count()
-    expect(foodOptions).toBe(1)
+    await expect(listbox.getByRole('option', { name: 'Food And Drink', exact: true })).toBeVisible()
+    await expect(listbox.getByRole('option', { name: 'Food And Drink Custom', exact: true })).toBeVisible()
   })
 })

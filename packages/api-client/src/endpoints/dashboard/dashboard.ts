@@ -304,7 +304,7 @@ export function useGetBalanceHistory<TData = Awaited<ReturnType<typeof getBalanc
 
 
 /**
- * Returns current balance overview with breakdown by account type and period comparison.
+ * Returns a signed balance overview as of the requested day, with account type and account breakdowns. Raw credit and loan balances are negated, including overpayments; other account types retain their sign. The 30-day comparison uses the same signed contributions and divides change by the absolute previous balance (zero percent when previous is zero).
  * @summary Get balance summary
  */
 export const getBalanceSummary = (

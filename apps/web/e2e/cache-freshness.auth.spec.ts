@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { acceptCookieConsent } from './helpers/auth'
 import { apiClient } from './helpers/api/client'
+import { captureNavigationJson } from './helpers/capture-navigation-response'
 
 // Issue #1531 Task 11e: proves the Redis analytics cache serves FRESH data after a real,
 // application-level write, end-to-end through the real running frontend + backend (not the Go
@@ -413,66 +414,37 @@ async function captureCashFlowSummary(
     await page.waitForTimeout(500) // debounced layout save (useDashboardLayout SAVE_DEBOUNCE_MS)
   }
 
-  // ONE deterministic reload, with the response promise set up immediately before it — this is
-  // the only navigation whose response we read the body of, so there is no race between an
-  // earlier navigation's response object being invalidated by a later one (which is exactly what
-  // "page.reload() at the end of the widget-add branch, but the response promise was set up
-  // before the FIRST goto" produced: a "No resource with given identifier found" Protocol error
-  // when the widget-add branch's own reload discarded the original response before it was read).
-  // ⚠ `.json()` is chained onto the wait, NOT awaited after the navigation settles.
-  // Reading the body later is what produced `Network.getResponseBody: No resource with
-  // given identifier found` on job 101762977828: `waitForResponse` resolves on response
-  // HEADERS, and Chromium may discard the body once the document finishes loading, so
-  // every `await` between the response arriving and `.json()` widens the eviction window.
-  // Chaining starts the body read in the microtask right after headers land, while the
-  // resource is still live. Do not "simplify" this back to `await responsePromise` followed
-  // by `response.json()`.
-  const bodyPromise = page
-    .waitForResponse(
-      (r) =>
-        r.url().includes('/api/v1/analytics/cash-flow-summary') && r.request().method() === 'GET',
-      { timeout: WAIT_RESPONSE_MS }
-    )
-    .then((r) => r.json() as Promise<CashFlowSummaryResponse>)
-
-  // Order matters: the response promise must exist BEFORE the reload (the response can land
-  // before any post-navigation await), but the reload is asserted — commit, then URL — before
-  // the promise is awaited. Otherwise a stalled reload lets the response timer expire first,
-  // and a navigation stall is mis-reported as cash-flow-summary cache staleness.
-  await page.reload({ waitUntil: 'commit', timeout: WAIT_ELEMENT_MS })
+  // Arm before reloading, but accept only requests issued after the destination commits.
+  // A response from widget preparation can otherwise arrive during this reload.
+  const body = await captureNavigationJson<CashFlowSummaryResponse>(page, {
+    destinationPath: '/dashboard',
+    apiPath: '/api/v1/analytics/cash-flow-summary',
+    timeout: WAIT_RESPONSE_MS,
+    navigate: () => page.reload({ waitUntil: 'commit', timeout: WAIT_ELEMENT_MS }),
+  })
   await expect(page).toHaveURL(/\/dashboard/)
   await page.waitForLoadState('domcontentloaded')
 
-  return bodyPromise
+  return body
 }
 
-// captureSpendingByCategory navigates to /reports and returns the REAL
+// captureSpendingByCategory navigates to the canonical spending tab and returns the REAL
 // GET /api/v1/analytics/spending-by-category response body the page's own fetch received.
+// #1300 made /reports a client redirect; capture the destination document directly.
 // Always uses page.goto — see captureCashFlowSummary's doc comment for why (page may currently
 // be on /dashboard from a prior call).
 async function captureSpendingByCategory(
   page: import('@playwright/test').Page
 ): Promise<SpendingByCategoryResponse> {
-  // Same body-eviction hazard as captureCashFlowSummary, and WIDER here: three awaits
-  // separate the response from the read, one of which (acceptCookieConsent) interacts with
-  // the DOM and can take seconds. Chain the read for the same reason.
-  const bodyPromise = page
-    .waitForResponse(
-      (r) =>
-        r.url().includes('/api/v1/analytics/spending-by-category') &&
-        r.request().method() === 'GET',
-      { timeout: WAIT_RESPONSE_MS }
-    )
-    .then((r) => r.json() as Promise<SpendingByCategoryResponse>)
-
-  // Order matters: the response promise must exist BEFORE the goto (the response can land
-  // before any post-navigation await), but the navigation is asserted — commit, then URL —
-  // before the promise is awaited. Otherwise a stalled goto lets the response timer expire
-  // first, and a navigation stall is mis-reported as spending-by-category cache staleness.
-  await page.goto('/reports', { waitUntil: 'commit', timeout: WAIT_ELEMENT_MS })
-  await expect(page).toHaveURL(/\/reports/)
+  const body = await captureNavigationJson<SpendingByCategoryResponse>(page, {
+    destinationPath: '/insights',
+    apiPath: '/api/v1/analytics/spending-by-category',
+    timeout: WAIT_RESPONSE_MS,
+    navigate: () => page.goto('/insights?tab=spending', { waitUntil: 'commit', timeout: WAIT_ELEMENT_MS }),
+  })
+  await expect(page).toHaveURL(url => url.pathname === '/insights' && url.searchParams.get('tab') === 'spending')
   await page.waitForLoadState('domcontentloaded')
   await acceptCookieConsent(page)
 
-  return bodyPromise
+  return body
 }

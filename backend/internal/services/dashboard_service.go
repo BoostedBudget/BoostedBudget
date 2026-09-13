@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -186,9 +187,19 @@ func accountChainKey(a domain.Account) string {
 	return a.ID
 }
 
-// buildChainAwareAccountMap builds a map keyed by both account.ID and account.UserAccountID
-// so that snapshots carrying a replaced account_id still resolve via the chain key (Issue #1109).
-// baselineBalanceForComparison sums the 30-day-ago snapshots for the period comparison, applying
+// balanceSummaryContribution interprets raw provider debt as a signed contribution without
+// changing the snapshot shared with other dashboard reads. Negative raw debt is an overpayment.
+func balanceSummaryContribution(accountType string, raw *float64) float64 {
+	if raw == nil || *raw == 0 {
+		return 0
+	}
+	if accountType == "credit" || accountType == "loan" {
+		return -*raw
+	}
+	return *raw
+}
+
+// baselineBalanceForComparison sums signed contributions from the 30-day-ago snapshots, applying
 // the SAME AccountTypes filter the current total applies, over a DELIBERATELY DIFFERENT account
 // universe.
 //
@@ -287,9 +298,7 @@ func baselineBalanceForComparison(
 		if !accountTypeMatchesFilter(account.Type, accountTypes) {
 			continue
 		}
-		if snapshot.CurrentBalance != nil {
-			total += *snapshot.CurrentBalance
-		}
+		total += balanceSummaryContribution(account.Type, snapshot.CurrentBalance)
 	}
 	return total
 }
@@ -845,11 +854,7 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 			}
 		}
 
-		// Get current balance from snapshot
-		balance := 0.0
-		if snapshot.CurrentBalance != nil {
-			balance = *snapshot.CurrentBalance
-		}
+		balance := balanceSummaryContribution(account.Type, snapshot.CurrentBalance)
 
 		// Initialize type balance if not exists
 		if _, exists := byType[account.Type]; !exists {
@@ -926,7 +931,7 @@ func (s *dashboardService) GetBalanceSummary(ctx context.Context, userID string,
 		changeAmount := totalBalance - previousBalance
 		changePercent := 0.0
 		if previousBalance != 0 {
-			changePercent = (changeAmount / previousBalance) * 100
+			changePercent = (changeAmount / math.Abs(previousBalance)) * 100
 		}
 
 		periodComparison = &domain.PeriodComparisonData{
@@ -1165,10 +1170,7 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 			}
 		}
 
-		balance := 0.0
-		if snapshot.CurrentBalance != nil {
-			balance = *snapshot.CurrentBalance
-		}
+		balance := balanceSummaryContribution(account.Type, snapshot.CurrentBalance)
 
 		if _, exists := byType[account.Type]; !exists {
 			byType[account.Type] = &domain.AccountTypeBalance{
@@ -1231,7 +1233,7 @@ func (s *dashboardService) getBalanceSummaryHousehold(ctx context.Context, userI
 		changeAmount := totalBalance - previousBalance
 		changePercent := 0.0
 		if previousBalance != 0 {
-			changePercent = (changeAmount / previousBalance) * 100
+			changePercent = (changeAmount / math.Abs(previousBalance)) * 100
 		}
 		periodComparison = &domain.PeriodComparisonData{
 			PreviousBalance: previousBalance,
