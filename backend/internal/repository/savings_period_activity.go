@@ -45,7 +45,9 @@ func (f savingsActivityFact) activity() SavingsPeriodActivity {
 const savingsPeriodActivityQuery = `
 		WITH contributions AS (
 			SELECT c.*,g.currency_code AS goal_currency_code FROM savings_goal_contributions c
-			JOIN savings_goals g ON g.id=c.savings_goal_id AND g.user_id=$1 AND g.deleted_at IS NULL
+				JOIN savings_goals g ON g.id=c.savings_goal_id AND g.user_id=$1
+				-- tombstone-exempt(savings_goals g): retained contributions remain evidence
+				-- for generation ambiguity and capacity; only the final output filters live goals.
 			WHERE c.deleted_at IS NULL AND c.status='confirmed'
 		), ambiguous_transactions AS (
 			SELECT transaction_id FROM contributions
