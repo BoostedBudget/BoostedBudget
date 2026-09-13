@@ -6,6 +6,9 @@ import { posthogConfig } from './posthog';
 const minimumPostHogVersion = [1, 430, 2] as const;
 
 function numericVersion(version: string): number[] {
+  if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(version)) {
+    throw new Error(`invalid stable SemVer: ${version}`);
+  }
   return version.split('.').map(Number);
 }
 
@@ -19,13 +22,27 @@ function isAtLeast(version: number[], minimum: readonly number[]): boolean {
 }
 
 describe('posthog config', () => {
+  test.each([
+    ['1.430.1', false],
+    ['1.430.2', true],
+    ['1.430.3', true],
+    ['1.431.0', true],
+    ['2.0.0', true],
+  ])('compares %s against the supported floor', (version, expected) => {
+    expect(isAtLeast(numericVersion(version), minimumPostHogVersion)).toBe(expected);
+  });
+
+  test.each(['01.430.2', '1.0430.2', '1.430.02'])('rejects leading-zero SemVer %s', (version) => {
+    expect(() => numericVersion(version)).toThrow(/invalid stable SemVer/);
+  });
+
   test('uses an exact stable posthog-js version at or above the supported floor', () => {
     const packageJson = JSON.parse(
       readFileSync(resolve(import.meta.dir, '../../../package.json'), 'utf8'),
     ) as { dependencies: Record<string, string> };
     const declaredVersion = packageJson.dependencies['posthog-js'];
 
-    expect(declaredVersion).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(declaredVersion).toMatch(/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/);
     expect(isAtLeast(numericVersion(declaredVersion), minimumPostHogVersion)).toBe(true);
   });
 

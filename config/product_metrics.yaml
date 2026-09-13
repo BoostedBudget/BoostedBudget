@@ -1,0 +1,121 @@
+# Decision contracts only. `planned` means no production dashboard should claim this metric is live.
+schema_version: 1
+metrics:
+  - id: weekly_observed_value_users
+    question: How many consenting users observe a core budgeting value each UTC week?
+    formula: Count distinct users with at least one curated value action during the window.
+    unit: users
+    cohort_start: First qualifying curated value action in the UTC week.
+    denominator: All consenting, non-excluded users observed during the UTC week.
+    exclusions: [Internal users, test users, events captured without analytics consent]
+    window: P7D
+    timezone: UTC
+    consent_caveat: This is an observed-consenting-user metric, not total product usage.
+    owner: Product Analytics
+    review_cadence: monthly
+    decision_supported: Choose which demonstrated-value workflows receive product investment.
+    availability: planned
+    event_dependencies: [budget_created, transaction_categorized, savings_goal_created, rule_previewed, reports_viewed]
+    future_event_dependencies: []
+
+  - id: observed_linked_account_activation
+    question: What share of consenting account linkers complete initial sync and reach curated value within seven days?
+    formula: Distinct users with ordered account_link_completed then initial financial_data_sync_completed then a curated value action within seven days, divided by eligible account linkers.
+    unit: proportion
+    cohort_start: First account_link_completed per user.
+    denominator: Consenting users whose first account_link_completed occurred at least seven days before evaluation.
+    exclusions: [Internal users, test users, re-links, refresh syncs, users without a complete observation window]
+    window: P7D
+    timezone: UTC
+    consent_caveat: Users who decline analytics are absent from numerator and denominator.
+    owner: Growth Product
+    review_cadence: monthly
+    decision_supported: Prioritize account-link, initial-sync, or first-value funnel improvements.
+    availability: planned
+    event_dependencies: [budget_created, transaction_categorized, savings_goal_created, rule_previewed, reports_viewed]
+    future_event_dependencies: [account_link_completed, financial_data_sync_completed]
+
+  - id: observed_w1_retention
+    question: What share of consenting activated users return for observed value in week one?
+    formula: Activated users with a curated value action during days 7 through 13 after activation, divided by activated users with a complete week-one observation window.
+    unit: proportion
+    cohort_start: Timestamp of observed_linked_account_activation completion.
+    denominator: Consenting activated users at least fourteen days past activation.
+    exclusions: [Internal users, test users, users without a complete observation window]
+    window: P14D
+    timezone: UTC
+    consent_caveat: This measures observed retention only while analytics consent is present.
+    owner: Growth Product
+    review_cadence: monthly
+    decision_supported: Decide whether onboarding creates repeatable first-week value.
+    availability: planned
+    event_dependencies: [budget_created, transaction_categorized, savings_goal_created, rule_previewed, reports_viewed]
+    future_event_dependencies: [account_link_completed, financial_data_sync_completed]
+
+  - id: observed_w4_retention
+    question: What share of consenting activated users return for observed value in week four?
+    formula: Activated users with a curated value action during days 28 through 34 after activation, divided by activated users with a complete week-four observation window.
+    unit: proportion
+    cohort_start: Timestamp of observed_linked_account_activation completion.
+    denominator: Consenting activated users at least thirty-five days past activation.
+    exclusions: [Internal users, test users, users without a complete observation window]
+    window: P35D
+    timezone: UTC
+    consent_caveat: This measures observed retention only while analytics consent is present.
+    owner: Growth Product
+    review_cadence: monthly
+    decision_supported: Decide whether the product sustains monthly budgeting value.
+    availability: planned
+    event_dependencies: [budget_created, transaction_categorized, savings_goal_created, rule_previewed, reports_viewed]
+    future_event_dependencies: [account_link_completed, financial_data_sync_completed]
+
+  - id: consenting_subscription_conversion
+    question: What share of consenting activated trial users become paying subscribers?
+    formula: Distinct eligible activated users with subscription_created and payment_succeeded during trial, divided by eligible activated trial users with a complete conversion window.
+    unit: proportion
+    cohort_start: Timestamp of observed_linked_account_activation completion during the trial.
+    denominator: Consenting activated trial users whose sixty-day trial observation window is complete.
+    exclusions: [Internal users, test users, complimentary tiers, failed or refunded payments, incomplete observation windows]
+    window: P60D
+    timezone: UTC
+    consent_caveat: Revenue records are broader than this consent-limited behavioral conversion metric.
+    owner: Growth Product
+    review_cadence: monthly
+    decision_supported: Evaluate trial packaging and conversion interventions without overstating non-consenting users.
+    availability: planned
+    event_dependencies: [subscription_created, payment_succeeded, budget_created, transaction_categorized, savings_goal_created, rule_previewed, reports_viewed]
+    future_event_dependencies: [account_link_completed, financial_data_sync_completed]
+
+  - id: feature_adoption
+    question: Which curated product features are adopted by consenting weekly observed-value users?
+    formula: Distinct weekly observed-value users performing each curated feature event, divided by weekly_observed_value_users; compute one rate per cataloged feature.
+    unit: proportion_per_feature
+    cohort_start: First curated value action in the UTC week.
+    denominator: weekly_observed_value_users for the same UTC week; return null when the denominator is zero.
+    exclusions: [Internal users, test users, events outside the curated feature set]
+    window: P7D
+    timezone: UTC
+    consent_caveat: Adoption represents consenting users and cannot be extrapolated to all users.
+    owner: Product Analytics
+    review_cadence: monthly
+    decision_supported: Retain, improve, or retire features based on demonstrated adoption.
+    availability: planned
+    event_dependencies: [budget_created, transaction_categorized, rule_previewed, reports_viewed, savings_goal_created, portfolio_page_viewed]
+    future_event_dependencies: []
+
+  - id: mcp_usage_and_outcomes
+    question: Which MCP tool families deliver successful outcomes for consenting MCP users?
+    formula: Distinct MCP users and completion counts grouped by bounded tool_family and outcome; success rate is succeeded completions divided by all completions.
+    unit: users_completions_and_proportion
+    cohort_start: First mcp_tool_completed in the UTC week.
+    denominator: All mcp_tool_completed events from consenting, non-excluded MCP users; return null success rate when zero.
+    exclusions: [Internal users, test users, canceled requests before tool completion]
+    window: P7D
+    timezone: UTC
+    consent_caveat: MCP sessions without analytics consent are intentionally invisible.
+    owner: MCP Product
+    review_cadence: monthly
+    decision_supported: Improve low-success MCP tool families and invest in high-value usage.
+    availability: planned
+    event_dependencies: []
+    future_event_dependencies: [mcp_tool_completed]

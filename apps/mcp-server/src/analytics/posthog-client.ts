@@ -11,15 +11,10 @@
  * The host-proxy redaction layer enforces this before analytics are called.
  */
 
-export const MCP_EVENTS = {
-  OAUTH_AUTHORIZED: 'mcp_oauth_authorized',
-  TOOL_CALLED: 'mcp_tool_called',
-  CODE_EXECUTED: 'mcp_code_executed',
-  EXECUTE_FAILED: 'mcp_execute_failed',
-  SESSION_REVOKED: 'mcp_session_revoked',
-} as const
+import { MCP_EVENTS, type McpEvent } from './events.generated'
 
-export type McpEvent = (typeof MCP_EVENTS)[keyof typeof MCP_EVENTS]
+export { MCP_EVENTS }
+export type { McpEvent }
 
 type CaptureOverride = (
   distinctId: string,
