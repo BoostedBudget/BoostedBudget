@@ -24,7 +24,7 @@ describe('web API client adapter', () => {
     expect(getWebApiUrl(undefined, {})).toBe('')
   })
 
-  test('wires authenticated 401 responses to the sign-in route', async () => {
+  test('wires authenticated 401 responses to the landing-page auth flow', async () => {
     const navigations: string[] = []
     AXIOS_INSTANCE.defaults.adapter = async (config) => {
       const requestConfig = {
@@ -48,6 +48,6 @@ describe('web API client adapter', () => {
 
     await expect(customInstance({ url: '/api/v1/accounts' })).rejects.toBeInstanceOf(AxiosError)
 
-    expect(navigations).toEqual(['/sign-in'])
+    expect(navigations).toEqual(['/'])
   })
 })

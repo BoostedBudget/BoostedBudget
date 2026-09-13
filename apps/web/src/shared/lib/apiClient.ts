@@ -36,7 +36,9 @@ export function configureWebApiClient(options: ConfigureWebApiClientOptions = {}
   configureApiClient({
     baseUrl: getWebApiUrl(runtimeEnv, buildEnv),
     getAccessToken: options.getAccessToken,
-    onUnauthorized: () => navigate('/sign-in'),
+    // This app has no /sign-in route. Authentication is a Clerk modal hosted by
+    // the landing page, matching ClerkProvider and ProtectedRoute behavior.
+    onUnauthorized: () => navigate('/'),
     debug: buildEnv.DEV,
     debugLog: buildEnv.DEV
       ? (message, details) => console.error(message, details)

@@ -71,7 +71,7 @@ export function configureApiClient(config: ApiClientRuntimeConfig = {}): void {
   AXIOS_INSTANCE.defaults.baseURL = runtimeState.config.baseUrl
 }
 
-// Public API paths that should never trigger a sign-in redirect on 401.
+// Public API paths that should never trigger the host's unauthorized callback.
 const PUBLIC_API_PATHS = ['/api/v1/user/delete/cancel/']
 
 /** Known route shapes whose path segment is a bearer capability token. */
