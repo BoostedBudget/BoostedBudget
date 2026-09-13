@@ -97,6 +97,37 @@ func TestSavingsFlowProvenanceRoundTrip(t *testing.T) {
 		require.True(t, found)
 	}
 
+	t.Run("retired goal remains evidence for later report", func(t *testing.T) {
+		subtx, err := tx.Begin(ctx)
+		require.NoError(t, err)
+		defer subtx.Rollback(ctx) //nolint:errcheck
+		// The expense query cannot expose this ambiguity in September because
+		// the underlying bank transaction belongs to August.
+		_, err = subtx.Exec(ctx, `UPDATE transactions SET date='2026-08-12' WHERE id=$1`, transactionID)
+		require.NoError(t, err)
+		require.NoError(t, NewSavingsGoalRepository(subtx).Delete(ctx, oldGoal, userID, nil))
+		budgetID := uuid.NewString()
+		_, err = subtx.Exec(ctx, `INSERT INTO budgets (id,user_id,name,period,start_date,end_date,amount,expected_income,currency_code,series_id)
+			VALUES ($1,$2,'September generation','monthly','2026-09-01','2026-09-30',200,200,'USD',$1)`, budgetID, userID)
+		require.NoError(t, err)
+		_, err = subtx.Exec(ctx, `INSERT INTO budget_categories (budget_id,category_kind,savings_goal_id,allocated_amount)
+			VALUES ($1,'savings',$2,100)`, budgetID, newGoal)
+		require.NoError(t, err)
+		report, err := readBudgetPlanInSnapshot(ctx, subtx, userID, budgetID, start.AddDate(0, 0, 11))
+		require.NoError(t, err)
+		require.Len(t, report.Lines, 1)
+		require.Equal(t, &newGoal, report.Lines[0].SavingsGoalID)
+		require.Nil(t, report.Lines[0].Actual, "retiring the archived goal must not make the newer generation provable")
+		require.Contains(t, report.Lines[0].Reasons, "ambiguous_savings_generation")
+		require.Nil(t, report.Totals.Actual)
+		require.Equal(t, "partial", report.Completeness)
+		activity, err := ReadSavingsPeriodActivity(ctx, subtx, userID, start, end)
+		require.NoError(t, err)
+		for _, row := range activity {
+			require.NotEqual(t, oldGoal, row.GoalID, "retained evidence must not expose retired goals")
+		}
+	})
+
 	// Exercise the migration itself, including retained rows, inside this
 	// rollback-only fixture; never reverse the shared scratch schema.
 	_, err = tx.Exec(ctx, `UPDATE savings_goal_contributions SET flow_kind='legacy_unknown',deleted_at=NOW(),deleted_reason='provider_removed_txn' WHERE savings_goal_id=$1`, oldGoal)
