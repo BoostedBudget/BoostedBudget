@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import pathlib
+import re
 import sys
 
 import yaml
@@ -51,16 +52,20 @@ NEGATIVE_PATHS = (
     "README.md",
 )
 
-REQUIRED_COMMANDS = (
-    "bun install --frozen-lockfile",
-    "bun run --filter @boostedbudget/design-tokens check",
-    "bun run --cwd apps/mobile lint",
-    "bun run --cwd apps/mobile typecheck",
-    "bun run --cwd apps/mobile test:ci",
-    "bunx expo-doctor",
-    "bun run --cwd apps/mobile export:web",
-    "bun run --cwd apps/mobile export:ios",
-    "bun run --cwd apps/mobile export:android",
+REQUIRED_STEPS = (
+    ("bun install --frozen-lockfile", "."),
+    ("bun run --filter @boostedbudget/design-tokens check", "."),
+    ("bun run --cwd apps/mobile lint", "."),
+    ("bun run --cwd apps/mobile typecheck", "."),
+    (
+        "bun run --cwd apps/mobile test:ci "
+        "--coverageThreshold='{\"global\":{\"lines\":82}}'",
+        ".",
+    ),
+    ("bun run doctor", "apps/mobile"),
+    ("bun run --cwd apps/mobile export:web", "."),
+    ("bun run --cwd apps/mobile export:ios", "."),
+    ("bun run --cwd apps/mobile export:android", "."),
 )
 
 MOBILE_COMPATIBILITY_DEPS = {
@@ -73,6 +78,7 @@ MOBILE_COMPATIBILITY_DEPS = {
     "expo-linking",
     "expo-router",
     "expo-status-bar",
+    "expo-doctor",
     "jest-expo",
     "nativewind",
     "react",
@@ -84,6 +90,32 @@ MOBILE_COMPATIBILITY_DEPS = {
     "react-native-web",
     "react-native-worklets",
 }
+
+PINNED_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
+
+
+def normalized_command(step: dict) -> str:
+    """Return executable text in a canonical one-line form.
+
+    Required CI gates are deliberately single commands. Keeping wrappers, comments, and shell
+    conditionals distinct makes an inert mention fail instead of satisfying a substring search.
+    """
+    return " ".join(str(step.get("run", "")).split())
+
+
+def working_directory(step: dict) -> str:
+    value = str(step.get("working-directory", ".")).rstrip("/")
+    return value or "."
+
+
+def enabled_exact_steps(steps: list[dict], command: str, cwd: str) -> list[dict]:
+    return [
+        step
+        for step in steps
+        if "if" not in step
+        and normalized_command(step) == command
+        and working_directory(step) == cwd
+    ]
 
 
 def matches(path: str, pattern: str) -> bool:
@@ -170,52 +202,56 @@ def check(root: pathlib.Path) -> list[str]:
             findings.append("mobile-test.if must gate on the declared mobile output")
         if job.get("runs-on") != "ubicloud-standard-2":
             findings.append("mobile-test must run on ubicloud-standard-2")
-        text = "\n".join(
-            str(step.get("run", ""))
-            for step in job.get("steps") or []
-            if isinstance(step, dict)
-        )
-        uses = "\n".join(
-            str(step.get("uses", ""))
-            for step in job.get("steps") or []
-            if isinstance(step, dict)
-        )
-        if "actions/checkout@" not in uses:
+        steps = [step for step in job.get("steps") or [] if isinstance(step, dict)]
+        action_steps = [step for step in steps if isinstance(step.get("uses"), str)]
+        for step in action_steps:
+            if not PINNED_ACTION.fullmatch(str(step["uses"])):
+                findings.append(
+                    f"mobile-test action must use a 40-character commit SHA: {step['uses']}"
+                )
+        if not any(str(step.get("uses", "")).startswith("actions/checkout@") for step in action_steps):
             findings.append("mobile-test must check out the repository")
         node_steps = [
             step
-            for step in job.get("steps") or []
-            if isinstance(step, dict) and str(step.get("uses", "")).startswith("actions/setup-node@")
+            for step in action_steps
+            if str(step.get("uses", "")).startswith("actions/setup-node@")
         ]
         node_version = str(((node_steps[0].get("with") or {}).get("node-version", ""))) if node_steps else ""
         if not node_version.startswith("22.13"):
             findings.append("mobile-test must pin Node 22.13.x or newer within the 22.13 line")
         bun_steps = [
             step
-            for step in job.get("steps") or []
-            if isinstance(step, dict) and str(step.get("uses", "")).startswith("oven-sh/setup-bun@")
+            for step in action_steps
+            if str(step.get("uses", "")).startswith("oven-sh/setup-bun@")
         ]
         bun_version = str(((bun_steps[0].get("with") or {}).get("bun-version", ""))) if bun_steps else ""
         if bun_version != "1.3.14":
             findings.append("mobile-test must pin Bun 1.3.14")
-        for command in REQUIRED_COMMANDS:
-            if command not in text:
-                findings.append(f"mobile-test is missing command: {command}")
-        if "--coverageThreshold" not in text or '"global":{"lines":82' not in text.replace(" ", ""):
-            findings.append("mobile-test must enforce a global 82% Jest line threshold")
+        for command, cwd in REQUIRED_STEPS:
+            step_matches = enabled_exact_steps(steps, command, cwd)
+            if len(step_matches) != 1:
+                findings.append(
+                    "mobile-test must contain exactly one enabled step running "
+                    f"{command!r} from {cwd!r}; found {len(step_matches)}"
+                )
+
+        doctor_version = str((mobile_package.get("devDependencies") or {}).get("expo-doctor", ""))
+        if doctor_version != "1.20.4":
+            findings.append("apps/mobile must pin expo-doctor exactly to 1.20.4")
+        if (mobile_package.get("scripts") or {}).get("doctor") != "expo-doctor":
+            findings.append("apps/mobile scripts.doctor must invoke the locked expo-doctor binary")
 
     e2e = jobs.get("e2e-test") or {}
-    e2e_text = "\n".join(
-        str(step.get("run", ""))
-        for step in e2e.get("steps") or []
-        if isinstance(step, dict)
-    )
+    e2e_steps = [step for step in e2e.get("steps") or [] if isinstance(step, dict)]
     for command in (
         "bash scripts/__tests__/check-mobile-ci.test.sh",
         "python3 scripts/check-mobile-ci.py",
     ):
-        if command not in e2e_text:
-            findings.append(f"unconditional e2e-test job must run: {command}")
+        step_matches = enabled_exact_steps(e2e_steps, command, ".")
+        if len(step_matches) != 1:
+            findings.append(
+                f"unconditional e2e-test job must contain one enabled exact step: {command}"
+            )
     if e2e.get("needs") is not None:
         findings.append("e2e-test hosts mobile CI guards and must remain ungated")
     if e2e.get("if") != "always() && !cancelled()":

@@ -2378,7 +2378,9 @@ jobs:
       - name: Validate Expo dependency compatibility
         working-directory: apps/mobile
         # This is the compatibility gate for Dependabot's grouped Expo/React Native updates.
-        run: bunx expo-doctor
+        # `expo-doctor` is an exact mobile devDependency: never replace this with `bunx`, which
+        # may resolve a registry version absent from the reviewed lockfile.
+        run: bun run doctor
 
       - name: Export mobile web bundle
         run: bun run --cwd apps/mobile export:web
