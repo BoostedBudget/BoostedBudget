@@ -568,7 +568,8 @@ describe('PrivacyPolicy', () => {
   it('documents the fail-closed browser analytics privacy boundary', () => {
     renderWithRouter(<PrivacyPolicy />)
     expect(screen.getByText(/pseudonymous product analytics/i)).toBeInTheDocument()
-    expect(screen.getByText(/no posthog persistence or capture occurs before/i)).toBeInTheDocument()
+    expect(screen.getByText(/no posthog analytics persistence or analytics event capture occurs before/i)).toBeInTheDocument()
+    expect(screen.getByText(/authenticated support chat when you choose to contact us/i)).toBeInTheDocument()
     expect(screen.getByText(/production session replay is disabled/i)).toBeInTheDocument()
     expect(screen.getByText(/do not track.*browser only/i)).toBeInTheDocument()
     expect(screen.getByText(/tab-scoped sessionStorage/i)).toBeInTheDocument()
@@ -592,12 +593,10 @@ describe('PrivacyPolicy', () => {
     expect(screen.getAllByText(/cryptographically derived/i).length).toBeGreaterThan(0)
   })
 
-  // Bumped by #1592: § 8.2 and § 8.4 changed substantively (what deletion destroys, what
-  // survives it, and when the automatic deletion runs), and § 12 commits us to updating this
-  // date when the policy changes.
-  it('renders correct Last Updated date (August 25, 2026)', () => {
+  // Bumped by #1650 because the PostHog Support and Surveys processing disclosures changed.
+  it('renders correct Last Updated date (September 13, 2026)', () => {
     renderWithRouter(<PrivacyPolicy />)
-    expect(screen.getByText(/august 25, 2026/i)).toBeInTheDocument()
+    expect(screen.getByText(/september 13, 2026/i)).toBeInTheDocument()
   })
 
   it('renders household data sharing as a consent-based lawful basis (Section 3.1)', () => {

@@ -239,14 +239,15 @@ type Config struct {
 	FrontendURL string
 
 	// Observability
-	LogLevel         string  // from LOG_LEVEL — "debug"/"info"/"warn"/"error", default "info"
-	EnableMetrics    bool    // from ENABLE_METRICS, default true
-	SentryDSN        string  // from SENTRY_DSN — empty = disabled
-	OTELEndpoint     string  // from OTEL_EXPORTER_OTLP_ENDPOINT — empty = disabled
-	SentrySampleRate float64 // from SENTRY_SAMPLE_RATE — default 1.0
-	OTELSampleRate   float64 // from OTEL_SAMPLE_RATE — default 1.0
-	PostHogAPIKey    string  // from POSTHOG_API_KEY — empty = disabled
-	PostHogHost      string  // from POSTHOG_HOST — default us.i.posthog.com
+	LogLevel              string  // from LOG_LEVEL — "debug"/"info"/"warn"/"error", default "info"
+	EnableMetrics         bool    // from ENABLE_METRICS, default true
+	SentryDSN             string  // from SENTRY_DSN — empty = disabled
+	OTELEndpoint          string  // from OTEL_EXPORTER_OTLP_ENDPOINT — empty = disabled
+	SentrySampleRate      float64 // from SENTRY_SAMPLE_RATE — default 1.0
+	OTELSampleRate        float64 // from OTEL_SAMPLE_RATE — default 1.0
+	PostHogAPIKey         string  // from POSTHOG_API_KEY — empty = disabled
+	PostHogHost           string  // from POSTHOG_HOST — default us.i.posthog.com
+	PostHogSecretAPIToken string  // from POSTHOG_SECRET_API_TOKEN — server-only Support identity HMAC key
 
 	// Paddle Reconciliation
 	PaddleReconciliationEnabled bool // from PADDLE_RECONCILIATION_ENABLED, default true
@@ -352,14 +353,15 @@ func Load() (*Config, error) {
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 
 		// Observability
-		LogLevel:         getEnv("LOG_LEVEL", "info"),
-		EnableMetrics:    getEnvBool("ENABLE_METRICS", true),
-		SentryDSN:        getEnv("SENTRY_DSN", ""),
-		OTELEndpoint:     getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-		SentrySampleRate: getEnvFloat64("SENTRY_SAMPLE_RATE", 1.0),
-		OTELSampleRate:   getEnvFloat64("OTEL_SAMPLE_RATE", 1.0),
-		PostHogAPIKey:    getEnv("POSTHOG_API_KEY", ""),
-		PostHogHost:      getEnv("POSTHOG_HOST", "https://us.i.posthog.com"),
+		LogLevel:              getEnv("LOG_LEVEL", "info"),
+		EnableMetrics:         getEnvBool("ENABLE_METRICS", true),
+		SentryDSN:             getEnv("SENTRY_DSN", ""),
+		OTELEndpoint:          getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		SentrySampleRate:      getEnvFloat64("SENTRY_SAMPLE_RATE", 1.0),
+		OTELSampleRate:        getEnvFloat64("OTEL_SAMPLE_RATE", 1.0),
+		PostHogAPIKey:         getEnv("POSTHOG_API_KEY", ""),
+		PostHogHost:           getEnv("POSTHOG_HOST", "https://us.i.posthog.com"),
+		PostHogSecretAPIToken: getEnv("POSTHOG_SECRET_API_TOKEN", ""),
 
 		// Paddle Reconciliation
 		PaddleReconciliationEnabled: getEnvBool("PADDLE_RECONCILIATION_ENABLED", true),

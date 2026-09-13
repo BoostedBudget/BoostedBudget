@@ -18,7 +18,7 @@ export function PrivacyPolicy() {
         <h1 className="text-foreground text-4xl mb-2 border-b-[3px] border-primary pb-4 sm:text-[2rem] xs:text-[1.75rem]">
           Privacy Policy
         </h1>
-        <p className="text-muted-foreground italic mb-8 text-[0.95rem]">Last Updated: August 25, 2026</p>
+        <p className="text-muted-foreground italic mb-8 text-[0.95rem]">Last Updated: September 13, 2026</p>
 
         <section>
           <h2>1. Introduction</h2>
@@ -171,7 +171,9 @@ export function PrivacyPolicy() {
               under its own End User Privacy Policy. You can disconnect Plaid-linked accounts at
               any time in your account settings.</li>
             <li><strong>Paddle:</strong> Payment processing and subscription management</li>
-            <li><strong>PostHog:</strong> Product analytics and usage insights (analytics cookies only, with your consent)</li>
+            <li><strong>PostHog:</strong> Product analytics and closed-answer surveys (only with your
+              consent), plus authenticated Support chat when you choose to contact us. Support uses a
+              server-verified account identifier and is unavailable to signed-out visitors.</li>
             <li><strong>Cloud Infrastructure:</strong> AWS (data hosting), Fly.io (application hosting)</li>
             <li><strong>Sentry:</strong> Error tracking and performance monitoring. Sentry may receive
               error context, device and browser information, IP address, and application state at the
@@ -203,7 +205,8 @@ export function PrivacyPolicy() {
           </p>
           <p>
             PostHog provides pseudonymous product analytics only after the applicable consent choice
-            resolves. No PostHog persistence or capture occurs before that point. After consent,
+            resolves. No PostHog analytics persistence or analytics event capture occurs before that
+            point. After consent,
             PostHog persistence uses tab-scoped sessionStorage so identity does not carry between tabs.
             Production session replay is disabled. Do Not Track is enforced in the browser only; it does not rewrite your
             server-authoritative consent setting, so browser analytics can undercount consenting DNT users.

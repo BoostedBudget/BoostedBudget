@@ -30,6 +30,15 @@ func TestLoad_ServerTimeoutDefaults(t *testing.T) {
 	assert.Equal(t, "1M", cfg.MaxBodySize, "MaxBodySize should default to 1M")
 }
 
+func TestLoad_PostHogSupportIdentitySecretIsServerOnlyConfiguration(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("POSTHOG_SECRET_API_TOKEN", "phs_server_only")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "phs_server_only", cfg.PostHogSecretAPIToken)
+}
+
 func TestLoad_ServerTimeoutsConfigurable(t *testing.T) {
 	// See TestLoad_ServerTimeoutDefaults: an ambient production/staging ENVIRONMENT
 	// would fail require.NoError below for an unrelated reason.

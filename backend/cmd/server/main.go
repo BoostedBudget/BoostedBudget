@@ -2598,6 +2598,12 @@ func main() {
 		operations.RegisterPrivacyRoutes(humaAPI, humaPrivacyHandler)
 		appLogger.Info("Huma privacy routes registered")
 
+		// Support identity is signed from the authenticated Clerk subject. The
+		// PostHog secret token remains server-only and an absent token fails closed.
+		humaPostHogSupportIdentityHandler := operations.NewPostHogSupportIdentityHandler(cfg.PostHogAPIKey, cfg.PostHogSecretAPIToken)
+		operations.RegisterPostHogSupportIdentityRoutes(humaAPI, humaPostHogSupportIdentityHandler)
+		appLogger.Info("Huma PostHog Support identity route registered")
+
 		// Register the Huma data-export route (Issue #1587).
 		// ⚠ Also registered in operations.RegisterAllRoutesForSpec — `make generate-openapi` reads
 		// that function and never this file, so a route wired only here is invisible to the spec

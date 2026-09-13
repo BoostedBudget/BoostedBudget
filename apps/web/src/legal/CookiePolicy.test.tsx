@@ -8,7 +8,8 @@ describe('CookiePolicy analytics disclosure', () => {
     render(<MemoryRouter><CookiePolicy /></MemoryRouter>)
 
     expect(screen.getByText(/pseudonymous analytics data/i)).toBeInTheDocument()
-    expect(screen.getByText(/no posthog persistence or capture occurs before/i)).toBeInTheDocument()
+    expect(screen.getByText(/no posthog analytics persistence or analytics event capture occurs before/i)).toBeInTheDocument()
+    expect(screen.getByText(/authenticated support chat is a separate, user-requested service/i)).toBeInTheDocument()
     expect(screen.getByText(/production session replay remains disabled/i)).toBeInTheDocument()
     expect(screen.getByText(/do not track.*browser-only/i)).toBeInTheDocument()
     expect(screen.getByText(/signed-out visitors can reopen Cookie Settings/i)).toBeInTheDocument()

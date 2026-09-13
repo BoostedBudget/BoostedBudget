@@ -15,7 +15,7 @@ export function CookiePolicy() {
     <div className="privacy-policy">
       <div className="privacy-policy-container">
         <h1>Cookie Policy</h1>
-        <p className="last-updated">Last Updated: March 29, 2026</p>
+        <p className="last-updated">Last Updated: September 13, 2026</p>
 
         <section>
           <h2>1. What Are Cookies?</h2>
@@ -54,7 +54,8 @@ export function CookiePolicy() {
             features are most valuable, and improve the platform.
           </p>
           <p>
-            No PostHog persistence or capture occurs before the applicable consent choice resolves.
+            No PostHog analytics persistence or analytics event capture occurs before the applicable
+            consent choice resolves.
             Signed-out visitors choose through our consent banner; signed-in users choose in
             Profile → Privacy Settings. Signed-out visitors can reopen Cookie Settings and explicitly
             withdraw; signed-in users can withdraw in Privacy Settings.
@@ -82,6 +83,13 @@ export function CookiePolicy() {
             Analytics properties and URLs are sanitized before capture. If session replay is separately
             enabled in the future with consent, financial amounts, account numbers, and other sensitive
             displayed data will be masked. We do not sell analytics data to third parties.
+          </p>
+          <p>
+            Authenticated Support chat is a separate, user-requested service and is not an analytics
+            cookie. It loads only inside the signed-in application after our server verifies your
+            account identity. PostHog Surveys load only for signed-in users who have granted analytics
+            consent; BoostedBudget permits rating and closed-choice questions and does not display
+            free-text surveys.
           </p>
         </section>
 

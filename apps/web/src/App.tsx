@@ -92,6 +92,7 @@ import {
 } from './shared/lib/posthog'
 import { devLog } from './shared/lib/devLog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
+import { AuthenticatedPostHogExperiences } from './shared/posthog/AuthenticatedPostHogExperiences'
 import {
   useConsentAwarePageViews,
   type PageViewDependencies,
@@ -635,6 +636,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
       <AppFooter />
 
       {!isAuthenticated && <CookieConsent onConsentChange={handleConsentChange} />}
+      <AuthenticatedPostHogExperiences />
       <Toaster position="bottom-right" richColors theme={resolvedTheme} />
     </div>
   )
