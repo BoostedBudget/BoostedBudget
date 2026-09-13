@@ -14,24 +14,35 @@ import (
 )
 
 func TestCommittedBudgetCategoryKindsMatchGeneratedClient(t *testing.T) {
-	want := map[string][]string{
-		"BudgetCategory":              {"pfc", "custom", "savings", "group", "remainder"},
-		"CreateBudgetCategoryRequest": {"pfc", "custom", "savings", "group", "remainder"},
-		"CategoryPreviewRequest":      {"pfc", "custom", "group", "remainder"},
-	}
-	clientFiles := map[string]string{
-		"BudgetCategory":              "budgetCategoryCategoryKind.ts",
-		"CreateBudgetCategoryRequest": "createBudgetCategoryRequestCategoryKind.ts",
-		"CategoryPreviewRequest":      "categoryPreviewRequestCategoryKind.ts",
+	tests := []struct {
+		schemaName string
+		clientFile string
+		expected   []string
+	}{
+		{
+			schemaName: "BudgetCategory",
+			clientFile: "budgetCategoryCategoryKind.ts",
+			expected:   []string{"pfc", "custom", "savings", "group", "remainder"},
+		},
+		{
+			schemaName: "CreateBudgetCategoryRequest",
+			clientFile: "createBudgetCategoryRequestCategoryKind.ts",
+			expected:   []string{"pfc", "custom", "savings", "group", "remainder"},
+		},
+		{
+			schemaName: "CategoryPreviewRequest",
+			clientFile: "categoryPreviewRequestCategoryKind.ts",
+			expected:   []string{"pfc", "custom", "group", "remainder"},
+		},
 	}
 	schemas := committedSpec(t)
 	_, thisFile, _, _ := runtime.Caller(0)
 	modelsDir := filepath.Join(filepath.Dir(thisFile), "../../../../packages/api-client/src/models")
 
-	for schemaName, expected := range want {
-		t.Run(schemaName, func(t *testing.T) {
-			schema, ok := schemas[schemaName].(map[string]any)
-			require.True(t, ok, "%s is missing from committed api/openapi.yaml", schemaName)
+	for _, test := range tests {
+		t.Run(test.schemaName, func(t *testing.T) {
+			schema, ok := schemas[test.schemaName].(map[string]any)
+			require.True(t, ok, "%s is missing from committed api/openapi.yaml", test.schemaName)
 			properties, ok := schema["properties"].(map[string]any)
 			require.True(t, ok)
 			categoryKind, ok := properties["category_kind"].(map[string]any)
@@ -42,11 +53,11 @@ func TestCommittedBudgetCategoryKindsMatchGeneratedClient(t *testing.T) {
 			for _, value := range rawEnum {
 				actualSpec = append(actualSpec, value.(string))
 			}
-			require.Equal(t, expected, actualSpec, "committed OpenAPI category_kind enum drifted")
+			require.Equal(t, test.expected, actualSpec, "committed OpenAPI category_kind enum drifted")
 
-			data, err := os.ReadFile(filepath.Join(modelsDir, clientFiles[schemaName]))
+			data, err := os.ReadFile(filepath.Join(modelsDir, test.clientFile))
 			require.NoError(t, err)
-			require.NoError(t, validateGeneratedCategoryKindModule(string(data), schemaName+"CategoryKind", expected))
+			require.NoError(t, validateGeneratedCategoryKindModule(string(data), test.schemaName+"CategoryKind", test.expected))
 		})
 	}
 }
