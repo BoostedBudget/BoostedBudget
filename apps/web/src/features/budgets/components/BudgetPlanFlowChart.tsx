@@ -45,9 +45,19 @@ export function BudgetPlanFlowChart({ data, privacyMode = false, onSelectLine }:
   const graph = useMemo(() => buildBudgetFlow(data.income.expected, data.lines, showActuals), [data.income.expected, data.lines, showActuals])
   const allocated = data.lines.reduce((sum, line) => sum + line.planned, 0)
   const actualTotal = showActuals ? data.lines.reduce((sum, line) => sum + (line.actual ?? 0), 0) : null
-  const money = (amount: number | null) => privacyMode ? 'Hidden' : amount == null ? 'Unavailable' : new Intl.NumberFormat('en-US', { style: 'currency', currency: data.currency_code }).format(amount)
+  const formatMoney = useMemo(() => {
+    try {
+      const formatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: data.currency_code })
+      return (amount: number) => formatter.format(amount)
+    } catch {
+      // Preserve the supplied marker rather than imply conversion to another currency.
+      const formatter = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      return (amount: number) => `${data.currency_code} ${formatter.format(amount)}`
+    }
+  }, [data.currency_code])
+  const money = (amount: number | null) => privacyMode ? 'Hidden' : amount == null ? 'Unavailable' : formatMoney(amount)
   const canSelect = (line: BudgetPlanFlowData['lines'][number]) => data.eligibility === 'eligible' && !privacyMode &&
-    (line.kind !== 'savings' || !line.reasons.some((reason) => reason === 'mixed_currency' || reason === 'unknown_currency'))
+    (line.kind === 'savings' ? !line.reasons.some((reason) => reason === 'mixed_currency' || reason === 'unknown_currency') : line.actual != null)
   const select = (line: BudgetPlanFlowData['lines'][number]) => {
     if (!canSelect(line)) return
     trackEvent(ANALYTICS_EVENTS.BUDGET_PLAN_LINE_OPENED, { kind: line.kind })
@@ -127,6 +137,7 @@ export function BudgetPlanFlowChart({ data, privacyMode = false, onSelectLine }:
             <td className="p-2" data-ph-mask>{money(line.actual)}</td>
             <td className="p-2" data-ph-mask>{money(line.variance)}</td>
             <td className="p-2">{canSelect(line) && <Button variant="ghost" onClick={() => select(line)} aria-label={`View allocation ${index + 1} ${line.kind === 'savings' ? 'full savings history' : 'activity'}`}>{line.kind === 'savings' ? 'Full history' : 'View'}</Button>}
+              {data.eligibility === 'eligible' && !privacyMode && line.kind !== 'savings' && line.actual == null && <span className="text-xs text-muted-foreground">Activity unavailable</span>}
               {line.reasons.map((reason) => <p key={reason} className="text-xs text-muted-foreground">{REASON_TEXT[reason] ?? 'Some activity could not be verified.'}</p>)}
             </td>
           </tr>)}</tbody>

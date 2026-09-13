@@ -36,11 +36,47 @@ describe('BudgetPlanFlowChart', () => {
     expect(screen.queryByRole('button', { name: /Daily life/ })).toBeNull()
   })
 
+  it('renders malformed persisted currency codes without breaking the table or tooltip', () => {
+    render(<BudgetPlanFlowChart data={{ ...data, currency_code: 'U$D' }} onSelectLine={() => {}} />)
+    const table = screen.getByRole('table', { name: 'Budget allocation and activity' })
+    expect(within(table).getByText('U$D 400.00')).toHaveAttribute('data-ph-mask')
+    const props = MockEChartsChart.mock.calls.at(-1)?.[0] as unknown as {
+      option: { tooltip: { formatter: (params: unknown) => string } }
+    }
+    expect(props.option.tooltip.formatter({ data: { id: 'allocation:food' }, value: 400 })).toContain('U$D 400.00')
+  })
+
+  it.each([['EUR', '€400.00'], ['JPY', '¥400']])('preserves valid %s currency formatting', (currency, expected) => {
+    render(<BudgetPlanFlowChart data={{ ...data, currency_code: currency }} onSelectLine={() => {}} />)
+    expect(within(screen.getByRole('table')).getByText(expected)).toHaveAttribute('data-ph-mask')
+  })
+
   it('keeps unknown activity visibly unavailable instead of formatting zero', () => {
     render(<BudgetPlanFlowChart data={{ ...data, completeness: 'partial', reasons: ['legacy_savings_origin'], lines: [{ ...data.lines[1]!, actual: null, variance: null, reasons: ['legacy_savings_origin'] }] }} onSelectLine={() => {}} />)
     expect(screen.getByText(/Plan only/)).toBeInTheDocument()
     expect(screen.getAllByText('Unavailable').length).toBeGreaterThan(0)
     expect(screen.getAllByText(/Historical savings entries/).length).toBeGreaterThan(0)
+  })
+
+  it.each(['expense', 'unbudgeted'] as const)('does not offer or open unavailable %s activity', (kind) => {
+    const select = mock(() => {})
+    const line = { ...data.lines[0]!, kind, actual: null, variance: null, reasons: ['mixed_currency'] }
+    render(<BudgetPlanFlowChart data={{ ...data, completeness: 'partial', lines: [line] }} onSelectLine={select} />)
+
+    expect(screen.queryByRole('button', { name: 'View allocation 1 activity' })).toBeNull()
+    expect(within(screen.getByRole('table')).getByText('Activity unavailable')).toBeInTheDocument()
+    const props = MockEChartsChart.mock.calls.at(-1)?.[0] as unknown as { onEvents: { click: (event: unknown) => void } }
+    props.onEvents.click({ dataType: 'node', data: { id: 'allocation:food' } })
+    expect(select).not.toHaveBeenCalled()
+    expect(mockTrackEvent).not.toHaveBeenCalled()
+  })
+
+  it('keeps known zero expense activity selectable in a partial report', () => {
+    const select = mock(() => {})
+    const line = { ...data.lines[0]!, actual: 0 }
+    render(<BudgetPlanFlowChart data={{ ...data, completeness: 'partial', lines: [line] }} onSelectLine={select} />)
+    fireEvent.click(screen.getByRole('button', { name: 'View allocation 1 activity' }))
+    expect(select).toHaveBeenCalledWith(line)
   })
 
   it('hides monetary values in privacy mode, including chart options', () => {
