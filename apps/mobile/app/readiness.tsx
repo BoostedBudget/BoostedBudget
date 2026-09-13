@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Platform, Pressable, Text, View } from 'react-native'
-import { selectBillingProvider } from '../src/billing/provider'
+import { asBillingPlatform, selectBillingProvider } from '../src/billing/provider'
 import { describePublicEnvironment, MobilePublicEnvironment } from '../src/config/public-env'
 
 interface ReadinessScreenProps {
@@ -16,8 +16,12 @@ export default function ReadinessScreen({
 }: ReadinessScreenProps) {
   const [checked, setChecked] = useState(false)
   const status = describePublicEnvironment(environment)
-  const billingProvider = selectBillingProvider(platform)
+  const billingPlatform = asBillingPlatform(platform)
+  const billingProvider = billingPlatform ? selectBillingProvider(billingPlatform) : null
   const apiStatus = status.apiUrl.valid ? 'configured and valid' : 'missing or invalid'
+  const billingStatus = billingProvider
+    ? `${billingNames[billingProvider]} (contract only)`
+    : 'unavailable on this platform'
 
   return (
     <View className="flex-1 gap-5 bg-background px-6 py-10">
@@ -26,9 +30,7 @@ export default function ReadinessScreen({
       </Text>
       <View accessibilityRole="summary" className="gap-2 rounded-lg border border-border bg-card p-4">
         <Text className="text-card-foreground">API URL: {apiStatus}</Text>
-        <Text className="text-card-foreground">
-          Billing adapter: {billingNames[billingProvider]} (contract only)
-        </Text>
+        <Text className="text-card-foreground">Billing adapter: {billingStatus}</Text>
         <Text className="text-muted-foreground">Authentication: deferred</Text>
         <Text className="text-muted-foreground">Offline cache: deferred</Text>
       </View>

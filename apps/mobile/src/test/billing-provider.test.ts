@@ -1,4 +1,4 @@
-import { selectBillingProvider } from '../billing/provider'
+import { asBillingPlatform, selectBillingProvider } from '../billing/provider'
 
 describe('billing provider contract', () => {
   it.each([
@@ -9,7 +9,8 @@ describe('billing provider contract', () => {
     expect(selectBillingProvider(platform)).toBe(expected)
   })
 
-  it('fails closed for unsupported platforms', () => {
-    expect(() => selectBillingProvider('windows')).toThrow('Unsupported billing platform: windows')
+  it('narrows supported platforms and fails closed without throwing', () => {
+    expect(asBillingPlatform('ios')).toBe('ios')
+    expect(asBillingPlatform('windows')).toBeNull()
   })
 })
