@@ -17,7 +17,7 @@ import { parse as parseYaml } from 'yaml'
 import { getCapability } from '../manifest/capability-manifest'
 import { validateResponseCatalog } from '../responses/catalog-validation'
 import { responseCatalog, responseProfiles, type ProjectionTarget, type ResponseDetail } from '../responses/projection'
-import type { SpecBodyField, SpecEntry, SpecIndex, SpecParameter } from './search-runtime'
+import type { SpecBodyField, SpecEntry, SpecIndex, SpecParameter, SpecResponseShape } from './search-runtime'
 
 // Paths relative to repo root
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -62,6 +62,8 @@ interface OpenAPISchema {
   required?: string[]
   enum?: unknown[]
   description?: string
+  /** OpenAPI 3.0 nullability; OpenAPI 3.1 represents this in the type union instead. */
+  nullable?: boolean
   [key: string]: unknown
 }
 
@@ -317,6 +319,128 @@ function findJsonSuccessResponseSchema(
   return undefined
 }
 
+const MAX_RESPONSE_REF_DEPTH = 32
+const MAX_RESPONSE_ARRAY_DEPTH = 32
+const RESPONSE_SCALAR_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'null'])
+
+interface ResponseRootAnalysis {
+  shape: SpecResponseShape
+  deepestSchema: OpenAPISchema
+}
+
+/**
+ * Resolve and describe the selected response root. Only array items recurse: object properties
+ * remain represented by responseBody, while this metadata records the exact root containers.
+ */
+function analyzeResponseRoot(
+  schema: OpenAPISchema,
+  spec: OpenAPISpec,
+  operationId: string,
+  refStack: Set<string> = new Set(),
+  schemaStack: Set<OpenAPISchema> = new Set(),
+  refDepth = 0,
+  arrayDepth = 0,
+): ResponseRootAnalysis {
+  const nullable = schema.nullable === true || (Array.isArray(schema.type) && schema.type.includes('null'))
+  if (schema.$ref) {
+    if (refDepth >= MAX_RESPONSE_REF_DEPTH) {
+      throw new Error(`Response shape for operation ${operationId} exceeds ${MAX_RESPONSE_REF_DEPTH} ref hops`)
+    }
+    const prefix = '#/components/schemas/'
+    if (!schema.$ref.startsWith(prefix)) {
+      throw new Error(`Response shape for operation ${operationId} has unresolved ref ${schema.$ref}`)
+    }
+    const refName = schema.$ref.slice(prefix.length)
+    if (refStack.has(refName)) {
+      throw new Error(`Response shape for operation ${operationId} is cyclic at ${schema.$ref}`)
+    }
+    const target = spec.components?.schemas?.[refName]
+    if (!target) {
+      throw new Error(`Response shape for operation ${operationId} has unresolved ref ${schema.$ref}`)
+    }
+    const nextRefs = new Set(refStack)
+    nextRefs.add(refName)
+    const resolved = analyzeResponseRoot(
+      target,
+      spec,
+      operationId,
+      nextRefs,
+      schemaStack,
+      refDepth + 1,
+      arrayDepth,
+    )
+    if (!nullable) return resolved
+    return {
+      ...resolved,
+      shape: { ...resolved.shape, nullable: true },
+    }
+  }
+
+  if (schemaStack.has(schema)) {
+    throw new Error(`Response shape for operation ${operationId} is cyclic at response array depth ${arrayDepth}`)
+  }
+  const nextSchemas = new Set(schemaStack)
+  nextSchemas.add(schema)
+
+  const declaredTypes = new Set(Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [])
+  const nonNullTypes = [...declaredTypes].filter((type) => type !== 'null')
+  if (nonNullTypes.length > 1) {
+    throw new Error(
+      `Response shape for operation ${operationId} has unsupported JSON root type union ${nonNullTypes.join(' | ')}`,
+    )
+  }
+  const schemaType = nonNullTypes[0] ?? (declaredTypes.has('null') ? 'null' : undefined)
+  const inferredType = schemaType ?? (schema.properties || schema.additionalProperties ? 'object' : undefined)
+  if (!inferredType) {
+    throw new Error(`Response shape for operation ${operationId} has unresolved JSON root type`)
+  }
+
+  if (inferredType === 'array') {
+    if (arrayDepth >= MAX_RESPONSE_ARRAY_DEPTH) {
+      throw new Error(`Response shape for operation ${operationId} exceeds ${MAX_RESPONSE_ARRAY_DEPTH} nested arrays`)
+    }
+    if (!schema.items) {
+      throw new Error(`Response shape for operation ${operationId} has unresolved array items`)
+    }
+    const item = analyzeResponseRoot(
+      schema.items,
+      spec,
+      operationId,
+      refStack,
+      nextSchemas,
+      refDepth,
+      arrayDepth + 1,
+    )
+    return {
+      shape: {
+        type: 'array',
+        items: item.shape,
+        ...(nullable && { nullable: true }),
+      },
+      deepestSchema: item.deepestSchema,
+    }
+  }
+
+  if (inferredType === 'object') {
+    return {
+      shape: { type: 'object', ...(nullable && { nullable: true }) },
+      deepestSchema: schema,
+    }
+  }
+
+  if (!RESPONSE_SCALAR_TYPES.has(inferredType)) {
+    throw new Error(`Response shape for operation ${operationId} has unsupported JSON root type ${inferredType}`)
+  }
+
+  return {
+    shape: {
+      type: inferredType as 'string' | 'number' | 'integer' | 'boolean' | 'null',
+      ...(nullable && inferredType !== 'null' && { nullable: true }),
+    },
+    deepestSchema: schema,
+  }
+}
+
 /**
  * Extract and flatten an operation's JSON success-response body schema (issue #1610a). Unlike
  * request bodies, `readOnly` properties are KEPT (see RESPONSE_BODY_POLICY) and only the
@@ -327,21 +451,14 @@ function findJsonSuccessResponseSchema(
  * there is no meaningful top-level field name for "the array itself" to hang a dotted path off.
  */
 function extractResponseBodyFields(
-  responses: Record<string, OpenAPIResponse | undefined> | undefined,
+  schema: OpenAPISchema,
   spec: OpenAPISpec,
 ): SpecBodyField[] {
-  const schema = findJsonSuccessResponseSchema(responses)
-  if (!schema) return []
-
   const resolved = resolveSchema(schema, spec)
   if (!resolved) return []
 
   const out: SpecBodyField[] = []
-  if (primaryType(resolved.type) === 'array') {
-    flattenBodySchema(resolved.items, spec, 1, '', out, RESPONSE_BODY_POLICY)
-  } else {
-    flattenBodySchema(schema, spec, 1, '', out, RESPONSE_BODY_POLICY)
-  }
+  flattenBodySchema(resolved, spec, 1, '', out, RESPONSE_BODY_POLICY)
   return out
 }
 
@@ -378,9 +495,25 @@ function extractProjectedFields(schema: OpenAPISchema | undefined, spec: OpenAPI
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const
 export { HTTP_METHODS }
 
+function validateSelectedResponseRoots(spec: OpenAPISpec): void {
+  for (const pathItem of Object.values(spec.paths ?? {})) {
+    for (const method of HTTP_METHODS) {
+      const operation = pathItem[method] as OpenAPIOperation | undefined
+      if (!operation?.operationId) continue
+      if (getCapability(operation.operationId)?.excluded !== false) continue
+      const schema = findJsonSuccessResponseSchema(operation.responses)
+      if (schema) analyzeResponseRoot(schema, spec, operation.operationId)
+    }
+  }
+}
+
 export async function buildSpecIndex(sourceSpec?: OpenAPISpec): Promise<SpecIndex> {
   // Parse YAML
   const rawSpec = sourceSpec ?? parseYaml(readFileSync(OPENAPI_PATH, 'utf-8')) as OpenAPISpec
+
+  // Validate raw refs before dereferencing so failures retain operation context. RefParser's
+  // circular-ref errors identify pointers, but not the operation whose response selected them.
+  validateSelectedResponseRoots(rawSpec)
 
   // Dereference all $refs (inline — no remote refs in this spec)
   const spec = (await $RefParser.dereference(rawSpec as object)) as OpenAPISpec
@@ -448,12 +581,20 @@ export function indexFromSpec(spec: OpenAPISpec): SpecIndex {
       const responseSchema = findJsonSuccessResponseSchema(operation.responses)
       let responseBody: SpecBodyField[] = []
       let compactResponseBody: SpecBodyField[] = []
+      let responseShape: SpecResponseShape | undefined
       if (!capability.excluded) {
+        const responseRoot = responseSchema
+          ? analyzeResponseRoot(responseSchema, spec, operationId)
+          : undefined
+        responseShape = responseRoot?.shape
         if (policy?.kind === 'project') {
           responseBody = extractProjectedFields(responseSchema, spec, policy.target, 'full')
           compactResponseBody = extractProjectedFields(responseSchema, spec, policy.target, 'compact')
-        } else {
-          responseBody = extractResponseBodyFields(operation.responses, spec)
+          if (responseBody.length === 0 && responseRoot) {
+            responseBody = extractResponseBodyFields(responseRoot.deepestSchema, spec)
+          }
+        } else if (responseRoot) {
+          responseBody = extractResponseBodyFields(responseRoot.deepestSchema, spec)
         }
       }
 
@@ -469,6 +610,7 @@ export function indexFromSpec(spec: OpenAPISpec): SpecIndex {
       if (description) entry.description = description
       if (parameters.length > 0) entry.parameters = parameters
       if (requestBody.length > 0) entry.requestBody = requestBody
+      if (responseShape) entry.responseShape = responseShape
       if (responseBody.length > 0) entry.responseBody = responseBody
       if (compactResponseBody.length > 0) {
         const fullNames = new Set(responseBody.map((field) => field.name))

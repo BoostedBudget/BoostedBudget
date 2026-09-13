@@ -1,12 +1,20 @@
 import { describe, expect, it, mock } from 'bun:test'
-import { buildWriteExecuteHandler, buildReadExecuteHandler, type ExecuteCall, type ExecuteSpecEntry } from './execute'
+import { readFileSync } from 'node:fs'
+import {
+  buildWriteExecuteHandler,
+  buildReadExecuteHandler,
+  MAX_BATCH_RESULT_CHARS,
+  MAX_EMITTED_RESULT_CHARS,
+  type ExecuteCall,
+  type ExecuteSpecEntry,
+} from './execute'
 import { HostProxyError } from '../../sandbox/host-proxy'
 import { ALL_OPERATION_IDS, getCapability } from '../../manifest/capability-manifest'
 import {
-  ACKNOWLEDGED_LAZY_INIT_OPERATIONS,
-  findUnacknowledgedLazyInitOperations,
-  readLazyInitOperationIds,
-} from '../../manifest/lazy-init-extension'
+  ACKNOWLEDGED_READ_SIDE_EFFECT_OPERATIONS,
+  findUnacknowledgedReadSideEffectOperations,
+  readReadSideEffectOperationIds,
+} from '../../manifest/read-side-effect-extension'
 import {
   ACKNOWLEDGED_SAFE_POST_OPERATIONS,
   ACKNOWLEDGED_SAFE_POST_OPERATION_IDS,
@@ -15,6 +23,20 @@ import {
 } from '../../manifest/safe-post-extension'
 import { readSpecIndex } from '../../../scripts/generate-mcp-capability-summary'
 import { sizeFixtures } from '../../responses/size-fixtures'
+
+describe('readExecute module contract wording', () => {
+  it('describes the profile last-login write as best-effort and the response as pre-update', () => {
+    const source = readFileSync(new URL('./execute.ts', import.meta.url), 'utf8')
+
+    expect(source).toContain(
+      "`getUserProfile` attempts a best-effort update of the existing caller's last-login timestamp",
+    )
+    expect(source).toContain('response retains the pre-update timestamp')
+    expect(source).not.toContain(
+      "`getUserProfile` updates the existing caller's last-login timestamp on every successful read",
+    )
+  })
+})
 
 // Minimal proxy stub for testing
 function makeProxy(invokeResult: unknown = {}) {
@@ -596,8 +618,8 @@ describe('buildWriteExecuteHandler', () => {
 //     class 'read' AND confirmationRequired: false (honestly — it's read('...')-built), yet its
 //     HTTP method is POST. class+confirmationRequired alone would wrongly admit it; only the
 //     method check catches it.
-// readExecute must therefore require ALL THREE: class === 'read', method is read-only, AND
-// confirmationRequired === false.
+// readExecute must therefore require class === 'read', confirmationRequired === false, AND a
+// conventionally read-only method or the exact explicitly reviewed safe-POST tuple.
 describe('buildReadExecuteHandler — the three-way admission gate (#1610b)', () => {
   const READ_EXECUTE_SPEC_ENTRIES = [
     { operationId: 'getTransactions', method: 'GET', path: '/api/v1/transactions' },
@@ -692,14 +714,12 @@ describe('buildReadExecuteHandler — the three-way admission gate (#1610b)', ()
 
 // ── Issue #1610: readExecute's REAL guarantee (not "read-only by construction") ─────────────
 //
-// Codex adversarial review of d8567c2e found the module doc's old claim false: `getPrivacySettings`
-// and `getUserProfile` pass all three admission legs yet lazily `repo.Create` the caller's own
-// default row on first access (privacy_service.go / user profile equivalent — see each operation's
-// OpenAPI description). The fix keeps both operations admitted (the user's explicit choice) and
-// replaces the false claim with the properties that ARE true of every admitted call. These tests
-// pin those properties against the REAL manifest + spec index, not a fabricated one, so a future
-// widening of the gate (e.g. dropping the method check, or admitting confirmationRequired: true)
-// is caught here even if no other test happens to exercise the specific operation that regresses.
+// `getPrivacySettings` and `getUserProfile` pass all three admission legs but are not side-effect
+// free: privacy may create caller-owned defaults; profile attempts a best-effort last-login update
+// after fetching the returned timestamp. Both remain admitted because their effects are
+// caller-scoped and non-destructive.
+// These tests pin the properties that are true of every admitted call against the real manifest
+// and spec index, rather than assuming that an HTTP GET cannot write.
 describe("readExecute's REAL guarantee, checked against the real manifest + spec index (#1610)", () => {
   const specIndex = readSpecIndex()
   const specEntries: ExecuteSpecEntry[] = specIndex.entries.map((e) => ({
@@ -709,7 +729,7 @@ describe("readExecute's REAL guarantee, checked against the real manifest + spec
   }))
   const READ_ONLY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
-  it('every operation readExecute actually admits is non-destructive, non-confirmation-gated, and uses a conventionally read-only verb', async () => {
+  it('every admitted operation is non-destructive, non-confirmation-gated, and uses a read-only verb or reviewed safe POST', async () => {
     const admittedOperationIds: string[] = []
 
     for (const operationId of ALL_OPERATION_IDS) {
@@ -772,19 +792,18 @@ describe("readExecute's REAL guarantee, checked against the real manifest + spec
     expect(nonReadOnlyVerbAdmitted).not.toContain('runMCPRecipe')
   })
 
-  // The properties above are true of EVERY admitted operation, including these two — but they do
-  // NOT prove "readExecute cannot write". These two are known, named exceptions: both lazily
-  // create the caller's own default row on first access.
+  // The properties above are true of EVERY admitted operation, including these two, but do not
+  // prove "readExecute cannot write". These are reviewed caller-scoped side-effecting GETs.
   //
   // #1610: this used to be a hardcoded array here — a tripwire that pinned the two known
-  // exceptions but couldn't see a THIRD one added later, since nothing in this package can see
+  // operations but couldn't see a THIRD one added later, since nothing in this package can see
   // the Go implementation to detect a write on its own. It is now derived from
-  // ACKNOWLEDGED_LAZY_INIT_OPERATIONS (manifest/lazy-init-extension.ts), which is itself checked
-  // against api/openapi.yaml's `x-mcp-lazy-init` extension by
+  // ACKNOWLEDGED_READ_SIDE_EFFECT_OPERATIONS (manifest/read-side-effect-extension.ts), which is
+  // checked against api/openapi.yaml's `x-mcp-read-side-effect` extension by
   // scripts/check-manifest-completeness.ts (a real CI gate, not just this vitest suite) — see
   // that module's doc comment for the full mechanism.
-  it.each(ACKNOWLEDGED_LAZY_INIT_OPERATIONS)(
-    'acknowledges %s as an admitted GET that lazily creates a row on first access',
+  it.each(ACKNOWLEDGED_READ_SIDE_EFFECT_OPERATIONS)(
+    'acknowledges %s as an admitted GET with a reviewed caller-scoped side effect',
     async (operationId) => {
       const proxy = makeProxy({})
       const handler = buildReadExecuteHandler(proxy, specEntries)
@@ -799,23 +818,25 @@ describe("readExecute's REAL guarantee, checked against the real manifest + spec
     },
   )
 
-  it('the acknowledged list is exactly these two — a new admitted read-with-a-write needs a human to update this list', () => {
-    // This does not (and cannot) detect a new lazy-init write on its own; it only pins the
-    // count/names of the ones already acknowledged, so a PR adding a third stands out in review.
-    expect(ACKNOWLEDGED_LAZY_INIT_OPERATIONS).toEqual(['getPrivacySettings', 'getUserProfile'])
+  it('the acknowledged read-side-effect list is exactly these two operations', () => {
+    expect(ACKNOWLEDGED_READ_SIDE_EFFECT_OPERATIONS).toEqual([
+      'getPrivacySettings',
+      'getUserProfile',
+    ])
   })
 
-  it('api/openapi.yaml tags exactly the acknowledged operations with x-mcp-lazy-init — no unreviewed drift', () => {
+  it('api/openapi.yaml tags exactly the acknowledged read-side-effect operations', () => {
     // The actual scanner: derive what the SPEC currently tags and diff it against what has been
-    // reviewed. A non-empty result here means a third lazy-init-tagged operation was added to the
-    // Go layer without anyone updating ACKNOWLEDGED_LAZY_INIT_OPERATIONS — the exact gap the
-    // by-name-only tripwire above could not close.
-    const specTagged = readLazyInitOperationIds()
-    expect(findUnacknowledgedLazyInitOperations(specTagged, ACKNOWLEDGED_LAZY_INIT_OPERATIONS)).toEqual([])
+    // reviewed. A non-empty result means a third side-effecting read was tagged without review.
+    const specTagged = readReadSideEffectOperationIds()
+    expect(findUnacknowledgedReadSideEffectOperations(
+      specTagged,
+      ACKNOWLEDGED_READ_SIDE_EFFECT_OPERATIONS,
+    )).toEqual([])
   })
 
   // #1630: the mirror-image mechanism — a POST that unexpectedly does NOT write, rather than a
-  // GET that unexpectedly does. Same shape as the lazy-init tests above, copied part for part.
+  // GET that unexpectedly does. Same shape as the read-side-effect tests above.
   it.each(ACKNOWLEDGED_SAFE_POST_OPERATION_IDS)(
     'acknowledges %s as an admitted POST proven to write nothing',
     async (operationId) => {
@@ -853,6 +874,16 @@ describe("readExecute's REAL guarantee, checked against the real manifest + spec
 // calls) once exhausted — using the same self-describing marker style as the per-result
 // truncation marker (shown/full-equivalent sizes, an actionable hint).
 describe('batch aggregate result bound (#1612)', () => {
+  function expectBoundedOutput(text: string, fullLength: number): void {
+    const marker = text.match(
+      /\n… \[output truncated: showing (\d+) of (\d+) UTF-16 code units\. Split the batch or narrow the request to receive the complete output\.\]$/,
+    )
+    expect(marker).not.toBeNull()
+    expect(Number(marker![1])).toBe(text.indexOf('\n… [output truncated:'))
+    expect(Number(marker![2])).toBe(fullLength)
+    expect(text).toHaveLength(MAX_EMITTED_RESULT_CHARS)
+  }
+
   // A single result whose rendered length sits comfortably under MAX_RESULT_CHARS (so no
   // per-call truncation marker fires) but where several of them together blow the aggregate cap.
   function makeBigResult(sizeChars: number): { id: string; note: string } {
@@ -876,7 +907,7 @@ describe('batch aggregate result bound (#1612)', () => {
 
     const text = toolResult.content[0]?.text ?? ''
     expect(text).toContain('Batch result budget exhausted')
-    expect(text).toContain('300000')
+    expect(text).toContain(String(MAX_BATCH_RESULT_CHARS))
   })
 
   it('does not fire the batch marker when the aggregate stays under budget', async () => {
@@ -895,6 +926,21 @@ describe('batch aggregate result bound (#1612)', () => {
     expect(proxy.invoke).toHaveBeenCalledTimes(3)
     expect(auditEvents).toHaveLength(3)
     expect(toolResult.content[0]?.text ?? '').not.toContain('Batch result budget exhausted')
+  })
+
+  it('preserves the exact bytes of an under-budget multi-call batch', async () => {
+    const proxy = { invoke: mock((operationId: string) => Promise.resolve({ operationId })) }
+    const handler = buildWriteExecuteHandler(proxy)
+
+    const { toolResult } = await handler({ calls: [
+      { operationId: 'listMCPRecipes', detail: 'full' },
+      { operationId: 'listMCPRecipes', detail: 'full' },
+    ] })
+
+    expect(toolResult.content[0]?.text).toBe(
+      '✅ listMCPRecipes: {"operationId":"listMCPRecipes"}\n\n' +
+      '✅ listMCPRecipes: {"operationId":"listMCPRecipes"}',
+    )
   })
 
   it('charges the per-call prefix and separator, not just the rendered payload', async () => {
@@ -917,15 +963,7 @@ describe('batch aggregate result bound (#1612)', () => {
     expect(proxy.invoke.mock.calls.length).toBeLessThan(20_000)
   })
 
-  it('bounds the returned text at the budget plus one call plus the marker', async () => {
-    // The honest bound, pinned. The budget check is a PRE-check, so the text may exceed
-    // MAX_BATCH_RESULT_CHARS by at most one call's rendered output (itself capped at
-    // MAX_RESULT_CHARS) plus the exhaustion marker. This asserts that bound rather than the
-    // tighter "never exceeds 300_000", which is not what the implementation provides.
-    const MAX_BATCH = 300_000
-    const MAX_RESULT = 100_000
-    const MARKER_SLACK = 1_000
-
+  it('bounds writeExecute output, including separators and the exhaustion marker, at exactly the aggregate budget', async () => {
     // Deliberately the many-small-results shape, NOT a few large ones: with large payloads the
     // payload-only accounting trips the cap at nearly the right place anyway, so the assertion
     // would pass against the old code and pin nothing. Here the uncharged prefixes dominate, so
@@ -938,12 +976,178 @@ describe('batch aggregate result bound (#1612)', () => {
 
     const { toolResult } = await handler({ calls })
 
-    // Length first, deliberately: this test exists to pin the BOUND, so the bound must be the
-    // assertion that fires when the accounting regresses -- not the marker check, which would
-    // otherwise mask it and duplicate the test above.
     const text = toolResult.content[0]?.text ?? ''
-    expect(text.length).toBeLessThanOrEqual(MAX_BATCH + MAX_RESULT + MARKER_SLACK)
+    expect(text.length).toBeLessThanOrEqual(MAX_BATCH_RESULT_CHARS)
     expect(text).toContain('Batch result budget exhausted')
+  })
+
+  it('bounds readExecute output, including separators and the exhaustion marker, at exactly the aggregate budget', async () => {
+    const proxy = makeProxy(makeBigResult(99_000))
+    const handler = buildReadExecuteHandler(proxy, [
+      { operationId: 'getTransactions', method: 'GET', path: '/api/v1/transactions' },
+    ])
+
+    const { toolResult } = await handler({
+      calls: Array.from({ length: 5 }, () => ({ operationId: 'getTransactions' })),
+    })
+
+    const text = toolResult.content[0]?.text ?? ''
+    expect(text.length).toBeLessThanOrEqual(MAX_BATCH_RESULT_CHARS)
+    expect(text).toContain('Batch result budget exhausted')
+    expect(proxy.invoke.mock.calls.length).toBeLessThan(5)
+  })
+
+  it('reports rendered and omitted call counts, the budget, and recovery guidance', async () => {
+    const proxy = makeProxy(makeBigResult(99_000))
+    const handler = buildWriteExecuteHandler(proxy)
+
+    const { toolResult } = await handler({
+      calls: Array.from({ length: 5 }, () => ({ operationId: 'getTransactions' })),
+    })
+
+    const text = toolResult.content[0]?.text ?? ''
+    expect(text).toContain('after 4 of 5 call(s)')
+    expect(text).toContain('1 call(s) were not executed')
+    expect(text).toContain(`${MAX_BATCH_RESULT_CHARS} character budget`)
+    expect(text).toContain('Split this batch into smaller invocations')
+    expect(text).toContain('narrow filters/limits')
+  })
+
+  function payloadForSuccessLineLength(lineLength: number): { note: string } {
+    const prefix = '✅ listMCPRecipes: '
+    const emptyJson = JSON.stringify({ note: '' })
+    return { note: 'x'.repeat(lineLength - prefix.length - emptyJson.length) }
+  }
+
+  const exactBudgetCalls: ExecuteCall[] = Array.from(
+    { length: 3 },
+    () => ({ operationId: 'listMCPRecipes', detail: 'full' }),
+  )
+
+  function makeExactBudgetProxy() {
+    const desiredLineLengths = [99_999, 99_999, 99_998]
+    let index = 0
+    return {
+      invoke: mock(() => Promise.resolve(payloadForSuccessLineLength(desiredLineLengths[index++]!))),
+    }
+  }
+
+  it('returns an exactly 300,000-character completed batch without a marker', async () => {
+    const proxy = makeExactBudgetProxy()
+    const handler = buildWriteExecuteHandler(proxy)
+
+    const { toolResult, auditEvents } = await handler({ calls: exactBudgetCalls })
+
+    const text = toolResult.content[0]?.text ?? ''
+    expect(text).toHaveLength(MAX_BATCH_RESULT_CHARS)
+    expect(text).not.toContain('Batch result budget exhausted')
+    expect(proxy.invoke).toHaveBeenCalledTimes(3)
+    expect(auditEvents).toHaveLength(3)
+  })
+
+  it('does not invoke another call after an exact 300,000-character batch', async () => {
+    const proxy = makeExactBudgetProxy()
+    const handler = buildWriteExecuteHandler(proxy)
+
+    const { toolResult, auditEvents } = await handler({
+      calls: [...exactBudgetCalls, { operationId: 'getAccounts' }],
+    })
+
+    const text = toolResult.content[0]?.text ?? ''
+    expect(proxy.invoke).toHaveBeenCalledTimes(3)
+    expect(auditEvents).toHaveLength(3)
+    expect(text.length).toBeLessThanOrEqual(MAX_BATCH_RESULT_CHARS)
+    expect(text).toContain('Batch result budget exhausted after 3 of 4 call(s)')
+    expect(text).toContain('1 call(s) were not executed')
+  })
+
+  it('bounds an oversized unknown operationId and retains its denied audit event', async () => {
+    const tailSentinel = 'UNKNOWN_OPERATION_TAIL_MUST_NOT_LEAK'
+    const operationId = `unknown-${'x'.repeat(400_000)}-${tailSentinel}`
+    const proxy = makeProxy()
+
+    const { toolResult, auditEvents } = await buildWriteExecuteHandler(proxy)({ calls: [
+      { operationId },
+      { operationId: 'getTransactions' },
+    ] })
+
+    const text = toolResult.content[0]?.text ?? ''
+    expect(text.length).toBeLessThanOrEqual(MAX_EMITTED_RESULT_CHARS)
+    expectBoundedOutput(text, `❌ ${operationId}: not available via MCP`.length)
+    expect(text).not.toContain(tailSentinel)
+    expect(proxy.invoke).not.toHaveBeenCalled()
+    expect(auditEvents).toEqual([{ operationId, operationClass: 'write', result: 'denied' }])
+  })
+
+  it('bounds an oversized HostProxyError in readExecute and still stops on first error', async () => {
+    const tailSentinel = 'BACKEND_ERROR_TAIL_MUST_NOT_LEAK'
+    const message = `backend-${'y'.repeat(400_000)}-${tailSentinel}`
+    const proxy = { invoke: mock(() => Promise.reject(new HostProxyError('backend_error', message))) }
+
+    const { toolResult, auditEvents } = await buildReadExecuteHandler(proxy, [
+      { operationId: 'getTransactions', method: 'GET', path: '/api/v1/transactions' },
+      { operationId: 'getAccounts', method: 'GET', path: '/api/v1/accounts' },
+    ])({ calls: [
+      { operationId: 'getTransactions' },
+      { operationId: 'getAccounts' },
+    ] })
+
+    const text = toolResult.content[0]?.text ?? ''
+    expect(text.length).toBeLessThanOrEqual(MAX_EMITTED_RESULT_CHARS)
+    expectBoundedOutput(text, `❌ getTransactions: ${message} (backend_error)`.length)
+    expect(text).not.toContain(tailSentinel)
+    expect(proxy.invoke).toHaveBeenCalledTimes(1)
+    expect(auditEvents).toEqual([
+      { operationId: 'getTransactions', operationClass: 'read', result: 'error' },
+    ])
+  })
+
+  it('bounds an oversized early batch-confirmation HostProxyError', async () => {
+    const tailSentinel = 'CONFIRMATION_ERROR_TAIL_MUST_NOT_LEAK'
+    const message = `confirmation-${'z'.repeat(400_000)}-${tailSentinel}`
+    const proxy = {
+      invoke: mock(() => Promise.resolve({})),
+      confirmBatch: mock(() => Promise.reject(new HostProxyError('invalid_confirmation', message))),
+    }
+
+    const { toolResult, auditEvents } = await buildWriteExecuteHandler(proxy)({ calls: [
+      { operationId: 'createMCPRecipe' },
+    ] })
+
+    const text = toolResult.content[0]?.text ?? ''
+    expect(text.length).toBeLessThanOrEqual(MAX_EMITTED_RESULT_CHARS)
+    expectBoundedOutput(text, `❌ batch confirmation failed: ${message} (invalid_confirmation)`.length)
+    expect(text).not.toContain(tailSentinel)
+    expect(proxy.invoke).not.toHaveBeenCalled()
+    expect(auditEvents).toEqual([
+      { operationId: 'createMCPRecipe', operationClass: 'write', result: 'error' },
+    ])
+  })
+
+  it('bounds an oversized token in an early batch-confirmation challenge', async () => {
+    const tailSentinel = 'CONFIRMATION_TOKEN_TAIL_MUST_NOT_LEAK'
+    const token = `token-${'t'.repeat(400_000)}-${tailSentinel}`
+    const proxy = {
+      invoke: mock(() => Promise.resolve({})),
+      confirmBatch: mock(() => Promise.resolve({ needsConfirmation: true, token, count: 1 })),
+    }
+
+    const { toolResult, auditEvents } = await buildWriteExecuteHandler(proxy)({ calls: [
+      { operationId: 'createMCPRecipe' },
+    ] })
+
+    const text = toolResult.content[0]?.text ?? ''
+    expect(text.length).toBeLessThanOrEqual(MAX_EMITTED_RESULT_CHARS)
+    expectBoundedOutput(
+      text,
+      (`⚠️ 1 operation requires confirmation. Nothing has been executed.\n` +
+        `Re-invoke writeExecute() with the IDENTICAL calls array and confirmationToken: "${token}"`).length,
+    )
+    expect(text).not.toContain(tailSentinel)
+    expect(proxy.invoke).not.toHaveBeenCalled()
+    expect(auditEvents).toEqual([
+      { operationId: 'createMCPRecipe', operationClass: 'write', result: 'confirmation_required' },
+    ])
   })
 
   it('the manifest-denial break behaviour is untouched by the new budget check (denial still aborts the rest of the batch)', async () => {
@@ -1126,5 +1330,30 @@ describe('batch confirmation covers the whole batch (#1625)', () => {
 
     expect(proxy.seen).toHaveLength(1)
     expect(proxy.seen[0]!.map((c) => c.operationId)).toEqual([READ, GATED])
+  })
+
+  it('rejects a replay that removes defined call data discarded by request normalization', async () => {
+    const mutator = mock(() => Promise.resolve({ id: 'recipe-1' })) as unknown as FetchMutator
+    const proxy = createHostProxy({ mutator, userId: 'exact-user', grantId: 'exact-grant' })
+    const handler = buildWriteExecuteHandler(proxy)
+    const challengedCalls: ExecuteCall[] = [
+      { operationId: GATED, pathParams: { ignored: 'A' } },
+    ]
+
+    const challenge = await handler({ calls: challengedCalls })
+    const token = challenge.toolResult.content[0]!.text.match(/confirmationToken: "([^"]+)"/)?.[1]
+    expect(token).toBeDefined()
+    expect(mutator).not.toHaveBeenCalled()
+
+    const replay = await handler({
+      calls: [{ operationId: GATED }],
+      confirmationToken: token,
+    })
+
+    expect(replay.toolResult.content[0]!.text).toContain('invalid_confirmation')
+    expect(mutator).not.toHaveBeenCalled()
+    expect(replay.auditEvents).toEqual([
+      { operationId: GATED, operationClass: 'write', result: 'error' },
+    ])
   })
 })

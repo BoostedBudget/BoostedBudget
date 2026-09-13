@@ -25,7 +25,7 @@
     "src/**/*.spec.ts",
     "src/**/*.integration.test.ts",
     "src/spec/index-builder.ts",
-    "src/manifest/lazy-init-extension.ts",
+    "src/manifest/read-side-effect-extension.ts",
     "src/manifest/safe-post-extension.ts",
     "scripts/**"
   ]
