@@ -117,7 +117,9 @@ export function useInfiniteTransactions(opts: UseInfiniteTransactionsOptions) {
     getNextPageParam: (lastPage: GetTransactionsOutputBody) =>
       lastPage.next_cursor ?? undefined,
     staleTime: 5 * 60_000,
-    refetchOnMount: false,
+    // Edits in Review can invalidate this feed while it is unmounted. Recheck
+    // stale/invalidated membership on return while reusing fresh cached pages.
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
   });
 

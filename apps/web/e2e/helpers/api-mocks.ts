@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test'
+import type { PrivacySettings } from '@boostedbudget/api-client/models'
 
 /**
  * Mock endpoints required for any authenticated page to render through PremiumRoute.
@@ -33,6 +34,39 @@ export async function mockAuthDependencies(
     compTier,
     compEndsAt,
   } = overrides ?? {}
+
+  // CookieConsent replays saved consent on mount, including after a reload. Keep
+  // that App-level PUT in this page's fixture so it cannot trigger a live 401 redirect.
+  const privacy: PrivacySettings = {
+    id: 'privacy-123',
+    user_id: 'user-123',
+    gdpr_necessary_consent: true,
+    gdpr_analytics_consent: false,
+    gdpr_advertising_consent: false,
+    gdpr_consent_timestamp: '2026-01-01T00:00:00Z',
+    marketing_emails_enabled: false,
+    product_updates_enabled: true,
+    security_alerts_enabled: true,
+    data_sharing_enabled: false,
+    include_in_aggregate_stats: true,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+  }
+  await page.route(url => url.pathname === '/api/v1/user/privacy', route => {
+    const method = route.request().method()
+    if (method !== 'GET' && method !== 'PUT') return route.fallback()
+    if (method === 'PUT') {
+      const updates = route.request().postDataJSON() as Record<string, unknown> | null
+      for (const field of [
+        'gdpr_necessary_consent', 'gdpr_analytics_consent', 'gdpr_advertising_consent',
+        'marketing_emails_enabled', 'product_updates_enabled', 'security_alerts_enabled',
+        'data_sharing_enabled', 'include_in_aggregate_stats',
+      ] as const) {
+        if (typeof updates?.[field] === 'boolean') privacy[field] = updates[field]
+      }
+    }
+    return route.fulfill({ status: 200, json: privacy })
+  })
 
   await page.route('**/api/v1/user/profile*', (route) => {
     route.fulfill({
