@@ -1,7 +1,34 @@
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { posthogConfig } from './posthog';
 
+const minimumPostHogVersion = [1, 430, 2] as const;
+
+function numericVersion(version: string): number[] {
+  return version.split('.').map(Number);
+}
+
+function isAtLeast(version: number[], minimum: readonly number[]): boolean {
+  for (const [index, part] of version.entries()) {
+    if (part !== minimum[index]) {
+      return part > minimum[index];
+    }
+  }
+  return true;
+}
+
 describe('posthog config', () => {
+  test('uses an exact stable posthog-js version at or above the supported floor', () => {
+    const packageJson = JSON.parse(
+      readFileSync(resolve(import.meta.dir, '../../../package.json'), 'utf8'),
+    ) as { dependencies: Record<string, string> };
+    const declaredVersion = packageJson.dependencies['posthog-js'];
+
+    expect(declaredVersion).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(isAtLeast(numericVersion(declaredVersion), minimumPostHogVersion)).toBe(true);
+  });
+
   test('autocapture is disabled', () => {
     const cfg = posthogConfig();
     expect(cfg.autocapture).toBe(false);
