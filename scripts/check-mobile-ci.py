@@ -341,11 +341,18 @@ def check_single_lockfile_policy(root: pathlib.Path) -> list[str]:
                 )
                 continue
             for entry in entries:
+                if entry.name == "node_modules":
+                    continue
                 if entry.name in LOCKFILE_NAMES and (entry.is_symlink() or entry.exists()):
                     findings.append(
                         f"single-lockfile policy forbids {entry.relative_to(root)}"
                     )
-                if entry.name != "node_modules" and not entry.is_symlink() and entry.is_dir():
+                if entry.is_symlink() and entry.is_dir():
+                    findings.append(
+                        "single-lockfile policy forbids non-vendored symlink directory "
+                        f"{entry.relative_to(root)}"
+                    )
+                elif not entry.is_symlink() and entry.is_dir():
                     pending.append(entry)
     return findings
 
