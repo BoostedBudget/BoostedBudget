@@ -46,7 +46,7 @@ adapter; this scaffold does not store credentials.
   React Native application.
 - A root TanStack Query client provides conservative online defaults. There is
   no cache persistence or offline mutation queue.
-- NativeWind 5 preview compiles Tailwind CSS 4 classes through Metro and
+- NativeWind `5.0.0-rc.0` compiles Tailwind CSS 4 classes through Metro and
   consumes `@boostedbudget/design-tokens/nativewind.css`. System light/dark
   preference is the only theme control. The repository uses Bun's hoisted
   linker so Expo native modules resolve to a single copy.
@@ -68,6 +68,7 @@ payment SDKs and entitlement aggregation ([#1664](https://github.com/BoostedBudg
 Plaid and deep links ([#1665](https://github.com/BoostedBudget/BoostedBudget/issues/1665)),
 or authenticated product screens ([#1655](https://github.com/BoostedBudget/BoostedBudget/issues/1655)).
 
-NativeWind 5 remains a release candidate. This initial gate passed Expo Doctor
+NativeWind 5 remains a release candidate and is pinned exactly to the validated
+`5.0.0-rc.0` build. This initial gate passed Expo Doctor
 and static exports for all three platforms; production UI primitives and the
-decision to graduate or replace the preview are tracked in #1658.
+decision to graduate or replace the release candidate are tracked in #1658.

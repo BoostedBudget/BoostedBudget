@@ -63,29 +63,26 @@ jobs:
               - 'backend/migrations/**'
             workflow:
               - '.github/workflows/**'
-            # The full source surface apps/mcp-server is built from. `packages/**` is here, not in
-            # `deps` below, because it is not a dependency-pin risk: apps/mcp-server/package.json
+            # The full source surface apps/mcp-server is built from. The API-client path is here,
+            # not in `deps` below, because it is not a dependency-pin risk: apps/mcp-server/package.json
             # declares "@boostedbudget/api-client": "workspace:*", so packages/api-client IS MCP
             # source. Omitting it (#1464 U1a) meant a change confined to packages/api-client/ that
             # touched neither api/openapi.yaml nor bun.lock ran neither the MCP typecheck nor the
-            # MCP integration tests. `packages/**` rather than `packages/api-client/**`: there are
-            # exactly two packages, so the shared-types over-trigger costs one job pair, and the
-            # broad form stays correct if mcp-server ever adds that dependency — whereas the
-            # precise form would silently under-trigger again the moment it did.
+            # MCP integration tests. Keep this dependency-exact: unrelated workspace packages do
+            # not affect the MCP build and must not consume the MCP runners.
             # Enforced row-by-row by scripts/check-mcp-job-triggers.py.
             mcp:
               - 'apps/mcp-server/**'
               - 'api/openapi.yaml'
-              - 'packages/**'
+              - 'packages/api-client/**'
             # Dedicated filter for the undici-pin risk (G5-11/#1464 review): the `frontend`
-            # filter also matches apps/web/**, scripts/**, and packages/** (the last of which is now
-            # deliberately part of the MCP surface via `mcp` above), so wiring the MCP jobs to it (see
+            # filter also matches apps/web/**, scripts/**, and packages/**, so wiring the MCP jobs to it (see
             # mcp-server-validate/mcp-server-integration below) made both run on essentially
             # every frontend PR — two extra jobs on the same 4-runner Mac Mini that hit ENOSPC
             # on 2026-08-04. The dependency-pin risk is narrow: only a change to root
             # package.json/bun.lock can move the undici version miniflare and the root
             # `overrides` both pin. This filter targets exactly that. It deliberately does NOT
-            # carry packages/** — that is real MCP source, matched by `mcp` above, and folding it
+            # carry workspace package paths — API-client source is matched by `mcp` above, and folding it
             # in here would make this filter's name and this comment describe less than it
             # matches (the same defect class #1464 U1a fixed in the conditions below).
             deps:
@@ -1149,7 +1146,7 @@ jobs:
     # scripts/**, so both MCP jobs ran on nearly every frontend PR — two extra jobs on the
     # same 4-runner Mac Mini that hit ENOSPC on 2026-08-04. `deps` matches only root
     # package.json/bun.lock, the actual pin risk; real MCP source surface (including
-    # packages/**) is covered by the `mcp` filter instead.
+    # packages/api-client/**) is covered by the `mcp` filter instead.
     #
     # `backend` is deliberately NOT OR'd in (#1464 U1a). It matched scripts/**, so a
     # script-only PR still launched both MCP jobs and the load reduction above never actually
@@ -1480,7 +1477,7 @@ jobs:
     name: MCP Server Integration Tests
     needs: [detect-changes, openapi-validate]
     # Condition is identical to mcp-server-validate's — see that job's comment for the `deps`,
-    # `mcp`/packages/**, and dropped-`backend` rationale, and for the truth-table guard that
+    # `mcp`/packages/api-client/**, and dropped-`backend` rationale, and for the truth-table guard that
     # enforces both jobs. This is the job that actually exercises
     # miniflare/@cloudflare/vitest-pool-workers and their pinned undici.
     if: |
