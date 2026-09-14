@@ -55,6 +55,7 @@ import type {
   BudgetPlanVsActualResponse,
   CategoryTransactionsResponse,
   CreateBudgetCategoryRequest,
+  CreateBudgetHeaders,
   CreateBudgetRequest,
   ErrorModel,
   GetCategoryTransactionsParams,
@@ -211,13 +212,14 @@ export function useGetBudgets<TData = Awaited<ReturnType<typeof getBudgets>>, TE
  */
 export const createBudget = (
     createBudgetRequest: BodyType<NonReadonly<CreateBudgetRequest>>,
+    headers?: CreateBudgetHeaders,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<Budget>(
       {url: `/api/v1/budgets`, method: 'POST',
-      headers: {'Content-Type': 'application/json', },
+      headers: {'Content-Type': 'application/json', ...headers},
       data: createBudgetRequest, signal
     },
       options);
@@ -227,8 +229,8 @@ export const createBudget = (
 
 
 export const getCreateBudgetMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createBudget>>, TError,{data: BodyType<NonReadonly<CreateBudgetRequest>>}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof createBudget>>, TError,{data: BodyType<NonReadonly<CreateBudgetRequest>>}, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createBudget>>, TError,{data: BodyType<NonReadonly<CreateBudgetRequest>>;headers?: CreateBudgetHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof createBudget>>, TError,{data: BodyType<NonReadonly<CreateBudgetRequest>>;headers?: CreateBudgetHeaders}, TContext> => {
 
 const mutationKey = ['createBudget'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -240,10 +242,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createBudget>>, {data: BodyType<NonReadonly<CreateBudgetRequest>>}> = (props) => {
-          const {data} = props ?? {};
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createBudget>>, {data: BodyType<NonReadonly<CreateBudgetRequest>>;headers?: CreateBudgetHeaders}> = (props) => {
+          const {data,headers} = props ?? {};
 
-          return  createBudget(data,requestOptions)
+          return  createBudget(data,headers,requestOptions)
         }
 
 
@@ -261,11 +263,11 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
  * @summary Create budget
  */
 export const useCreateBudget = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createBudget>>, TError,{data: BodyType<NonReadonly<CreateBudgetRequest>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createBudget>>, TError,{data: BodyType<NonReadonly<CreateBudgetRequest>>;headers?: CreateBudgetHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof createBudget>>,
         TError,
-        {data: BodyType<NonReadonly<CreateBudgetRequest>>},
+        {data: BodyType<NonReadonly<CreateBudgetRequest>>;headers?: CreateBudgetHeaders},
         TContext
       > => {
       return useMutation(getCreateBudgetMutationOptions(options), queryClient);

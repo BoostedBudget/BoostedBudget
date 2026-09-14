@@ -14461,6 +14461,7 @@ paths:
         - description: Worker-only shared secret; constant-time validated before accepting telemetry
           in: header
           name: X-MCP-Worker-Secret
+          required: true
           schema:
             description: Worker-only shared secret; constant-time validated before accepting telemetry
             type: string

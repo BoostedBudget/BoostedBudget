@@ -2,6 +2,7 @@ package operations
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"net/http"
 
@@ -30,14 +31,14 @@ type RecordMCPToolTelemetryBody struct {
 
 type RecordMCPToolTelemetryInput struct {
 	inputs.AuthenticatedInput
-	MCPWorkerSecret string `header:"X-MCP-Worker-Secret" doc:"Worker-only shared secret; constant-time validated before accepting telemetry"`
+	MCPWorkerSecret string `header:"X-MCP-Worker-Secret" required:"true" doc:"Worker-only shared secret; constant-time validated before accepting telemetry"`
 	Body            RecordMCPToolTelemetryBody
 }
 
 type RecordMCPToolTelemetryOutput struct{}
 
 func (h *MCPToolTelemetryHandler) Record(ctx context.Context, input *RecordMCPToolTelemetryInput) (*RecordMCPToolTelemetryOutput, error) {
-	if h == nil || h.mcpWorkerSecret == "" || subtle.ConstantTimeCompare([]byte(input.MCPWorkerSecret), []byte(h.mcpWorkerSecret)) != 1 {
+	if h == nil || h.mcpWorkerSecret == "" || !validMCPWorkerSecret(input.MCPWorkerSecret, h.mcpWorkerSecret) {
 		return nil, huma.Error403Forbidden("invalid or missing Worker secret")
 	}
 	if h.analytics != nil {
@@ -49,6 +50,12 @@ func (h *MCPToolTelemetryHandler) Record(ctx context.Context, input *RecordMCPTo
 		})
 	}
 	return &RecordMCPToolTelemetryOutput{}, nil
+}
+
+func validMCPWorkerSecret(provided, expected string) bool {
+	providedDigest := sha256.Sum256([]byte(provided))
+	expectedDigest := sha256.Sum256([]byte(expected))
+	return subtle.ConstantTimeCompare(providedDigest[:], expectedDigest[:]) == 1
 }
 
 func RegisterMCPToolTelemetryRoutes(api huma.API, handler *MCPToolTelemetryHandler) {

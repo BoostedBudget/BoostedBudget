@@ -21,6 +21,9 @@ export default defineConfig({
       schemas: 'src/models',
       client: 'react-query',
       httpClient: 'axios',
+      // Preserve declared request headers in generated endpoint signatures. This makes
+      // required internal credentials impossible to omit from the typed client contract.
+      headers: true,
       // MSW-only mocks. In orval v8 `mock: true` emits BOTH msw and faker outputs, so we
       // pin the generator list to msw to keep the generated tree stable.
       mock: {

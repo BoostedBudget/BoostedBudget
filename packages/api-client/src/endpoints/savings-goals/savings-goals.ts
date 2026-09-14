@@ -50,9 +50,11 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  CreateSavingsGoalHeaders,
   CreateSavingsGoalRequest,
   DeletedGoalContributionsBody,
   ErrorModel,
+  GetSavingsProgressSummaryHeaders,
   LogContributionRequest,
   SavingsGoal,
   SavingsGoalContribution,
@@ -209,13 +211,14 @@ export function useGetSavingsGoals<TData = Awaited<ReturnType<typeof getSavingsG
  */
 export const createSavingsGoal = (
     createSavingsGoalRequest: BodyType<NonReadonly<CreateSavingsGoalRequest>>,
+    headers?: CreateSavingsGoalHeaders,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<SavingsGoal>(
       {url: `/api/v1/savings-goals`, method: 'POST',
-      headers: {'Content-Type': 'application/json', },
+      headers: {'Content-Type': 'application/json', ...headers},
       data: createSavingsGoalRequest, signal
     },
       options);
@@ -225,8 +228,8 @@ export const createSavingsGoal = (
 
 
 export const getCreateSavingsGoalMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSavingsGoal>>, TError,{data: BodyType<NonReadonly<CreateSavingsGoalRequest>>}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof createSavingsGoal>>, TError,{data: BodyType<NonReadonly<CreateSavingsGoalRequest>>}, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSavingsGoal>>, TError,{data: BodyType<NonReadonly<CreateSavingsGoalRequest>>;headers?: CreateSavingsGoalHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof createSavingsGoal>>, TError,{data: BodyType<NonReadonly<CreateSavingsGoalRequest>>;headers?: CreateSavingsGoalHeaders}, TContext> => {
 
 const mutationKey = ['createSavingsGoal'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -238,10 +241,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createSavingsGoal>>, {data: BodyType<NonReadonly<CreateSavingsGoalRequest>>}> = (props) => {
-          const {data} = props ?? {};
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createSavingsGoal>>, {data: BodyType<NonReadonly<CreateSavingsGoalRequest>>;headers?: CreateSavingsGoalHeaders}> = (props) => {
+          const {data,headers} = props ?? {};
 
-          return  createSavingsGoal(data,requestOptions)
+          return  createSavingsGoal(data,headers,requestOptions)
         }
 
 
@@ -259,11 +262,11 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
  * @summary Create savings goal
  */
 export const useCreateSavingsGoal = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSavingsGoal>>, TError,{data: BodyType<NonReadonly<CreateSavingsGoalRequest>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSavingsGoal>>, TError,{data: BodyType<NonReadonly<CreateSavingsGoalRequest>>;headers?: CreateSavingsGoalHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof createSavingsGoal>>,
         TError,
-        {data: BodyType<NonReadonly<CreateSavingsGoalRequest>>},
+        {data: BodyType<NonReadonly<CreateSavingsGoalRequest>>;headers?: CreateSavingsGoalHeaders},
         TContext
       > => {
       return useMutation(getCreateSavingsGoalMutationOptions(options), queryClient);
@@ -552,13 +555,14 @@ export function useListDeletedSavingsGoalContributions<TData = Awaited<ReturnTyp
  * @summary Get savings progress summary
  */
 export const getSavingsProgressSummary = (
-
+    headers?: GetSavingsProgressSummaryHeaders,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<SavingsProgressSummary>(
-      {url: `/api/v1/savings-goals/progress-summary`, method: 'GET', signal
+      {url: `/api/v1/savings-goals/progress-summary`, method: 'GET',
+      headers, signal
     },
       options);
     }
@@ -573,7 +577,7 @@ export const getGetSavingsProgressSummaryQueryKey = () => {
     }
 
 
-export const getGetSavingsProgressSummaryQueryOptions = <TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export const getGetSavingsProgressSummaryQueryOptions = <TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>(headers?: GetSavingsProgressSummaryHeaders, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -582,7 +586,7 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSavingsProgressSummary>>> = ({ signal }) => getSavingsProgressSummary(requestOptions, signal);
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSavingsProgressSummary>>> = ({ signal }) => getSavingsProgressSummary(headers, requestOptions, signal);
 
 
 
@@ -596,7 +600,7 @@ export type GetSavingsProgressSummaryQueryError = ErrorType<ErrorModel>
 
 
 export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>(
-  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>> & Pick<
+ headers: undefined |  GetSavingsProgressSummaryHeaders, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>> & Pick<
         DefinedInitialDataOptions<
           Awaited<ReturnType<typeof getSavingsProgressSummary>>,
           TError,
@@ -606,7 +610,7 @@ export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof g
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>> & Pick<
+ headers?: GetSavingsProgressSummaryHeaders, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>> & Pick<
         UndefinedInitialDataOptions<
           Awaited<ReturnType<typeof getSavingsProgressSummary>>,
           TError,
@@ -616,7 +620,7 @@ export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof g
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ headers?: GetSavingsProgressSummaryHeaders, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -624,11 +628,11 @@ export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof g
  */
 
 export function useGetSavingsProgressSummary<TData = Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ headers?: GetSavingsProgressSummaryHeaders, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getSavingsProgressSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
-  const queryOptions = getGetSavingsProgressSummaryQueryOptions(options)
+  const queryOptions = getGetSavingsProgressSummaryQueryOptions(headers,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

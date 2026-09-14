@@ -7,7 +7,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -137,6 +140,38 @@ func TestMCPToolTelemetryBodyCannotCarryIdentityOrFreeFormPayload(t *testing.T) 
 	assert.ElementsMatch(t, []string{"tool_surface", "tool_family", "outcome", "duration_bucket"}, got)
 }
 
+func TestMCPWorkerSecretComparison(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		provided string
+		expected string
+		want     bool
+	}{
+		{name: "equal", provided: "worker-secret", expected: "worker-secret", want: true},
+		{name: "shorter", provided: "short", expected: "worker-secret"},
+		{name: "longer", provided: "worker-secret-with-suffix", expected: "worker-secret"},
+		{name: "wrong same length", provided: "worker-secrex", expected: "worker-secret"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, validMCPWorkerSecret(test.provided, test.expected))
+		})
+	}
+}
+
+func TestMCPWorkerSecretComparisonUsesFixedLengthDigests(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("mcp_telemetry.go"))
+	require.NoError(t, err)
+	comparison := string(source)
+
+	assert.Contains(t, comparison, "sha256.Sum256([]byte(provided))")
+	assert.Contains(t, comparison, "sha256.Sum256([]byte(expected))")
+	assert.Contains(t, comparison, "subtle.ConstantTimeCompare(providedDigest[:], expectedDigest[:])")
+	assert.NotContains(t, comparison, "subtle.ConstantTimeCompare([]byte(")
+	start := strings.Index(comparison, "func validMCPWorkerSecret")
+	require.NotEqual(t, -1, start)
+	assert.NotContains(t, comparison[start:], "len(", "the secret comparator must not branch on raw secret length")
+}
+
 func TestMCPToolTelemetryRouteRequiresAuthentication(t *testing.T) {
 	_, api := humatest.New(t)
 	RegisterMCPToolTelemetryRoutes(api, NewMCPToolTelemetryHandler(nil, "worker-secret"))
@@ -164,22 +199,31 @@ func TestMCPToolTelemetryRouteReturnsNoContentForAuthenticatedRequests(t *testin
 }
 
 func TestMCPToolTelemetryRouteRejectsMissingOrInvalidWorkerSecret(t *testing.T) {
-	for _, header := range []string{"", "X-MCP-Worker-Secret: wrong-secret"} {
-		_, api := humatest.New(t)
-		api.UseMiddleware(func(ctx huma.Context, next func(huma.Context)) {
-			next(huma.WithValue(ctx, inputs.UserIDKey, "authenticated-internal-user"))
+	for _, tc := range []struct {
+		name       string
+		header     string
+		wantStatus int
+	}{
+		{name: "missing", wantStatus: http.StatusUnprocessableEntity},
+		{name: "invalid", header: "X-MCP-Worker-Secret: wrong-secret", wantStatus: http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, api := humatest.New(t)
+			api.UseMiddleware(func(ctx huma.Context, next func(huma.Context)) {
+				next(huma.WithValue(ctx, inputs.UserIDKey, "authenticated-internal-user"))
+			})
+			RegisterMCPToolTelemetryRoutes(api, NewMCPToolTelemetryHandler(nil, "worker-secret"))
+			args := []interface{}{map[string]interface{}{
+				"tool_surface": "search", "tool_family": "discovery", "outcome": "succeeded", "duration_bucket": "under_250ms",
+			}}
+			if tc.header != "" {
+				args = append([]interface{}{tc.header}, args...)
+			}
+
+			resp := api.Post("/api/v1/mcp/telemetry", args...)
+
+			assert.Equal(t, tc.wantStatus, resp.Code)
 		})
-		RegisterMCPToolTelemetryRoutes(api, NewMCPToolTelemetryHandler(nil, "worker-secret"))
-		args := []interface{}{map[string]interface{}{
-			"tool_surface": "search", "tool_family": "discovery", "outcome": "succeeded", "duration_bucket": "under_250ms",
-		}}
-		if header != "" {
-			args = append([]interface{}{header}, args...)
-		}
-
-		resp := api.Post("/api/v1/mcp/telemetry", args...)
-
-		assert.Equal(t, http.StatusForbidden, resp.Code)
 	}
 }
 
@@ -222,6 +266,10 @@ func TestMCPToolTelemetryPublishedSchemaIsClosedAndBounded(t *testing.T) {
 	path, ok := paths["/api/v1/mcp/telemetry"].(map[string]interface{})
 	require.True(t, ok, "telemetry route must be in the generated OpenAPI route table")
 	post := path["post"].(map[string]interface{})
+	parameters := post["parameters"].([]interface{})
+	workerSecretParameter := parameters[0].(map[string]interface{})
+	assert.Equal(t, "X-MCP-Worker-Secret", workerSecretParameter["name"])
+	assert.Equal(t, true, workerSecretParameter["required"])
 	requestBody := post["requestBody"].(map[string]interface{})
 	content := requestBody["content"].(map[string]interface{})
 	schema := content["application/json"].(map[string]interface{})["schema"].(map[string]interface{})
