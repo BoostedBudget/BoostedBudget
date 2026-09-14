@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"reflect"
 	"regexp"
 	"strings"
@@ -221,6 +222,9 @@ func validatePropertyValue(schema PropertyContract, value interface{}) (interfac
 			return nil, fmt.Errorf("property must be number")
 		}
 		number := rv.Float()
+		if math.IsNaN(number) || math.IsInf(number, 0) {
+			return nil, fmt.Errorf("property must be finite")
+		}
 		if outsideBounds(number, schema) {
 			return nil, fmt.Errorf("number property outside bounds")
 		}

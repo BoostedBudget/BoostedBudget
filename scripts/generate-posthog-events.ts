@@ -569,9 +569,38 @@ function renderGoPropertyTypes(entries: SymbolEntry[]): string[] {
       } else if (property.type === 'number') {
         typeName = 'float64'
       }
-      return `\t${goIdentifier(key)} ${typeName} \`json:"${key}"\``
+      if (!property.required) {
+        typeName = `*${typeName}`
+      }
+      return `\t${goIdentifier(key)} ${typeName} \`json:"${key}${property.required ? '' : ',omitempty'}"\``
     })
-    const props = Object.keys(event.properties).map((key) => `\t\t"${key}": p.${goIdentifier(key)},`)
+    const requiredProps = Object.entries(event.properties)
+      .filter(([, property]) => property.required)
+      .map(([key]) => `\t\t"${key}": p.${goIdentifier(key)},`)
+    const optionalProps = Object.entries(event.properties)
+      .filter(([, property]) => !property.required)
+      .flatMap(([key]) => [
+        `\tif p.${goIdentifier(key)} != nil {`,
+        `\t\tproperties["${key}"] = *p.${goIdentifier(key)}`,
+        '\t}',
+      ])
+    const propertiesMethod = optionalProps.length === 0
+      ? [
+          `func (p ${base}Payload) Properties() map[string]interface{} {`,
+          '\treturn map[string]interface{}{',
+          ...requiredProps,
+          '\t}',
+          '}',
+        ]
+      : [
+          `func (p ${base}Payload) Properties() map[string]interface{} {`,
+          '\tproperties := map[string]interface{}{',
+          ...requiredProps,
+          '\t}',
+          ...optionalProps,
+          '\treturn properties',
+          '}',
+        ]
     return [
       ...enumTypes,
       `type ${base}Payload struct {`,
@@ -580,11 +609,7 @@ function renderGoPropertyTypes(entries: SymbolEntry[]): string[] {
       '',
       `func (${base}Payload) isGeneratedEvent() {}`,
       `func (${base}Payload) EventName() EventName { return ${symbol} }`,
-      `func (p ${base}Payload) Properties() map[string]interface{} {`,
-      '\treturn map[string]interface{}{',
-      ...props,
-      '\t}',
-      '}',
+      ...propertiesMethod,
       '',
     ]
   })

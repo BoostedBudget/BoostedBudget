@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/plaid/plaid-go/v23/plaid"
@@ -9,6 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 )
@@ -16,26 +18,140 @@ import (
 type recordingSyncProductAnalytics struct {
 	userID string
 	event  phclient.TypedEvent
+	events []phclient.TypedEvent
 }
 
 func (r *recordingSyncProductAnalytics) CaptureEvent(_ context.Context, userID string, event phclient.TypedEvent) {
 	r.userID = userID
 	r.event = event
+	r.events = append(r.events, event)
 }
 
-func TestFinancialDataSyncKindUsesPreSyncCursor(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		cursor string
-		want   phclient.FinancialDataSyncCompletedSyncKind
-	}{
-		{name: "initial nil or blank cursor", want: phclient.FinancialDataSyncCompletedSyncKindInitial},
-		{name: "refresh existing cursor", cursor: "cursor-1", want: phclient.FinancialDataSyncCompletedSyncKindRefresh},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, financialDataSyncKind(tc.cursor))
-		})
+type memorySyncCompletionRecorder struct {
+	completed map[string]bool
+}
+
+func (r *memorySyncCompletionRecorder) RecordTransactionSyncCompletion(_ context.Context, id, _ string, _ *string) (bool, error) {
+	if r.completed == nil {
+		r.completed = make(map[string]bool)
 	}
+	first := !r.completed[id]
+	r.completed[id] = true
+	return first, nil
+}
+
+func TestSyncTransactions_BlankFinalCursorUsesDurableLatchAcrossRetriesAndRelink(t *testing.T) {
+	ctx := context.Background()
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+	subscriptions := NewSubscriptionService(tierConfig, nil)
+	plaidService := new(MockPlaidService)
+	linkedItems := new(MockLinkedItemRepository)
+	transactions := new(MockTransactionRepository)
+	accounts := new(MockAccountRepository)
+	profiles := new(mockProfileRepoForCursorTests)
+	service := NewTransactionSyncService(nil, linkedItems, transactions, accounts, profiles, nil,
+		plaidService, subscriptions, nil, nil, nil, nil, nil)
+	analytics := &recordingSyncProductAnalytics{}
+	latch := &memorySyncCompletionRecorder{}
+	SetTransactionSyncProductAnalytics(service, analytics)
+	SetTransactionSyncCompletionRecorder(service, latch)
+
+	user := &domain.User{ID: "user-1", SubscriptionTier: string(domain.TierPremium)}
+	profiles.On("GetUserByID", ctx, "user-1").Return(user, nil).Times(3)
+	accounts.On("GetByLinkedItemIDIncludingRetained", ctx, mock.Anything).
+		Return([]domain.Account{}, nil).Times(3)
+	finalBlank := &plaid.TransactionsSyncResponse{}
+	finalBlank.SetNextCursor("")
+	finalBlank.SetHasMore(false)
+	plaidService.On("TransactionsSync", ctx, "token", "", 730).Return(finalBlank, nil).Times(3)
+
+	item := &domain.LinkedItem{ID: "item-1", UserID: "user-1", AccessToken: "token"}
+	_, err = service.SyncTransactions(ctx, item)
+	require.NoError(t, err)
+	_, err = service.SyncTransactions(ctx, item)
+	require.NoError(t, err)
+
+	relinked := &domain.LinkedItem{ID: "item-2", UserID: "user-1", AccessToken: "token"}
+	_, err = service.SyncTransactions(ctx, relinked)
+	require.NoError(t, err)
+
+	require.Len(t, analytics.events, 3)
+	assert.Equal(t, phclient.FinancialDataSyncCompletedSyncKindInitial,
+		analytics.events[0].(phclient.FinancialDataSyncCompletedPayload).SyncKind)
+	assert.Equal(t, phclient.FinancialDataSyncCompletedSyncKindRefresh,
+		analytics.events[1].(phclient.FinancialDataSyncCompletedPayload).SyncKind,
+		"a blank final cursor and invalid-cursor recovery must not reclassify an already completed item as initial")
+	assert.Equal(t, phclient.FinancialDataSyncCompletedSyncKindInitial,
+		analytics.events[2].(phclient.FinancialDataSyncCompletedPayload).SyncKind,
+		"a relink creates a new retained linked-item generation with its own first completion")
+}
+
+func TestSyncTransactions_NormalInitialCompletionThenRefreshUsesDurableLatch(t *testing.T) {
+	ctx := context.Background()
+	tierConfig, err := config.LoadTierConfig()
+	require.NoError(t, err)
+	plaidService := new(MockPlaidService)
+	linkedItems := new(MockLinkedItemRepository)
+	accounts := new(MockAccountRepository)
+	profiles := new(mockProfileRepoForCursorTests)
+	service := NewTransactionSyncService(nil, linkedItems, new(MockTransactionRepository), accounts, profiles, nil,
+		plaidService, NewSubscriptionService(tierConfig, nil), nil, nil, nil, nil, nil)
+	analytics := &recordingSyncProductAnalytics{}
+	SetTransactionSyncProductAnalytics(service, analytics)
+	SetTransactionSyncCompletionRecorder(service, &memorySyncCompletionRecorder{})
+
+	profiles.On("GetUserByID", ctx, "user-1").
+		Return(&domain.User{ID: "user-1", SubscriptionTier: string(domain.TierPremium)}, nil).Once()
+	accounts.On("GetByLinkedItemIDIncludingRetained", ctx, "item-1").Return([]domain.Account{}, nil).Twice()
+	initial := &plaid.TransactionsSyncResponse{}
+	initial.SetNextCursor("cursor-1")
+	initial.SetHasMore(false)
+	refresh := &plaid.TransactionsSyncResponse{}
+	refresh.SetNextCursor("cursor-2")
+	refresh.SetHasMore(false)
+	plaidService.On("TransactionsSync", ctx, "token", "", 730).Return(initial, nil).Once()
+	plaidService.On("TransactionsSync", ctx, "token", "cursor-1", 0).Return(refresh, nil).Once()
+
+	item := &domain.LinkedItem{ID: "item-1", UserID: "user-1", AccessToken: "token"}
+	_, err = service.SyncTransactions(ctx, item)
+	require.NoError(t, err)
+	cursor := "cursor-1"
+	item.Cursor = &cursor
+	_, err = service.SyncTransactions(ctx, item)
+	require.NoError(t, err)
+
+	require.Len(t, analytics.events, 2)
+	assert.Equal(t, phclient.FinancialDataSyncCompletedSyncKindInitial,
+		analytics.events[0].(phclient.FinancialDataSyncCompletedPayload).SyncKind)
+	assert.Equal(t, phclient.FinancialDataSyncCompletedSyncKindRefresh,
+		analytics.events[1].(phclient.FinancialDataSyncCompletedPayload).SyncKind)
+}
+
+func TestSyncTransactions_CompletionFinalizationFailureEmitsNothing(t *testing.T) {
+	ctx := context.Background()
+	plaidService := new(MockPlaidService)
+	linkedItems := new(MockLinkedItemRepository)
+	accounts := new(MockAccountRepository)
+	service := NewTransactionSyncService(nil, linkedItems, new(MockTransactionRepository), accounts, nil, nil,
+		plaidService, nil, nil, nil, nil, nil, nil)
+	analytics := &recordingSyncProductAnalytics{}
+	SetTransactionSyncProductAnalytics(service, analytics)
+	SetTransactionSyncCompletionRecorder(service, linkedItems)
+	cursor := "cursor-before"
+	item := &domain.LinkedItem{ID: "item-1", UserID: "user-1", AccessToken: "token", Cursor: &cursor}
+	accounts.On("GetByLinkedItemIDIncludingRetained", ctx, "item-1").Return([]domain.Account{}, nil).Once()
+	response := &plaid.TransactionsSyncResponse{}
+	response.SetNextCursor("cursor-after")
+	response.SetHasMore(false)
+	plaidService.On("TransactionsSync", ctx, "token", cursor, 0).Return(response, nil).Once()
+	after := "cursor-after"
+	linkedItems.On("RecordTransactionSyncCompletion", ctx, "item-1", cursor, &after).
+		Return(false, errors.New("commit failed")).Once()
+
+	_, err := service.SyncTransactions(ctx, item)
+	require.ErrorContains(t, err, "finalize transaction sync completion")
+	assert.Empty(t, analytics.events, "an uncommitted completion cannot be reported as delivered")
 }
 
 // TestSyncTransactions_BlankNextCursor_DoesNotOverwriteStoredCursor pins the LIVE path against a
@@ -84,6 +200,7 @@ func TestSyncTransactions_BlankNextCursor_DoesNotOverwriteStoredCursor(t *testin
 	)
 	analytics := &recordingSyncProductAnalytics{}
 	SetTransactionSyncProductAnalytics(service, analytics)
+	SetTransactionSyncCompletionRecorder(service, mockLinkedItemRepo)
 
 	goodCursor := "cursor-earned-over-many-syncs"
 	linkedItem := &domain.LinkedItem{
@@ -109,6 +226,8 @@ func TestSyncTransactions_BlankNextCursor_DoesNotOverwriteStoredCursor(t *testin
 
 	// Permissive so an unexpected call is a readable ASSERTION failure rather than a mock panic.
 	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockLinkedItemRepo.On("RecordTransactionSyncCompletion", ctx, "linked-item-123", goodCursor, (*string)(nil)).
+		Return(false, nil).Once()
 
 	result, err := service.SyncTransactions(ctx, linkedItem)
 	require.NoError(t, err)
@@ -273,6 +392,9 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 		nil, mockLinkedItemRepo, mockTransactionRepo, mockAccountRepo,
 		nil, nil, mockPlaidService, nil, nil, nil, nil, nil, nil,
 	)
+	analytics := &recordingSyncProductAnalytics{}
+	SetTransactionSyncProductAnalytics(service, analytics)
+	SetTransactionSyncCompletionRecorder(service, mockLinkedItemRepo)
 
 	startCursor := "cursor-page-0"
 	linkedItem := &domain.LinkedItem{
@@ -311,7 +433,7 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", startCursor, 0).Return(page1, nil).Once()
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", "cursor-page-1", 0).Return(page2, nil).Once()
-	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockLinkedItemRepo.On("RecordTransactionSyncProgress", ctx, "linked-item-multipage", startCursor, "cursor-page-1").Return(nil).Once()
 
 	mockTransactionRepo.On("CreateBatch", mock.Anything, mock.Anything).
 		Return(map[string]bool{"txn-page1": true, "txn-page2": true}, nil).Maybe()
@@ -337,12 +459,14 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 
 	var persisted []string
 	for _, c := range mockLinkedItemRepo.Calls {
-		if c.Method == "UpdateCursor" {
-			persisted = append(persisted, c.Arguments.Get(2).(string))
+		if c.Method == "RecordTransactionSyncProgress" {
+			persisted = append(persisted, c.Arguments.Get(3).(string))
 		}
 	}
 	assert.Equal(t, []string{"cursor-page-1"}, persisted,
 		"exactly page 1's cursor should be persisted — never the blank")
+	assert.Nil(t, analytics.event, "partial pagination is durable progress, not a completed sync")
+	mockLinkedItemRepo.AssertNotCalled(t, "RecordTransactionSyncCompletion", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	storedInSync1 := storedExternalIDs(mockTransactionRepo)
 	assert.Equal(t, 1, storedInSync1["txn-page1"],
@@ -379,6 +503,9 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 	page2Redelivered.SetHasMore(false)
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", resumedCursor, 0).
 		Return(page2Redelivered, nil).Once()
+	completedCursor := "cursor-page-2"
+	mockLinkedItemRepo.On("RecordTransactionSyncCompletion", ctx, "linked-item-multipage", resumedCursor, &completedCursor).
+		Return(true, nil).Once()
 
 	result2, err2 := service.SyncTransactions(ctx, linkedItem)
 	require.NoError(t, err2, "the follow-up sync must complete now that Plaid sends a real next_cursor")
@@ -397,12 +524,16 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 
 	var persistedAfter []string
 	for _, c := range mockLinkedItemRepo.Calls {
-		if c.Method == "UpdateCursor" {
-			persistedAfter = append(persistedAfter, c.Arguments.Get(2).(string))
+		if c.Method == "RecordTransactionSyncProgress" {
+			persistedAfter = append(persistedAfter, c.Arguments.Get(3).(string))
 		}
 	}
-	assert.Equal(t, []string{"cursor-page-1", "cursor-page-2"}, persistedAfter,
-		"the second sync must advance the cursor past page 2, ending the lag")
+	assert.Equal(t, []string{"cursor-page-1"}, persistedAfter,
+		"partial progress uses UpdateCursor; full completion is finalized atomically by the completion recorder")
+	payload, ok := analytics.event.(phclient.FinancialDataSyncCompletedPayload)
+	require.True(t, ok)
+	assert.Equal(t, phclient.FinancialDataSyncCompletedSyncKindInitial, payload.SyncKind,
+		"the partial cursor must not turn the connection's first full catch-up into refresh")
 
 	mockPlaidService.AssertExpectations(t)
 }

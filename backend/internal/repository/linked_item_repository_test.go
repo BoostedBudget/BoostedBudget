@@ -222,6 +222,86 @@ func TestLinkedItemRepository_UpdateCursor(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestLinkedItemRepository_RecordTransactionSyncCompletion(t *testing.T) {
+	mockDB, repo := setupLinkedItemMockDB(t)
+	defer mockDB.Close()
+
+	completedCursor := "cursor-after"
+	mockDB.ExpectQuery("UPDATE linked_items AS li").
+		WithArgs("item-1", "cursor-before", &completedCursor).
+		WillReturnRows(pgxmock.NewRows([]string{"first_completion"}).AddRow(true))
+
+	recorder := repo.(interface {
+		RecordTransactionSyncCompletion(context.Context, string, string, *string) (bool, error)
+	})
+	first, err := recorder.RecordTransactionSyncCompletion(context.Background(), "item-1", "cursor-before", &completedCursor)
+	require.NoError(t, err)
+	assert.True(t, first)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestLinkedItemRepository_ResetCursorIfUnchanged(t *testing.T) {
+	mockDB, repo := setupLinkedItemMockDB(t)
+	defer mockDB.Close()
+
+	mockDB.ExpectExec("UPDATE linked_items").
+		WithArgs("item-1", "cursor-before").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	resetter := repo.(interface {
+		ResetCursorIfUnchanged(context.Context, string, string) error
+	})
+	require.NoError(t, resetter.ResetCursorIfUnchanged(context.Background(), "item-1", "cursor-before"))
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestLinkedItemRepository_ResetCursorIfUnchangedRejectsStaleOrTerminalItem(t *testing.T) {
+	mockDB, repo := setupLinkedItemMockDB(t)
+	defer mockDB.Close()
+
+	mockDB.ExpectExec("UPDATE linked_items").
+		WithArgs("item-1", "cursor-before").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	resetter := repo.(interface {
+		ResetCursorIfUnchanged(context.Context, string, string) error
+	})
+	err := resetter.ResetCursorIfUnchanged(context.Background(), "item-1", "cursor-before")
+	require.ErrorIs(t, err, ErrLinkedItemSyncStateChanged)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestLinkedItemRepository_RecordTransactionSyncProgressDoesNotMarkCompletion(t *testing.T) {
+	mockDB, repo := setupLinkedItemMockDB(t)
+	defer mockDB.Close()
+
+	mockDB.ExpectExec("UPDATE linked_items").
+		WithArgs("item-1", "cursor-before", "cursor-partial").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	advancer := repo.(interface {
+		RecordTransactionSyncProgress(context.Context, string, string, string) error
+	})
+	require.NoError(t, advancer.RecordTransactionSyncProgress(context.Background(), "item-1", "cursor-before", "cursor-partial"))
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestLinkedItemRepository_RecordTransactionSyncCompletionRejectsStaleOrTerminalItem(t *testing.T) {
+	mockDB, repo := setupLinkedItemMockDB(t)
+	defer mockDB.Close()
+
+	mockDB.ExpectQuery("UPDATE linked_items AS li").
+		WithArgs("item-1", "stale-cursor", (*string)(nil)).
+		WillReturnError(pgx.ErrNoRows)
+
+	recorder := repo.(interface {
+		RecordTransactionSyncCompletion(context.Context, string, string, *string) (bool, error)
+	})
+	_, err := recorder.RecordTransactionSyncCompletion(context.Background(), "item-1", "stale-cursor", nil)
+	require.ErrorIs(t, err, ErrLinkedItemSyncStateChanged)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
 // TestLinkedItemRepository_Delete tests deletion of a linked item
 func TestLinkedItemRepository_Delete(t *testing.T) {
 	mock, repo := setupLinkedItemMockDB(t)

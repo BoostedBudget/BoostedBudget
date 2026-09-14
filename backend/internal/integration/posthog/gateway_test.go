@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"testing"
 
 	posthoggo "github.com/posthog/posthog-go"
@@ -148,6 +149,14 @@ func TestValidatePropertyValueEnforcesNumericBounds(t *testing.T) {
 	value, err := validatePropertyValue(contract, 25)
 	require.NoError(t, err)
 	assert.Equal(t, int64(25), value)
+}
+
+func TestValidatePropertyValueRejectsNonFiniteNumbers(t *testing.T) {
+	contract := PropertyContract{Kind: "number"}
+	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		_, err := validatePropertyValue(contract, value)
+		require.Error(t, err)
+	}
 }
 
 func TestGatewayLegacyCaptureDropsUnreviewedPropertiesButStillGatesConsent(t *testing.T) {

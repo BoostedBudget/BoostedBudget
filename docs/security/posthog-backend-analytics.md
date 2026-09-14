@@ -24,13 +24,14 @@ unreviewed, all of their properties are stripped before delivery.
 The grandfathered `Analytics.Capture` adapters are explicit production wiring for: data export,
 transactions, registration, rule application, savings goals, investments, boost execution,
 households, account deletion, subscription webhooks, past-due handling, email-change propagation,
-transfer correlation, investment sync, liability sync, dead letters, merchants, and transfer
+transfer correlation, investment sync, liability sync, merchants, and transfer
 suggestion HTTP handling. They remain only because their catalog rows are still marked `legacy`
 and their property contracts are unreviewed; moving them mechanically to typed payloads would bless
 unknown semantics. The server injects the gateway—not the SDK client—into every adapter, and a
 guard prevents raw SDK imports or raw-client production wiring. A second exact path-and-call-count
-allowlist pins every grandfathered `.Capture` site, so adding even one raw producer fails tests.
-The six grandfathered `.CaptureIfConsented` sites are pinned by the same path-and-count rule.
+allowlist pins the exact generated event symbol at every grandfathered `.Capture` and
+`.CaptureIfConsented` site, so adding a call or substituting its event fails tests. The household
+adapter's private wrapper is additionally pinned at all nine generated-symbol callers.
 Each adapter must be converted to a generated payload when its event semantics are reviewed.
 
 Operational health does not belong in PostHog. Contract entries classified `operational` are
@@ -40,14 +41,27 @@ properties. Investment/liability sync failures remain in their existing retry st
 and structured logs; Paddle cleanup failures remain in the deletion residue/audit workflow and
 structured logs; dead letters remain in their durable repository, Prometheus, and structured logs.
 Their former PostHog contracts are deprecated and cannot pass the gateway.
+`dead_letter_queue_size` is refreshed from the durable repository at process startup and every job
+health interval. It counts unresolved rows using the same replay-resolution predicate as the admin
+health repository, so existing startup backlog appears immediately and successful replay or
+deletion lowers the gauge; a failed database read leaves the series absent or at its last measured
+value rather than asserting a false zero.
 
 Capture is best effort and at most once from the application's perspective. Consent/identity
 lookups and PostHog backpressure never change a business-operation result. The SDK queue is flushed
 with `Close` during graceful server shutdown; enqueue failures are logged without payloads.
 
 `financial_data_sync_completed` is produced only at the end of
-`transactionSyncService.SyncTransactions`, after transaction storage and the durable cursor update
-succeed. That shared boundary covers scheduled jobs and transaction webhooks without duplicate
-success events. Its sole property is the bounded `sync_kind` enum (`initial` or `refresh`), derived
-from the linked item's pre-sync cursor. Legacy `sync_completed` and `account_synced` emissions from
-the unused provider are not a production metric source.
+`transactionSyncService.SyncTransactions`, after transaction storage, full pagination, and an
+atomic durable completion/cursor write succeed. Partial progress is retained but never reported as
+completion. A retained per-linked-item first-completion timestamp makes classification independent
+of cursor shape: the first full catch-up for a new or relinked connection is `initial`; subsequent
+completions and invalid-cursor recoveries are `refresh`. Invalid-cursor recovery compare-and-resets
+only the cursor value that Plaid rejected, so a stale recovery cannot overwrite newer progress.
+During rolling deploys, a database trigger latches legacy `last_synced_at` completion writes from an
+older binary; the migration also backfills that same durable evidence for existing connections.
+The latch can commit before a best-effort
+PostHog enqueue and is therefore a semantic completion fact, not a delivery receipt. That shared
+boundary covers scheduled jobs and transaction webhooks without duplicate success producers.
+Legacy `sync_completed` and `account_synced` emissions from the unused provider are not a production
+metric source.
