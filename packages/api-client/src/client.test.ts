@@ -261,6 +261,56 @@ function isGlobalDeclaration(node: ts.Node, sourceFile: ts.SourceFile): boolean 
   return !ts.isExternalModule(sourceFile)
 }
 
+function isAmbientDeclaration(node: ts.Node, sourceFile: ts.SourceFile): boolean {
+  if (sourceFile.isDeclarationFile) return true
+
+  for (let current: ts.Node | undefined = node; current; current = current.parent) {
+    if (
+      ts.isModuleDeclaration(current)
+      && (current.flags & ts.NodeFlags.GlobalAugmentation) !== 0
+    ) {
+      return true
+    }
+    if (
+      ts.canHaveModifiers(current)
+      && ts.getModifiers(current)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword)
+    ) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function ambientBrowserValueDeclaration(
+  node: ts.Node,
+  sourceFile: ts.SourceFile,
+): string | undefined {
+  if (
+    !ts.isVariableDeclaration(node)
+    && !ts.isFunctionDeclaration(node)
+    && !ts.isClassDeclaration(node)
+    && !ts.isEnumDeclaration(node)
+    && !ts.isModuleDeclaration(node)
+  ) {
+    return undefined
+  }
+  if (!node.name || !ts.isIdentifier(node.name)) return undefined
+  if (!browserRuntimeGlobals.has(node.name.text)) return undefined
+  if (!isGlobalDeclaration(node, sourceFile) || !isAmbientDeclaration(node, sourceFile)) {
+    return undefined
+  }
+  return node.name.text
+}
+
+function isBrowserLibraryReference(library: string): boolean {
+  const normalized = library.toLowerCase()
+  return normalized === 'dom'
+    || normalized.startsWith('dom.')
+    || normalized === 'webworker'
+    || normalized.startsWith('webworker.')
+}
+
 function createTypeChecker(sourceFile: ts.SourceFile): ts.TypeChecker {
   const options: ts.CompilerOptions = {
     noLib: true,
@@ -296,9 +346,19 @@ function findPortabilityViolations(source: string, relativePath: string): string
   for (const reference of sourceFile.typeReferenceDirectives) {
     if (reference.fileName === 'vite/client') violations.add('vite/client type reference')
   }
+  for (const reference of sourceFile.libReferenceDirectives) {
+    if (isBrowserLibraryReference(reference.fileName)) {
+      violations.add(`browser library reference ${reference.fileName}`)
+    }
+  }
 
   function visit(node: ts.Node): void {
     if (isViteClientImport(node)) violations.add('vite/client import')
+
+    const ambientBrowserGlobal = ambientBrowserValueDeclaration(node, sourceFile)
+    if (ambientBrowserGlobal) {
+      violations.add(`ambient browser value declaration ${ambientBrowserGlobal}`)
+    }
 
     if (
       (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node))
@@ -370,6 +430,61 @@ describe('API client portability detector', () => {
   test.each(forbiddenSyntax)('rejects %s', (_description, source) => {
     expect(findPortabilityViolations(source, 'fixture.ts')).not.toEqual([])
   })
+
+  const ambientBrowserGlobals = [
+    'window',
+    'document',
+    'navigator',
+    'localStorage',
+    'sessionStorage',
+  ] as const
+
+  test.each(ambientBrowserGlobals)('rejects top-level ambient %s declarations', (name) => {
+    const source = `declare var ${name}: { value: string }; ${name}.value`
+
+    expect(findPortabilityViolations(source, 'fixture.ts')).not.toEqual([])
+  })
+
+  test.each(ambientBrowserGlobals)('rejects declare global ambient %s declarations', (name) => {
+    const source = `
+      export {}
+      declare global { var ${name}: { value: string } }
+      ${name}.value
+    `
+
+    expect(findPortabilityViolations(source, 'fixture.ts')).not.toEqual([])
+  })
+
+  const ambientValueDeclarationForms = [
+    ['function', 'declare function navigator(): string; navigator()'],
+    ['class', 'declare class window {}; new window()'],
+    ['enum', 'declare enum document { Value }; document.Value'],
+    ['namespace', 'declare namespace localStorage { const value: string }; localStorage.value'],
+  ] as const
+
+  test.each(ambientValueDeclarationForms)('rejects ambient %s declarations', (_kind, source) => {
+    expect(findPortabilityViolations(source, 'fixture.ts')).not.toEqual([])
+  })
+
+  test('accepts equivalent non-ambient local value declarations', () => {
+    const source = `
+      export function navigator(): string { return 'fixture' }
+      export class window {}
+      export enum document { Value }
+      export namespace localStorage { export const value = 'fixture' }
+    `
+
+    expect(findPortabilityViolations(source, 'fixture.ts')).toEqual([])
+  })
+
+  test.each(['dom', 'dom.iterable', 'webworker', 'webworker.importscripts'])(
+    'rejects the %s browser library reference',
+    (library) => {
+      const source = `/// <reference lib="${library}" />\nlet browserValue: Window | Worker`
+
+      expect(findPortabilityViolations(source, 'fixture.ts')).not.toEqual([])
+    },
+  )
 
   test('ignores comments and ordinary string prose', () => {
     const source = `
