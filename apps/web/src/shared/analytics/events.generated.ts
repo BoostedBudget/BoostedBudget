@@ -1001,7 +1001,7 @@ function isValidAnalyticsProperty(
   }
 }
 
-function isAnalyticsProperties(value: unknown): value is Record<string, unknown> | undefined {
+function isPlainAnalyticsProperties(value: unknown): value is Record<string, unknown> | undefined {
   if (value === undefined) return true
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
   try {
@@ -1017,10 +1017,11 @@ export function normalizeAnalyticsEventPayload(
   properties?: unknown,
 ): Record<string, unknown> | null {
   if (!Object.prototype.hasOwnProperty.call(ANALYTICS_EVENT_CONTRACTS, event)) return null
-  if (!isAnalyticsProperties(properties)) return null
+  if (!isPlainAnalyticsProperties(properties)) return null
   const input = (properties ?? {}) as Record<string, unknown>
-  if (ANALYTICS_EVENTS_WITH_UNREVIEWED_PROPERTIES.has(event as AnalyticsEventName)) return {}
-  const contract = ANALYTICS_EVENT_CONTRACTS[event as AnalyticsEventName]
+  const analyticsEvent = event as AnalyticsEventName
+  if (ANALYTICS_EVENTS_WITH_UNREVIEWED_PROPERTIES.has(analyticsEvent)) return {}
+  const contract = ANALYTICS_EVENT_CONTRACTS[analyticsEvent]
   for (const key of Object.keys(input)) {
     if (!Object.prototype.hasOwnProperty.call(contract, key)) return null
   }
