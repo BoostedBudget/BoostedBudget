@@ -2651,8 +2651,28 @@ Each phase produces a deployable, valuable product increment. The architecture s
   adversarial review (retry once, then fresh-context fallback if unavailable); update PR #1649
   with evidence before marking it ready.
 
-*Document Version: 2.0.1*
+## 2026-09-14 — #1654 Requirements-Gap Remediation
 
-*Last Updated: 2026-09-13*
+- **Baseline and audit:** Work was staged remotely from base `9b22ed3c`. The initial requirements
+  audit found 10/14 MET, 4 PARTIAL, and 0 NOT MET. The four partial gaps were package-ambient
+  Vite/browser types, a Router 8/React 19.2.3 peer conflict, a non-genuine route smoke test, and
+  incomplete compatibility/dependency guards.
+- **Implemented closures:** The API client now has a package-wide AST/symbol portability boundary,
+  targets ES2020 without DOM libraries, and no longer carries its `vite-env` declaration. Mobile
+  route coverage uses official `expo-router` and Testing Library navigation. React Router is
+  `^7.13.1`, resolving to v7 and remaining compatible with React 19.2.3. A 160-case guard now pins
+  dependency compatibility, Dependabot policy, and the single-lockfile invariant.
+- **Scope:** Every named milestone #8 deferral remains separate; this remediation creates no new
+  ticket. #1668 and CI-runner work are excluded, with no additional Ubicloud migration.
+- **Review workflow:** Fresh subagents handled implementation, specification review, and quality
+  review, and both specification and quality approvals were obtained.
+- **Validation so far:** Available local evidence includes 97 API-client tests, 32 mobile tests at
+  99.03% coverage, all 160 guard cases, Expo Doctor 21/21, package-export checks, and the complete
+  web test/typecheck/lint/E2E checks. Final whole-repository validation and the mandatory
+  adversarial review remain pending; this entry does not mark those completion gates as complete.
+
+*Document Version: 2.0.2*
+
+*Last Updated: 2026-09-14*
 
 *Project: BoostedBudget - Global Financial Automation Platform*
