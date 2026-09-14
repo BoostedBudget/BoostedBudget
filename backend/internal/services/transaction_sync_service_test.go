@@ -2393,7 +2393,7 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 
 			// The completion latch and final cursor are committed atomically.
 			mockLinkedItemRepo.On("RecordTransactionSyncCompletion", ctx, "linked-item-first-sync", "", &firstCursor).
-				Return(true, nil).Once()
+				Return(repository.TransactionSyncCompletionInitial, nil).Once()
 
 			// Execute
 			result, err := service.SyncTransactions(ctx, linkedItem)

@@ -229,14 +229,31 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletion(t *testing.T) {
 	completedCursor := "cursor-after"
 	mockDB.ExpectQuery("UPDATE linked_items AS li").
 		WithArgs("item-1", "cursor-before", &completedCursor).
-		WillReturnRows(pgxmock.NewRows([]string{"first_completion"}).AddRow(true))
+		WillReturnRows(pgxmock.NewRows([]string{"completion_disposition"}).AddRow("initial"))
 
 	recorder := repo.(interface {
-		RecordTransactionSyncCompletion(context.Context, string, string, *string) (bool, error)
+		RecordTransactionSyncCompletion(context.Context, string, string, *string) (TransactionSyncCompletionDisposition, error)
 	})
-	first, err := recorder.RecordTransactionSyncCompletion(context.Background(), "item-1", "cursor-before", &completedCursor)
+	disposition, err := recorder.RecordTransactionSyncCompletion(context.Background(), "item-1", "cursor-before", &completedCursor)
 	require.NoError(t, err)
-	assert.True(t, first)
+	assert.Equal(t, TransactionSyncCompletionInitial, disposition)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestLinkedItemRepository_RecordTransactionSyncCompletionSuppressesAmbiguousRollout(t *testing.T) {
+	mockDB, repo := setupLinkedItemMockDB(t)
+	defer mockDB.Close()
+
+	mockDB.ExpectQuery("UPDATE linked_items AS li").
+		WithArgs("item-1", "cursor-before", (*string)(nil)).
+		WillReturnRows(pgxmock.NewRows([]string{"completion_disposition"}).AddRow("suppressed_rollout_ambiguous"))
+
+	recorder := repo.(interface {
+		RecordTransactionSyncCompletion(context.Context, string, string, *string) (TransactionSyncCompletionDisposition, error)
+	})
+	disposition, err := recorder.RecordTransactionSyncCompletion(context.Background(), "item-1", "cursor-before", nil)
+	require.NoError(t, err)
+	assert.Equal(t, TransactionSyncCompletionSuppressedRolloutAmbiguous, disposition)
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
@@ -295,7 +312,7 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletionRejectsStaleOrTermi
 		WillReturnError(pgx.ErrNoRows)
 
 	recorder := repo.(interface {
-		RecordTransactionSyncCompletion(context.Context, string, string, *string) (bool, error)
+		RecordTransactionSyncCompletion(context.Context, string, string, *string) (TransactionSyncCompletionDisposition, error)
 	})
 	_, err := recorder.RecordTransactionSyncCompletion(context.Background(), "item-1", "stale-cursor", nil)
 	require.ErrorIs(t, err, ErrLinkedItemSyncStateChanged)

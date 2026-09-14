@@ -151,7 +151,7 @@ type SyncProposedContributionUpserter interface {
 // first completion for its linked-item generation. It is intentionally narrower than the full
 // linked-item repository so worker test doubles do not gain unrelated methods.
 type TransactionSyncCompletionRecorder interface {
-	RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, completedCursor *string) (bool, error)
+	RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, completedCursor *string) (repository.TransactionSyncCompletionDisposition, error)
 }
 
 type transactionSyncCursorResetter interface {
@@ -851,18 +851,24 @@ func (s *transactionSyncService) SyncTransactions(
 		if pendingCursor != "" {
 			completedCursor = &pendingCursor
 		}
-		firstCompletion, err := s.completionRecorder.RecordTransactionSyncCompletion(
+		disposition, err := s.completionRecorder.RecordTransactionSyncCompletion(
 			ctx, linkedItem.ID, preSyncCursor, completedCursor,
 		)
 		if err != nil {
 			s.logger.Error("failed to finalize transaction sync completion", "error", err)
 			return result, fmt.Errorf("failed to finalize transaction sync completion: %w", err)
 		}
-		completionRecorded = true
-		if firstCompletion {
+		switch disposition {
+		case repository.TransactionSyncCompletionInitial:
+			completionRecorded = true
 			syncKind = phclient.FinancialDataSyncCompletedSyncKindInitial
-		} else {
+		case repository.TransactionSyncCompletionRefresh:
+			completionRecorded = true
 			syncKind = phclient.FinancialDataSyncCompletedSyncKindRefresh
+		case repository.TransactionSyncCompletionSuppressedRolloutAmbiguous:
+			// The durable write succeeded, but mixed-version evidence cannot prove event semantics.
+		default:
+			s.logger.Error("transaction sync completion returned an unknown analytics disposition")
 		}
 	} else if pendingCursor != "" && !fullyPaginated {
 		advancer, ok := s.linkedItemRepo.(transactionSyncCursorAdvancer)

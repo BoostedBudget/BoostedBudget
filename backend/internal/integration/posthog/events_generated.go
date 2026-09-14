@@ -20,7 +20,7 @@ const (
 	EventDeletionCancelled   = "deletion_cancelled"
 	EventDeletionRequested   = "deletion_requested"
 	EventEmailChanged        = "email_changed"
-	// EventFinancialDataSyncCompleted Fires best-effort only after a fully paginated Plaid transaction sync atomically commits its durable completion latch and final cursor; the per-linked-item latch classifies the first full catch-up as initial and every later completion or invalid-cursor recovery as refresh.
+	// EventFinancialDataSyncCompleted Fires best-effort only after a fully paginated Plaid transaction sync atomically commits its durable completion latch and final cursor; the per-linked-item latch classifies the first full catch-up as initial and every later completion or invalid-cursor recovery as refresh, while a one-time rollout-ambiguous legacy completion is conservatively suppressed.
 	EventFinancialDataSyncCompleted    = "financial_data_sync_completed"
 	EventHouseholdAccountHidden        = "household_account_hidden"
 	EventHouseholdAccountShared        = "household_account_shared"

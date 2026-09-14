@@ -58,8 +58,11 @@ completion. A retained per-linked-item first-completion timestamp makes classifi
 of cursor shape: the first full catch-up for a new or relinked connection is `initial`; subsequent
 completions and invalid-cursor recoveries are `refresh`. Invalid-cursor recovery compare-and-resets
 only the cursor value that Plaid rejected, so a stale recovery cannot overwrite newer progress.
-During rolling deploys, a database trigger latches legacy `last_synced_at` completion writes from an
-older binary; the migration also backfills that same durable evidence for existing connections.
+The migration backfills connections with durable `last_synced_at` evidence already present at
+cutover. If an older binary writes `last_synced_at` after that snapshot while the latch remains
+empty, the first new-code completion atomically sets the latch but emits no event: the old write
+cannot prove full versus partial pagination. The next completion is reported as `refresh`. This
+bounded rollout undercounts one completion instead of inventing an `initial` or `refresh` event.
 The latch can commit before a best-effort
 PostHog enqueue and is therefore a semantic completion fact, not a delivery receipt. That shared
 boundary covers scheduled jobs and transaction webhooks without duplicate success producers.
