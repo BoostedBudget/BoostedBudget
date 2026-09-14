@@ -30,6 +30,8 @@ func TestMigration000211_PostHogErasureOutboxContract(t *testing.T) {
 		"requires_manual_event_verification BOOLEAN NOT NULL DEFAULT FALSE",
 		"provider_request_started_at TIMESTAMPTZ",
 		"resolution_cursor INTEGER NOT NULL DEFAULT 0",
+		"baseline_cursor INTEGER NOT NULL DEFAULT 0",
+		"poll_cursor INTEGER NOT NULL DEFAULT 0",
 		"provider_deletion_baseline_encrypted TEXT",
 		"identities_encrypted IS NULL",
 	} {

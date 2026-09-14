@@ -31,10 +31,11 @@ func (PostHogErasureArgs) Kind() string { return "posthog_erasure" }
 type postHogErasureStore interface {
 	ClaimDue(context.Context, time.Time, time.Duration) (*repository.PostHogErasureRecord, error)
 	MarkPersonUUIDsResolved(context.Context, string, string, []string, bool, int, int) (bool, error)
+	MarkDeletionBaselineCheckpoint(context.Context, string, string, map[string]*time.Time, int, int) (bool, error)
 	MarkDeletionRequestStarted(context.Context, string, string, map[string]*time.Time) (time.Time, bool, error)
 	MarkAccepted(context.Context, string, string, int, bool) (bool, error)
 	RecordPollPending(context.Context, string, string) (bool, error)
-	MarkPersonEventsVerified(context.Context, string, string, bool) (bool, error)
+	MarkPersonPollCheckpoint(context.Context, string, string, int, int, bool) (bool, error)
 	RecordRetry(context.Context, string, string, string, time.Time, int) (string, error)
 }
 
@@ -120,18 +121,31 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 				return nil
 			}
 		}
+	case "person_baseline":
+		if record.BaselineCursor >= len(record.PersonUUIDs) {
+			err = fmt.Errorf("PostHog erasure baseline cursor exhausted")
+			break
+		}
+		personUUID := record.PersonUUIDs[record.BaselineCursor]
+		var checkpoint map[string]*time.Time
+		checkpoint, err = w.provider.CapturePersonEventDeletionBaseline(phaseCtx, record.ProjectID, record.Region, []string{personUUID})
+		if err == nil {
+			baseline := mergeDeletionBaseline(record.DeletionBaseline, checkpoint)
+			var updated bool
+			updated, err = w.store.MarkDeletionBaselineCheckpoint(ctx, record.ID, record.LeaseToken, baseline, record.BaselineCursor+1, len(record.PersonUUIDs))
+			if err == nil && !updated {
+				err = fmt.Errorf("PostHog erasure lease lost")
+			}
+			if err == nil {
+				observability.RecordPostHogErasureAttempt("person_baseline", "accepted", "none")
+				return nil
+			}
+		}
 	case "person_delete":
 		requiresManualEvents := false
 		baseline := record.DeletionBaseline
-		if record.ProviderRequestStartedAt == nil {
-			baseline, err = w.provider.CapturePersonEventDeletionBaseline(phaseCtx, record.ProjectID, record.Region, record.PersonUUIDs)
-			if err != nil {
-				break
-			}
-		}
-		var startedAt time.Time
 		var updated bool
-		startedAt, updated, err = w.store.MarkDeletionRequestStarted(ctx, record.ID, record.LeaseToken, baseline)
+		_, updated, err = w.store.MarkDeletionRequestStarted(ctx, record.ID, record.LeaseToken, baseline)
 		if err == nil && !updated {
 			err = fmt.Errorf("PostHog erasure lease lost")
 		}
@@ -145,15 +159,10 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 		result, err = w.provider.RequestPersonDeletion(phaseCtx, record.ProjectID, record.Region, record.Identities)
 		if err == nil && (result.PersonsFound != len(record.PersonUUIDs) || result.PersonsDeleted != len(record.PersonUUIDs)) {
 			if result.PersonsFound == 0 && result.PersonsDeleted == 0 && len(record.PersonUUIDs) > 0 {
-				if err = phaseCtx.Err(); err != nil {
-					break
-				}
-				var observation phclient.ErasureDeletionObservation
-				observation, err = w.provider.PersonEventDeletionStatus(phaseCtx, record.ProjectID, record.Region, record.PersonUUIDs, baseline, startedAt, w.now())
-				requiresManualEvents = observation.RequiresManualVerification
-				if err == nil && !observation.Found {
-					err = &phclient.ErasureProviderError{Class: "invalid_response"}
-				}
+				// The original 202 may have landed before its local acceptance checkpoint. A repeated
+				// bulk request then legitimately reports zero people. Persist acceptance conservatively;
+				// the checkpointed per-person poll and manual event evidence establish completion.
+				requiresManualEvents = true
 			} else {
 				err = &phclient.ErasureProviderError{Class: "invalid_response"}
 			}
@@ -178,7 +187,12 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 		if record.ProviderRequestStartedAt != nil {
 			submittedAt = *record.ProviderRequestStartedAt
 		}
-		observation, err = w.provider.PersonEventDeletionStatus(phaseCtx, record.ProjectID, record.Region, record.PersonUUIDs, record.DeletionBaseline, submittedAt, *record.AcceptedAt)
+		if record.PollCursor >= len(record.PersonUUIDs) {
+			err = fmt.Errorf("PostHog erasure poll cursor exhausted")
+			break
+		}
+		personUUID := record.PersonUUIDs[record.PollCursor]
+		observation, err = w.provider.PersonEventDeletionStatus(phaseCtx, record.ProjectID, record.Region, []string{personUUID}, record.DeletionBaseline, submittedAt, *record.AcceptedAt)
 		if err == nil && (!observation.Found || !observation.Complete) {
 			updated, updateErr := w.store.RecordPollPending(ctx, record.ID, record.LeaseToken)
 			if updateErr != nil {
@@ -191,7 +205,7 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 		}
 		if err == nil {
 			var updated bool
-			updated, err = w.store.MarkPersonEventsVerified(ctx, record.ID, record.LeaseToken, observation.RequiresManualVerification)
+			updated, err = w.store.MarkPersonPollCheckpoint(ctx, record.ID, record.LeaseToken, record.PollCursor+1, len(record.PersonUUIDs), observation.RequiresManualVerification)
 			if err == nil && !updated {
 				err = fmt.Errorf("PostHog erasure lease lost")
 			}
@@ -208,6 +222,17 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 		return w.persistRetry(ctx, record, class, retryAfter)
 	}
 	return nil
+}
+
+func mergeDeletionBaseline(existing, checkpoint map[string]*time.Time) map[string]*time.Time {
+	result := make(map[string]*time.Time, len(existing)+len(checkpoint))
+	for personUUID, createdAt := range existing {
+		result[personUUID] = createdAt
+	}
+	for personUUID, createdAt := range checkpoint {
+		result[personUUID] = createdAt
+	}
+	return result
 }
 
 func appendUniqueStrings(existing, additions []string) []string {

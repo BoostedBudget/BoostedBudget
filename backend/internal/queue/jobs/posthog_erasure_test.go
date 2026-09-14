@@ -17,14 +17,15 @@ import (
 )
 
 type stubPostHogErasureStore struct {
-	record      *repository.PostHogErasureRecord
-	claimErr    error
-	accepted    bool
-	retryClass  string
-	retryAt     time.Time
-	maxAttempts int
-	retryState  string
-	backlog     repository.PostHogErasureBacklog
+	record        *repository.PostHogErasureRecord
+	claimErr      error
+	accepted      bool
+	retryClass    string
+	retryAt       time.Time
+	maxAttempts   int
+	retryState    string
+	backlog       repository.PostHogErasureBacklog
+	checkpointErr error
 }
 
 func (s *stubPostHogErasureStore) Backlog(context.Context, time.Time) (repository.PostHogErasureBacklog, error) {
@@ -39,6 +40,23 @@ func (s *stubPostHogErasureStore) MarkPersonUUIDsResolved(_ context.Context, _, 
 	s.record.RequiresManualEventVerification = s.record.RequiresManualEventVerification || unresolved
 	s.record.ResolutionCursor = nextCursor
 	if nextCursor == total {
+		if len(uuids) == 0 {
+			s.record.Phase = "person_delete"
+		} else {
+			s.record.Phase = "person_baseline"
+		}
+	}
+	return true, nil
+}
+func (s *stubPostHogErasureStore) MarkDeletionBaselineCheckpoint(_ context.Context, _, _ string, baseline map[string]*time.Time, nextCursor, total int) (bool, error) {
+	if s.checkpointErr != nil {
+		err := s.checkpointErr
+		s.checkpointErr = nil
+		return false, err
+	}
+	s.record.DeletionBaseline = baseline
+	s.record.BaselineCursor = nextCursor
+	if nextCursor == total {
 		s.record.Phase = "person_delete"
 	}
 	return true, nil
@@ -49,13 +67,25 @@ func (s *stubPostHogErasureStore) MarkDeletionRequestStarted(context.Context, st
 func (s *stubPostHogErasureStore) MarkAccepted(_ context.Context, _, _ string, _ int, requiresManualEvents bool) (bool, error) {
 	s.accepted = true
 	s.record.RequiresManualEventVerification = s.record.RequiresManualEventVerification || requiresManualEvents
+	now := time.Unix(51, 0)
+	s.record.AcceptedAt = &now
+	s.record.Phase = "person_poll"
 	return true, nil
 }
 func (s *stubPostHogErasureStore) RecordPollPending(context.Context, string, string) (bool, error) {
 	return true, nil
 }
-func (s *stubPostHogErasureStore) MarkPersonEventsVerified(_ context.Context, _, _ string, requiresManualEvents bool) (bool, error) {
+func (s *stubPostHogErasureStore) MarkPersonPollCheckpoint(_ context.Context, _, _ string, nextCursor, total int, requiresManualEvents bool) (bool, error) {
+	if s.checkpointErr != nil {
+		err := s.checkpointErr
+		s.checkpointErr = nil
+		return false, err
+	}
+	s.record.PollCursor = nextCursor
 	s.record.RequiresManualEventVerification = s.record.RequiresManualEventVerification || requiresManualEvents
+	if nextCursor == total {
+		s.record.Phase = "support_manual"
+	}
 	return true, nil
 }
 func (s *stubPostHogErasureStore) RecordRetry(_ context.Context, _, _, class string, at time.Time, max int) (string, error) {
@@ -150,6 +180,80 @@ func TestPostHogErasureWorker_CheckpointsLargeIdentityResolutionAcrossLeases(t *
 	assert.Equal(t, "person_resolve", store.record.Phase)
 }
 
+type fullErasureLifecycleProvider struct {
+	resolvedIDs   []string
+	baselineUUIDs []string
+	pollUUIDs     []string
+	personCount   int
+}
+
+func (p *fullErasureLifecycleProvider) ResolvePersonUUIDs(_ context.Context, _, _ string, distinctIDs []string) (phclient.ErasurePersonResolution, error) {
+	p.resolvedIDs = append(p.resolvedIDs, distinctIDs...)
+	index := len(p.resolvedIDs)
+	return phclient.ErasurePersonResolution{PersonUUIDs: []string{fmt.Sprintf("00000000-0000-4000-8000-%012d", index)}}, nil
+}
+func (p *fullErasureLifecycleProvider) CapturePersonEventDeletionBaseline(_ context.Context, _, _ string, personUUIDs []string) (map[string]*time.Time, error) {
+	p.baselineUUIDs = append(p.baselineUUIDs, personUUIDs...)
+	return map[string]*time.Time{personUUIDs[0]: nil}, nil
+}
+func (p *fullErasureLifecycleProvider) RequestPersonDeletion(context.Context, string, string, []string) (phclient.ErasureDeleteResult, error) {
+	return phclient.ErasureDeleteResult{PersonsFound: p.personCount, PersonsDeleted: p.personCount, EventsQueued: true, RecordingsQueued: true}, nil
+}
+func (p *fullErasureLifecycleProvider) PersonEventDeletionStatus(_ context.Context, _, _ string, personUUIDs []string, _ map[string]*time.Time, _, _ time.Time) (phclient.ErasureDeletionObservation, error) {
+	p.pollUUIDs = append(p.pollUUIDs, personUUIDs...)
+	return phclient.ErasureDeletionObservation{Found: true, Complete: true}, nil
+}
+
+func TestPostHogErasureWorker_CheckpointsMaximumSetThroughBaselineAndPoll(t *testing.T) {
+	const identityCount = 1000
+	identities := make([]string, identityCount)
+	for i := range identities {
+		identities[i] = fmt.Sprintf("identity-%d", i)
+	}
+	store := &stubPostHogErasureStore{record: &repository.PostHogErasureRecord{
+		ID: "row", Identities: identities, LeaseToken: "lease", Phase: "person_resolve",
+	}}
+	provider := &fullErasureLifecycleProvider{personCount: identityCount}
+	worker := NewPostHogErasureWorker(PostHogErasureWorkerDeps{Store: store, Provider: provider})
+	for store.record.Phase != "support_manual" {
+		require.NoError(t, worker.Work(context.Background(), &river.Job[PostHogErasureArgs]{}))
+	}
+	assert.Len(t, provider.resolvedIDs, identityCount)
+	assert.Len(t, provider.baselineUUIDs, identityCount)
+	assert.Len(t, provider.pollUUIDs, identityCount)
+	assert.Equal(t, identityCount, store.record.ResolutionCursor)
+	assert.Equal(t, identityCount, store.record.BaselineCursor)
+	assert.Equal(t, identityCount, store.record.PollCursor)
+}
+
+func TestPostHogErasureWorker_CrashBeforeBaselineCheckpointRetriesSameUUID(t *testing.T) {
+	uuid := "11111111-1111-4111-8111-111111111111"
+	store := &stubPostHogErasureStore{record: &repository.PostHogErasureRecord{
+		ID: "row", Identities: []string{"identity"}, PersonUUIDs: []string{uuid}, LeaseToken: "lease", Phase: "person_baseline",
+	}, checkpointErr: errors.New("database unavailable")}
+	provider := &fullErasureLifecycleProvider{personCount: 1}
+	worker := NewPostHogErasureWorker(PostHogErasureWorkerDeps{Store: store, Provider: provider})
+	require.NoError(t, worker.Work(context.Background(), &river.Job[PostHogErasureArgs]{}))
+	require.NoError(t, worker.Work(context.Background(), &river.Job[PostHogErasureArgs]{}))
+	assert.Equal(t, []string{uuid, uuid}, provider.baselineUUIDs)
+	assert.Equal(t, 1, store.record.BaselineCursor)
+}
+
+func TestPostHogErasureWorker_CrashBeforePollCheckpointRetriesSameUUID(t *testing.T) {
+	uuid := "11111111-1111-4111-8111-111111111111"
+	startedAt, acceptedAt := time.Unix(50, 0), time.Unix(51, 0)
+	store := &stubPostHogErasureStore{record: &repository.PostHogErasureRecord{
+		ID: "row", Identities: []string{"identity"}, PersonUUIDs: []string{uuid}, LeaseToken: "lease", Phase: "person_poll",
+		ProviderRequestStartedAt: &startedAt, AcceptedAt: &acceptedAt, DeletionBaseline: map[string]*time.Time{uuid: nil},
+	}, checkpointErr: errors.New("database unavailable")}
+	provider := &fullErasureLifecycleProvider{personCount: 1}
+	worker := NewPostHogErasureWorker(PostHogErasureWorkerDeps{Store: store, Provider: provider})
+	require.NoError(t, worker.Work(context.Background(), &river.Job[PostHogErasureArgs]{}))
+	require.NoError(t, worker.Work(context.Background(), &river.Job[PostHogErasureArgs]{}))
+	assert.Equal(t, []string{uuid, uuid}, provider.pollUUIDs)
+	assert.Equal(t, 1, store.record.PollCursor)
+}
+
 func TestPostHogErasureWorker_ReconcilesLost202PersistenceWhenRetryFindsNoPerson(t *testing.T) {
 	store := &stubPostHogErasureStore{record: &repository.PostHogErasureRecord{ID: "row", Identities: []string{"deleted"}, PersonUUIDs: []string{"11111111-1111-4111-8111-111111111111"}, LeaseToken: "lease", Phase: "person_delete"}}
 	worker := NewPostHogErasureWorker(PostHogErasureWorkerDeps{Store: store, Provider: stubPostHogErasureProvider{zeroAfterAccepted: true}})
@@ -204,7 +308,7 @@ func (*expiringBaselineErasureProvider) PersonEventDeletionStatus(context.Contex
 func TestPostHogErasureWorker_DoesNotStartAnotherProviderCallAfterPhaseDeadline(t *testing.T) {
 	store := &stubPostHogErasureStore{record: &repository.PostHogErasureRecord{
 		ID: "row", Identities: []string{"id"}, PersonUUIDs: []string{"11111111-1111-4111-8111-111111111111"},
-		LeaseToken: "lease", Phase: "person_delete",
+		LeaseToken: "lease", Phase: "person_baseline",
 	}}
 	provider := &expiringBaselineErasureProvider{}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -250,6 +354,7 @@ func TestPostHogErasureWorker_ReusesPersistedBaselineAfterAcceptancePersistenceC
 	provider := &persistedBaselineErasureProvider{}
 	worker := NewPostHogErasureWorker(PostHogErasureWorkerDeps{Store: store, Provider: provider})
 
+	require.NoError(t, worker.Work(context.Background(), &river.Job[PostHogErasureArgs]{}))
 	require.NoError(t, worker.Work(context.Background(), &river.Job[PostHogErasureArgs]{}))
 	assert.Zero(t, provider.captureCalls)
 	assert.Equal(t, baseline, provider.gotBaseline)

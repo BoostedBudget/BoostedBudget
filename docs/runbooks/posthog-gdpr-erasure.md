@@ -32,9 +32,14 @@ clock-skew window is treated as ambiguous and requires manual evidence. If a per
 deletion record, or any distinct ID did not resolve to a person, automatic event verification
 remains insufficient and the row requires twice-separated manual `events` evidence.
 
-Person resolution is durably checkpointed one distinct ID per leased worker run. The encrypted
-person-UUID set, sticky unresolved flag, and cursor survive retries, so even the maximum supported
-identity set advances without exceeding the two-minute lease or restarting from its first identity.
+Person resolution, pre-delete status-baseline capture, and post-acceptance status polling are each
+durably checkpointed one distinct ID or person UUID per leased worker run. The encrypted person-UUID
+set, encrypted incremental baseline, sticky manual-events flag, and three cursors survive retries,
+so even the maximum supported identity set advances without exceeding the two-minute lease or
+restarting from its first identity. A successful provider read advances only after its database
+checkpoint commits. If the process or database fails between the response and checkpoint, the same
+safe read is repeated; no UUID is skipped or certified. Each committed checkpoint is immediately
+eligible for the minutely sweeper and resets the failure-attempt budget.
 
 PostHog documents no public API for deleting an individual Support conversation/ticket/message and
 no public API for deleting an individual survey response. Survey responses may be represented as

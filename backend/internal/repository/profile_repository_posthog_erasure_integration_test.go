@@ -139,7 +139,7 @@ func TestPostHogErasureMixedIdentity_IntegrationRequiresManualEventEvidence(t *t
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_outbox WHERE id=$1", id) })
 
-	updated, err := repo.MarkPersonEventsVerified(ctx, id, leaseToken, false)
+	updated, err := repo.MarkPersonPollCheckpoint(ctx, id, leaseToken, 1, 1, false)
 	require.NoError(t, err)
 	require.True(t, updated)
 	var state, phase string
@@ -229,5 +229,67 @@ func TestPostHogErasureResolutionCheckpoint_IntegrationPersistsAcrossLeases(t *t
 	assert.Equal(t, 1, cursor)
 	assert.Zero(t, attempts)
 	assert.True(t, requiresManualEvents)
+	assert.True(t, immediatelyDue)
+}
+
+func TestPostHogErasureBaselineAndPollCheckpoints_IntegrationPersistIncrementally(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewPostHogErasureOutboxRepository(pool, enc)
+	ctx := context.Background()
+	id := uuid.NewString()
+	firstUUID := "11111111-1111-4111-8111-111111111111"
+	secondUUID := "22222222-2222-4222-8222-222222222222"
+	identities, err := enc.EncryptJSON([]byte(`["first","second"]`))
+	require.NoError(t, err)
+	personUUIDs, err := enc.EncryptJSON([]byte(`["` + firstUUID + `","` + secondUUID + `"]`))
+	require.NoError(t, err)
+	leaseToken := uuid.NewString()
+	_, err = pool.Exec(ctx, `INSERT INTO posthog_erasure_outbox
+		(id,idempotency_key,identities_encrypted,provider_person_uuids_encrypted,project_id,region,state,phase,
+		 resolution_cursor,attempt_count,lease_token,lease_until)
+		VALUES($1,$2,$3,$4,'42','us','retrying','person_baseline',2,7,$5,clock_timestamp()+interval '1 minute')`,
+		id, "provider-checkpoint:"+id, identities, personUUIDs, leaseToken)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_outbox WHERE id=$1", id) })
+
+	baseline := map[string]*time.Time{firstUUID: nil}
+	updated, err := repo.MarkDeletionBaselineCheckpoint(ctx, id, leaseToken, baseline, 1, 2)
+	require.NoError(t, err)
+	require.True(t, updated)
+	var baselineCiphertext, phase string
+	var baselineCursor, attempts int
+	var immediatelyDue bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT provider_deletion_baseline_encrypted,phase,baseline_cursor,
+		attempt_count,next_attempt_at <= clock_timestamp() FROM posthog_erasure_outbox WHERE id=$1`, id).
+		Scan(&baselineCiphertext, &phase, &baselineCursor, &attempts, &immediatelyDue))
+	raw, err := enc.DecryptJSON(baselineCiphertext)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"`+firstUUID+`":null}`, string(raw))
+	assert.Equal(t, "person_baseline", phase)
+	assert.Equal(t, 1, baselineCursor)
+	assert.Zero(t, attempts)
+	assert.True(t, immediatelyDue)
+
+	pollLease := uuid.NewString()
+	_, err = pool.Exec(ctx, `UPDATE posthog_erasure_outbox SET phase='person_poll',state='retrying',
+		accepted_at=clock_timestamp(),person_verified_at=clock_timestamp(),attempt_count=9,
+		lease_token=$2,lease_until=clock_timestamp()+interval '1 minute' WHERE id=$1`, id, pollLease)
+	require.NoError(t, err)
+	updated, err = repo.MarkPersonPollCheckpoint(ctx, id, pollLease, 1, 2, true)
+	require.NoError(t, err)
+	require.True(t, updated)
+	var pollCursor int
+	var requiresManual bool
+	var eventsVerifiedAt *time.Time
+	require.NoError(t, pool.QueryRow(ctx, `SELECT phase,poll_cursor,attempt_count,
+		requires_manual_event_verification,events_verified_at,next_attempt_at <= clock_timestamp()
+		FROM posthog_erasure_outbox WHERE id=$1`, id).
+		Scan(&phase, &pollCursor, &attempts, &requiresManual, &eventsVerifiedAt, &immediatelyDue))
+	assert.Equal(t, "person_poll", phase)
+	assert.Equal(t, 1, pollCursor)
+	assert.Zero(t, attempts)
+	assert.True(t, requiresManual)
+	assert.Nil(t, eventsVerifiedAt)
 	assert.True(t, immediatelyDue)
 }
