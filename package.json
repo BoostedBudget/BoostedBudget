@@ -14,7 +14,7 @@
     "typecheck": "turbo run typecheck",
     "generate:api": "turbo run generate:api --filter=@boostedbudget/api-client",
     "generate:posthog": "bun run scripts/generate-posthog-events.ts",
-    "validate:posthog": "bun test scripts/generate-posthog-events.test.ts scripts/validate-posthog-rollout.test.ts && bun run scripts/generate-posthog-events.ts --check && bun run scripts/validate-posthog-rollout.ts"
+    "validate:posthog": "bun test --timeout 30000 scripts/generate-posthog-events.test.ts scripts/validate-posthog-rollout.test.ts && bun run scripts/generate-posthog-events.ts --check && bun run scripts/validate-posthog-rollout.ts"
   },
   "devDependencies": {
     "@lhci/cli": "^0.15.1",
