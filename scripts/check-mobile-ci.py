@@ -122,6 +122,9 @@ TANSTACK_QUERY_LOCATIONS = (
     ("API-client devDependencies", "api-client", "devDependencies"),
 )
 
+LOCKFILE_NAMES = ("bun.lock", "bun.lockb", "package-lock.json", "yarn.lock", "pnpm-lock.yaml")
+WORKSPACE_PATTERN = re.compile(r"^(apps|packages)/(\*|[A-Za-z0-9][A-Za-z0-9._-]*)$")
+
 
 def normalized_command(step: dict) -> str:
     """Return executable text in a canonical one-line form.
@@ -218,6 +221,83 @@ def override_dependency_names(overrides: dict) -> set[str]:
     return names
 
 
+def declared_workspace_directories(
+    root: pathlib.Path, root_package: dict
+) -> tuple[list[pathlib.Path], list[str]]:
+    workspaces = root_package.get("workspaces")
+    if not isinstance(workspaces, list) or not workspaces:
+        return [], ["root package.json workspaces must be a non-empty list"]
+    if not all(isinstance(pattern, str) and pattern for pattern in workspaces):
+        return [], ["root package.json workspaces must contain non-empty string patterns"]
+
+    root = root.resolve()
+    workspace_directories: set[pathlib.Path] = set()
+    findings: list[str] = []
+    for pattern in workspaces:
+        match = WORKSPACE_PATTERN.fullmatch(pattern)
+        if match is None:
+            findings.append(f"root package.json has unsafe workspace pattern: {pattern}")
+            continue
+
+        workspace_parent = root / match.group(1)
+        if workspace_parent.is_symlink() or not workspace_parent.is_dir():
+            findings.append(f"root package.json workspace parent is unsafe or missing: {pattern}")
+            continue
+
+        workspace_name = match.group(2)
+        candidates = (
+            [candidate for candidate in workspace_parent.iterdir() if candidate.is_dir()]
+            if workspace_name == "*"
+            else [workspace_parent / workspace_name]
+        )
+        if not any(candidate.is_dir() for candidate in candidates):
+            findings.append(f"root package.json workspace pattern matches no directories: {pattern}")
+            continue
+        for candidate in candidates:
+            if candidate.is_symlink():
+                findings.append(f"root package.json workspace cannot be a symlink: {candidate}")
+                continue
+            resolved = candidate.resolve()
+            try:
+                relative = resolved.relative_to(root)
+            except ValueError:
+                findings.append(f"root package.json workspace escapes repository: {pattern}")
+                continue
+            if "node_modules" in relative.parts:
+                findings.append(f"root package.json workspace resolves into node_modules: {relative}")
+                continue
+            if not (resolved / "package.json").is_file():
+                findings.append(f"declared workspace is missing package.json: {relative}")
+                continue
+            workspace_directories.add(resolved)
+
+    return sorted(workspace_directories), findings
+
+
+def check_single_lockfile_policy(root: pathlib.Path, root_package: dict) -> list[str]:
+    findings: list[str] = []
+    root_lockfile = root / "bun.lock"
+    if root_lockfile.is_symlink() or not root_lockfile.is_file():
+        findings.append("single-lockfile policy requires root bun.lock as a regular file")
+
+    for lock_name in LOCKFILE_NAMES:
+        lock_path = root / lock_name
+        if lock_name != "bun.lock" and (lock_path.is_symlink() or lock_path.exists()):
+            findings.append(f"single-lockfile policy forbids root {lock_name}")
+
+    workspace_directories, workspace_findings = declared_workspace_directories(root, root_package)
+    findings.extend(workspace_findings)
+    for workspace in workspace_directories:
+        relative_workspace = workspace.relative_to(root)
+        for lock_name in LOCKFILE_NAMES:
+            lock_path = workspace / lock_name
+            if lock_path.is_symlink() or lock_path.exists():
+                findings.append(
+                    f"single-lockfile policy forbids {relative_workspace / lock_name}"
+                )
+    return findings
+
+
 def check_dependency_policy(packages: dict[str, dict]) -> list[str]:
     findings: list[str] = []
 
@@ -312,6 +392,7 @@ def check(root: pathlib.Path) -> list[str]:
         return [str(exc)]
 
     findings.extend(check_dependency_policy(packages))
+    findings.extend(check_single_lockfile_policy(root, packages["root"]))
 
     jobs = workflow.get("jobs") or {}
 
@@ -524,10 +605,6 @@ def check(root: pathlib.Path) -> list[str]:
             "mobile compatibility policy lists dependencies absent from apps/mobile/package.json: "
             + ", ".join(absent_expected)
         )
-    for lock_name in ("bun.lock", "bun.lockb", "package-lock.json", "yarn.lock", "pnpm-lock.yaml"):
-        if (root / "apps/mobile" / lock_name).exists():
-            findings.append(f"single-lockfile policy forbids apps/mobile/{lock_name}")
-
     return findings
 
 

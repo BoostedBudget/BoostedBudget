@@ -8,7 +8,7 @@ GUARD="$REPO_ROOT/scripts/check-mobile-ci.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-TOTAL=113
+TOTAL=131
 case_no=0
 pass=0
 fail=0
@@ -21,15 +21,47 @@ announce() {
 
 copy_fixture() {
   local dest="$1"
-  mkdir -p "$dest/.github/workflows" "$dest/apps/mobile" "$dest/apps/web" "$dest/packages/api-client"
+  mkdir -p "$dest/.github/workflows" "$dest/apps/mobile" "$dest/apps/web" \
+    "$dest/packages/api-client" "$dest/packages/design-tokens"
   cp "$REPO_ROOT/.github/workflows/test.yml" "$dest/.github/workflows/test.yml"
   cp "$REPO_ROOT/.github/workflows/warm-ci-cache.yml" "$dest/.github/workflows/warm-ci-cache.yml"
   cp "$REPO_ROOT/.github/dependabot.yml" "$dest/.github/dependabot.yml"
   cp "$REPO_ROOT/apps/mobile/package.json" "$dest/apps/mobile/package.json"
   cp "$REPO_ROOT/apps/web/package.json" "$dest/apps/web/package.json"
   cp "$REPO_ROOT/packages/api-client/package.json" "$dest/packages/api-client/package.json"
+  cp "$REPO_ROOT/packages/design-tokens/package.json" "$dest/packages/design-tokens/package.json"
   cp "$REPO_ROOT/package.json" "$dest/package.json"
   touch "$dest/bun.lock"
+}
+
+mutate_workspace_config() {
+  python3 - "$1" "$2" <<'PY'
+import json, pathlib, sys
+path, action = pathlib.Path(sys.argv[1]) / 'package.json', sys.argv[2]
+doc = json.loads(path.read_text())
+if action == 'missing':
+    doc.pop('workspaces', None)
+elif action == 'malformed':
+    doc['workspaces'] = 'apps/*'
+elif action == 'unsafe-deep':
+    workspace = path.parent / 'vendor/cache/example'
+    workspace.mkdir(parents=True)
+    (workspace / 'package.json').write_text('{}\n')
+    doc['workspaces'] = ['vendor/cache/*']
+elif action == 'symlink-parent':
+    apps = path.parent / 'apps'
+    outside = path.parent / 'outside-apps'
+    apps.rename(outside)
+    apps.symlink_to(outside, target_is_directory=True)
+elif action == 'symlink-child':
+    outside = path.parent.parent / 'outside-workspace'
+    outside.mkdir(exist_ok=True)
+    (outside / 'package.json').write_text('{}\n')
+    (path.parent / 'apps/link').symlink_to(outside, target_is_directory=True)
+else:
+    raise AssertionError(action)
+path.write_text(json.dumps(doc, indent=2) + '\n')
+PY
 }
 
 mutate_playwright_resolution() {
@@ -268,6 +300,22 @@ reject_mobile_package() {
   if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
 }
 
+reject_workspace_lockfile() {
+  local label="$1" relative_path="$2" dir="$TMP/case-$((case_no + 1))"
+  announce "$label"
+  copy_fixture "$dir"
+  touch "$dir/$relative_path"
+  if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
+}
+
+reject_workspace_config() {
+  local label="$1" action="$2" dir="$TMP/case-$((case_no + 1))"
+  announce "$label"
+  copy_fixture "$dir"
+  mutate_workspace_config "$dir" "$action"
+  if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
+}
+
 reject_dependency_policy() {
   local label="$1" action="$2" dir="$TMP/case-$((case_no + 1))"
   announce "$label"
@@ -379,6 +427,67 @@ lock_dir="$TMP/case-$case_no"
 copy_fixture "$lock_dir"
 touch "$lock_dir/apps/mobile/bun.lock"
 if guard_passes "$lock_dir"; then bad "mobile lockfile accepted"; else ok "rejected"; fi
+
+reject_workspace_lockfile "apps/web cannot own a Bun lockfile" "apps/web/bun.lock"
+reject_workspace_lockfile "API-client cannot own a Bun lockfile" "packages/api-client/bun.lock"
+reject_workspace_lockfile "design tokens cannot own a Bun lockfile" "packages/design-tokens/bun.lock"
+reject_workspace_lockfile "workspace npm lockfiles are forbidden" "apps/web/package-lock.json"
+reject_workspace_lockfile "workspace Yarn lockfiles are forbidden" "packages/api-client/yarn.lock"
+reject_workspace_lockfile "workspace pnpm lockfiles are forbidden" "packages/design-tokens/pnpm-lock.yaml"
+reject_workspace_lockfile "workspace binary Bun lockfiles are forbidden" "apps/mobile/bun.lockb"
+reject_workspace_lockfile "root lockfiles other than bun.lock are forbidden" "package-lock.json"
+
+announce "a synthetic workspace discovered from apps/* cannot own a lockfile"
+synthetic_dir="$TMP/case-$case_no"
+copy_fixture "$synthetic_dir"
+mkdir -p "$synthetic_dir/apps/synthetic"
+cp "$REPO_ROOT/packages/design-tokens/package.json" "$synthetic_dir/apps/synthetic/package.json"
+touch "$synthetic_dir/apps/synthetic/bun.lock"
+if guard_passes "$synthetic_dir"; then bad "synthetic workspace lockfile accepted"; else ok "rejected"; fi
+
+announce "a dangling workspace lockfile symlink is still forbidden"
+dangling_lock_dir="$TMP/case-$case_no"
+copy_fixture "$dangling_lock_dir"
+python3 - "$dangling_lock_dir/apps/web/bun.lock" <<'PY'
+import pathlib, sys
+pathlib.Path(sys.argv[1]).symlink_to('missing-lock-target')
+PY
+if guard_passes "$dangling_lock_dir"; then bad "dangling workspace lock symlink accepted"; else ok "rejected"; fi
+
+announce "root bun.lock must be a regular in-repository file"
+root_symlink_dir="$TMP/case-$case_no"
+copy_fixture "$root_symlink_dir"
+python3 - "$root_symlink_dir" <<'PY'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+(root / 'bun.lock').unlink()
+outside = root.parent / 'external-bun.lock'
+outside.touch()
+(root / 'bun.lock').symlink_to(outside)
+PY
+if guard_passes "$root_symlink_dir"; then bad "root bun.lock symlink accepted"; else ok "rejected"; fi
+
+announce "nested node_modules lockfiles are not workspace lockfiles"
+vendored_lock_dir="$TMP/case-$case_no"
+copy_fixture "$vendored_lock_dir"
+mkdir -p "$vendored_lock_dir/apps/web/node_modules/vendor"
+touch "$vendored_lock_dir/apps/web/node_modules/vendor/bun.lock"
+if guard_passes "$vendored_lock_dir"; then ok "ignored"; else bad "unrelated vendored lockfile rejected"; fi
+
+reject_workspace_config "root package must declare workspaces" "missing"
+reject_workspace_config "root workspaces must be a list of safe patterns" "malformed"
+reject_workspace_config "deep workspace globs cannot enumerate unrelated trees" "unsafe-deep"
+reject_workspace_config "workspace discovery cannot traverse a symlinked apps parent" "symlink-parent"
+reject_workspace_config "workspace discovery rejects a symlinked direct child" "symlink-child"
+
+announce "the root bun.lock is required"
+root_lock_dir="$TMP/case-$case_no"
+copy_fixture "$root_lock_dir"
+python3 - "$root_lock_dir/bun.lock" <<'PY'
+import pathlib, sys
+pathlib.Path(sys.argv[1]).unlink()
+PY
+if guard_passes "$root_lock_dir"; then bad "missing root bun.lock accepted"; else ok "rejected"; fi
 
 reject_dependabot "Expo compatibility group is not first" "group-last"
 reject_dependabot "Expo compatibility group loses minor/patch update types" "group-major-only"
