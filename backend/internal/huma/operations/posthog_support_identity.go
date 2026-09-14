@@ -16,6 +16,11 @@ import (
 type PostHogSupportIdentityHandler struct {
 	projectToken string
 	secretToken  string
+	authority    PostHogSupportAuthorityReader
+}
+
+type PostHogSupportAuthorityReader interface {
+	CanIssueSupportIdentity(context.Context, string, string) (bool, error)
 }
 
 type GetPostHogSupportIdentityInput struct {
@@ -32,8 +37,12 @@ type GetPostHogSupportIdentityOutput struct {
 	Body         PostHogSupportIdentity
 }
 
-func NewPostHogSupportIdentityHandler(projectToken, secretToken string) *PostHogSupportIdentityHandler {
-	return &PostHogSupportIdentityHandler{projectToken: projectToken, secretToken: secretToken}
+func NewPostHogSupportIdentityHandler(projectToken, secretToken string, authority ...PostHogSupportAuthorityReader) *PostHogSupportIdentityHandler {
+	var reader PostHogSupportAuthorityReader
+	if len(authority) > 0 {
+		reader = authority[0]
+	}
+	return &PostHogSupportIdentityHandler{projectToken: projectToken, secretToken: secretToken, authority: reader}
 }
 
 func computePostHogIdentityHash(distinctID, secretToken string) string {
@@ -42,13 +51,20 @@ func computePostHogIdentityHash(distinctID, secretToken string) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-func (h *PostHogSupportIdentityHandler) Get(ctx context.Context, _ *GetPostHogSupportIdentityInput) (*GetPostHogSupportIdentityOutput, error) {
+func (h *PostHogSupportIdentityHandler) Get(ctx context.Context, input *GetPostHogSupportIdentityInput) (*GetPostHogSupportIdentityOutput, error) {
 	if h.projectToken == "" || h.secretToken == "" {
 		return nil, huma.Error503ServiceUnavailable("Support is unavailable")
 	}
 	clerkUserID, ok := ctx.Value(inputs.ClerkUserIDKey).(string)
 	if !ok || clerkUserID == "" {
 		return nil, huma.Error401Unauthorized("User not authenticated")
+	}
+	if h.authority == nil {
+		return nil, huma.Error503ServiceUnavailable("Support is unavailable")
+	}
+	allowed, err := h.authority.CanIssueSupportIdentity(ctx, input.UserID, clerkUserID)
+	if err != nil || !allowed {
+		return nil, huma.Error503ServiceUnavailable("Support is unavailable")
 	}
 	return &GetPostHogSupportIdentityOutput{
 		CacheControl: "no-store",

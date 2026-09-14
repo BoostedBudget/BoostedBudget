@@ -21,6 +21,12 @@ The backend derives the distinct ID exclusively from authenticated middleware st
 `window.ENV`. This HMAC is deterministic and does not expire; it remains valid until the server
 secret is rotated. It is held only in memory by the active page and is never persisted by the app.
 
+The signature's non-expiry means it is not itself a revocation credential. While Support is active,
+the browser revalidates the signed identity endpoint every 15 seconds, including in background tabs;
+an error, account-erasure fence, focus return, logout, or account switch shuts down the transport and
+removes the widget before it can be shown again. Returning to a visible tab always performs a fresh
+authority check before reactivation.
+
 The vendor container is hidden by default in CSS. An app-owned Support button hands off to the
 PostHog widget only after verification. Logout, account switch, a public route, or verification
 failure hides the widget, clears its verified identity, cancels its native polling, and resets the
@@ -86,3 +92,12 @@ identities, and the legacy internal user UUID, but never an email address. It su
 cascade and retries independently of PostHog availability. See the
 [PostHog erasure runbook](../runbooks/posthog-gdpr-erasure.md) for provider capabilities and the
 mandatory manual Support/survey-response verification phase.
+
+The obligation first durably retries deletion of the canonical Clerk user. A keyed, non-recoverable
+Clerk-subject fence survives the local user cascade and permanently prevents middleware
+auto-registration or new Support identity issuance for that subject. PostHog deletion cannot begin
+until Clerk deletion is confirmed and a 30-second database-clock cutoff—twice the foreground
+revalidation interval—has elapsed. Provider completion additionally requires that Clerk checkpoint.
+This is the application revocation boundary; it does not misrepresent PostHog's deterministic HMAC
+as expiring. A request already accepted by PostHog before browser teardown is covered by the later
+PostHog deletion and manual Support zero verification.

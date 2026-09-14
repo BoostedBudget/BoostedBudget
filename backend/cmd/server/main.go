@@ -756,6 +756,7 @@ func main() {
 
 		// Clerk Backend API service — used by deletion service and email propagation worker
 		clerkService := services.NewClerkService(cfg.ClerkSecretKey)
+		postHogErasureWorker.SetClerkDeleter(clerkService)
 		appLogger.Info("Clerk Backend API service initialized")
 
 		// Issue #1413 (Task 9): Manual tier override expiry check worker — reuses
@@ -790,7 +791,7 @@ func main() {
 		transactionService := services.NewTransactionService(transactionRepo, customCategoryRepo)
 		transactionService.SetAnalytics(analyticsGateway)
 		transactionService.SetAccountRepository(accountRepo) // #1329: embed account in investment rows
-		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
+		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db, postHogErasureRepo)
 		registrationService.SetAnalytics(analyticsGateway)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
 		subscriptionService := services.NewSubscriptionService(tierConfig, subscriptionOverrideRepo)
@@ -2626,7 +2627,7 @@ func main() {
 
 		// Support identity is signed from the authenticated Clerk subject. The
 		// PostHog secret token remains server-only and an absent token fails closed.
-		humaPostHogSupportIdentityHandler := operations.NewPostHogSupportIdentityHandler(cfg.PostHogAPIKey, cfg.PostHogSecretAPIToken)
+		humaPostHogSupportIdentityHandler := operations.NewPostHogSupportIdentityHandler(cfg.PostHogAPIKey, cfg.PostHogSecretAPIToken, postHogErasureRepo)
 		operations.RegisterPostHogSupportIdentityRoutes(humaAPI, humaPostHogSupportIdentityHandler)
 		appLogger.Info("Huma PostHog Support identity route registered")
 

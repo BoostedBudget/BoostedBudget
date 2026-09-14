@@ -12,12 +12,19 @@ import (
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 )
 
+const (
+	postHogClerkErasureFenceLabel      = "posthog_clerk_erasure_fence_v1"
+	postHogSupportCredentialFenceDelay = 30 * time.Second
+)
+
 type postHogErasureEnvelope struct {
-	Ciphertext     string
-	IdempotencyKey string
+	Ciphertext      string
+	ClerkCiphertext string
+	ClerkFenceKey   string
+	IdempotencyKey  string
 }
 
-func buildPostHogErasureEnvelope(enc *appcrypto.FieldEncryptor, internalUserID string, encryptedClerkIDs []string) (postHogErasureEnvelope, error) {
+func buildPostHogErasureEnvelope(enc *appcrypto.FieldEncryptor, internalUserID, canonicalEncryptedClerkID string, encryptedClerkIDs []string) (postHogErasureEnvelope, error) {
 	if enc == nil {
 		return postHogErasureEnvelope{}, fmt.Errorf("PostHog erasure envelope requires field encryption")
 	}
@@ -30,6 +37,10 @@ func buildPostHogErasureEnvelope(enc *appcrypto.FieldEncryptor, internalUserID s
 		}
 	}
 	appendUnique(internalUserID) // legacy backend distinct ID used before #1650
+	canonicalClerkID, err := enc.DecryptString(canonicalEncryptedClerkID)
+	if err != nil {
+		return postHogErasureEnvelope{}, fmt.Errorf("decrypt canonical Clerk identity: %w", err)
+	}
 	for _, encrypted := range encryptedClerkIDs {
 		plain, err := enc.DecryptString(encrypted)
 		if err != nil {
@@ -46,13 +57,16 @@ func buildPostHogErasureEnvelope(enc *appcrypto.FieldEncryptor, internalUserID s
 		return postHogErasureEnvelope{}, fmt.Errorf("encrypt PostHog erasure identities: %w", err)
 	}
 	return postHogErasureEnvelope{
-		Ciphertext:     ciphertext,
-		IdempotencyKey: enc.BlindIndexWithLabel("posthog_erasure_v1", internalUserID),
+		Ciphertext:      ciphertext,
+		ClerkCiphertext: canonicalEncryptedClerkID,
+		ClerkFenceKey:   enc.BlindIndexWithLabel(postHogClerkErasureFenceLabel, canonicalClerkID),
+		IdempotencyKey:  enc.BlindIndexWithLabel("posthog_erasure_v1", internalUserID),
 	}, nil
 }
 
 type PostHogErasureRecord struct {
 	ID                              string
+	ClerkUserID                     string
 	Identities                      []string
 	PersonUUIDs                     []string
 	ProjectID                       string
@@ -131,6 +145,7 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 	leaseToken := uuid.NewString()
 	var record PostHogErasureRecord
 	var encrypted string
+	var encryptedClerk *string
 	var encryptedPersonUUIDs *string
 	var encryptedBaseline *string
 	err := r.db.QueryRow(ctx, `
@@ -147,12 +162,13 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 		SET lease_token = $2, lease_until = $1 + $3::interval,
 		    attempt_count = attempt_count + 1, updated_at = clock_timestamp(), version = version + 1
 		FROM candidate WHERE o.id = candidate.id
-		RETURNING o.id, o.identities_encrypted, o.provider_person_uuids_encrypted,
+		RETURNING o.id, o.identities_encrypted, o.clerk_user_id_encrypted,
+		          o.provider_person_uuids_encrypted,
 		          o.provider_deletion_baseline_encrypted,
 		          o.project_id, o.region, o.phase, o.attempt_count, o.resolution_cursor,
 		          o.baseline_cursor, o.poll_cursor,
 		          o.requires_manual_event_verification, o.provider_request_started_at, o.accepted_at`, now, leaseToken, lease.String()).Scan(
-		&record.ID, &encrypted, &encryptedPersonUUIDs, &encryptedBaseline, &record.ProjectID, &record.Region,
+		&record.ID, &encrypted, &encryptedClerk, &encryptedPersonUUIDs, &encryptedBaseline, &record.ProjectID, &record.Region,
 		&record.Phase, &record.AttemptCount, &record.ResolutionCursor, &record.BaselineCursor, &record.PollCursor,
 		&record.RequiresManualEventVerification,
 		&record.ProviderRequestStartedAt, &record.AcceptedAt)
@@ -163,6 +179,15 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 		return nil, fmt.Errorf("claim PostHog erasure outbox: %w", err)
 	}
 	record.LeaseToken = leaseToken
+	if encryptedClerk != nil {
+		record.ClerkUserID, err = r.enc.DecryptString(*encryptedClerk)
+		if err != nil {
+			if deadLetterErr := r.deadLetterClaim(ctx, record.ID, leaseToken, "identity_decryption"); deadLetterErr != nil {
+				return nil, deadLetterErr
+			}
+			return nil, fmt.Errorf("claim PostHog erasure failed: identity_decryption")
+		}
+	}
 	raw, err := r.enc.DecryptJSON(encrypted)
 	if err != nil || json.Unmarshal(raw, &record.Identities) != nil || len(record.Identities) == 0 {
 		if deadLetterErr := r.deadLetterClaim(ctx, record.ID, leaseToken, "identity_decryption"); deadLetterErr != nil {
@@ -178,7 +203,7 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 			}
 			return nil, fmt.Errorf("claim PostHog erasure failed: correlation_decryption")
 		}
-	} else if record.Phase != "person_resolve" {
+	} else if record.Phase != "clerk_delete" && record.Phase != "person_resolve" {
 		if deadLetterErr := r.deadLetterClaim(ctx, record.ID, leaseToken, "correlation_decryption"); deadLetterErr != nil {
 			return nil, deadLetterErr
 		}
@@ -207,6 +232,55 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 		}
 	}
 	return &record, nil
+}
+
+func (r *PostHogErasureOutboxRepository) MarkClerkDeleted(ctx context.Context, id, leaseToken string) (bool, error) {
+	tag, err := r.db.Exec(ctx, `WITH fence AS (SELECT clock_timestamp() AS at)
+		UPDATE posthog_erasure_outbox
+		SET clerk_deleted_at = fence.at,
+		    phase = 'person_resolve', state = 'retrying',
+		    next_attempt_at = fence.at + $3::interval,
+		    attempt_count = 0, last_error_class = NULL,
+		    lease_token = NULL, lease_until = NULL,
+		    updated_at = clock_timestamp(), version = version + 1
+		FROM fence
+		WHERE id = $1 AND lease_token = $2 AND phase = 'clerk_delete'`,
+		id, leaseToken, postHogSupportCredentialFenceDelay.String())
+	if err != nil {
+		return false, fmt.Errorf("checkpoint Clerk erasure: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func (r *PostHogErasureOutboxRepository) IsClerkIdentityErasureFenced(ctx context.Context, clerkUserID string) (bool, error) {
+	if r.enc == nil || clerkUserID == "" {
+		return false, fmt.Errorf("Clerk erasure fence requires field encryption and identity")
+	}
+	var fenced bool
+	err := r.db.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM posthog_erasure_outbox WHERE clerk_user_id_blind_idx=$1
+	)`, r.enc.BlindIndexWithLabel(postHogClerkErasureFenceLabel, clerkUserID)).Scan(&fenced)
+	if err != nil {
+		return false, fmt.Errorf("read Clerk erasure fence: %w", err)
+	}
+	return fenced, nil
+}
+
+func (r *PostHogErasureOutboxRepository) CanIssueSupportIdentity(ctx context.Context, userID, clerkUserID string) (bool, error) {
+	if r.enc == nil || userID == "" || clerkUserID == "" {
+		return false, nil
+	}
+	var allowed bool
+	err := r.db.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM users
+		WHERE id=$1 AND is_deleted=FALSE AND deletion_requested_at IS NULL
+	) AND NOT EXISTS (
+		SELECT 1 FROM posthog_erasure_outbox WHERE clerk_user_id_blind_idx=$2
+	)`, userID, r.enc.BlindIndexWithLabel(postHogClerkErasureFenceLabel, clerkUserID)).Scan(&allowed)
+	if err != nil {
+		return false, fmt.Errorf("read PostHog Support authority: %w", err)
+	}
+	return allowed, nil
 }
 
 func (r *PostHogErasureOutboxRepository) deadLetterClaim(ctx context.Context, id, leaseToken, errorClass string) error {
@@ -415,10 +489,11 @@ func (r *PostHogErasureOutboxRepository) RecordOperatorEvidence(ctx context.Cont
 	}
 	if err = tx.QueryRow(ctx, `UPDATE posthog_erasure_outbox SET
 		state='completed', phase='complete', completed_at=clock_timestamp(),
-		identities_encrypted=NULL, provider_person_uuids_encrypted=NULL,
+		identities_encrypted=NULL, clerk_user_id_encrypted=NULL, provider_person_uuids_encrypted=NULL,
 		provider_deletion_baseline_encrypted=NULL,
 		last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
-		WHERE id=$1 AND state='manual_pending' AND person_verified_at IS NOT NULL
+		WHERE id=$1 AND state='manual_pending' AND clerk_deleted_at IS NOT NULL
+		  AND person_verified_at IS NOT NULL
 		  AND events_verified_at IS NOT NULL AND recordings_verified_at IS NOT NULL
 		  AND surveys_verified_at IS NOT NULL AND support_verified_at IS NOT NULL
 		RETURNING state`, id).Scan(&state); err != nil && !errors.Is(err, pgx.ErrNoRows) {

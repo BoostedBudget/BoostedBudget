@@ -12,6 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type supportAuthorityStub struct {
+	allowed bool
+	err     error
+}
+
+func (s supportAuthorityStub) CanIssueSupportIdentity(context.Context, string, string) (bool, error) {
+	return s.allowed, s.err
+}
+
 func TestPostHogIdentityHashContractDescribesActualLifetime(t *testing.T) {
 	field, ok := reflect.TypeOf(PostHogSupportIdentity{}).FieldByName("IdentityHash")
 	require.True(t, ok)
@@ -27,7 +36,7 @@ func TestComputePostHogIdentityHashKnownVector(t *testing.T) {
 }
 
 func TestGetPostHogSupportIdentityUsesAuthenticatedSubject(t *testing.T) {
-	handler := NewPostHogSupportIdentityHandler("phc_public", "server-only-secret")
+	handler := NewPostHogSupportIdentityHandler("phc_public", "server-only-secret", supportAuthorityStub{allowed: true})
 	ctx := context.WithValue(context.Background(), inputs.ClerkUserIDKey, "user_clerk_123")
 	output, err := handler.Get(ctx, &GetPostHogSupportIdentityInput{
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "246d147b-7e0f-41bd-a80d-a4a30491b626"},
@@ -38,6 +47,17 @@ func TestGetPostHogSupportIdentityUsesAuthenticatedSubject(t *testing.T) {
 	assert.Equal(t, "user_clerk_123", output.Body.DistinctID)
 	assert.Equal(t, computePostHogIdentityHash("user_clerk_123", "server-only-secret"), output.Body.IdentityHash)
 	assert.Equal(t, "no-store", output.CacheControl)
+}
+
+func TestGetPostHogSupportIdentityRejectsErasureFencedSession(t *testing.T) {
+	handler := NewPostHogSupportIdentityHandler("phc_public", "server-only-secret", supportAuthorityStub{allowed: false})
+	ctx := context.WithValue(context.Background(), inputs.ClerkUserIDKey, "user_clerk_123")
+	output, err := handler.Get(ctx, &GetPostHogSupportIdentityInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "246d147b-7e0f-41bd-a80d-a4a30491b626"},
+	})
+	assert.Nil(t, output)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Support is unavailable")
 }
 
 func TestGetPostHogSupportIdentityFailsClosedWithoutClerkSubject(t *testing.T) {

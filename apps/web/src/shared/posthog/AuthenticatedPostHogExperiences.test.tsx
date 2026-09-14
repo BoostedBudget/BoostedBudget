@@ -243,7 +243,7 @@ describe('AuthenticatedPostHogExperiences', () => {
     window.clearInterval = originalClearInterval
   })
 
-  test('pauses the handed-off widget in the background and resumes it when visible', async () => {
+  test('pauses in the background and tears down for revalidation before visible resume', async () => {
     const hide = mock(() => {})
     const c = controller()
     c.getSupportClient.mockReturnValue({ conversations: { hide } } as never)
@@ -251,11 +251,12 @@ describe('AuthenticatedPostHogExperiences', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Support' }))
 
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
-    document.dispatchEvent(new Event('visibilitychange'))
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
     expect(hide).toHaveBeenCalledTimes(1)
 
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
-    document.dispatchEvent(new Event('visibilitychange'))
-    expect(c.showSupport).toHaveBeenCalledTimes(2)
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    expect(c.deactivateSupport).toHaveBeenCalled()
+    expect(c.showSupport).toHaveBeenCalledTimes(1)
   })
 })

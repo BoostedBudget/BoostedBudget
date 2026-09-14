@@ -30,6 +30,7 @@ func (PostHogErasureArgs) Kind() string { return "posthog_erasure" }
 
 type postHogErasureStore interface {
 	ClaimDue(context.Context, time.Time, time.Duration) (*repository.PostHogErasureRecord, error)
+	MarkClerkDeleted(context.Context, string, string) (bool, error)
 	MarkPersonUUIDsResolved(context.Context, string, string, []string, bool, int, int) (bool, error)
 	MarkDeletionBaselineCheckpoint(context.Context, string, string, map[string]*time.Time, int, int) (bool, error)
 	MarkDeletionRequestStarted(context.Context, string, string, map[string]*time.Time) (time.Time, bool, error)
@@ -37,6 +38,10 @@ type postHogErasureStore interface {
 	RecordPollPending(context.Context, string, string) (bool, error)
 	MarkPersonPollCheckpoint(context.Context, string, string, int, int, bool) (bool, error)
 	RecordRetry(context.Context, string, string, string, time.Time, int) (string, error)
+}
+
+type clerkUserDeleter interface {
+	DeleteUser(context.Context, string) error
 }
 
 type postHogErasureProvider interface {
@@ -51,18 +56,20 @@ type postHogErasureBacklogStore interface {
 }
 
 type PostHogErasureWorkerDeps struct {
-	Store    postHogErasureStore
-	Provider postHogErasureProvider
-	Logger   *slog.Logger
-	Now      func() time.Time
+	Store        postHogErasureStore
+	Provider     postHogErasureProvider
+	ClerkDeleter clerkUserDeleter
+	Logger       *slog.Logger
+	Now          func() time.Time
 }
 
 type PostHogErasureWorker struct {
 	river.WorkerDefaults[PostHogErasureArgs]
-	store    postHogErasureStore
-	provider postHogErasureProvider
-	logger   *slog.Logger
-	now      func() time.Time
+	store        postHogErasureStore
+	provider     postHogErasureProvider
+	clerkDeleter clerkUserDeleter
+	logger       *slog.Logger
+	now          func() time.Time
 }
 
 func NewPostHogErasureWorker(deps PostHogErasureWorkerDeps) *PostHogErasureWorker {
@@ -74,7 +81,11 @@ func NewPostHogErasureWorker(deps PostHogErasureWorkerDeps) *PostHogErasureWorke
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &PostHogErasureWorker{store: deps.Store, provider: deps.Provider, logger: logger, now: now}
+	return &PostHogErasureWorker{store: deps.Store, provider: deps.Provider, clerkDeleter: deps.ClerkDeleter, logger: logger, now: now}
+}
+
+func (w *PostHogErasureWorker) SetClerkDeleter(deleter clerkUserDeleter) {
+	w.clerkDeleter = deleter
 }
 
 func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogErasureArgs]) error {
@@ -87,9 +98,6 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 	if err != nil || record == nil {
 		return err
 	}
-	if w.provider == nil {
-		return w.persistRetry(ctx, record, "configuration", 0)
-	}
 	phaseCtx, cancel := context.WithTimeout(ctx, postHogErasurePhaseTimeout)
 	defer cancel()
 	if err = phaseCtx.Err(); err != nil {
@@ -97,7 +105,26 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 		return w.persistRetry(ctx, record, class, retryAfter)
 	}
 	switch record.Phase {
+	case "clerk_delete":
+		if w.clerkDeleter == nil || record.ClerkUserID == "" {
+			return w.persistRetry(ctx, record, "configuration", 0)
+		}
+		err = w.clerkDeleter.DeleteUser(phaseCtx, record.ClerkUserID)
+		if err == nil {
+			var updated bool
+			updated, err = w.store.MarkClerkDeleted(ctx, record.ID, record.LeaseToken)
+			if err == nil && !updated {
+				err = fmt.Errorf("PostHog erasure lease lost")
+			}
+			if err == nil {
+				observability.RecordPostHogErasureAttempt("clerk_delete", "accepted", "none")
+				return nil
+			}
+		}
 	case "person_resolve":
+		if w.provider == nil {
+			return w.persistRetry(ctx, record, "configuration", 0)
+		}
 		if record.ResolutionCursor >= len(record.Identities) {
 			err = fmt.Errorf("PostHog erasure resolution cursor exhausted")
 			break
@@ -122,6 +149,9 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 			}
 		}
 	case "person_baseline":
+		if w.provider == nil {
+			return w.persistRetry(ctx, record, "configuration", 0)
+		}
 		if record.BaselineCursor >= len(record.PersonUUIDs) {
 			err = fmt.Errorf("PostHog erasure baseline cursor exhausted")
 			break
@@ -142,6 +172,9 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 			}
 		}
 	case "person_delete":
+		if w.provider == nil {
+			return w.persistRetry(ctx, record, "configuration", 0)
+		}
 		requiresManualEvents := false
 		baseline := record.DeletionBaseline
 		var updated bool
@@ -178,6 +211,9 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 			}
 		}
 	case "person_poll":
+		if w.provider == nil {
+			return w.persistRetry(ctx, record, "configuration", 0)
+		}
 		if record.AcceptedAt == nil {
 			err = fmt.Errorf("PostHog erasure accepted timestamp missing")
 			break

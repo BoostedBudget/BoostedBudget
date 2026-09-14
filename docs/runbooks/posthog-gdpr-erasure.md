@@ -6,6 +6,15 @@ insert fails, the entire local erasure rolls back. If PostHog is unavailable or 
 missing, local erasure may commit, but the external obligation remains pending or dead-lettered.
 Never tell a user that provider erasure is complete merely because PostHog returned HTTP 202.
 
+Each new obligation begins with durable Clerk deletion. The canonical Clerk subject is encrypted;
+only its keyed blind-index fence remains after completion. A failed best-effort deletion in the
+account service therefore cannot be lost: the erasure worker retries it, and neither PostHog work nor
+provider completion can pass the `clerk_deleted_at` fence. After Clerk confirms deletion, the worker
+waits 30 seconds on the database clock before PostHog processing—longer than the Support client's
+15-second authority revalidation interval. Background tabs revalidate too, and visibility return
+tears down the Support transport until a fresh check succeeds. PostHog's Support identity HMAC has
+no native expiry; do not describe this application/Clerk fence as HMAC revocation.
+
 The encrypted envelope captures every identity BoostedBudget legitimately records at deletion time:
 the canonical `users.clerk_user_id`, all `user_identities.clerk_user_id` rows, and the legacy internal
 UUID used by older backend analytics. The application has no production writer that replaces a
