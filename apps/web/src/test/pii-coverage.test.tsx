@@ -2190,9 +2190,9 @@ describe('PII coverage — Round 15: UserDetailModal target email', () => {
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 
-  // Sibling: the opaque user id is deliberately NOT masked — it is the identifier an operator
-  // needs to correlate the record, and it carries no personal data.
-  test('the user id is NOT masked', async () => {
+  // #1652: customer correlation IDs remain visible to the operator, but are masked
+  // in session replay. Keep the structural label legible as the non-PII control.
+  test('the user id is masked while its structural label stays legible', async () => {
     render(
       <UserDetailModal
         user={{
@@ -2215,10 +2215,11 @@ describe('PII coverage — Round 15: UserDetailModal target email', () => {
       />,
       { wrapper: createWrapper() }
     )
-    await waitFor(() => expect(screen.getByText(/User ID: user-pii/)).toBeInTheDocument(), {
+    await waitFor(() => expect(screen.getByText('user-pii')).toBeInTheDocument(), {
       timeout: 3000,
     })
-    expect(screen.getByText(/User ID: user-pii/).closest('[data-ph-mask]')).toBeNull()
+    expect(screen.getByText('user-pii').closest('[data-ph-mask]')).not.toBeNull()
+    expect(screen.getByText('User ID:').closest('[data-ph-mask]')).toBeNull()
   })
 })
 

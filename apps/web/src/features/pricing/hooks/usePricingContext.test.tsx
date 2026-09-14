@@ -44,6 +44,13 @@ function PricingContextReader() {
   )
 }
 
+it.each(['inactive', 'unresolved'] as const)('handles confirmed HTTP 200 %s without permanent loading', (status) => {
+  mockUseUser.mockReturnValue(signedInUser as unknown as ReturnType<typeof mockUseUser>)
+  mockUseGetCurrentSubscription.mockReturnValue({data:{status,subscription_id:'',tier:'premium',is_comped:false},isLoading:false,error:null} as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+  renderWithProviders()
+  expect(screen.getByTestId('status').textContent).toBe(status)
+})
+
 function renderWithProviders() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -97,6 +104,17 @@ beforeEach(() => {
 })
 
 describe('usePricingContext', () => {
+  it.each(['inactive', 'trial', 'active'])('does not offer checkout from cached %s data after a failed refresh', (status) => {
+    mockUseUser.mockReturnValue(signedInUser as unknown as ReturnType<typeof mockUseUser>)
+    mockUseGetCurrentSubscription.mockReturnValue({
+      data: { status, tier: 'premium', subscription_id: '', is_comped: status === 'active' },
+      isLoading: false,
+      error: { status: 503, message: 'Unavailable' },
+    } as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+    renderWithProviders()
+    expect(screen.getByTestId('status').textContent).toBe('unresolved')
+  })
+
   it('returns loading when auth is not yet loaded', () => {
     mockUseUser.mockReturnValue({ isLoaded: false, isSignedIn: false, user: null })
     renderWithProviders()
@@ -125,7 +143,7 @@ describe('usePricingContext', () => {
     expect(screen.getByTestId('status').textContent).toBe('inactive')
   })
 
-  it('returns inactive when subscription query fails with non-404 error', () => {
+  it('returns unresolved when subscription query fails with non-404 error', () => {
     mockUseUser.mockReturnValue(signedInUser)
     mockUseGetCurrentSubscription.mockReturnValue({
       data: undefined,
@@ -133,8 +151,8 @@ describe('usePricingContext', () => {
       error: { status: 500, message: 'Internal Server Error' },
     })
     renderWithProviders()
-    // Non-404 errors should show Subscribe CTAs (inactive), not spin forever (loading)
-    expect(screen.getByTestId('status').textContent).toBe('inactive')
+    // Billing failures must offer recovery rather than imply there is no paid plan.
+    expect(screen.getByTestId('status').textContent).toBe('unresolved')
   })
 
   it('returns trial state with days remaining', () => {
@@ -228,6 +246,24 @@ describe('usePricingContext', () => {
 
   // Issue #1413: admin-comped users get real access even though they have no Paddle subscription.
   describe('Comped users (#1413)', () => {
+    it('keeps paused paid subscriptions in a recoverable pricing state', () => {
+      mockUseUser.mockReturnValue(signedInUser as unknown as ReturnType<typeof mockUseUser>)
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: { status: 'paused', tier: 'premium', subscription_id: 'sub_paused' },
+        isLoading: false, error: null,
+      } as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+      renderWithProviders()
+      expect(screen.getByTestId('status').textContent).toBe('paused')
+    })
+    it('uses paid subscription controls when a comp also exists', () => {
+      mockUseUser.mockReturnValue(signedInUser as unknown as ReturnType<typeof mockUseUser>)
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: { status: 'active', tier: 'household_2', subscription_id: 'sub_paid', is_comped: true },
+        isLoading: false, error: null,
+      } as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+      renderWithProviders()
+      expect(screen.getByTestId('status').textContent).toBe('active')
+    })
     it('returns comped state (with tier and comp end date) from the subscription payload', () => {
       mockUseUser.mockReturnValue(signedInUser)
       mockUseGetCurrentSubscription.mockReturnValue({

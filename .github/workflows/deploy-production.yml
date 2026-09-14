@@ -652,10 +652,11 @@ jobs:
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
           VITE_ENVIRONMENT: production
           VITE_MCP_URL: https://mcp.boostedbudget.com
-          VITE_PADDLE_CLIENT_TOKEN: ${{ secrets.VITE_PADDLE_CLIENT_TOKEN }}
-          VITE_PADDLE_ENV: production
+          VITE_REVENUECAT_PUBLIC_API_KEY: ${{ secrets.VITE_REVENUECAT_PUBLIC_API_KEY }}
           VITE_POSTHOG_KEY: ${{ secrets.POSTHOG_API_KEY }}
-        run: bun run build
+        run: |
+          test -n "$VITE_REVENUECAT_PUBLIC_API_KEY" || { echo "RevenueCat public SDK key is required for this environment" >&2; exit 1; }
+          bun run build
 
       # Issue #1514 (G6): vite.config.ts uses sourcemap: 'hidden', so dist/**/*.map is
       # produced but not referenced by the built .js. Upload those maps to Sentry so

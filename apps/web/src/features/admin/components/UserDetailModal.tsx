@@ -5,6 +5,7 @@
  * Modal dialog displaying detailed user information and statistics.
  */
 
+import { useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -23,6 +24,7 @@ import { useRegions } from '../../../shared/hooks/useRegions'
 import { isOverrideActive, getOverrideStatus } from '../lib/overrideStatus'
 import { KNOWN_TIER_NAMES } from '../lib/knownTiers'
 import { SnapshotAgeLabel } from './SnapshotAgeLabel'
+import { RevenueCatUserPanel } from './RevenueCatUserPanel'
 
 export interface UserDetailModalProps {
   /** User detail data */
@@ -72,6 +74,8 @@ const overrideStatusVariant = (variant: string): BadgeProps['variant'] => {
  */
 export function UserDetailModal({ user, loading, open, onClose }: UserDetailModalProps) {
   const { getRegionWithFlag } = useRegions()
+  const [diagnosticUserId, setDiagnosticUserId] = useState<string | null>(null)
+  const showDiagnostics = Boolean(user && diagnosticUserId === user.id)
 
   // Issue #1462 follow-up G2: anchors this modal's override-liveness arithmetic to the server's
   // own snapshot instant (`user.as_of`, populated on AdminUserDetail) instead of a fresh
@@ -104,7 +108,7 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <DialogContent className="max-w-[600px]" aria-describedby="user-detail-description">
+      <DialogContent className={showDiagnostics ? 'max-w-[1100px] sm:max-w-[1100px]' : 'max-w-[600px] sm:max-w-[600px]'} aria-describedby="user-detail-description">
         {loading ? (
           <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
             <Loader2 className="w-8 h-8 mb-4 animate-spin" />
@@ -127,7 +131,7 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
                 )}
               </DialogTitle>
               <DialogDescription id="user-detail-description">
-                User ID: {user.id}
+                User ID: <span data-ph-mask>{user.id}</span>
               </DialogDescription>
             </DialogHeader>
 
@@ -235,6 +239,11 @@ export function UserDetailModal({ user, loading, open, onClose }: UserDetailModa
                 </div>
               </section>
             </div>
+
+            <Button variant="outline" aria-expanded={showDiagnostics} onClick={() => setDiagnosticUserId(showDiagnostics ? null : user.id)}>
+              {showDiagnostics ? 'Hide RevenueCat diagnostics' : 'Show RevenueCat diagnostics'}
+            </Button>
+            {showDiagnostics && <RevenueCatUserPanel key={user.id} userId={user.id} />}
 
             <DialogFooter>
               <Button variant="outline" onClick={onClose}>

@@ -79,6 +79,13 @@ export default defineConfig({
             // Higher priority groups prevent lower-priority (vendor) catch-all from
             // vacuuming them. Each is budgeted independently in .size-limit.json.
             {
+              // Preserve the checkout runtime's dynamic SDK import. Without this
+              // group, vendor absorbs the SDK and every landing visit downloads it.
+              name: 'revenuecat',
+              test: /node_modules\/@revenuecat\/purchases-js\//,
+              priority: 15,
+            },
+            {
               name: 'charts',
               test: /node_modules\/(echarts|zrender|echarts-for-react)\//,
               priority: 15, // echarts (~500 KB raw) isolated from vendor
@@ -194,7 +201,7 @@ export default defineConfig({
             // remain lazily loaded by their own routes.
             {
               name: 'shared',
-              test: /\/apps\/web\/src\/features\/(profile\/hooks\/|admin\/(components\/(AdminRoute|AdminLayout|AdminSidebar)|hooks\/(useIsAdmin|useAdminMode)|constants)\.|billing\/components\/(SubscriptionManagementSkeleton|SubscriptionErrorState)\.)/,
+              test: /\/apps\/web\/src\/features\/(profile\/hooks\/|admin\/(components\/(AdminRoute|AdminLayout|AdminSidebar)|hooks\/(useIsAdmin|useAdminMode)|constants)\.|billing\/(components\/(SubscriptionManagementSkeleton|SubscriptionErrorState)|hooks\/useRevenueCatCheckout|revenueCatCheckout|revenueCatRuntime)\.)/,
               priority: 8,
             },
             {

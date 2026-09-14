@@ -3,6 +3,7 @@ import React from 'react'
 import { renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSubscriptionManagement } from './useSubscriptionManagement'
+import { mockUseAuth, createMockClerkAuth } from '@/test/mocks/clerk'
 import {
   mockUseGetCurrentSubscription,
   mockUseUpdatePaddleSubscription,
@@ -354,6 +355,32 @@ describe('useSubscriptionManagement', () => {
 
   // Issue #1413: admin-comped users get real access even though there's no Paddle subscription.
   describe('Comped resilience (#1413)', () => {
+    it('partitions billing reads by Clerk identity after account switching', () => {
+      mockUseAuth.mockReturnValue(createMockClerkAuth({ userId: 'user_first' }))
+      const hook = renderHook(() => useSubscriptionManagement(), { wrapper: createWrapper() })
+      const getKey = () => (mockUseGetCurrentSubscription.mock.calls.at(-1) as unknown as [{ query: { queryKey: unknown } }])?.[0]?.query?.queryKey
+      const firstKey = getKey()
+      mockUseAuth.mockReturnValue(createMockClerkAuth({ userId: 'user_second' }))
+      hook.rerender()
+      const secondKey = getKey()
+      expect(secondKey).not.toEqual(firstKey)
+    })
+    it('allows billing portal recovery for a paused paid subscription', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: { status: 'paused', tier: 'premium', subscription_id: 'sub_paused' },
+      } as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+      renderHook(() => useSubscriptionManagement(), { wrapper: createWrapper() })
+      expect(mockUseGetBillingPortalUrl).toHaveBeenLastCalledWith({ query: expect.objectContaining({ enabled: true }) })
+    })
+    it('keeps the paid billing portal available when complimentary access coexists', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: { status: 'active', tier: 'household_2', subscription_id: 'sub_paid', is_comped: true },
+      } as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+      renderHook(() => useSubscriptionManagement(), { wrapper: createWrapper() })
+      expect(mockUseGetBillingPortalUrl).toHaveBeenLastCalledWith({ query: expect.objectContaining({ enabled: true }) })
+    })
     it('returns hasNoSubscription false for a comped user even when the endpoint 404s (profile-derived)', () => {
       mockUseGetCurrentSubscription.mockReturnValue({
         ...defaultQueryState,

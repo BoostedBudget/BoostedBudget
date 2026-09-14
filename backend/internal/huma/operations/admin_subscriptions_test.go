@@ -75,6 +75,8 @@ func (m *MockAdminUserService) RemoveUserTierOverride(ctx context.Context, actor
 // interface.
 func (m *MockAdminUserService) SetGDPRAnalytics(a phclient.GDPRAnalytics) {}
 
+func (m *MockAdminUserService) SetRevenueCatSummary(services.RevenueCatSummaryReader) {}
+
 // MockAdminService is a mock implementation of services.AdminService
 type MockAdminService struct {
 	mock.Mock

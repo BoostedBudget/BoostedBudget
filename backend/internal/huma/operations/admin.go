@@ -30,6 +30,7 @@ type TrialGranter interface {
 // Routes are protected by AdminMiddleware, which authorizes by identity and admin role in
 // every environment (Issue #1499 removed its environment check).
 type AdminHandler struct {
+	revenueCat            *RevenueCatAdminDeps
 	plaidService          services.PlaidService
 	linkedItemRepo        repository.LinkedItemRepository
 	trialService          TrialGranter

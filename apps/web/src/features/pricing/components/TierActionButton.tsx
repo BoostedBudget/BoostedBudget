@@ -1,6 +1,7 @@
 import { useClerk } from '@clerk/react-router'
+import { Link } from 'react-router'
 import { Button } from '@/components/ui/button'
-import { usePaddleCheckout } from '../../billing/hooks/usePaddleCheckout'
+import { useRevenueCatCheckout } from '../../billing/hooks/useRevenueCatCheckout'
 import { classifyTierChange } from '../../subscription/lib/tierDirection'
 import type { PricingState } from '../hooks/usePricingContext'
 import type { SubscriptionTier, TierName } from '../../subscription/types'
@@ -21,21 +22,18 @@ export function TierActionButton({
   onChangePlan,
 }: TierActionButtonProps) {
   const { openSignUp } = useClerk()
-  const { checkout, isLoading } = usePaddleCheckout()
+  const { checkout, isLoading } = useRevenueCatCheckout()
 
   const handleCheckout = async () => {
-    try {
-      const response = await checkout({ tier: tierKey, billingInterval })
-      if (window.Paddle) {
-        window.Paddle.Checkout.open({ transactionId: response.transaction_id })
-      }
-    } catch {
-      // Error handling done by usePaddleCheckout
-    }
+    await checkout()
   }
 
   if (pricingState.status === 'loading') {
     return <Button disabled className="w-full">Loading...</Button>
+  }
+
+  if (pricingState.status === 'unresolved') {
+    return <Button asChild variant="outline" className="w-full"><Link to="/billing/manage">Check subscription status</Link></Button>
   }
 
   if (pricingState.status === 'signed-out') {
@@ -59,13 +57,8 @@ export function TierActionButton({
     )
   }
 
-  // Issue #1413: comped users keep full commerce functionality. Their own comped tier reads as
-  // "Current Plan" (nothing to buy); every other tier is a normal, functional Subscribe CTA — a
-  // comped user may legitimately want to buy, e.g. if their comp has an end date.
+  // Complimentary access is independent of a paid plan, including the same tier.
   if (pricingState.status === 'comped') {
-    if (pricingState.tier === tierKey) {
-      return <Button disabled className="w-full">Current Plan</Button>
-    }
     return (
       <Button onClick={handleCheckout} disabled={isLoading} className="w-full">
         {isLoading ? 'Loading...' : 'Subscribe'}
@@ -75,6 +68,10 @@ export function TierActionButton({
 
   if (pricingState.status === 'past_due') {
     return <Button disabled className="w-full">Update Payment</Button>
+  }
+
+  if (pricingState.status === 'paused') {
+    return <Button disabled className="w-full">Manage Billing</Button>
   }
 
   if (

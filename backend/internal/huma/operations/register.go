@@ -148,6 +148,9 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	// Issue #45, #46: Paddle payment integration
 	RegisterPaddleCheckoutRoutes(api, paddleCheckoutHandler)
 	RegisterPaddleWebhookRoutes(api, paddleWebhookHandler)
+	RegisterRevenueCatWebhookRoutes(api, &RevenueCatWebhookHandler{})
+	RegisterRevenueCatSubscriptionRoutes(api, &RevenueCatSubscriptionHandler{})
+	RegisterAdminRevenueCatRoutes(api, adminHandler)
 
 	// Issue #821: QA auth bypass
 	RegisterQAAuthBypassRoutes(api, qaBypassHandler)

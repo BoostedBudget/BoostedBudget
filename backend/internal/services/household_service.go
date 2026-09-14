@@ -779,7 +779,11 @@ func (s *householdService) removeMemberTx(ctx context.Context, tx pgx.Tx, househ
 		if err != nil {
 			return nil, err
 		}
-		ownerTier, err := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
+		ownerAccess, err := s.ownAccessInTransaction(ctx, tx, owner)
+		if err != nil {
+			return nil, err
+		}
+		ownerTier, err := s.tierConfig.GetTier(domain.TierName(ownerAccess.Tier))
 		if err != nil {
 			return nil, err
 		}
@@ -918,14 +922,18 @@ func (s *householdService) OffboardExcessMembers(ctx context.Context, householdI
 	// outcome, not an error; the caller (the daily worker's autoOffboard) already clears
 	// the over-capacity flag unconditionally after any successful call here, regardless of
 	// queue length.
-	if domain.SubscriptionStatus(owner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
+	ownerAccess, cerr := s.ownAccessInTransaction(ctx, tx, owner)
+	if cerr != nil {
+		return nil, cerr
+	}
+	if domain.SubscriptionStatus(ownerAccess.Status).IsReadOnlySubscription() {
 		if cerr = tx.Commit(ctx); cerr != nil {
 			return nil, cerr
 		}
 		return []QueuedRemovalEmail{}, nil
 	}
 
-	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
+	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(ownerAccess.Tier))
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -1216,7 +1224,20 @@ func (s *householdService) CreateInvite(ctx context.Context, ownerUserID, invite
 		return nil, cerr
 	}
 
-	tier, cerr := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
+	if s.revenueCatEnabled() {
+		owner, cerr = s.lockAndGetUser(ctx, tx, ownerUserID)
+		if cerr != nil {
+			return nil, cerr
+		}
+	}
+	ownerAccess, cerr := s.ownAccessInTransaction(ctx, tx, owner)
+	if cerr != nil {
+		return nil, cerr
+	}
+	if !domain.SubscriptionStatus(ownerAccess.Status).IsActiveSubscription() {
+		return nil, domain.ErrOwnerPlanInactive
+	}
+	tier, cerr := s.tierConfig.GetTier(domain.TierName(ownerAccess.Tier))
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -1393,7 +1414,11 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	}
 
 	// (3b) Paying-invitee guard (decision #6): block any live Paddle billing relationship.
-	if callerHasLivePaddleSubscription(caller) {
+	callerPaid, cerr := s.callerHasLiveBillingInTransaction(ctx, tx, caller)
+	if cerr != nil {
+		return nil, cerr
+	}
+	if callerPaid {
 		cerr = &domain.InviteeHasActivePaidSubscriptionError{EligibleAfter: caller.SubscriptionEndsAt}
 		return nil, cerr
 	}
@@ -1437,7 +1462,11 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	if cerr != nil {
 		return nil, cerr
 	}
-	if owner.DeletionRequestedAt != nil || domain.SubscriptionStatus(owner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
+	ownerAccess, cerr := s.ownAccessInTransaction(ctx, tx, owner)
+	if cerr != nil {
+		return nil, cerr
+	}
+	if owner.DeletionRequestedAt != nil || domain.SubscriptionStatus(ownerAccess.Status).IsReadOnlySubscription() {
 		cerr = domain.ErrOwnerPlanInactive
 		return nil, cerr
 	}
@@ -1453,7 +1482,7 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		s.acceptInviteAfterOwnerCheckHook()
 	}
 
-	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
+	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(ownerAccess.Tier))
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -1501,8 +1530,15 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		// into household_members.prior_subscription_tier, later read back to revert a member's
 		// tier when they leave the household — effectiveTierName falls back to the raw tier
 		// instead.
-		priorTier := s.effectiveTierName(caller)
-		priorStatus := caller.SubscriptionStatus
+		callerAccess, accessErr := s.ownAccessInTransaction(ctx, tx, caller)
+		if accessErr != nil {
+			return nil, accessErr
+		}
+		priorTier := callerAccess.Tier
+		priorStatus := callerAccess.Status
+		if !s.revenueCatEnabled() {
+			priorStatus = caller.SubscriptionStatus
+		}
 		member = &domain.HouseholdMember{
 			HouseholdID:             inv.HouseholdID,
 			UserID:                  callerUserID,
@@ -1569,7 +1605,7 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	}
 
 	// (10) Insert the household entitlement (payer == owner satisfies the composite FK).
-	if cerr = entRepo.CreateHouseholdEntitlement(ctx, callerUserID, string(ownerTier.Name), owner.ComputeEffectiveStatus(), ownerUserID, inv.HouseholdID); cerr != nil {
+	if cerr = entRepo.CreateHouseholdEntitlement(ctx, callerUserID, string(ownerTier.Name), ownerAccess.Status, ownerUserID, inv.HouseholdID); cerr != nil {
 		return nil, cerr
 	}
 

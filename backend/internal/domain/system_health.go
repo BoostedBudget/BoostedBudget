@@ -400,6 +400,7 @@ type PlaidHealth struct {
 
 // QueueMetrics represents River job queue metrics
 type QueueMetrics struct {
+	Unavailable       bool  `json:"unavailable,omitempty" doc:"Metrics could not be read; numeric placeholders are not measured zeroes"`
 	Pending           int64 `json:"pending"`
 	Running           int64 `json:"running"`
 	Failed            int64 `json:"failed"`

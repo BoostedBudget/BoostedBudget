@@ -40,6 +40,7 @@ type checkoutHouseholdSeatReader interface {
 
 // PaddleCheckoutHandler handles Paddle checkout and subscription management operations.
 type PaddleCheckoutHandler struct {
+	rcBilling       revenueCatBillingReader
 	paddleService   services.PaddleService
 	profileRepo     repository.ProfileRepository
 	config          *config.Config
@@ -181,20 +182,21 @@ type GetCurrentSubscriptionInput struct {
 // GetCurrentSubscriptionOutput represents the response for current subscription.
 type GetCurrentSubscriptionOutput struct {
 	Body struct {
-		SubscriptionID     string `json:"subscription_id" doc:"Paddle subscription ID" example:"sub_01h1234567890"`
-		Status             string `json:"status" doc:"Subscription status (active, trial, trialing, cancelled, past_due)" example:"active"`
-		Tier               string `json:"tier" doc:"Current subscription tier" example:"premium"`
-		BillingInterval    string `json:"billing_interval" doc:"Billing interval (month/year)" example:"month"`
-		CurrentPeriodEnd   string `json:"current_period_end,omitempty" doc:"End of current billing period" example:"2026-03-01"`
-		NextBillingDate    string `json:"next_billing_date,omitempty" doc:"Next billing date" example:"2026-03-01"`
-		Amount             string `json:"amount" doc:"Subscription amount" example:"9.99"`
-		Currency           string `json:"currency" doc:"Currency code" example:"USD"`
-		TrialEndsAt        string `json:"trial_ends_at,omitempty" doc:"Trial end date (for trial users)" example:"2026-04-08"`
-		TrialDaysRemaining *int   `json:"trial_days_remaining,omitempty" doc:"Days remaining in trial (for trial users)" example:"45"`
-		CancelAtPeriodEnd  bool   `json:"cancel_at_period_end" doc:"Whether the subscription is scheduled to cancel at end of current period"`
-		ScheduledChangeAt  string `json:"scheduled_change_at,omitempty" doc:"RFC 3339 datetime when the scheduled cancel takes effect" example:"2026-05-01T00:00:00Z"`
-		IsComped           bool   `json:"is_comped" doc:"True when access is granted by an admin comp rather than a paid subscription"`
-		CompEndsAt         string `json:"comp_ends_at,omitempty" doc:"RFC 3339 datetime when complimentary access ends; absent means indefinite"`
+		Authority          *services.RevenueCatSummary `json:"authority,omitempty" doc:"Confirmed access independent of paid billing details"`
+		SubscriptionID     string                      `json:"subscription_id" doc:"Paddle subscription ID" example:"sub_01h1234567890"`
+		Status             string                      `json:"status" doc:"Subscription status (active, trial, trialing, cancelled, past_due)" example:"active"`
+		Tier               string                      `json:"tier" doc:"Current subscription tier" example:"premium"`
+		BillingInterval    string                      `json:"billing_interval" doc:"Billing interval (month/year)" example:"month"`
+		CurrentPeriodEnd   string                      `json:"current_period_end,omitempty" doc:"End of current billing period" example:"2026-03-01"`
+		NextBillingDate    string                      `json:"next_billing_date,omitempty" doc:"Next billing date" example:"2026-03-01"`
+		Amount             string                      `json:"amount" doc:"Subscription amount" example:"9.99"`
+		Currency           string                      `json:"currency" doc:"Currency code" example:"USD"`
+		TrialEndsAt        string                      `json:"trial_ends_at,omitempty" doc:"Trial end date (for trial users)" example:"2026-04-08"`
+		TrialDaysRemaining *int                        `json:"trial_days_remaining,omitempty" doc:"Days remaining in trial (for trial users)" example:"45"`
+		CancelAtPeriodEnd  bool                        `json:"cancel_at_period_end" doc:"Whether the subscription is scheduled to cancel at end of current period"`
+		ScheduledChangeAt  string                      `json:"scheduled_change_at,omitempty" doc:"RFC 3339 datetime when the scheduled cancel takes effect" example:"2026-05-01T00:00:00Z"`
+		IsComped           bool                        `json:"is_comped" doc:"True when access is granted by an admin comp rather than a paid subscription"`
+		CompEndsAt         string                      `json:"comp_ends_at,omitempty" doc:"RFC 3339 datetime when complimentary access ends; absent means indefinite"`
 	}
 }
 
@@ -246,6 +248,9 @@ func (h *PaddleCheckoutHandler) HandleCreateCheckoutSession(
 ) (*CheckoutOutput, error) {
 	if err := validateUserAuth(input.UserID); err != nil {
 		return nil, err
+	}
+	if h.rcBilling != nil {
+		return nil, huma.Error409Conflict("Start checkout through the subscription paywall.")
 	}
 
 	// Get user from database
@@ -381,7 +386,7 @@ func (h *PaddleCheckoutHandler) HandlePreviewSubscriptionUpdate(
 		return nil, huma.Error400BadRequest("Invalid tier")
 	}
 
-	if !isSubscriptionModifiable(user.SubscriptionStatus) {
+	if h.rcBilling == nil && !isSubscriptionModifiable(user.SubscriptionStatus) {
 		return nil, huma.Error400BadRequest("No active subscription to update")
 	}
 
@@ -393,6 +398,9 @@ func (h *PaddleCheckoutHandler) HandlePreviewSubscriptionUpdate(
 	subscriptionID, err := h.getActiveSubscriptionID(ctx, user.ID)
 	if err != nil {
 		h.logger.Error("failed to get active subscription", "user_id", user.ID, "error", err)
+		if h.rcBilling != nil {
+			return nil, err
+		}
 		return nil, huma.Error400BadRequest("No active subscription found")
 	}
 
@@ -429,6 +437,13 @@ func (h *PaddleCheckoutHandler) getActiveSubscriptionID(ctx context.Context, use
 	user, err := h.profileRepo.GetUserByID(ctx, userID)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch user: %w", err)
+	}
+	if h.rcBilling != nil {
+		sub, _, err := h.rcBilling.Resolve(ctx, user)
+		if err != nil {
+			return "", revenueCatBillingError(err)
+		}
+		return sub.ID, nil
 	}
 
 	if user.PaddleSubscriptionID == nil || *user.PaddleSubscriptionID == "" {
@@ -491,11 +506,11 @@ func (h *PaddleCheckoutHandler) HandleUpdateSubscription(
 		return nil, huma.Error400BadRequest("Invalid tier")
 	}
 
-	if !isSubscriptionModifiable(user.SubscriptionStatus) {
+	if h.rcBilling == nil && !isSubscriptionModifiable(user.SubscriptionStatus) {
 		return nil, huma.Error400BadRequest("No active subscription to update")
 	}
 
-	if input.Body.CurrentBillingInterval != "" &&
+	if h.rcBilling == nil && input.Body.CurrentBillingInterval != "" &&
 		input.Body.NewTier == user.SubscriptionTier &&
 		input.Body.BillingInterval == input.Body.CurrentBillingInterval {
 		return nil, huma.Error400BadRequest("No change: subscription is already on the requested plan and billing interval")
@@ -523,6 +538,9 @@ func (h *PaddleCheckoutHandler) HandleUpdateSubscription(
 	subscriptionID, err := h.getActiveSubscriptionID(ctx, user.ID)
 	if err != nil {
 		h.logger.Error("failed to get subscription ID", "user_id", user.ID, "error", err)
+		if h.rcBilling != nil {
+			return nil, err
+		}
 		return nil, huma.Error400BadRequest("No active subscription found")
 	}
 
@@ -586,6 +604,25 @@ func (h *PaddleCheckoutHandler) checkDowngradeSeatCapacity(ctx context.Context, 
 	if hasOverride && h.rejectedOverride(user.ID, overrideValue, "seat-capacity check") {
 		effectiveTier = simulatedUser.SubscriptionTier
 	}
+	if h.rcBilling != nil {
+		_, summary, billingErr := h.rcBilling.Resolve(ctx, user)
+		if billingErr != nil {
+			return revenueCatBillingError(billingErr)
+		}
+		if summary.Own == nil || summary.PendingOperations > 0 {
+			return revenueCatBillingError(domain.ErrRevenueCatUnresolved)
+		}
+		grants := []domain.RevenueCatGrant{{Key: "paid_" + newTier}}
+		if summary.Comp != nil {
+			grants = append(grants, domain.RevenueCatGrant{Key: "comp_" + summary.Comp.Tier, ExpiresAt: summary.Comp.ExpiresAt})
+		}
+		now := time.Now()
+		access, accessErr := (domain.RevenueCatState{AccessUpdatedAt: now, Grants: grants}).ResolveAccess(now)
+		if accessErr != nil {
+			return revenueCatBillingError(accessErr)
+		}
+		effectiveTier = access.Tier
+	}
 
 	tier, err := h.tierConfig.GetTier(domain.TierName(effectiveTier))
 	if err != nil {
@@ -643,13 +680,16 @@ func (h *PaddleCheckoutHandler) HandleCancelSubscription(
 
 	h.logger.Info("canceling subscription", "user_id", user.ID)
 
-	if !isSubscriptionModifiable(user.SubscriptionStatus) {
+	if h.rcBilling == nil && !isSubscriptionModifiable(user.SubscriptionStatus) {
 		return nil, huma.Error400BadRequest("No active subscription to cancel")
 	}
 
 	subscriptionID, err := h.getActiveSubscriptionID(ctx, user.ID)
 	if err != nil {
 		h.logger.Error("failed to get subscription ID", "user_id", user.ID, "error", err)
+		if h.rcBilling != nil {
+			return nil, err
+		}
 		return nil, huma.Error400BadRequest("No active subscription found")
 	}
 
@@ -680,6 +720,9 @@ func (h *PaddleCheckoutHandler) HandleGetBillingPortalURL(
 ) (*GetBillingPortalURLOutput, error) {
 	if err := validateUserAuth(input.UserID); err != nil {
 		return nil, err
+	}
+	if h.rcBilling != nil {
+		return h.revenueCatBillingPortal(ctx, input.UserID)
 	}
 
 	// Get user from database
@@ -714,6 +757,9 @@ func (h *PaddleCheckoutHandler) HandleGetCurrentSubscription(
 ) (*GetCurrentSubscriptionOutput, error) {
 	if err := validateUserAuth(input.UserID); err != nil {
 		return nil, err
+	}
+	if h.rcBilling != nil {
+		return h.revenueCatCurrent(ctx, input.UserID)
 	}
 
 	// Get user from database

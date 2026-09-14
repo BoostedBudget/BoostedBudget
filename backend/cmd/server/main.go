@@ -29,6 +29,7 @@ import (
 	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/operations"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/integration/revenuecat"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
@@ -483,38 +484,19 @@ func main() {
 	var plaidCleanupService services.PlaidItemCleanupService
 	var deletionService services.DeletionService // Declared here for late binding of plaidCleanupService
 
-	// Issue #679, #680: Declare trial service and expiration check worker
-	var trialService *services.TrialService
-	var trialExpirationCheckWorker *jobs.TrialExpirationCheckWorker
-
-	// Issue #762: Declare Paddle reconciliation worker
-	var paddleReconciliationWorker *jobs.PaddleReconciliationWorker
-
-	// Issue #898: Declare past_due check worker
-	var pastDueCheckWorker *jobs.PastDueCheckWorker
+	// RevenueCat is the only subscription access authority.
+	var revenueCatSyncWorker *jobs.RevenueCatSyncWorker
+	var revenueCatRepairWorker *jobs.RevenueCatRepairWorker
+	var revenueCatRepo repository.RevenueCatRepository
+	var revenueCatProfiles repository.ProfileRepository
 
 	// Issue #930: Declare retention cleanup check worker
 	var retentionCleanupCheckWorker *jobs.RetentionCleanupCheckWorker
 
-	// Issue #1413 (Task 9): Declare manual tier override expiry check worker (the
-	// time-triggered twin of the admin "remove override" endpoint — Issue #1414 / Task 7).
-	// Not gated on DELETION_TOKEN_SECRET — it depends on adminUserRepo/clerkService, not
-	// deletionService. (Stale as of round-8: this used to be a contrast with retention's worker,
-	// which WAS gated on DELETION_TOKEN_SECRET at the time. Issue #1413 round-8 Blocker 2 moved
-	// retention's worker's own construction outside that gate too — see its construction site
-	// below — so both are now unconditional on DELETION_TOKEN_SECRET specifically. Neither is
-	// truly ungated, though: both still sit inside the OUTER `if db != nil && cfg.ClerkSecretKey
-	// != ""` block this whole function body lives in — a real, separate gate, filed as its own
-	// issue.)
-	var manualTierOverrideExpiryCheckWorker *jobs.ManualTierOverrideExpiryCheckWorker
-
 	// Issue #1371 — Phase 7 (Task 2): Declare household member cleanup check worker
 	// (purges household_members rows removed 30+ days ago). Constructed once
-	// householdService is available (below); not gated on DELETION_TOKEN_SECRET either — it
-	// depends on householdService, not deletionService. See
-	// manualTierOverrideExpiryCheckWorker's declaration comment above for why this is no longer a
-	// useful contrast with retention's worker (round-8 made that unconditional too), and for the
-	// real outer gate both still sit inside.
+	// householdService is available (below). This depends on householdService, not
+	// deletionService, and sits inside the DB + Clerk initialization gate.
 	var householdMemberCleanupCheckWorker *jobs.HouseholdMemberCleanupCheckWorker
 
 	// Issue #1371 — Phase 7 (Task 6): Declare household over-capacity check worker
@@ -653,6 +635,24 @@ func main() {
 
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db, fieldEncryptor)
+		profileRepo.EnableRevenueCatRetentionGuard()
+		revenueCatRepo = repository.NewRevenueCatRepository(db, fieldEncryptor, cfg.RetentionPeriodMonths)
+		revenueCatProfiles = profileRepo
+		var revenueCatClient services.RevenueCatProvider
+		if cfg.RevenueCatProjectID != "" {
+			revenueCatClient, err = revenuecat.NewClient(revenuecat.Config{
+				ProjectID: cfg.RevenueCatProjectID, SecretAPIKey: cfg.RevenueCatSecretAPIKey,
+				GrantAPIKey: cfg.RevenueCatGrantAPIKey, Environment: cfg.RevenueCatEnvironment,
+			})
+			if err != nil {
+				log.Fatal("Failed to initialize RevenueCat: ", err)
+			}
+		} else {
+			appLogger.Warn("RevenueCat is not configured; subscription access remains unresolved")
+		}
+		revenueCatService := services.NewRevenueCatService(revenueCatRepo, revenueCatClient, profileRepo)
+		revenueCatSyncWorker = jobs.NewRevenueCatSyncWorker(revenueCatService, revenueCatRepo)
+		revenueCatRepairWorker = jobs.NewRevenueCatRepairWorker(revenueCatRepo, nil)
 		// Issue #1413 G2 / round-5: reject a manual_tier_override that names no configured tier
 		// — both on the access-granting path (GetEffectiveSubscriptionStatusByUserID) and on the
 		// profile response's representation path (humaProfileHandler.SetOverrideTierValidator,
@@ -742,25 +742,6 @@ func main() {
 		clerkService := services.NewClerkService(cfg.ClerkSecretKey)
 		appLogger.Info("Clerk Backend API service initialized")
 
-		// Issue #1413 (Task 9): Manual tier override expiry check worker — reuses
-		// AdminUserRepository.RemoveUserTierOverride (adminUserRepo, Issue #1414 / Task 7) as
-		// the time-triggered twin of the admin "remove override" endpoint. RetentionMonths
-		// mirrors trialService.SetRetentionMonths / NewAdminUserService's retentionMonths param
-		// below — same cfg.RetentionPeriodMonths value threaded everywhere retention windows
-		// are sized.
-		manualTierOverrideExpiryCheckWorker = jobs.NewManualTierOverrideExpiryCheckWorker(jobs.ManualTierOverrideExpiryCheckWorkerDeps{
-			ProfileRepo:     profileRepo,
-			Remover:         adminUserRepo,
-			ClerkService:    clerkService,
-			RetentionMonths: cfg.RetentionPeriodMonths,
-			Logger:          appLogger,
-		})
-		// Consent-gated (Issue #1413 round 10): this worker's event carries the expired target user's
-		// own UUID as distinct_id, so it is that user's personal data even though a system job fired
-		// it — see SetGDPRAnalytics' doc comment for why the earlier raw-phClient clearance was reversed.
-		manualTierOverrideExpiryCheckWorker.SetGDPRAnalytics(gdprClient)
-		appLogger.Info("Manual tier override expiry check worker created (River)")
-
 		// Create services
 		profileService := services.NewProfileService(services.NewProfileServiceDeps{
 			Repo:         profileRepo,
@@ -776,6 +757,7 @@ func main() {
 		transactionService.SetAccountRepository(accountRepo) // #1329: embed account in investment rows
 		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
 		registrationService.SetAnalytics(phClient)
+		revenueCatService.SetGDPRAnalytics(gdprClient)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
 		subscriptionService := services.NewSubscriptionService(tierConfig, subscriptionOverrideRepo)
 		// Issue #1413 (tier axis, this task): same validator as profileRepo/humaProfileHandler/
@@ -796,6 +778,9 @@ func main() {
 		// make ResolveEffectiveEntitlement report the owner (and therefore every member) as
 		// covered. See HouseholdEntitlementService.SetOverrideTierValidator's doc comment.
 		householdEntitlementService.SetOverrideTierValidator(overrideTierValidator)
+		householdEntitlementService.SetOwnAccessResolver(revenueCatService)
+		revenueCatCleanupGuard := services.NewRevenueCatCleanupGuard(revenueCatService, revenueCatRepo, entitlementRepo)
+		revenueCatSummaryService := services.NewRevenueCatSummaryService(revenueCatService, revenueCatRepo, householdEntitlementService)
 		subscriptionService.SetEntitlementResolver(householdEntitlementService) // nil-safe injection; dormant until Phase 3 seeds rows
 		// Issue #353: Dashboard service for balance tracking
 		dashboardService := services.NewDashboardService(balanceSnapshotRepo, accountRepo)
@@ -1028,6 +1013,7 @@ func main() {
 		// never nil (see cachePurgeRetryWorker below); Generations() is nil-safe when the
 		// cache is disabled (NewNoopCache), and bumpCacheForHousehold nil-guards on it.
 		householdOverCapacityCheckWorker.SetCacheInvalidation(cacheInstance.Generations())
+		householdOverCapacityCheckWorker.SetOwnAccessResolver(revenueCatService)
 		appLogger.Info("Household over-capacity check worker created (River)")
 
 		// Create deletion services (if token secret configured)
@@ -1060,6 +1046,7 @@ func main() {
 			// cleanup or cascade delete — replaces the old self-assigning ClaimForDeletion
 			// guard, which reserved nothing. See work_claims_repository.go's package doc.
 			deletionService.SetWorkClaimsRepo(workClaimsRepo)
+			deletionService.SetSubscriptionCleanupGuard(revenueCatCleanupGuard)
 			appLogger.Info("Deletion service initialized (30-day grace period)")
 
 			// Issue #1560: deletion routes are NOT registered here. huma.Register snapshots the
@@ -1152,6 +1139,7 @@ func main() {
 		// before a notice email is sent — replaces the old ClaimRetentionNotice30dSent/7dSent,
 		// which stamped the *_sent_at marker BEFORE the send was attempted.
 		retentionCleanupCheckWorker.SetWorkClaimsRepo(workClaimsRepo)
+		retentionCleanupCheckWorker.SetSubscriptionCleanupGuard(revenueCatCleanupGuard)
 		appLogger.Info("Retention cleanup check worker created (River)")
 
 		// Create Paddle services (if configured) - Issue #45, #46: Paddle Payment Integration
@@ -1195,7 +1183,7 @@ func main() {
 					// household owner from downgrading to a tier without enough seats
 					// for their current active+pending household.
 					HouseholdRepo: householdRepo,
-				})
+				}).WithRevenueCatBilling(services.NewRevenueCatBillingService(revenueCatSummaryService, paddleService, paddleService.GetClient()))
 				appLogger.Info("Paddle checkout handler created")
 			}
 
@@ -1218,6 +1206,7 @@ func main() {
 					Logger:        logger,
 				})
 				subscriptionWebhookWorker.SetAnalytics(phClient)
+				subscriptionWebhookWorker.SetRevenueCatAuthority()
 				// Issue #1413 High finding H7 (Codex review round 4): required for
 				// processSubscriptionCanceled to gain EXCLUSIVITY on
 				// ActionSubscriptionCancelledCleanup before its Plaid disconnect / retention-clock
@@ -1235,82 +1224,20 @@ func main() {
 			deletionService.SetPaddleCleanupService(paddleService)
 			appLogger.Info("Paddle cleanup service wired to deletion service")
 		}
+		if deletionService != nil {
+			var erasureBilling *services.RevenueCatBillingService
+			if paddleService != nil {
+				erasureBilling = services.NewRevenueCatBillingService(nil, paddleService, paddleService.GetClient())
+			}
+			deletionService.SetRevenueCatCleanupService(services.NewRevenueCatErasureService(revenueCatService, repository.NewRevenueCatErasureRepository(db, fieldEncryptor), erasureBilling))
+		}
 
 		// Issue #1015: Create non-Plaid workers unconditionally (decoupled from Plaid config).
 		// These workers previously lived inside the Plaid block but have no Plaid dependency.
 		// Placement: after Paddle init (paddleService available), before Plaid init.
 
-		// Issue #679, #680: Create TrialService unconditionally.
-		// Issue #1413 round-7: TrialService has no Plaid dependency at all — ExpireTrial never
-		// calls Plaid. The disconnect lives entirely in RetentionCleanupCheckWorker's grace-window
-		// repair pass (wired further below, once plaidCleanupService is available).
-		trialService = services.NewTrialService(tierConfig, profileRepo)
-		trialService.SetRetentionMonths(cfg.RetentionPeriodMonths)
-		// #1367 — Phase 3: exempt actively covered household members from trial expiry.
-		trialService.SetHouseholdChecker(householdEntitlementService)
-		// Issue #1413 round-4 finding H2: required for ExpireTrial to gain EXCLUSIVITY on
-		// ActionTrialExpiration before its Plaid disconnect — trial_service was the one
-		// destructive flow in this branch with no work_claims flow claim at all.
-		trialService.SetWorkClaimsRepo(workClaimsRepo)
-		appLogger.Info("Trial service initialized")
-
-		// Issue #898: Create PastDueService unconditionally; plaidCleanup wired later if Plaid is configured.
-		pastDueCfg := tierConfig.GetPastDueConfig()
-		pastDueService := services.NewPastDueService(
-			profileRepo,
-			nil, // plaidCleanup — wired via SetPlaidCleanup() if Plaid is configured
-			paddleService,
-			clerkService,
-			notificationRepo,
-			pastDueCfg.GraceDays,
-			pastDueCfg.PlaidDisconnectDays,
-		)
-		pastDueService.SetAnalytics(phClient)
-		// #1413: exempt actively covered household members from past_due dunning, closing an
-		// asymmetry with TrialService's #1367 household exemption (wired identically above).
-		pastDueService.SetHouseholdChecker(householdEntitlementService)
-		// Issue #1413 High findings H6a/H6b (Codex review round 4): required for
-		// processPlaidDisconnectWindow/processGraceExpiry to gain EXCLUSIVITY on
-		// ActionPlaidDisconnectPastDue/ActionPastDueGraceCancel before any irreversible Plaid/Paddle
-		// call — replaces the old self-assigning-update guards, which reserved nothing.
-		pastDueService.SetWorkClaimsRepo(workClaimsRepo)
-		appLogger.Info("Past-due service initialized",
-			"grace_days", pastDueCfg.GraceDays,
-			"plaid_disconnect_days", pastDueCfg.PlaidDisconnectDays,
-		)
-
-		// Issue #679: Wire trial service to registration service for auto-grant on signup.
-		// Auto-grant now runs regardless of Plaid config (confirmed intended behavior #1015).
-		registrationService.SetTrialGranter(trialService)
-		appLogger.Info("Trial service wired to registration service")
-
-		// Issue #679, #680: Create trial expiration check worker (depends only on trialService)
-		trialExpirationCheckWorker = jobs.NewTrialExpirationCheckWorker(jobs.TrialExpirationCheckWorkerDeps{
-			ProfileRepo:  profileRepo,
-			TrialService: trialService,
-			Logger:       appLogger,
-		})
-		appLogger.Info("Trial expiration check worker created (River)")
-
-		// Issue #898: Create past-due check worker (depends on pastDueService, created unconditionally above)
-		pastDueCheckWorker = jobs.NewPastDueCheckWorker(jobs.PastDueCheckWorkerDeps{
-			ProfileRepo:    profileRepo,
-			PastDueService: pastDueService,
-			Logger:         appLogger,
-		})
-		appLogger.Info("Past-due check worker created (River)")
-
-		// Issue #762: Create Paddle reconciliation worker (depends only on paddleService, not Plaid)
-		if cfg.PaddleReconciliationEnabled && paddleService != nil {
-			paddleReconciliationWorker = jobs.NewPaddleReconciliationWorker(jobs.PaddleReconciliationWorkerDeps{
-				ProfileRepo: profileRepo,
-				PaddleSvc:   paddleService,
-				TierConfig:  tierConfig,
-				Logger:      appLogger,
-				AutoFix:     cfg.PaddleReconciliationAutoFix,
-			})
-			appLogger.Info("Paddle reconciliation worker created (River)")
-		}
+		// Trial creation is a durable RevenueCat intent in the registration transaction.
+		registrationService.SetTrialGranter(revenueCatService)
 
 		// Issue #1007: Create EmailChangePropagationWorker (no Plaid dependency).
 		// Issue #1015: Moved before Plaid block so it runs unconditionally.
@@ -1505,10 +1432,6 @@ func main() {
 					subscriptionWebhookWorker.SetPlaidCleanupService(plaidCleanupService)
 					appLogger.Info("Plaid cleanup service wired to subscription webhook worker")
 				}
-
-				// Issue #898: Wire Plaid cleanup to past-due service (created before Plaid block with nil cleanup)
-				pastDueService.SetPlaidCleanup(plaidCleanupService)
-				appLogger.Info("Plaid cleanup service wired to past-due service")
 
 				// Issue #1413 round-6: wire Plaid cleanup to the retention cleanup check worker's
 				// Plaid-disconnect repair pass (created before this Plaid block, with nil cleanup —
@@ -1844,23 +1767,20 @@ func main() {
 			// unit-tested directly (periodic_jobs_test.go) instead of enforced only by a
 			// main.go text scan.
 			periodicJobs := buildPeriodicJobs(periodicJobsDeps{
-				scheduledDeletionCheckWorker:        scheduledDeletionCheckWorker,
-				itemCleanupCheckWorker:              itemCleanupCheckWorker,
-				trialExpirationCheckWorker:          trialExpirationCheckWorker,
-				pastDueCheckWorker:                  pastDueCheckWorker,
-				paddleReconciliationWorker:          paddleReconciliationWorker,
-				retentionCleanupCheckWorker:         retentionCleanupCheckWorker,
-				manualTierOverrideExpiryCheckWorker: manualTierOverrideExpiryCheckWorker,
-				householdMemberCleanupCheckWorker:   householdMemberCleanupCheckWorker,
-				householdOverCapacityCheckWorker:    householdOverCapacityCheckWorker,
-				dlqCleanupCheckWorker:               dlqCleanupCheckWorker,
-				budgetPeriodCloseCheckWorker:        budgetPeriodCloseCheckWorker,
-				savingsStatsWorker:                  savingsStatsWorker,
-				portfolioSnapshotWorker:             portfolioSnapshotWorker,
-				balanceSnapshotDispatchWorker:       balanceSnapshotDispatchWorker,
-				ruleQuarantineCensusWorker:          ruleQuarantineCensusWorker,
-				plaidOrphanRetryWorker:              plaidOrphanRetryWorker,
-				budgetHierarchyAuditWorker:          budgetHierarchyAuditWorker,
+				revenueCatRepairWorker:            revenueCatRepairWorker,
+				scheduledDeletionCheckWorker:      scheduledDeletionCheckWorker,
+				itemCleanupCheckWorker:            itemCleanupCheckWorker,
+				retentionCleanupCheckWorker:       retentionCleanupCheckWorker,
+				householdMemberCleanupCheckWorker: householdMemberCleanupCheckWorker,
+				householdOverCapacityCheckWorker:  householdOverCapacityCheckWorker,
+				dlqCleanupCheckWorker:             dlqCleanupCheckWorker,
+				budgetPeriodCloseCheckWorker:      budgetPeriodCloseCheckWorker,
+				savingsStatsWorker:                savingsStatsWorker,
+				portfolioSnapshotWorker:           portfolioSnapshotWorker,
+				balanceSnapshotDispatchWorker:     balanceSnapshotDispatchWorker,
+				ruleQuarantineCensusWorker:        ruleQuarantineCensusWorker,
+				plaidOrphanRetryWorker:            plaidOrphanRetryWorker,
+				budgetHierarchyAuditWorker:        budgetHierarchyAuditWorker,
 			}, appLogger)
 
 			if len(periodicJobs) > 0 {
@@ -1889,6 +1809,12 @@ func main() {
 			// Non-Plaid workers are always non-nil when their config gates are met.
 			// Plaid-specific workers are nil when Plaid is not configured.
 			riverWorkers := river.NewWorkers()
+			river.AddWorker(riverWorkers, &jobs.RetiredSubscriptionWorker[jobs.TrialExpirationCheckArgs]{})
+			river.AddWorker(riverWorkers, &jobs.RetiredSubscriptionWorker[jobs.PastDueCheckArgs]{})
+			river.AddWorker(riverWorkers, &jobs.RetiredSubscriptionWorker[jobs.PaddleReconciliationArgs]{})
+			river.AddWorker(riverWorkers, &jobs.RetiredSubscriptionWorker[jobs.ManualTierOverrideExpiryCheckArgs]{})
+			river.AddWorker(riverWorkers, revenueCatSyncWorker)
+			river.AddWorker(riverWorkers, revenueCatRepairWorker)
 
 			// Non-Plaid workers (run unconditionally when configured)
 			if emailChangePropagationWorker != nil {
@@ -1912,26 +1838,12 @@ func main() {
 				river.AddWorker(riverWorkers, scheduledDeletionCheckWorker)
 				appLogger.Info("Scheduled deletion check worker registered with River")
 			}
-			if trialExpirationCheckWorker != nil {
-				river.AddWorker(riverWorkers, trialExpirationCheckWorker)
-				appLogger.Info("Trial expiration check worker registered with River")
-			}
-			if pastDueCheckWorker != nil {
-				river.AddWorker(riverWorkers, pastDueCheckWorker)
-				appLogger.Info("Past-due check worker registered with River")
-			}
-			if paddleReconciliationWorker != nil {
-				river.AddWorker(riverWorkers, paddleReconciliationWorker)
-				appLogger.Info("Paddle reconciliation worker registered with River")
-			}
+
 			if retentionCleanupCheckWorker != nil {
 				river.AddWorker(riverWorkers, retentionCleanupCheckWorker)
 				appLogger.Info("Retention cleanup check worker registered with River")
 			}
-			if manualTierOverrideExpiryCheckWorker != nil {
-				river.AddWorker(riverWorkers, manualTierOverrideExpiryCheckWorker)
-				appLogger.Info("Manual tier override expiry check worker registered with River")
-			}
+
 			// Issue #1371 — Phase 7 (Task 2): Household member cleanup check worker
 			// (constructed above, always non-nil here)
 			if householdMemberCleanupCheckWorker != nil {
@@ -2050,6 +1962,7 @@ func main() {
 
 				// Unconditional — the core fix of Issue #1015
 				profileService.SetJobQueue(jobQueue)
+				revenueCatRepairWorker.SetJobQueue(jobQueue)
 				appLogger.Info("Profile service connected to job queue for email propagation")
 
 				// Nil-guarded wiring for workers with circular dependencies
@@ -2165,7 +2078,7 @@ func main() {
 			// Issue #1531 Task 10a: cached scalar-UUID fast path — see cachedIdentityResolver's
 			// construction above.
 			cachedIdentityResolver,
-			profileRepo,
+			householdEntitlementService,
 		)
 		humaAPI.UseMiddleware(humaClerkMiddleware)
 		appLogger.Info("Huma Clerk middleware applied")
@@ -2257,7 +2170,7 @@ func main() {
 
 		// Issue #639: Admin user management - needs adminService for admin status checks
 		// Issue #1414: clerkService re-syncs Clerk metadata on tier-override removal;
-		// RetentionPeriodMonths sizes the retention-clock re-arm (same value trialService.SetRetentionMonths gets).
+		// RetentionPeriodMonths sizes the retention-clock re-arm.
 		// Issue #1413: tierConfig validates manual tier overrides and sizes the household seat-capacity warning.
 		adminUserService := services.NewAdminUserService(adminUserRepo, adminService, clerkService, cfg.RetentionPeriodMonths, tierConfig)
 		// Issue #1413 Task NB (Codex High finding): these events land on the TARGET user's
@@ -2265,6 +2178,7 @@ func main() {
 		// transfer_suggestion_service's user-initiated events are — via gdprClient, not the raw
 		// phClient other admin-triggered-but-operational events use.
 		adminUserService.SetGDPRAnalytics(gdprClient)
+		adminUserService.SetRevenueCatSummary(revenueCatSummaryService)
 
 		// Issue #640: System health monitoring service
 		systemHealthService := services.NewSystemHealthService(
@@ -2565,6 +2479,8 @@ func main() {
 
 		// Register Huma profile routes (Issue #559: Huma migration)
 		humaProfileHandler := operations.NewProfileHandler(profileService)
+		humaProfileHandler.SetRevenueCatSummary(revenueCatSummaryService)
+		operations.RegisterRevenueCatSubscriptionRoutes(humaAPI, operations.NewRevenueCatSubscriptionHandler(profileRepo, revenueCatSummaryService, revenueCatService).WithCheckout(repository.NewRevenueCatCheckoutRepository(db, fieldEncryptor)))
 		// Issue #1413 round-5: same validator as profileRepo above, so the profile response's
 		// derived comp fields (effective_status/is_comped/comp_tier) can never report a comp the
 		// access-granting path would reject.
@@ -2619,7 +2535,7 @@ func main() {
 		// rather than instantly. Issue #1499
 		// removed its environment check, so this surface is reachable in production BY ADMINS;
 		// the role gate, not the deployment environment, is what keeps everyone else out.
-		// Issue #698: Pass trialService for E2E test trial grant endpoint
+		// The legacy trial-grant dependency is deliberately nil: RevenueCat owns trials.
 		// Issue #638: Pass adminService for check-role endpoint
 		// Issue #639: Pass adminUserService for user management endpoints
 		// Issue #640: Pass systemHealthService for system health monitoring
@@ -2630,7 +2546,8 @@ func main() {
 		// and the orphaned-Plaid-Item view — none of which is Plaid-specific. plaidService and
 		// linkedItemRepo feed exactly one handler (FireWebhook, a QA webhook-firing helper),
 		// which returns 503 when either is nil rather than dereferencing it.
-		humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, trialService, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
+		humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, nil, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
+			WithRevenueCat(operations.RevenueCatAdminDeps{Grants: revenueCatService, Profiles: profileRepo, States: revenueCatRepo, Summary: revenueCatSummaryService, Admin: repository.NewRevenueCatAdminRepository(db)}).
 			WithPaddleTransactionRepo(paddleTransactionRepo).
 			WithPaddleWebhookRepo(paddleWebhookRepo).
 			WithJobQueue(jobQueue).
@@ -2645,6 +2562,7 @@ func main() {
 			// operations.BudgetHierarchyAuditReader via ListBudgetHierarchyAuditFindings.
 			WithBudgetHierarchyAuditReader(budgetRepo)
 		operations.RegisterAdminRoutes(humaAPI, humaAdminHandler)
+		operations.RegisterAdminRevenueCatRoutes(humaAPI, humaAdminHandler)
 		appLogger.Info("Huma admin routes registered (protected by AdminMiddleware)", "plaid_configured", plaidService != nil)
 
 		// Issue #821: QA auth bypass endpoint (QA/Staging only).
@@ -2753,6 +2671,15 @@ func main() {
 		appLogger.Warn("Plaid webhook signature verifier not configured — ALL incoming webhooks will be rejected (401), not processed (Plaid credentials not configured)")
 	} else {
 		appLogger.Warn("Webhook endpoint disabled (requires DATABASE_URL)")
+	}
+
+	// RevenueCat delivery authentication is handled before durable inbox insertion.
+	if revenueCatRepo != nil {
+		operations.RegisterRevenueCatWebhookRoutes(humaAPI, operations.NewRevenueCatWebhookHandler(operations.RevenueCatWebhookDeps{
+			Inbox: revenueCatRepo, Profiles: revenueCatProfiles, Queue: jobQueue,
+			InvalidAttempts: invalidWebhookAttemptRepo,
+			Authorization:   cfg.RevenueCatWebhookAuthorization, SigningSecret: cfg.RevenueCatWebhookSigningSecret,
+		}))
 	}
 
 	// Paddle webhook endpoint (public - no auth required) - Issue #46: Paddle Webhook Handler

@@ -67,6 +67,18 @@ const SUB_DETAIL_WITH_OVERRIDE = {
     manual_tier_ends_at: null,
 }
 
+it('reports a RevenueCat grant as queued rather than applied', async () => {
+    mockUseGetAdminUserSubscription.mockReturnValue({isLoading:false,data:SUB_DETAIL} as unknown as ReturnType<typeof mockUseGetAdminUserSubscription>)
+    const mutate=mock((_data:unknown, options?:{onSuccess?:(data:{stage:string;message:string})=>void})=>options?.onSuccess?.({stage:'pending',message:'Complimentary access change queued.'}))
+    mockUseUpdateAdminUserTier.mockReturnValue({mutate,isPending:false} as unknown as ReturnType<typeof mockUseUpdateAdminUserTier>)
+    render(<SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open onClose={()=>{}}/>,{wrapper})
+    fireEvent.change(screen.getByLabelText(/new tier/i),{target:{value:'household_2'}})
+    fireEvent.change(screen.getByPlaceholderText(/gifted upgrade/i),{target:{value:'A grant'}})
+    fireEvent.click(screen.getByRole('button',{name:/save override/i}))
+    await waitFor(()=>expect(mockToastInfo).toHaveBeenCalledWith('Complimentary access change queued.'))
+    expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_OVERRIDE_APPLIED, expect.anything())
+})
+
 // G10 (AC 6): the raw subscription is inactive, but a LIVE manual override forces effective
 // access to active — a fixture where raw and effective genuinely diverge, so a test can tell
 // "shows both" apart from "shows raw only" (the pre-fix behavior).
@@ -845,6 +857,25 @@ describe('SubscriptionOverrideModal', () => {
                     expect.anything()
                 )
             })
+        })
+
+        it('reports a queued RevenueCat revocation without claiming the override was removed', async () => {
+            const response = {removed: false, stage: 'pending', message: 'Revocation queued; waiting for provider readback.'}
+            const mutate = mock((_data: unknown, options?: {onSuccess?: (data: typeof response) => void}) => options?.onSuccess?.(response))
+            mockUseGetAdminUserSubscription.mockReturnValue({isLoading: false, data: SUB_DETAIL_WITH_OVERRIDE} as unknown as ReturnType<typeof mockUseGetAdminUserSubscription>)
+            mockUseRemoveAdminUserTierOverride.mockReturnValue({mutate, isPending: false} as unknown as ReturnType<typeof mockUseRemoveAdminUserTierOverride>)
+            const onClose = mock(() => {})
+            render(<SubscriptionOverrideModal userId="u1" userEmail="test@example.com" open onClose={onClose} />, {wrapper})
+            fireEvent.change(screen.getByPlaceholderText(/gifted upgrade/i), {target: {value: 'No longer needed'}})
+            fireEvent.click(screen.getByRole('button', {name: /remove override/i}))
+            const dialog = screen.getByRole('alertdialog')
+            fireEvent.change(within(dialog).getByLabelText(/type/i), {target: {value: 'REMOVE'}})
+            fireEvent.click(within(dialog).getByRole('button', {name: /remove override/i}))
+            await waitFor(() => expect(mockToastInfo).toHaveBeenCalledWith(response.message))
+            expect(mockToastSuccess).not.toHaveBeenCalled()
+            expect(mockTrackEvent).toHaveBeenCalledWith(ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_CHANGE_QUEUED, {action: 'revoke', tier: SUB_DETAIL_WITH_OVERRIDE.manual_tier_override})
+            expect(JSON.stringify(mockTrackEvent.mock.calls)).not.toContain(ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED)
+            expect(onClose).toHaveBeenCalled()
         })
 
         it('shows a success toast and closes the modal on success', async () => {

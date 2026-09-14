@@ -410,6 +410,9 @@ type RetentionPlaidCleanup interface {
 //   - 7d before expiry: final warning via email
 //   - After expiry: auto-delete account data
 type RetentionCleanupCheckWorker struct {
+	subscriptionCleanupGuard interface {
+		CanCleanup(context.Context, string) (bool, error)
+	}
 	river.WorkerDefaults[RetentionCleanupCheckArgs]
 
 	profileRepo     RetentionProfileRepository
@@ -458,6 +461,14 @@ type RetentionCleanupCheckWorker struct {
 	// Optional/nil-safe: a nil store reproduces the pre-#1477 behaviour exactly. See
 	// sweep_resume.go and repository/sweep_cursor_repository.go.
 	sweepCursors sweepCursorStore
+}
+
+// SetSubscriptionCleanupGuard adds confirmed own/household access and pending-operation
+// checks to every subscription-driven external action, without changing GDPR erasure.
+func (w *RetentionCleanupCheckWorker) SetSubscriptionCleanupGuard(guard interface {
+	CanCleanup(context.Context, string) (bool, error)
+}) {
+	w.subscriptionCleanupGuard = guard
 }
 
 // OrphanedPlaidItemLister is the ONE verb monitorOrphanedPlaidItems needs from
@@ -872,8 +883,10 @@ var retentionDeletionItems = []retentionDeletionItem{
 		mustMention: []string{"household"},
 	},
 	{
+		// RevenueCat projections, trial/comp changes, delivery receipts and checkout
+		// intents are subscription/billing records, all erased by their user FK.
 		phrase:      "your subscription, billing and payment records, and your referrals",
-		tables:      []string{"subscription_entitlements", "paddle_transactions", "user_subscription_overrides", "referrals", "referral_codes"},
+		tables:      []string{"subscription_entitlements", "paddle_transactions", "user_subscription_overrides", "referrals", "referral_codes", "revenuecat_customers", "revenuecat_operations", "revenuecat_webhooks", "revenuecat_checkout_intents"},
 		mustMention: []string{"subscription", "billing", "referrals"},
 	},
 	{
@@ -1083,6 +1096,9 @@ func (w *RetentionCleanupCheckWorker) processRetentionNotices(ctx context.Contex
 		// non-nil here since OccurrenceResourceID above would have already errored (and `continue`d)
 		// on a nil RetentionExpiresAt.
 		eligible, err := spec.isEligible(ctx, user.ID, *user.RetentionExpiresAt)
+		if err == nil && eligible && w.subscriptionCleanupGuard != nil {
+			eligible, err = w.subscriptionCleanupGuard.CanCleanup(ctx, user.ID)
+		}
 		if err != nil {
 			w.releaseClaimOnFailure(ctx, user.ID, resourceID, spec.action, token, err.Error())
 			w.logger.Warn("failed to re-verify "+spec.noticeName+" retention notice eligibility",
@@ -1453,6 +1469,12 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 		// formats to "") is a normal skip, not an error — the next scheduled run evaluates whatever
 		// episode is actually current, on its own merits and its own grace window.
 		isStillEligible := func(rctx context.Context) (bool, error) {
+			if w.subscriptionCleanupGuard != nil {
+				allowed, err := w.subscriptionCleanupGuard.CanCleanup(rctx, userID)
+				if err != nil || !allowed {
+					return false, err
+				}
+			}
 			current, err := w.profileRepo.GetUserByID(rctx, userID)
 			if err != nil {
 				return false, fmt.Errorf("failed to re-read user %s before Plaid-disconnect repair: %w", userID, err)
@@ -1766,6 +1788,7 @@ func (w *RetentionCleanupCheckWorker) monitorOrphanedFKlessRows(ctx context.Cont
 //   - the clock has RUN OUT, so those two queries can never select the user again — their bound is
 //     the opposite one. Nothing existing will ever send the missing notice, so the gate holds the
 //     account indefinitely. That is the alert.
+//
 // The SQL half of that split is CountRetentionDeletionsWithheld's; the process half — whether an
 // email service is wired at all — is not visible to SQL and is applied here.
 //

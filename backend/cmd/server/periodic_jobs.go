@@ -24,6 +24,7 @@ import (
 // package's existing nil-guard convention for optional subsystems (e.g. Plaid-specific
 // workers that are nil when Plaid isn't configured).
 type periodicJobsDeps struct {
+	revenueCatRepairWorker              *jobs.RevenueCatRepairWorker
 	scheduledDeletionCheckWorker        *jobs.ScheduledDeletionCheckWorker
 	itemCleanupCheckWorker              *jobs.ItemCleanupCheckWorker
 	trialExpirationCheckWorker          *jobs.TrialExpirationCheckWorker
@@ -105,6 +106,15 @@ func (s periodicJobSpec) toPeriodicJob() *river.PeriodicJob {
 // (periodic_jobs_test.go) enforces this for every entry this function returns.
 func buildPeriodicJobSpecs(deps periodicJobsDeps) []periodicJobSpec {
 	var specs []periodicJobSpec
+	if deps.revenueCatRepairWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name: "RevenueCat repair", logMessage: "RevenueCat repair configured (every minute)", interval: time.Minute,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.RevenueCatRepairArgs{}, jobs.RevenueCatRepairInsertOpts()
+			},
+			opts: jobs.RevenueCatRepairPeriodicOpts(),
+		})
+	}
 
 	// Issue #930 / #1450: Scheduled deletion check (hourly).
 	if deps.scheduledDeletionCheckWorker != nil {

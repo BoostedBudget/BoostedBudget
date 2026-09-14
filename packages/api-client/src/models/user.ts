@@ -34,6 +34,8 @@
 export interface User {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  access_resolved?: boolean;
+  access_source?: string;
   clerk_user_id: string;
   comp_ends_at?: string;
   comp_tier?: string;

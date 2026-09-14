@@ -81,6 +81,12 @@ describe('SubscriptionManagementPage', () => {
   })
 
   describe('Loading state', () => {
+	  it('offers plans for a confirmed inactive account without paid billing controls', () => {
+		mockUseGetCurrentSubscription.mockReturnValue({data:{status:'inactive',subscription_id:'',tier:'premium',is_comped:false},isLoading:false,error:null,refetch:()=>Promise.resolve()} as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+		renderPage()
+		expect(screen.getByRole('button',{name:'View Plans'})).toBeDefined()
+		expect(screen.queryByRole('button',{name:'Cancel Subscription'})).toBeNull()
+	  })
     it('renders skeleton with role="status" when subscription is loading', () => {
       mockUseGetCurrentSubscription.mockReturnValue({
         data: undefined,
@@ -247,6 +253,7 @@ describe('SubscriptionManagementPage', () => {
     it('renders subscription details for active status', () => {
       mockUseGetCurrentSubscription.mockReturnValue({
         data: {
+          subscription_id: 'sub_paid',
           status: 'active',
           tier: 'premium',
           amount: '8.99',
@@ -269,6 +276,24 @@ describe('SubscriptionManagementPage', () => {
 
   // Issue #1413: admin-comped users get real access with no Paddle subscription behind it.
   describe('Comped user', () => {
+    it('preserves observed subscription details when a refresh is unavailable', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: { status: 'active', tier: 'premium', subscription_id: 'sub_paid', amount: '8.99', currency: 'USD', billing_interval: 'month' },
+        isLoading: false, error: { status: 503 }, refetch: () => Promise.resolve(),
+      } as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+      renderPage()
+      expect(screen.getByRole('heading', { name: 'Current Subscription' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Refresh subscription status' })).toBeInTheDocument()
+    })
+    it('retains Change Plan and cancellation for paid plus complimentary access', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: { status: 'active', tier: 'premium', subscription_id: 'sub_paid', is_comped: true, amount: '8.99', currency: 'USD', billing_interval: 'month' },
+        isLoading: false, error: null, refetch: () => Promise.resolve(),
+      } as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+      renderPage()
+      expect(screen.getByRole('button', { name: /change plan/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /cancel subscription/i })).toBeInTheDocument()
+    })
     it('renders a complimentary view instead of the empty state when the subscription 404s', () => {
       mockUseGetCurrentSubscription.mockReturnValue({
         data: undefined,
@@ -446,6 +471,7 @@ describe('SubscriptionManagementPage', () => {
     it('regression: a non-comped past_due user still sees "Past Due"', () => {
       mockUseGetCurrentSubscription.mockReturnValue({
         data: {
+          subscription_id: 'sub_paid',
           status: 'past_due',
           tier: 'premium',
           is_comped: false,

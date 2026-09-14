@@ -87,6 +87,11 @@ var dataExportGlobalExcludedSuffixes = map[string]string{
 // table in that universe appears neither here nor in DataExportWithheldTables. If a migration adds
 // a user-scoped table, that guard is what tells you.
 var DataExportTables = []DataExportTable{
+	// RevenueCat billing envelopes are decrypted by the common export renderer.
+	{Table: "revenuecat_customers", OwnershipPredicate: "t.user_id = $1", OrderBy: "t.user_id"},
+	{Table: "revenuecat_operations", OwnershipPredicate: "t.user_id = $1", OrderBy: "t.created_at, t.id", ExcludedColumns: []string{"actor_id"}}, // administrator identity belongs to another data subject
+	{Table: "revenuecat_webhooks", OwnershipPredicate: "t.user_id = $1", OrderBy: "t.received_at, t.event_id"},
+	{Table: "revenuecat_checkout_intents", OwnershipPredicate: "t.user_id = $1", OrderBy: "t.created_at, t.id"},
 	// --- Identity and account ------------------------------------------------------------------
 	{
 		Table:              "users",

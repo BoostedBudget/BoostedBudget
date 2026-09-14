@@ -317,6 +317,8 @@ echo "🧪 Starting E2E tests..."
 echo ""
 
 # Run Playwright tests via bunx (not npx) to use Bun's module resolution.
+export E2E_REVENUECAT_FIXTURE_MODE=simulated
+unset REVENUECAT_PROJECT_ID REVENUECAT_ENVIRONMENT REVENUECAT_SECRET_API_KEY REVENUECAT_GRANT_API_KEY REVENUECAT_WEBHOOK_AUTHORIZATION REVENUECAT_WEBHOOK_SIGNING_SECRET
 # npx uses Node.js realpath caching which creates dual @playwright/test instances
 # in Bun's symlink-based node_modules/.bun/ layout.
 # Scenario tests are excluded via testIgnore in playwright.config.ts (not E2E_SCENARIOS_MODE)

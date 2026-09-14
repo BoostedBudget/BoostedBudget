@@ -19,3 +19,11 @@ func TestRegisterAllRoutesForSpec_DoesNotPanic(t *testing.T) {
 		RegisterAllRoutesForSpec(api)
 	}, "RegisterAllRoutesForSpec must not panic with a fresh Huma API")
 }
+
+func TestRegisterAllRoutesForSpecIncludesRevenueCatOperations(t *testing.T) {
+	_, api := humatest.New(t)
+	RegisterAllRoutesForSpec(api)
+	for _, path := range []string{"/webhooks/revenuecat", "/api/v1/subscription/authority", "/api/v1/subscription/authority/refresh", "/api/v1/admin/revenuecat/health", "/api/v1/admin/revenuecat/webhooks", "/api/v1/admin/users/{user_id}/revenuecat/grants"} {
+		require.Contains(t, api.OpenAPI().Paths, path)
+	}
+}

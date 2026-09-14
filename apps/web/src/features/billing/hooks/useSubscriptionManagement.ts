@@ -10,6 +10,7 @@ import type {
 } from '@boostedbudget/api-client/models'
 import { useSubscriptionPresentation } from '../../subscription/hooks/useSubscriptionPresentation'
 import { presentationFromSubscription } from '../../subscription/lib/subscriptionPresentation'
+import { useAuth } from '@clerk/react-router'
 
 interface UpdateOptions {
   newTier: string
@@ -31,6 +32,7 @@ function getErrorStatus(error: unknown): number | undefined {
 }
 
 export function useSubscriptionManagement() {
+  const { userId } = useAuth()
   // Issue #1413: admin-comped users get real access with no Paddle subscription behind it —
   // OR the profile-derived presentation's isComped in as a resilience fallback, in case the
   // subscription endpoint hasn't been redeployed with the is_comped field yet (or 404s outright).
@@ -39,6 +41,8 @@ export function useSubscriptionManagement() {
   // Query hooks
   const subscriptionQuery = useGetCurrentSubscription({
     query: {
+      queryKey: ['/api/v1/subscription/current', userId],
+      enabled: !!userId,
       retry: (failureCount: number, error: unknown) => {
         if (getErrorStatus(error) === 404) return false
         return failureCount < 1
@@ -55,11 +59,8 @@ export function useSubscriptionManagement() {
 
   const billingPortalQuery = useGetBillingPortalUrl({
     query: {
-      enabled:
-        !isComped &&
-        ['active', 'trialing', 'cancelled', 'past_due'].includes(
-          subscriptionQuery.data?.status ?? '',
-        ),
+      queryKey: ['/api/v1/subscription/portal', userId],
+      enabled: !!subscriptionQuery.data?.subscription_id,
     },
   })
 

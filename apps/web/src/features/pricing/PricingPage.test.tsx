@@ -842,7 +842,7 @@ describe('PricingPage', () => {
         expect(screen.getByText(/complimentary premium, provided by boostedbudget/i)).toBeInTheDocument()
       })
 
-      it('shows Current Plan for the comped tier and an enabled Subscribe for every other tier', () => {
+      it('allows complimentary users to purchase any paid tier', () => {
         mockUseGetCurrentSubscription.mockReturnValue({
           data: {
             status: 'active',
@@ -859,11 +859,10 @@ describe('PricingPage', () => {
 
         renderWithProviders(<PricingPage />)
 
-        const currentPlanButtons = screen.getAllByRole('button', { name: /current plan/i })
-        expect(currentPlanButtons.length).toBeGreaterThan(0)
+        expect(screen.queryByRole('button', { name: /current plan/i })).toBeNull()
 
         const subscribeButtons = screen.getAllByRole('button', { name: /^subscribe$/i })
-        expect(subscribeButtons.length).toBe(4)
+        expect(subscribeButtons.length).toBe(5)
         subscribeButtons.forEach((btn) => expect(btn).not.toBeDisabled())
       })
 
