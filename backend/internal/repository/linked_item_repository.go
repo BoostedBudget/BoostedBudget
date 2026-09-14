@@ -422,7 +422,7 @@ type LinkedItemRepository interface {
 // paginated sync. It remains separate from the broad linked-item repository so unrelated readers
 // and their test doubles do not gain a completion-only method.
 type TransactionSyncCompletionRepository interface {
-	RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, completedCursor *string) (TransactionSyncCompletionDisposition, error)
+	RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, expectedGeneration int64, completedCursor *string) (TransactionSyncCompletionDisposition, error)
 }
 
 type TransactionSyncCompletionDisposition string
@@ -466,7 +466,7 @@ const linkedItemSelectCols = `id, user_id, item_id, access_token_encrypted,
        replaced_at, replaced_by_id,
        created_at, updated_at,
        investments_last_synced_date, liabilities_last_synced_at,
-       status_changed_at`
+       status_changed_at, transaction_sync_completion_generation`
 
 // NewLinkedItemRepository returns the CONCRETE *linkedItemRepository, not the LinkedItemRepository
 // interface — Issue #1469. It used to return the interface, which meant a method absent from that
@@ -679,6 +679,7 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
 		&item.StatusChangedAt,
+		&item.TransactionSyncCompletionGeneration,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -742,6 +743,7 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 			&item.InvestmentsLastSyncedDate,
 			&item.LiabilitiesLastSyncedAt,
 			&item.StatusChangedAt,
+			&item.TransactionSyncCompletionGeneration,
 		)
 		if err != nil {
 			return nil, err
@@ -798,6 +800,7 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
 		&item.StatusChangedAt,
+		&item.TransactionSyncCompletionGeneration,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -886,12 +889,13 @@ func (r *linkedItemRepository) RecordTransactionSyncProgress(ctx context.Context
 }
 
 // RecordTransactionSyncCompletion finalizes only a fully paginated transaction sync. A single
-// UPDATE is the concurrency boundary: PostgreSQL rechecks the expected cursor after waiting on a
-// competing writer, so at most one caller can latch the first completion or advance from a given
-// starting cursor.
+// UPDATE is the concurrency boundary: PostgreSQL rechecks both the expected cursor and durable
+// completion generation after waiting on a competing writer. The generation advances even when
+// Plaid returns no cursor, so only one caller can record a completion from a given starting state.
 func (r *linkedItemRepository) RecordTransactionSyncCompletion(
 	ctx context.Context,
 	id, expectedCursor string,
+	expectedGeneration int64,
 	completedCursor *string,
 ) (TransactionSyncCompletionDisposition, error) {
 	query := `
@@ -900,8 +904,8 @@ func (r *linkedItemRepository) RecordTransactionSyncCompletion(
 			       CASE transaction_sync_state
 			           WHEN 'completed' THEN 'refresh'
 			           WHEN 'never_synced' THEN CASE
-			               WHEN $4::timestamptz IS NULL THEN 'suppressed_cutover_unset'
-			               WHEN created_at < $4::timestamptz THEN 'suppressed_pre_cutover'
+			               WHEN $5::timestamptz IS NULL THEN 'suppressed_cutover_unset'
+			               WHEN created_at < $5::timestamptz THEN 'suppressed_pre_cutover'
 			               ELSE 'initial'
 			           END
 			           WHEN 'legacy_ambiguous' THEN 'suppressed_legacy_ambiguous'
@@ -909,13 +913,15 @@ func (r *linkedItemRepository) RecordTransactionSyncCompletion(
 			FROM linked_items
 			WHERE id = $1
 			  AND COALESCE(cursor, '') = $2
+			  AND transaction_sync_completion_generation = $3
 			  AND COALESCE(status, 'active') NOT IN ('replaced', 'disconnected', 'revoked')
 			FOR UPDATE
 		)
 		UPDATE linked_items AS li
-		SET cursor = CASE WHEN $3::text IS NULL THEN li.cursor ELSE $3::text END,
+		SET cursor = CASE WHEN $4::text IS NULL THEN li.cursor ELSE $4::text END,
 		    first_transaction_sync_completed_at = COALESCE(li.first_transaction_sync_completed_at, NOW()),
 		    transaction_sync_state = 'completed',
+		    transaction_sync_completion_generation = li.transaction_sync_completion_generation + 1,
 		    last_synced_at = NOW(),
 		    updated_at = NOW()
 		FROM candidate
@@ -924,7 +930,7 @@ func (r *linkedItemRepository) RecordTransactionSyncCompletion(
 	`
 
 	var disposition TransactionSyncCompletionDisposition
-	if err := r.db.QueryRow(ctx, query, id, expectedCursor, completedCursor, r.transactionSyncCompletionCutover).Scan(&disposition); err != nil {
+	if err := r.db.QueryRow(ctx, query, id, expectedCursor, expectedGeneration, completedCursor, r.transactionSyncCompletionCutover).Scan(&disposition); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", ErrLinkedItemSyncStateChanged
 		}
@@ -1067,6 +1073,7 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
 		&item.StatusChangedAt,
+		&item.TransactionSyncCompletionGeneration,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1403,6 +1410,7 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
 		&item.StatusChangedAt,
+		&item.TransactionSyncCompletionGeneration,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1460,6 +1468,7 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
 		&item.StatusChangedAt,
+		&item.TransactionSyncCompletionGeneration,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1748,6 +1757,7 @@ func (r *linkedItemRepository) queryCleanupCandidates(ctx context.Context, query
 			&item.InvestmentsLastSyncedDate,
 			&item.LiabilitiesLastSyncedAt,
 			&item.StatusChangedAt,
+			&item.TransactionSyncCompletionGeneration,
 		)
 		if err != nil {
 			return nil, err
@@ -1858,6 +1868,7 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 			&item.InvestmentsLastSyncedDate,
 			&item.LiabilitiesLastSyncedAt,
 			&item.StatusChangedAt,
+			&item.TransactionSyncCompletionGeneration,
 		)
 		if err != nil {
 			return nil, err
@@ -2176,6 +2187,7 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 			&item.InvestmentsLastSyncedDate,
 			&item.LiabilitiesLastSyncedAt,
 			&item.StatusChangedAt,
+			&item.TransactionSyncCompletionGeneration,
 		)
 		if err != nil {
 			return nil, err

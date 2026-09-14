@@ -152,7 +152,7 @@ type SyncProposedContributionUpserter interface {
 // first completion for its linked-item generation. It is intentionally narrower than the full
 // linked-item repository so worker test doubles do not gain unrelated methods.
 type TransactionSyncCompletionRecorder interface {
-	RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, completedCursor *string) (repository.TransactionSyncCompletionDisposition, error)
+	RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, expectedGeneration int64, completedCursor *string) (repository.TransactionSyncCompletionDisposition, error)
 }
 
 type transactionSyncCursorResetter interface {
@@ -853,7 +853,7 @@ func (s *transactionSyncService) SyncTransactions(
 			completedCursor = &pendingCursor
 		}
 		disposition, err := s.completionRecorder.RecordTransactionSyncCompletion(
-			ctx, linkedItem.ID, preSyncCursor, completedCursor,
+			ctx, linkedItem.ID, preSyncCursor, linkedItem.TransactionSyncCompletionGeneration, completedCursor,
 		)
 		if err != nil {
 			s.logger.Error("failed to finalize transaction sync completion", "error", err)

@@ -164,8 +164,8 @@ func (m *MockLinkedItemRepository) RecordTransactionSyncProgress(ctx context.Con
 	return args.Error(0)
 }
 
-func (m *MockLinkedItemRepository) RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, completedCursor *string) (repository.TransactionSyncCompletionDisposition, error) {
-	args := m.Called(ctx, id, expectedCursor, completedCursor)
+func (m *MockLinkedItemRepository) RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, expectedGeneration int64, completedCursor *string) (repository.TransactionSyncCompletionDisposition, error) {
+	args := m.Called(ctx, id, expectedCursor, expectedGeneration, completedCursor)
 	return args.Get(0).(repository.TransactionSyncCompletionDisposition), args.Error(1)
 }
 

@@ -2392,7 +2392,7 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 			mockPlaidService.On("TransactionsSync", ctx, "access-token", "", 730).Return(plaidResponse, nil)
 
 			// The completion latch and final cursor are committed atomically.
-			mockLinkedItemRepo.On("RecordTransactionSyncCompletion", ctx, "linked-item-first-sync", "", &firstCursor).
+			mockLinkedItemRepo.On("RecordTransactionSyncCompletion", ctx, "linked-item-first-sync", "", int64(0), &firstCursor).
 				Return(repository.TransactionSyncCompletionInitial, nil).Once()
 
 			// Execute
