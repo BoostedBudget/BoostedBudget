@@ -77,7 +77,13 @@ import type {
   ListAdminRetentionWithheldParams,
   ListAdminUsersParams,
   ListPlaidOrphanedItemsOutputBody,
+  ListPostHogErasuresParams,
   PaddleWebhookEvent,
+  PostHogErasureEvidenceBody,
+  PostHogErasureOperatorIdentity,
+  PostHogErasureOperatorOutputBody,
+  PostHogErasureOperatorRow,
+  PostHogErasureRetargetBody,
   RecordPlaidOrphanedItemOperatorResolutionOutputBody,
   RecordPlaidOrphanedItemOperatorResolutionRequest,
   SystemHealthResponse,
@@ -1263,6 +1269,353 @@ export const useRecordAdminPlaidOrphanedItemOperatorResolution = <TError = Error
         TContext
       > => {
       return useMutation(getRecordAdminPlaidOrphanedItemOperatorResolutionMutationOptions(options), queryClient);
+    }
+    /**
+ * @summary List outstanding PostHog erasures
+ */
+export const listPostHogErasures = (
+    params?: ListPostHogErasuresParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<PostHogErasureOperatorRow[] | null>(
+      {url: `/api/v1/admin/posthog-erasure`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getListPostHogErasuresQueryKey = (params?: ListPostHogErasuresParams,) => {
+    return [
+    `/api/v1/admin/posthog-erasure`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListPostHogErasuresQueryOptions = <TData = Awaited<ReturnType<typeof listPostHogErasures>>, TError = ErrorType<ErrorModel>>(params?: ListPostHogErasuresParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listPostHogErasures>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListPostHogErasuresQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listPostHogErasures>>> = ({ signal }) => listPostHogErasures(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listPostHogErasures>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListPostHogErasuresQueryResult = NonNullable<Awaited<ReturnType<typeof listPostHogErasures>>>
+export type ListPostHogErasuresQueryError = ErrorType<ErrorModel>
+
+
+export function useListPostHogErasures<TData = Awaited<ReturnType<typeof listPostHogErasures>>, TError = ErrorType<ErrorModel>>(
+ params: undefined |  ListPostHogErasuresParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listPostHogErasures>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listPostHogErasures>>,
+          TError,
+          Awaited<ReturnType<typeof listPostHogErasures>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListPostHogErasures<TData = Awaited<ReturnType<typeof listPostHogErasures>>, TError = ErrorType<ErrorModel>>(
+ params?: ListPostHogErasuresParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listPostHogErasures>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listPostHogErasures>>,
+          TError,
+          Awaited<ReturnType<typeof listPostHogErasures>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListPostHogErasures<TData = Awaited<ReturnType<typeof listPostHogErasures>>, TError = ErrorType<ErrorModel>>(
+ params?: ListPostHogErasuresParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listPostHogErasures>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List outstanding PostHog erasures
+ */
+
+export function useListPostHogErasures<TData = Awaited<ReturnType<typeof listPostHogErasures>>, TError = ErrorType<ErrorModel>>(
+ params?: ListPostHogErasuresParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listPostHogErasures>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getListPostHogErasuresQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * @summary Record bounded PostHog erasure evidence
+ */
+export const recordPostHogErasureEvidence = (
+    erasureId: string,
+    postHogErasureEvidenceBody: BodyType<NonReadonly<PostHogErasureEvidenceBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<PostHogErasureOperatorOutputBody>(
+      {url: `/api/v1/admin/posthog-erasure/${erasureId}/evidence`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: postHogErasureEvidenceBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getRecordPostHogErasureEvidenceMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordPostHogErasureEvidence>>, TError,{erasureId: string;data: BodyType<NonReadonly<PostHogErasureEvidenceBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof recordPostHogErasureEvidence>>, TError,{erasureId: string;data: BodyType<NonReadonly<PostHogErasureEvidenceBody>>}, TContext> => {
+
+const mutationKey = ['recordPostHogErasureEvidence'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof recordPostHogErasureEvidence>>, {erasureId: string;data: BodyType<NonReadonly<PostHogErasureEvidenceBody>>}> = (props) => {
+          const {erasureId,data} = props ?? {};
+
+          return  recordPostHogErasureEvidence(erasureId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RecordPostHogErasureEvidenceMutationResult = NonNullable<Awaited<ReturnType<typeof recordPostHogErasureEvidence>>>
+    export type RecordPostHogErasureEvidenceMutationBody = BodyType<NonReadonly<PostHogErasureEvidenceBody>>
+    export type RecordPostHogErasureEvidenceMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Record bounded PostHog erasure evidence
+ */
+export const useRecordPostHogErasureEvidence = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordPostHogErasureEvidence>>, TError,{erasureId: string;data: BodyType<NonReadonly<PostHogErasureEvidenceBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof recordPostHogErasureEvidence>>,
+        TError,
+        {erasureId: string;data: BodyType<NonReadonly<PostHogErasureEvidenceBody>>},
+        TContext
+      > => {
+      return useMutation(getRecordPostHogErasureEvidenceMutationOptions(options), queryClient);
+    }
+    /**
+ * @summary Replay a dead-lettered PostHog erasure
+ */
+export const replayPostHogErasure = (
+    erasureId: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<PostHogErasureOperatorOutputBody>(
+      {url: `/api/v1/admin/posthog-erasure/${erasureId}/replay`, method: 'POST', signal
+    },
+      options);
+    }
+
+
+
+
+export const getReplayPostHogErasureMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof replayPostHogErasure>>, TError,{erasureId: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof replayPostHogErasure>>, TError,{erasureId: string}, TContext> => {
+
+const mutationKey = ['replayPostHogErasure'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof replayPostHogErasure>>, {erasureId: string}> = (props) => {
+          const {erasureId} = props ?? {};
+
+          return  replayPostHogErasure(erasureId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReplayPostHogErasureMutationResult = NonNullable<Awaited<ReturnType<typeof replayPostHogErasure>>>
+
+    export type ReplayPostHogErasureMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Replay a dead-lettered PostHog erasure
+ */
+export const useReplayPostHogErasure = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof replayPostHogErasure>>, TError,{erasureId: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof replayPostHogErasure>>,
+        TError,
+        {erasureId: string},
+        TContext
+      > => {
+      return useMutation(getReplayPostHogErasureMutationOptions(options), queryClient);
+    }
+    /**
+ * @summary Retarget an unconfigured PostHog erasure
+ */
+export const retargetPostHogErasure = (
+    erasureId: string,
+    postHogErasureRetargetBody: BodyType<NonReadonly<PostHogErasureRetargetBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<PostHogErasureOperatorOutputBody>(
+      {url: `/api/v1/admin/posthog-erasure/${erasureId}/retarget`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: postHogErasureRetargetBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getRetargetPostHogErasureMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retargetPostHogErasure>>, TError,{erasureId: string;data: BodyType<NonReadonly<PostHogErasureRetargetBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof retargetPostHogErasure>>, TError,{erasureId: string;data: BodyType<NonReadonly<PostHogErasureRetargetBody>>}, TContext> => {
+
+const mutationKey = ['retargetPostHogErasure'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof retargetPostHogErasure>>, {erasureId: string;data: BodyType<NonReadonly<PostHogErasureRetargetBody>>}> = (props) => {
+          const {erasureId,data} = props ?? {};
+
+          return  retargetPostHogErasure(erasureId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RetargetPostHogErasureMutationResult = NonNullable<Awaited<ReturnType<typeof retargetPostHogErasure>>>
+    export type RetargetPostHogErasureMutationBody = BodyType<NonReadonly<PostHogErasureRetargetBody>>
+    export type RetargetPostHogErasureMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Retarget an unconfigured PostHog erasure
+ */
+export const useRetargetPostHogErasure = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retargetPostHogErasure>>, TError,{erasureId: string;data: BodyType<NonReadonly<PostHogErasureRetargetBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof retargetPostHogErasure>>,
+        TError,
+        {erasureId: string;data: BodyType<NonReadonly<PostHogErasureRetargetBody>>},
+        TContext
+      > => {
+      return useMutation(getRetargetPostHogErasureMutationOptions(options), queryClient);
+    }
+    /**
+ * @summary Audit and reveal identifiers needed for provider verification
+ */
+export const revealPostHogErasure = (
+    erasureId: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<PostHogErasureOperatorIdentity>(
+      {url: `/api/v1/admin/posthog-erasure/${erasureId}/reveal`, method: 'POST', signal
+    },
+      options);
+    }
+
+
+
+
+export const getRevealPostHogErasureMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof revealPostHogErasure>>, TError,{erasureId: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof revealPostHogErasure>>, TError,{erasureId: string}, TContext> => {
+
+const mutationKey = ['revealPostHogErasure'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof revealPostHogErasure>>, {erasureId: string}> = (props) => {
+          const {erasureId} = props ?? {};
+
+          return  revealPostHogErasure(erasureId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RevealPostHogErasureMutationResult = NonNullable<Awaited<ReturnType<typeof revealPostHogErasure>>>
+
+    export type RevealPostHogErasureMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Audit and reveal identifiers needed for provider verification
+ */
+export const useRevealPostHogErasure = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof revealPostHogErasure>>, TError,{erasureId: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof revealPostHogErasure>>,
+        TError,
+        {erasureId: string},
+        TContext
+      > => {
+      return useMutation(getRevealPostHogErasureMutationOptions(options), queryClient);
     }
     /**
  * Returns inactive or cancelled accounts whose data-retention window has expired but which the pre-deletion-notice gate is refusing to hard-delete, because at least one of the 30-day and 7-day notices promised by the privacy policy was never recorded. What is blocked is the retention sweep, and only it: the notice queries select only users whose retention clock has not yet run out, so no existing path can send the missing notice and the retention sweep will hold these accounts indefinitely. A user-requested GDPR erasure is a separate authorisation and still deletes them normally; requesting deletion also removes the account from this listing. This is a read-only view — it sends nothing, extends no retention clock and waives no notice; choosing between those remedies is an open decision and will land as its own endpoint. has_email_on_file is reported per account because it is the one withholding reason the retention_deletions_withheld metric cannot separate. No email address is returned. withheld_total and the returned page come from two separate queries and are eventually consistent: a notice marker, a deletion request or a retention clock crossing the current instant between them can make the total disagree with the page by any number of rows — the gap is not bounded. as_of is when the response was calculated, after both queries returned. Keyset-paginated: pass next_cursor's two fields back as cursor_expires_at and cursor_user_id; next_cursor is absent on the final page. Requires admin role.

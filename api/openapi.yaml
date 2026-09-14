@@ -5898,6 +5898,119 @@ components:
         - total_positions_checked
         - available
       type: object
+    PostHogErasureEvidenceBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/PostHogErasureEvidenceBody.json
+          format: uri
+          readOnly: true
+          type: string
+        evidence:
+          enum:
+            - provider_zero
+            - provider_case_deleted
+          type: string
+        surface:
+          enum:
+            - events
+            - recordings
+            - surveys
+            - support
+          type: string
+      required:
+        - surface
+        - evidence
+      type: object
+    PostHogErasureOperatorIdentity:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/PostHogErasureOperatorIdentity.json
+          format: uri
+          readOnly: true
+          type: string
+        distinct_ids:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        person_uuids:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - distinct_ids
+        - person_uuids
+      type: object
+    PostHogErasureOperatorOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/PostHogErasureOperatorOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        state:
+          type: string
+      required:
+        - state
+      type: object
+    PostHogErasureOperatorRow:
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        phase:
+          type: string
+        project_id:
+          type: string
+        region:
+          type: string
+        requested_at:
+          format: date-time
+          type: string
+        state:
+          type: string
+      required:
+        - id
+        - project_id
+        - region
+        - state
+        - phase
+        - requested_at
+      type: object
+    PostHogErasureRetargetBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/PostHogErasureRetargetBody.json
+          format: uri
+          readOnly: true
+          type: string
+        project_id:
+          minLength: 1
+          type: string
+        region:
+          enum:
+            - us
+            - eu
+          type: string
+      required:
+        - project_id
+        - region
+      type: object
     PostHogSupportIdentity:
       additionalProperties: false
       properties:
@@ -10096,6 +10209,173 @@ paths:
       security:
         - clerk: []
       summary: Attest that an orphaned Plaid Item was removed by hand (admin)
+      tags:
+        - Admin
+  /api/v1/admin/posthog-erasure:
+    get:
+      operationId: listPostHogErasures
+      parameters:
+        - explode: false
+          in: query
+          name: limit
+          schema:
+            default: 50
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/PostHogErasureOperatorRow"
+                type:
+                  - array
+                  - "null"
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List outstanding PostHog erasures
+      tags:
+        - Admin
+  /api/v1/admin/posthog-erasure/{erasure_id}/evidence:
+    post:
+      operationId: recordPostHogErasureEvidence
+      parameters:
+        - in: path
+          name: erasure_id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PostHogErasureEvidenceBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostHogErasureOperatorOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Record bounded PostHog erasure evidence
+      tags:
+        - Admin
+  /api/v1/admin/posthog-erasure/{erasure_id}/replay:
+    post:
+      operationId: replayPostHogErasure
+      parameters:
+        - in: path
+          name: erasure_id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostHogErasureOperatorOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Replay a dead-lettered PostHog erasure
+      tags:
+        - Admin
+  /api/v1/admin/posthog-erasure/{erasure_id}/retarget:
+    post:
+      operationId: retargetPostHogErasure
+      parameters:
+        - in: path
+          name: erasure_id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PostHogErasureRetargetBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostHogErasureOperatorOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Retarget an unconfigured PostHog erasure
+      tags:
+        - Admin
+  /api/v1/admin/posthog-erasure/{erasure_id}/reveal:
+    post:
+      operationId: revealPostHogErasure
+      parameters:
+        - in: path
+          name: erasure_id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostHogErasureOperatorIdentity"
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Audit and reveal identifiers needed for provider verification
       tags:
         - Admin
   /api/v1/admin/retention/withheld:

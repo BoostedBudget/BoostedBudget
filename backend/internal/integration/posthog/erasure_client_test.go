@@ -112,3 +112,35 @@ func TestErasureClient_ClassifiesRetryAfterWithoutLeakingBody(t *testing.T) {
 	assert.Equal(t, 24*time.Hour, providerErr.RetryAfter)
 	assert.NotContains(t, err.Error(), "secret@example.com")
 }
+
+func TestErasureClient_ResolvesAndDeduplicatesPersonUUIDsBeforeDeletion(t *testing.T) {
+	var queries []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"uuid":"11111111-1111-4111-8111-111111111111"}],"next":null,"previous":null}`))
+	}))
+	defer server.Close()
+	client, err := NewErasureClient(ErasureClientConfig{Host: "https://us.posthog.com", ProjectID: "42", PersonalAPIKey: "secret", HTTPClient: server.Client(), ResolveHost: func(string) string { return server.URL }})
+	require.NoError(t, err)
+	uuids, err := client.ResolvePersonUUIDs(context.Background(), "42", "us", []string{"clerk/a+b", "legacy"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"11111111-1111-4111-8111-111111111111"}, uuids)
+	assert.ElementsMatch(t, []string{"distinct_id=clerk%2Fa%2Bb", "distinct_id=legacy"}, queries)
+}
+
+func TestErasureClient_PollsDocumentedDeletionStatusByPersonUUID(t *testing.T) {
+	var query string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"count":1,"next":null,"previous":null,"results":[{"person_uuid":"11111111-1111-4111-8111-111111111111","created_at":"2026-09-14T12:00:00Z","status":"completed","delete_verified_at":"2026-09-14T13:00:00Z"}]}`))
+	}))
+	defer server.Close()
+	client, err := NewErasureClient(ErasureClientConfig{Host: "https://us.posthog.com", ProjectID: "42", PersonalAPIKey: "secret", HTTPClient: server.Client(), ResolveHost: func(string) string { return server.URL }})
+	require.NoError(t, err)
+	complete, err := client.PersonEventDeletionComplete(context.Background(), "42", "us", []string{"11111111-1111-4111-8111-111111111111"})
+	require.NoError(t, err)
+	assert.True(t, complete)
+	assert.Contains(t, query, "person_uuid=11111111-1111-4111-8111-111111111111")
+	assert.Contains(t, query, "status=all")
+}

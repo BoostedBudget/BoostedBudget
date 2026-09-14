@@ -52,25 +52,33 @@ func buildPostHogErasureEnvelope(enc *appcrypto.FieldEncryptor, internalUserID s
 }
 
 type PostHogErasureRecord struct {
-	ID                   string
-	Identities           []string
-	ProjectID            string
-	Region               string
-	State                string
-	Phase                string
-	AttemptCount         int
-	LeaseToken           string
-	FirstZeroVerifiedAt  *time.Time
-	PersonVerifiedAt     *time.Time
-	EventsVerifiedAt     *time.Time
-	RecordingsVerifiedAt *time.Time
-	SurveysVerifiedAt    *time.Time
-	SupportVerifiedAt    *time.Time
+	ID           string
+	Identities   []string
+	PersonUUIDs  []string
+	ProjectID    string
+	Region       string
+	Phase        string
+	AttemptCount int
+	LeaseToken   string
 }
 
 type PostHogErasureBacklog struct {
 	Counts        map[string]int64
 	OldestSeconds float64
+}
+
+type PostHogErasureOperatorRow struct {
+	ID          string    `json:"id"`
+	ProjectID   string    `json:"project_id"`
+	Region      string    `json:"region"`
+	State       string    `json:"state"`
+	Phase       string    `json:"phase"`
+	RequestedAt time.Time `json:"requested_at"`
+}
+
+type PostHogErasureOperatorIdentity struct {
+	DistinctIDs []string `json:"distinct_ids"`
+	PersonUUIDs []string `json:"person_uuids"`
 }
 
 type PostHogErasureOutboxRepository struct {
@@ -106,6 +114,7 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 	leaseToken := uuid.NewString()
 	var record PostHogErasureRecord
 	var encrypted string
+	var encryptedPersonUUIDs *string
 	err := r.db.QueryRow(ctx, `
 		WITH candidate AS (
 			SELECT id FROM posthog_erasure_outbox
@@ -120,14 +129,10 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 		SET lease_token = $2, lease_until = $1 + $3::interval,
 		    attempt_count = attempt_count + 1, updated_at = clock_timestamp(), version = version + 1
 		FROM candidate WHERE o.id = candidate.id
-		RETURNING o.id, o.identities_encrypted, o.project_id, o.region, o.state, o.phase,
-		          o.attempt_count, o.first_zero_verified_at, o.person_verified_at,
-		          o.events_verified_at, o.recordings_verified_at, o.surveys_verified_at,
-		          o.support_verified_at`, now, leaseToken, lease.String()).Scan(
-		&record.ID, &encrypted, &record.ProjectID, &record.Region, &record.State, &record.Phase,
-		&record.AttemptCount, &record.FirstZeroVerifiedAt, &record.PersonVerifiedAt,
-		&record.EventsVerifiedAt, &record.RecordingsVerifiedAt, &record.SurveysVerifiedAt,
-		&record.SupportVerifiedAt)
+		RETURNING o.id, o.identities_encrypted, o.provider_person_uuids_encrypted,
+		          o.project_id, o.region, o.phase, o.attempt_count`, now, leaseToken, lease.String()).Scan(
+		&record.ID, &encrypted, &encryptedPersonUUIDs, &record.ProjectID, &record.Region,
+		&record.Phase, &record.AttemptCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -141,6 +146,21 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 			return nil, deadLetterErr
 		}
 		return nil, fmt.Errorf("claim PostHog erasure failed: identity_decryption")
+	}
+	if record.Phase != "person_resolve" {
+		if encryptedPersonUUIDs == nil {
+			if deadLetterErr := r.deadLetterClaim(ctx, record.ID, leaseToken, "correlation_decryption"); deadLetterErr != nil {
+				return nil, deadLetterErr
+			}
+			return nil, fmt.Errorf("claim PostHog erasure failed: correlation_decryption")
+		}
+		raw, err = r.enc.DecryptJSON(*encryptedPersonUUIDs)
+		if err != nil || json.Unmarshal(raw, &record.PersonUUIDs) != nil || (record.Phase == "person_poll" && len(record.PersonUUIDs) == 0) {
+			if deadLetterErr := r.deadLetterClaim(ctx, record.ID, leaseToken, "correlation_decryption"); deadLetterErr != nil {
+				return nil, deadLetterErr
+			}
+			return nil, fmt.Errorf("claim PostHog erasure failed: correlation_decryption")
+		}
 	}
 	return &record, nil
 }
@@ -160,62 +180,250 @@ func (r *PostHogErasureOutboxRepository) deadLetterClaim(ctx context.Context, id
 // MarkAccepted records only that PostHog accepted the documented asynchronous person/event/
 // recording deletion request. Support has no documented server deletion endpoint, so acceptance
 // deliberately transitions to manual_pending and can never be mistaken for completion.
-func (r *PostHogErasureOutboxRepository) MarkAccepted(ctx context.Context, id, leaseToken string, now time.Time) (bool, error) {
+func (r *PostHogErasureOutboxRepository) MarkPersonUUIDsResolved(ctx context.Context, id, leaseToken string, personUUIDs []string) (bool, error) {
+	raw, err := json.Marshal(personUUIDs)
+	if err != nil {
+		return false, fmt.Errorf("encode PostHog person UUIDs: %w", err)
+	}
+	ciphertext, err := r.enc.EncryptJSON(raw)
+	if err != nil {
+		return false, fmt.Errorf("encrypt PostHog person UUIDs: %w", err)
+	}
+	tag, err := r.db.Exec(ctx, `
+		UPDATE posthog_erasure_outbox SET provider_person_uuids_encrypted=$3, phase='person_delete',
+		    state='retrying', next_attempt_at=clock_timestamp(), lease_token=NULL, lease_until=NULL,
+		    last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
+		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying')`, id, leaseToken, ciphertext)
+	if err != nil {
+		return false, fmt.Errorf("record PostHog person UUID resolution: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func (r *PostHogErasureOutboxRepository) MarkAccepted(ctx context.Context, id, leaseToken string, resolvedPersons int) (bool, error) {
 	tag, err := r.db.Exec(ctx, `
 		UPDATE posthog_erasure_outbox
-		SET state='manual_pending', phase='support_manual', provider_status='accepted', accepted_at=$3,
+		SET state=CASE WHEN $3=0 THEN 'manual_pending' ELSE 'retrying' END,
+		    phase=CASE WHEN $3=0 THEN 'support_manual' ELSE 'person_poll' END,
+		    provider_status='accepted', accepted_at=clock_timestamp(), person_verified_at=clock_timestamp(),
+		    next_attempt_at=clock_timestamp()+interval '5 minutes',
 		    lease_token=NULL, lease_until=NULL, last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
-		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying')`, id, leaseToken, now)
+		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying')`, id, leaseToken, resolvedPersons)
 	if err != nil {
 		return false, fmt.Errorf("record PostHog erasure acceptance: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
 }
 
-func (r *PostHogErasureOutboxRepository) RecordRetry(ctx context.Context, id, leaseToken, errorClass string, next time.Time, maxAttempts int) error {
+func (r *PostHogErasureOutboxRepository) RecordRetry(ctx context.Context, id, leaseToken, errorClass string, next time.Time, maxAttempts int) (string, error) {
 	if maxAttempts < 1 {
-		return fmt.Errorf("max attempts must be positive")
+		return "", fmt.Errorf("max attempts must be positive")
 	}
-	_, err := r.db.Exec(ctx, `
+	var state string
+	err := r.db.QueryRow(ctx, `
 		UPDATE posthog_erasure_outbox
 		SET state=CASE WHEN attempt_count >= $5 THEN 'dead_letter' ELSE 'retrying' END,
 		    next_attempt_at=$4, last_error_class=$3, lease_token=NULL, lease_until=NULL,
 		    updated_at=clock_timestamp(), version=version+1
-		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying')`, id, leaseToken, errorClass, next, maxAttempts)
+		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying') RETURNING state`, id, leaseToken, errorClass, next, maxAttempts).Scan(&state)
 	if err != nil {
-		return fmt.Errorf("record PostHog erasure retry: %w", err)
+		return "", fmt.Errorf("record PostHog erasure retry: %w", err)
 	}
-	return nil
+	return state, nil
 }
 
-// RecordFirstZeroVerification persists the first complete, cross-surface zero result. A second
-// complete verification at least five minutes later is required before completion.
-func (r *PostHogErasureOutboxRepository) RecordFirstZeroVerification(ctx context.Context, id string, verifiedAt time.Time) (bool, error) {
-	tag, err := r.db.Exec(ctx, `
-		UPDATE posthog_erasure_outbox
-		SET first_zero_verified_at=$2, updated_at=clock_timestamp(), version=version+1
-		WHERE id=$1 AND state='manual_pending' AND accepted_at IS NOT NULL
-		  AND first_zero_verified_at IS NULL`, id, verifiedAt)
-	if err != nil {
-		return false, fmt.Errorf("record first PostHog erasure verification: %w", err)
-	}
-	return tag.RowsAffected() == 1, nil
+func (r *PostHogErasureOutboxRepository) RecordPollPending(ctx context.Context, id, leaseToken string) (bool, error) {
+	tag, err := r.db.Exec(ctx, `UPDATE posthog_erasure_outbox SET state='retrying', next_attempt_at=clock_timestamp()+interval '6 hours', lease_token=NULL, lease_until=NULL, updated_at=clock_timestamp(), version=version+1 WHERE id=$1 AND lease_token=$2 AND phase='person_poll'`, id, leaseToken)
+	return tag.RowsAffected() == 1, err
 }
 
-// CompleteWithOperatorEvidence is intentionally explicit: until an operator verifies the async
-// person/event/recording job, survey-response events, and Support tickets/messages, no state-machine
-// path can set completed. The evidence timestamps are durable but contain no identity or free text.
-func (r *PostHogErasureOutboxRepository) CompleteWithOperatorEvidence(ctx context.Context, id string, verifiedAt time.Time) (bool, error) {
-	tag, err := r.db.Exec(ctx, `
-		UPDATE posthog_erasure_outbox
-		SET state='completed', phase='complete', completed_at=$2,
-		    person_verified_at=$2, events_verified_at=$2, recordings_verified_at=$2,
-		    surveys_verified_at=$2, support_verified_at=$2,
-		    last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
-		WHERE id=$1 AND state='manual_pending' AND accepted_at IS NOT NULL
-		  AND first_zero_verified_at <= $2 - interval '5 minutes'`, id, verifiedAt)
-	if err != nil {
-		return false, fmt.Errorf("complete PostHog erasure with operator evidence: %w", err)
+func (r *PostHogErasureOutboxRepository) MarkPersonEventsVerified(ctx context.Context, id, leaseToken string) (bool, error) {
+	tag, err := r.db.Exec(ctx, `UPDATE posthog_erasure_outbox SET state='manual_pending', phase='support_manual', events_verified_at=clock_timestamp(), lease_token=NULL, lease_until=NULL, last_error_class=NULL, updated_at=clock_timestamp(), version=version+1 WHERE id=$1 AND lease_token=$2 AND phase='person_poll'`, id, leaseToken)
+	return tag.RowsAffected() == 1, err
+}
+
+// RecordOperatorEvidence stores only bounded evidence, using the database clock for both the
+// five-minute separation and audit time. Completion atomically destroys the last provider
+// identifiers, so a completed row contains no recoverable PostHog identity.
+func (r *PostHogErasureOutboxRepository) RecordOperatorEvidence(ctx context.Context, id, operatorID, surface, evidence string) (string, error) {
+	if r.enc == nil {
+		return "", fmt.Errorf("operator audit requires field encryption")
 	}
-	return tag.RowsAffected() == 1, nil
+	if evidence != "provider_zero" && evidence != "provider_case_deleted" {
+		return "", fmt.Errorf("unsupported PostHog erasure evidence")
+	}
+	var firstColumn, verifiedColumn, evidenceColumn string
+	switch surface {
+	case "events":
+		firstColumn, verifiedColumn, evidenceColumn = "events_first_verified_at", "events_verified_at", "events_evidence"
+	case "recordings":
+		firstColumn, verifiedColumn, evidenceColumn = "recordings_first_verified_at", "recordings_verified_at", "recordings_evidence"
+	case "surveys":
+		firstColumn, verifiedColumn, evidenceColumn = "surveys_first_verified_at", "surveys_verified_at", "surveys_evidence"
+	case "support":
+		firstColumn, verifiedColumn, evidenceColumn = "support_first_verified_at", "support_verified_at", "support_evidence"
+	default:
+		return "", fmt.Errorf("unsupported PostHog erasure surface")
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("begin PostHog operator evidence: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	query := fmt.Sprintf(`UPDATE posthog_erasure_outbox SET
+		%s=COALESCE(%s, clock_timestamp()),
+		%s=CASE WHEN %s <= clock_timestamp()-interval '5 minutes' THEN clock_timestamp() ELSE %s END,
+		%s=$2, updated_at=clock_timestamp(), version=version+1
+		WHERE id=$1 AND state='manual_pending' RETURNING state`, firstColumn, firstColumn,
+		verifiedColumn, firstColumn, verifiedColumn, evidenceColumn)
+	state := "manual_pending"
+	if err = tx.QueryRow(ctx, query, id, evidence).Scan(&state); err != nil {
+		return "", fmt.Errorf("record PostHog operator evidence: %w", err)
+	}
+	operatorHash := r.enc.BlindIndexWithLabel("posthog_erasure_operator_v1", operatorID)
+	if _, err = tx.Exec(ctx, `INSERT INTO posthog_erasure_operator_audit
+		(erasure_id, operator_hash, action, surface, evidence)
+		VALUES ($1,$2,'surface_evidence',$3,$4)`, id, operatorHash, surface, evidence); err != nil {
+		return "", fmt.Errorf("audit PostHog operator evidence: %w", err)
+	}
+	if err = tx.QueryRow(ctx, `UPDATE posthog_erasure_outbox SET
+		state='completed', phase='complete', completed_at=clock_timestamp(),
+		identities_encrypted=NULL, provider_person_uuids_encrypted=NULL,
+		last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
+		WHERE id=$1 AND state='manual_pending' AND person_verified_at IS NOT NULL
+		  AND events_verified_at IS NOT NULL AND recordings_verified_at IS NOT NULL
+		  AND surveys_verified_at IS NOT NULL AND support_verified_at IS NOT NULL
+		RETURNING state`, id).Scan(&state); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("complete PostHog erasure: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("commit PostHog operator evidence: %w", err)
+	}
+	return state, nil
+}
+
+// RetargetUnconfigured is the only supported repair for obligations created while the provider
+// target was missing. It cannot move a request already accepted by PostHog.
+func (r *PostHogErasureOutboxRepository) RetargetUnconfigured(ctx context.Context, id, operatorID, projectID, region string) (bool, error) {
+	if r.enc == nil || projectID == "" || (region != "us" && region != "eu") {
+		return false, fmt.Errorf("invalid PostHog erasure retarget")
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `UPDATE posthog_erasure_outbox SET project_id=$2, region=$3,
+		state='retrying', phase='person_resolve', next_attempt_at=clock_timestamp(),
+		last_error_class=NULL, lease_token=NULL, lease_until=NULL, updated_at=clock_timestamp(), version=version+1
+		WHERE id=$1 AND project_id='unconfigured' AND region='unconfigured'
+		  AND accepted_at IS NULL AND state IN ('pending','retrying','dead_letter')`, id, projectID, region)
+	if err != nil {
+		return false, fmt.Errorf("retarget PostHog erasure: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return false, nil
+	}
+	operatorHash := r.enc.BlindIndexWithLabel("posthog_erasure_operator_v1", operatorID)
+	_, err = tx.Exec(ctx, `INSERT INTO posthog_erasure_operator_audit
+		(erasure_id,operator_hash,action,from_project_id,from_region,to_project_id,to_region)
+		VALUES ($1,$2,'retarget','unconfigured','unconfigured',$3,$4)`, id, operatorHash, projectID, region)
+	if err != nil {
+		return false, fmt.Errorf("audit PostHog erasure retarget: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// RequeueDeadLetter preserves the attempt count, target, correlation, and encrypted identity. It
+// only clears the bounded failure/lease state so an operator cannot use replay to rewrite history.
+func (r *PostHogErasureOutboxRepository) RequeueDeadLetter(ctx context.Context, id, operatorID string) (bool, error) {
+	if r.enc == nil {
+		return false, fmt.Errorf("PostHog erasure replay requires encryption")
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `UPDATE posthog_erasure_outbox SET state='retrying',
+		next_attempt_at=clock_timestamp(), last_error_class=NULL, lease_token=NULL, lease_until=NULL,
+		updated_at=clock_timestamp(), version=version+1 WHERE id=$1 AND state='dead_letter'`, id)
+	if err != nil {
+		return false, fmt.Errorf("requeue PostHog erasure: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return false, nil
+	}
+	operatorHash := r.enc.BlindIndexWithLabel("posthog_erasure_operator_v1", operatorID)
+	if _, err = tx.Exec(ctx, `INSERT INTO posthog_erasure_operator_audit(erasure_id,operator_hash,action)
+		VALUES($1,$2,'replay')`, id, operatorHash); err != nil {
+		return false, fmt.Errorf("audit PostHog erasure replay: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (r *PostHogErasureOutboxRepository) ListOutstanding(ctx context.Context, limit int) ([]PostHogErasureOperatorRow, error) {
+	if limit < 1 || limit > 100 {
+		return nil, fmt.Errorf("limit must be 1..100")
+	}
+	rows, err := r.db.Query(ctx, `SELECT id,project_id,region,state,phase,requested_at
+		FROM posthog_erasure_outbox WHERE state<>'completed' ORDER BY requested_at,id LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list PostHog erasures: %w", err)
+	}
+	defer rows.Close()
+	var out []PostHogErasureOperatorRow
+	for rows.Next() {
+		var row PostHogErasureOperatorRow
+		if err := rows.Scan(&row.ID, &row.ProjectID, &row.Region, &row.State, &row.Phase, &row.RequestedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// RevealOperatorIdentity is intentionally a POST: every sensitive reveal is an auditable action,
+// never an incidental field on the list response.
+func (r *PostHogErasureOutboxRepository) RevealOperatorIdentity(ctx context.Context, id, operatorID string) (PostHogErasureOperatorIdentity, error) {
+	if r.enc == nil {
+		return PostHogErasureOperatorIdentity{}, fmt.Errorf("identity reveal requires encryption")
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return PostHogErasureOperatorIdentity{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var identities string
+	var personUUIDs *string
+	if err = tx.QueryRow(ctx, `SELECT identities_encrypted,provider_person_uuids_encrypted
+		FROM posthog_erasure_outbox WHERE id=$1 AND state<>'completed' FOR UPDATE`, id).Scan(&identities, &personUUIDs); err != nil {
+		return PostHogErasureOperatorIdentity{}, err
+	}
+	var out PostHogErasureOperatorIdentity
+	raw, err := r.enc.DecryptJSON(identities)
+	if err != nil || json.Unmarshal(raw, &out.DistinctIDs) != nil {
+		return out, fmt.Errorf("decrypt PostHog identities")
+	}
+	if personUUIDs != nil {
+		raw, err = r.enc.DecryptJSON(*personUUIDs)
+		if err != nil || json.Unmarshal(raw, &out.PersonUUIDs) != nil {
+			return out, fmt.Errorf("decrypt PostHog correlations")
+		}
+	}
+	operatorHash := r.enc.BlindIndexWithLabel("posthog_erasure_operator_v1", operatorID)
+	if _, err = tx.Exec(ctx, `INSERT INTO posthog_erasure_operator_audit(erasure_id,operator_hash,action)
+		VALUES($1,$2,'identity_reveal')`, id, operatorHash); err != nil {
+		return out, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return out, err
+	}
+	return out, nil
 }

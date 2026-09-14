@@ -29,12 +29,17 @@ func (PostHogErasureArgs) Kind() string { return "posthog_erasure" }
 
 type postHogErasureStore interface {
 	ClaimDue(context.Context, time.Time, time.Duration) (*repository.PostHogErasureRecord, error)
-	MarkAccepted(context.Context, string, string, time.Time) (bool, error)
-	RecordRetry(context.Context, string, string, string, time.Time, int) error
+	MarkPersonUUIDsResolved(context.Context, string, string, []string) (bool, error)
+	MarkAccepted(context.Context, string, string, int) (bool, error)
+	RecordPollPending(context.Context, string, string) (bool, error)
+	MarkPersonEventsVerified(context.Context, string, string) (bool, error)
+	RecordRetry(context.Context, string, string, string, time.Time, int) (string, error)
 }
 
 type postHogErasureProvider interface {
+	ResolvePersonUUIDs(context.Context, string, string, []string) ([]string, error)
 	RequestPersonDeletion(context.Context, string, string, []string) (phclient.ErasureDeleteResult, error)
+	PersonEventDeletionComplete(context.Context, string, string, []string) (bool, error)
 }
 
 type postHogErasureBacklogStore interface {
@@ -79,24 +84,75 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 		return err
 	}
 	if w.provider == nil {
-		observability.RecordPostHogErasureAttempt("person_delete", "retry", "configuration")
 		return w.persistRetry(ctx, record, "configuration", 0)
 	}
-	_, err = w.provider.RequestPersonDeletion(ctx, record.ProjectID, record.Region, record.Identities)
+	switch record.Phase {
+	case "person_resolve":
+		var personUUIDs []string
+		personUUIDs, err = w.provider.ResolvePersonUUIDs(ctx, record.ProjectID, record.Region, record.Identities)
+		if err == nil {
+			var updated bool
+			updated, err = w.store.MarkPersonUUIDsResolved(ctx, record.ID, record.LeaseToken, personUUIDs)
+			if err == nil && !updated {
+				err = fmt.Errorf("PostHog erasure lease lost")
+			}
+			if err == nil {
+				outcome := "accepted"
+				if len(personUUIDs) == 0 {
+					outcome = "failure"
+				}
+				observability.RecordPostHogErasureAttempt("person_resolve", outcome, "none")
+				return nil
+			}
+		}
+	case "person_delete":
+		var result phclient.ErasureDeleteResult
+		result, err = w.provider.RequestPersonDeletion(ctx, record.ProjectID, record.Region, record.Identities)
+		if err == nil && (result.PersonsFound != len(record.PersonUUIDs) || result.PersonsDeleted != len(record.PersonUUIDs)) {
+			err = &phclient.ErasureProviderError{Class: "invalid_response"}
+		}
+		if err == nil {
+			var updated bool
+			updated, err = w.store.MarkAccepted(ctx, record.ID, record.LeaseToken, len(record.PersonUUIDs))
+			if err == nil && !updated {
+				err = fmt.Errorf("PostHog erasure lease lost")
+			}
+			if err == nil {
+				observability.RecordPostHogErasureAttempt("person_delete", "accepted", "none")
+				return nil
+			}
+		}
+	case "person_poll":
+		var complete bool
+		complete, err = w.provider.PersonEventDeletionComplete(ctx, record.ProjectID, record.Region, record.PersonUUIDs)
+		if err == nil && !complete {
+			updated, updateErr := w.store.RecordPollPending(ctx, record.ID, record.LeaseToken)
+			if updateErr != nil {
+				return updateErr
+			}
+			if !updated {
+				return fmt.Errorf("PostHog erasure lease lost")
+			}
+			return nil
+		}
+		if err == nil {
+			var updated bool
+			updated, err = w.store.MarkPersonEventsVerified(ctx, record.ID, record.LeaseToken)
+			if err == nil && !updated {
+				err = fmt.Errorf("PostHog erasure lease lost")
+			}
+			if err == nil {
+				observability.RecordPostHogErasureAttempt("person_poll", "accepted", "none")
+				return nil
+			}
+		}
+	default:
+		err = fmt.Errorf("unknown PostHog erasure phase")
+	}
 	if err != nil {
 		class, retryAfter := classifyErasureFailure(err)
-		observability.RecordPostHogErasureAttempt("person_delete", "retry", class)
 		return w.persistRetry(ctx, record, class, retryAfter)
 	}
-	updated, err := w.store.MarkAccepted(ctx, record.ID, record.LeaseToken, now)
-	if err != nil {
-		return err
-	}
-	if !updated {
-		return fmt.Errorf("PostHog erasure lease was lost before acceptance could be recorded")
-	}
-	w.logger.Info("PostHog erasure accepted; awaiting manual verification", "phase", "support_manual")
-	observability.RecordPostHogErasureAttempt("person_delete", "accepted", "none")
 	return nil
 }
 
@@ -117,10 +173,16 @@ func (w *PostHogErasureWorker) persistRetry(ctx context.Context, record *reposit
 	if retryAfter <= 0 {
 		retryAfter = erasureBackoff(record.ID, record.AttemptCount)
 	}
-	if err := w.store.RecordRetry(ctx, record.ID, record.LeaseToken, class, w.now().Add(retryAfter), postHogErasureMaxAttempts); err != nil {
+	state, err := w.store.RecordRetry(ctx, record.ID, record.LeaseToken, class, w.now().Add(retryAfter), postHogErasureMaxAttempts)
+	if err != nil {
 		return err
 	}
-	w.logger.Warn("PostHog erasure attempt deferred", "phase", "person_delete", "error_class", class)
+	outcome := "retry"
+	if state == "dead_letter" {
+		outcome = "dead_letter"
+	}
+	observability.RecordPostHogErasureAttempt(record.Phase, outcome, class)
+	w.logger.Warn("PostHog erasure attempt deferred", "phase", record.Phase, "error_class", class, "state", state)
 	return nil
 }
 

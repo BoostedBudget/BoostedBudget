@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -23,6 +25,108 @@ const (
 var allowedPostHogPrivateHosts = map[string]bool{
 	"us.posthog.com": true,
 	"eu.posthog.com": true,
+}
+
+func (c *ErasureClient) ResolvePersonUUIDs(ctx context.Context, projectID, region string, distinctIDs []string) ([]string, error) {
+	if err := c.checkTarget(projectID, region); err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(distinctIDs))
+	for _, distinctID := range distinctIDs {
+		query := url.Values{"distinct_id": []string{distinctID}}
+		var page struct {
+			Results []struct {
+				UUID string `json:"uuid"`
+			} `json:"results"`
+			Next *string `json:"next"`
+		}
+		if err := c.getJSON(ctx, "/persons/?"+query.Encode(), &page); err != nil {
+			return nil, err
+		}
+		if page.Next != nil || len(page.Results) > 1 {
+			return nil, &ErasureProviderError{Class: "invalid_response"}
+		}
+		for _, person := range page.Results {
+			if _, err := uuid.Parse(person.UUID); err != nil {
+				return nil, &ErasureProviderError{Class: "invalid_response"}
+			}
+			if !seen[person.UUID] {
+				seen[person.UUID] = true
+				result = append(result, person.UUID)
+			}
+		}
+	}
+	return result, nil
+}
+
+func (c *ErasureClient) PersonEventDeletionComplete(ctx context.Context, projectID, region string, personUUIDs []string) (bool, error) {
+	if err := c.checkTarget(projectID, region); err != nil {
+		return false, err
+	}
+	for _, personUUID := range personUUIDs {
+		if _, err := uuid.Parse(personUUID); err != nil {
+			return false, &ErasureProviderError{Class: "invalid_correlation"}
+		}
+		query := url.Values{"person_uuid": []string{personUUID}, "status": []string{"all"}}
+		var page struct {
+			Next    *string `json:"next"`
+			Results []struct {
+				PersonUUID     string  `json:"person_uuid"`
+				Status         string  `json:"status"`
+				DeleteVerified *string `json:"delete_verified_at"`
+			} `json:"results"`
+		}
+		if err := c.getJSON(ctx, "/persons/deletion_status/?"+query.Encode(), &page); err != nil {
+			return false, err
+		}
+		if page.Next != nil || len(page.Results) != 1 || page.Results[0].PersonUUID != personUUID {
+			return false, nil
+		}
+		status := page.Results[0]
+		if status.Status != "completed" || status.DeleteVerified == nil {
+			if status.Status != "pending" && status.Status != "completed" {
+				return false, &ErasureProviderError{Class: "invalid_response"}
+			}
+			return false, nil
+		}
+		if _, err := time.Parse(time.RFC3339, *status.DeleteVerified); err != nil {
+			return false, &ErasureProviderError{Class: "invalid_response"}
+		}
+	}
+	return true, nil
+}
+
+func (c *ErasureClient) getJSON(ctx context.Context, path string, destination any) error {
+	endpoint := fmt.Sprintf("%s/api/projects/%s%s", c.baseURL, url.PathEscape(c.projectID), path)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return &ErasureProviderError{Class: "request"}
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return &ErasureProviderError{Class: "transport"}
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, erasureResponseLimit+1))
+	if err != nil || len(raw) > erasureResponseLimit {
+		return &ErasureProviderError{Class: "invalid_response"}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return &ErasureProviderError{Class: classifyHTTPStatus(resp.StatusCode), RetryAfter: boundedRetryAfter(resp.Header.Get("Retry-After"))}
+	}
+	if err := json.Unmarshal(raw, destination); err != nil {
+		return &ErasureProviderError{Class: "invalid_response"}
+	}
+	return nil
+}
+
+func (c *ErasureClient) checkTarget(projectID, region string) error {
+	if projectID != c.projectID || region != c.region {
+		return &ErasureProviderError{Class: "target_mismatch"}
+	}
+	return nil
 }
 
 func ErasureRegionForHost(host string) string {
@@ -101,8 +205,8 @@ func NewErasureClient(cfg ErasureClientConfig) (*ErasureClient, error) {
 }
 
 func (c *ErasureClient) RequestPersonDeletion(ctx context.Context, projectID, region string, distinctIDs []string) (ErasureDeleteResult, error) {
-	if projectID != c.projectID || region != c.region {
-		return ErasureDeleteResult{}, &ErasureProviderError{Class: "target_mismatch"}
+	if err := c.checkTarget(projectID, region); err != nil {
+		return ErasureDeleteResult{}, err
 	}
 	if len(distinctIDs) == 0 || len(distinctIDs) > 1000 {
 		return ErasureDeleteResult{}, fmt.Errorf("PostHog erasure requires 1..1000 distinct IDs")
@@ -140,14 +244,7 @@ func (c *ErasureClient) RequestPersonDeletion(ctx context.Context, projectID, re
 		return ErasureDeleteResult{}, fmt.Errorf("PostHog erasure response too large")
 	}
 	if resp.StatusCode != http.StatusAccepted {
-		class := "provider_rejected"
-		if resp.StatusCode == http.StatusTooManyRequests {
-			class = "rate_limited"
-		} else if resp.StatusCode >= 500 {
-			class = "provider_unavailable"
-		} else if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			class = "auth"
-		}
+		class := classifyHTTPStatus(resp.StatusCode)
 		return ErasureDeleteResult{}, &ErasureProviderError{Class: class, RetryAfter: boundedRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 	var decoded struct {
@@ -161,6 +258,19 @@ func (c *ErasureClient) RequestPersonDeletion(ctx context.Context, projectID, re
 		return ErasureDeleteResult{}, fmt.Errorf("invalid deletion response from PostHog")
 	}
 	return ErasureDeleteResult{decoded.PersonsFound, decoded.PersonsDeleted, *decoded.EventsQueued, *decoded.RecordingsQueued}, nil
+}
+
+func classifyHTTPStatus(status int) string {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return "rate_limited"
+	case status >= 500:
+		return "provider_unavailable"
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return "auth"
+	default:
+		return "provider_rejected"
+	}
 }
 
 func boundedRetryAfter(value string) time.Duration {

@@ -52,6 +52,29 @@ func TestLoad_PostHogErasureUsesServerOnlyPrivateAPIConfiguration(t *testing.T) 
 	assert.Equal(t, "https://us.posthog.com", cfg.PostHogPrivateHost)
 }
 
+func TestLoad_PostHogIngestionRequiresCompleteErasureConfiguration(t *testing.T) {
+	for _, missing := range []string{"POSTHOG_PERSONAL_API_KEY", "POSTHOG_PROJECT_ID"} {
+		t.Run(missing, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", "development")
+			t.Setenv("POSTHOG_API_KEY", "phc_ingestion_enabled")
+			t.Setenv("POSTHOG_PERSONAL_API_KEY", "phx_private")
+			t.Setenv("POSTHOG_PROJECT_ID", "42")
+			t.Setenv(missing, "")
+			_, err := Load()
+			require.ErrorContains(t, err, missing)
+		})
+	}
+	t.Run("private host", func(t *testing.T) {
+		t.Setenv("ENVIRONMENT", "development")
+		t.Setenv("POSTHOG_API_KEY", "phc_ingestion_enabled")
+		t.Setenv("POSTHOG_PERSONAL_API_KEY", "phx_private")
+		t.Setenv("POSTHOG_PROJECT_ID", "42")
+		t.Setenv("POSTHOG_PRIVATE_HOST", "https://attacker.example")
+		_, err := Load()
+		require.ErrorContains(t, err, "POSTHOG_PRIVATE_HOST")
+	})
+}
+
 func TestLoad_PostHogSyncCompletionCutover(t *testing.T) {
 	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("POSTHOG_SYNC_COMPLETION_CUTOVER_AT", "2026-09-13T20:15:00Z")
