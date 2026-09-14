@@ -297,9 +297,7 @@ function ambientBrowserValueDeclaration(
   }
   if (!node.name || !ts.isIdentifier(node.name)) return undefined
   if (!browserRuntimeGlobals.has(node.name.text)) return undefined
-  if (!isGlobalDeclaration(node, sourceFile) || !isAmbientDeclaration(node, sourceFile)) {
-    return undefined
-  }
+  if (!isAmbientDeclaration(node, sourceFile)) return undefined
   return node.name.text
 }
 
@@ -466,8 +464,38 @@ describe('API client portability detector', () => {
     expect(findPortabilityViolations(source, 'fixture.ts')).not.toEqual([])
   })
 
+  const moduleAmbientValueDeclarationForms = [
+    ['const', (name: string) => `declare const ${name}: { value: string }; ${name}.value`],
+    ['let', (name: string) => `declare let ${name}: { value: string }; ${name}.value`],
+    ['var', (name: string) => `declare var ${name}: { value: string }; ${name}.value`],
+    ['function', (name: string) => `declare function ${name}(): string; ${name}()`],
+    ['class', (name: string) => `declare class ${name} {}; new ${name}()`],
+    ['enum', (name: string) => `declare enum ${name} { Value }; ${name}.Value`],
+    [
+      'namespace',
+      (name: string) => `declare namespace ${name} { const value: string }; ${name}.value`,
+    ],
+  ] as const
+
+  for (const name of ambientBrowserGlobals) {
+    test.each(moduleAmbientValueDeclarationForms)(
+      `rejects module-scoped ambient %s declarations named ${name}`,
+      (_kind, declaration) => {
+        const source = `export {}; ${declaration(name)}`
+
+        expect(findPortabilityViolations(source, 'fixture.ts')).not.toEqual([])
+      },
+    )
+  }
+
   test('accepts equivalent non-ambient local value declarations', () => {
     const source = `
+      export function localBindings(): string {
+        const window = { value: 'fixture' }
+        let document = window
+        var sessionStorage = document
+        return sessionStorage.value
+      }
       export function navigator(): string { return 'fixture' }
       export class window {}
       export enum document { Value }
