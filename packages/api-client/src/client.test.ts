@@ -185,6 +185,8 @@ function collectGlobalThisAliases(
   sourceFile: ts.SourceFile,
   checker: ts.TypeChecker,
 ): Set<ts.Symbol> {
+  // Deliberately flow-insensitive: once a binding can reference globalThis, later local
+  // reassignment does not make browser access portable again.
   const aliases = new Set<ts.Symbol>()
   let changed = true
 
@@ -248,6 +250,32 @@ function destructuredBrowserMemberOnGlobalThis(
   }
   const name = propertyNameText(property)
   return name && browserRuntimeGlobals.has(name) ? name : undefined
+}
+
+function destructuringAssignmentBrowserMembersOnGlobalThis(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+  aliases: Set<ts.Symbol>,
+): string[] {
+  if (
+    !ts.isBinaryExpression(node)
+    || node.operatorToken.kind !== ts.SyntaxKind.EqualsToken
+    || !isGlobalThisLike(node.right, checker, aliases)
+  ) {
+    return []
+  }
+
+  const target = unwrapExpression(node.left)
+  if (!ts.isObjectLiteralExpression(target)) return []
+
+  return target.properties.flatMap((property) => {
+    const name = ts.isShorthandPropertyAssignment(property)
+      ? property.name.text
+      : ts.isPropertyAssignment(property)
+        ? propertyNameText(property.name)
+        : undefined
+    return name && browserRuntimeGlobals.has(name) ? [name] : []
+  })
 }
 
 function isGlobalThisLike(
@@ -487,6 +515,14 @@ function findPortabilityViolations(source: string, relativePath: string): string
       violations.add(`destructured globalThis browser member ${destructuredMember}`)
     }
 
+    for (const member of destructuringAssignmentBrowserMembersOnGlobalThis(
+      node,
+      checker,
+      globalThisAliases,
+    )) {
+      violations.add(`destructuring assignment globalThis browser member ${member}`)
+    }
+
     ts.forEachChild(node, visit)
   }
 
@@ -527,6 +563,14 @@ describe('API client portability detector', () => {
     [
       'wrapped assignment with a chained alias',
       "let runtime: any; runtime = (globalThis as any); const next = runtime; next['window']",
+    ],
+    [
+      'destructuring assignment from globalThis',
+      'let browserWindow: any; ({ window: browserWindow } = globalThis as any); browserWindow.location',
+    ],
+    [
+      'computed destructuring assignment from a wrapped alias',
+      "const root = globalThis; let current: any; ({ ['location']: current } = (root as any)); current.href",
     ],
     ['ImportMeta declaration', 'interface ImportMeta { readonly env: Config }'],
     ['ImportMetaEnv declaration', 'interface ImportMetaEnv {}'],
@@ -671,6 +715,31 @@ describe('API client portability detector', () => {
     `
 
     expect(findPortabilityViolations(source, 'fixture.ts')).toEqual([])
+  })
+
+  test('ignores destructuring assignments sourced from local data', () => {
+    const source = `
+      const local = { window: { location: 'fixture' }, location: { href: 'fixture' } }
+      let browserWindow: typeof local.window
+      let current: typeof local.location
+      ({ window: browserWindow, ['location']: current } = local)
+      void browserWindow.location
+      void current.href
+    `
+
+    expect(findPortabilityViolations(source, 'fixture.ts')).toEqual([])
+  })
+
+  test('conservatively retains a globalThis alias after local reassignment', () => {
+    const source = `
+      const local = { location: { href: 'fixture' } }
+      let runtime: typeof globalThis | typeof local
+      runtime = globalThis
+      runtime = local
+      void runtime.location.href
+    `
+
+    expect(findPortabilityViolations(source, 'fixture.ts')).not.toEqual([])
   })
 
   test('ignores module-scoped browser-shaped declarations', () => {
