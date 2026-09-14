@@ -99,6 +99,28 @@ PLAYWRIGHT_VERSION_EXPRESSION = (
     "require(require.resolve('@playwright/test/package.json', { paths: ['./apps/web'] })).version"
 )
 PLAYWRIGHT_VERSION_ASSIGNMENT = f'version="$(node -p "{PLAYWRIGHT_VERSION_EXPRESSION}")"'
+EXACT_SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+
+REACT_LOCATIONS = (
+    ("root dependencies", "root", "dependencies"),
+    ("web dependencies", "web", "dependencies"),
+    ("mobile dependencies", "mobile", "dependencies"),
+    ("API-client devDependencies", "api-client", "devDependencies"),
+)
+
+MOBILE_VERSION_POLICIES = (
+    ("apps/mobile expo", "expo", "~", 57, None),
+    ("apps/mobile expo-router", "expo-router", "~", 57, None),
+    ("apps/mobile react-native", "react-native", "", 0, 86),
+    ("apps/mobile react-native-web", "react-native-web", "~", 0, 21),
+)
+
+TANSTACK_QUERY_LOCATIONS = (
+    ("apps/mobile dependencies", "mobile", "dependencies"),
+    ("apps/web dependencies", "web", "dependencies"),
+    ("API-client peerDependencies", "api-client", "peerDependencies"),
+    ("API-client devDependencies", "api-client", "devDependencies"),
+)
 
 
 def normalized_command(step: dict) -> str:
@@ -142,20 +164,154 @@ def load_yaml(path: pathlib.Path):
         raise ValueError(f"cannot read valid YAML from {path}: {exc}") from exc
 
 
+def load_json(path: pathlib.Path) -> dict:
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read valid JSON from {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"JSON document must be an object: {path}")
+    return value
+
+
+def dependency_value(package: dict, section: str, dependency: str) -> str:
+    dependencies = package.get(section) or {}
+    if not isinstance(dependencies, dict):
+        return ""
+    value = dependencies.get(dependency, "")
+    return value if isinstance(value, str) else ""
+
+
+def numeric_version(value: str) -> tuple[int, int, int] | None:
+    match = EXACT_SEMVER.fullmatch(value)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def require_version_shape(
+    findings: list[str],
+    label: str,
+    value: str,
+    prefix: str,
+    expected_major: int,
+    expected_minor: int | None = None,
+) -> None:
+    if not value.startswith(prefix):
+        findings.append(f"{label} must use {prefix!r} with a numeric compatible version")
+        return
+    version = numeric_version(value[len(prefix) :])
+    if version is None or version[0] != expected_major:
+        findings.append(f"{label} must stay within major {expected_major}")
+        return
+    if expected_minor is not None and version[1] != expected_minor:
+        findings.append(f"{label} must stay within {expected_major}.{expected_minor}.x")
+
+
+def override_dependency_names(overrides: dict) -> set[str]:
+    names: set[str] = set()
+    for key, value in overrides.items():
+        if isinstance(key, str):
+            names.add(key.partition("@")[0])
+        if isinstance(value, dict):
+            names.update(override_dependency_names(value))
+    return names
+
+
+def check_dependency_policy(packages: dict[str, dict]) -> list[str]:
+    findings: list[str] = []
+
+    react_versions: list[tuple[str, str, str]] = []
+    for label, package_name, section in REACT_LOCATIONS:
+        package = packages[package_name]
+        for dependency in ("react", "react-dom"):
+            value = dependency_value(package, section, dependency)
+            version = numeric_version(value)
+            if version is None or version[:2] != (19, 2):
+                findings.append(
+                    f"{label} {dependency} must be an exact numeric 19.2.x version"
+                )
+            react_versions.append((label, dependency, value))
+
+    distinct_react_versions = {value for _, _, value in react_versions}
+    if len(distinct_react_versions) != 1:
+        rendered = ", ".join(
+            f"{label} {dependency}={value or '<empty>'}"
+            for label, dependency, value in react_versions
+        )
+        findings.append(f"React and ReactDOM must use one exact version everywhere: {rendered}")
+
+    mobile = packages["mobile"]
+    for label, dependency, prefix, expected_major, expected_minor in MOBILE_VERSION_POLICIES:
+        require_version_shape(
+            findings,
+            label,
+            dependency_value(mobile, "dependencies", dependency),
+            prefix,
+            expected_major,
+            expected_minor,
+        )
+
+    for label, package_name, section in TANSTACK_QUERY_LOCATIONS:
+        require_version_shape(
+            findings,
+            f"{label} @tanstack/react-query",
+            dependency_value(packages[package_name], section, "@tanstack/react-query"),
+            "^",
+            5,
+        )
+
+    for dependency, expected in (
+        ("nativewind", "5.0.0-rc.0"),
+        ("react-native-css", "3.1.0-rc.0"),
+    ):
+        actual = dependency_value(mobile, "dependencies", dependency)
+        if actual != expected:
+            findings.append(f"apps/mobile {dependency} must be pinned exactly to {expected}")
+
+    router_value = dependency_value(packages["web"], "dependencies", "react-router")
+    router_version = numeric_version(router_value[1:]) if router_value.startswith("^") else None
+    if router_version is None or router_version[0] != 7 or router_version < (7, 13, 1):
+        findings.append("apps/web react-router must use a caret range on 7.13.1 or newer within major 7")
+
+    root_overrides = packages["root"].get("overrides") or {}
+    if not isinstance(root_overrides, dict):
+        findings.append("root overrides must be an object")
+    else:
+        forbidden_overrides = sorted(
+            {"react", "react-dom", "lightningcss"} & override_dependency_names(root_overrides)
+        )
+        if forbidden_overrides:
+            findings.append(
+                "root overrides must not replace compatibility contracts: "
+                + ", ".join(forbidden_overrides)
+            )
+
+    return findings
+
+
 def check(root: pathlib.Path) -> list[str]:
     findings: list[str] = []
     workflow_path = root / ".github/workflows/test.yml"
     warm_cache_workflow_path = root / ".github/workflows/warm-ci-cache.yml"
     dependabot_path = root / ".github/dependabot.yml"
-    mobile_package_path = root / "apps/mobile/package.json"
+    package_paths = {
+        "root": root / "package.json",
+        "web": root / "apps/web/package.json",
+        "mobile": root / "apps/mobile/package.json",
+        "api-client": root / "packages/api-client/package.json",
+    }
 
     try:
         workflow = load_yaml(workflow_path)
         warm_cache_workflow = load_yaml(warm_cache_workflow_path)
         dependabot = load_yaml(dependabot_path)
-        mobile_package = json.loads(mobile_package_path.read_text())
-    except (ValueError, OSError) as exc:
+        packages = {name: load_json(path) for name, path in package_paths.items()}
+        mobile_package = packages["mobile"]
+    except ValueError as exc:
         return [str(exc)]
+
+    findings.extend(check_dependency_policy(packages))
 
     jobs = workflow.get("jobs") or {}
 
@@ -383,7 +539,10 @@ def main() -> int:
         for finding in findings:
             print(f"  - {finding}", file=sys.stderr)
         return 1
-    print("check-mobile-ci: OK (trigger matrix, build gates, runners, and Dependabot policy)")
+    print(
+        "check-mobile-ci: OK "
+        "(trigger matrix, build gates, runners, dependency compatibility, and Dependabot policy)"
+    )
     return 0
 
 
