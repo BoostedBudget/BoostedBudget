@@ -1959,31 +1959,10 @@ func (s *CacheService) GetOrSet(ctx context.Context, key string,
 ```
 
 ### 6.3 Mobile App Foundation
-- [ ] Create React Native app structure:
-```typescript
-// mobile/src/App.tsx
-import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
-import { ClerkProvider } from 'react-native-clerk';
-import { Provider } from 'react-redux';
-import { store } from './store';
-import { AppNavigator } from './navigation';
 
-export default function App() {
-  return (
-    <ClerkProvider
-      domain={Config.CLERK_DOMAIN}
-      clientId={Config.CLERK_CLIENT_ID}
-    >
-      <Provider store={store}>
-        <NavigationContainer>
-          <AppNavigator />
-        </NavigationContainer>
-      </Provider>
-    </ClerkProvider>
-  );
-}
-```
+The maintained mobile roadmap is [GitHub milestone #8](https://github.com/BoostedBudget/BoostedBudget/milestone/8),
+with [architecture and delivery index #1653](https://github.com/BoostedBudget/BoostedBudget/issues/1653). Those tickets supersede
+the obsolete sample architecture that previously appeared here.
 
 ### Phase 6 Deliverables
 ✅ **Advanced Features:**

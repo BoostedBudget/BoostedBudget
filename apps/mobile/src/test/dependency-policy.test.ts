@@ -5,6 +5,10 @@ const mobilePackage = require('../../package.json')
 const mobileAppConfig = require('../../app.json')
 
 describe('universal React dependency policy', () => {
+  it('pins the validated NativeWind release candidate exactly', () => {
+    expect(mobilePackage.dependencies.nativewind).toBe('5.0.0-rc.0')
+  })
+
   it('installs Android system appearance support when automatic theming is enabled', () => {
     expect(mobileAppConfig.expo.userInterfaceStyle).toBe('automatic')
     expect(mobilePackage.dependencies['expo-system-ui']).toBeDefined()
