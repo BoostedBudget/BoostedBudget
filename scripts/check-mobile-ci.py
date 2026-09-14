@@ -100,6 +100,11 @@ PLAYWRIGHT_VERSION_EXPRESSION = (
 )
 PLAYWRIGHT_VERSION_ASSIGNMENT = f'version="$(node -p "{PLAYWRIGHT_VERSION_EXPRESSION}")"'
 EXACT_SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+STANDARD_SEMVER_SPEC = re.compile(
+    r"^[~^]?(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
 
 REACT_LOCATIONS = (
     ("root dependencies", "root", "dependencies"),
@@ -122,8 +127,32 @@ TANSTACK_QUERY_LOCATIONS = (
     ("API-client devDependencies", "api-client", "devDependencies"),
 )
 
-LOCKFILE_NAMES = ("bun.lock", "bun.lockb", "package-lock.json", "yarn.lock", "pnpm-lock.yaml")
+LOCKFILE_NAMES = (
+    "bun.lock",
+    "bun.lockb",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+)
 WORKSPACE_PATTERN = re.compile(r"^(apps|packages)/(\*|[A-Za-z0-9][A-Za-z0-9._-]*)$")
+DEPENDENCY_SECTIONS = ("dependencies", "devDependencies")
+MANUAL_UPDATE_POLICIES = {
+    "react": {"version-update:semver-minor", "version-update:semver-major"},
+    "react-dom": {"version-update:semver-minor", "version-update:semver-major"},
+    "react-native": {"version-update:semver-minor", "version-update:semver-major"},
+    "react-native-web": {"version-update:semver-minor", "version-update:semver-major"},
+    "nativewind": {
+        "version-update:semver-patch",
+        "version-update:semver-minor",
+        "version-update:semver-major",
+    },
+    "react-native-css": {
+        "version-update:semver-patch",
+        "version-update:semver-minor",
+        "version-update:semver-major",
+    },
+}
 
 
 def normalized_command(step: dict) -> str:
@@ -158,6 +187,21 @@ def matches(path: str, pattern: str) -> bool:
 
 def dependency_matches(name: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
+
+
+def valid_semver_spec(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    match = STANDARD_SEMVER_SPEC.fullmatch(value)
+    if match is None:
+        return False
+    prerelease = match.group(1)
+    if prerelease is None:
+        return True
+    return all(
+        not (identifier.isdigit() and len(identifier) > 1 and identifier.startswith("0"))
+        for identifier in prerelease.split(".")
+    )
 
 
 def load_yaml(path: pathlib.Path):
@@ -274,19 +318,19 @@ def declared_workspace_directories(
     return sorted(workspace_directories), findings
 
 
-def check_single_lockfile_policy(root: pathlib.Path, root_package: dict) -> list[str]:
+def check_single_lockfile_policy(
+    root: pathlib.Path, workspace_directories: list[pathlib.Path]
+) -> list[str]:
     findings: list[str] = []
     root_lockfile = root / "bun.lock"
     if root_lockfile.is_symlink() or not root_lockfile.is_file():
         findings.append("single-lockfile policy requires root bun.lock as a regular file")
 
-    for lock_name in LOCKFILE_NAMES:
+    for lock_name in LOCKFILE_NAMES[1:]:
         lock_path = root / lock_name
-        if lock_name != "bun.lock" and (lock_path.is_symlink() or lock_path.exists()):
+        if lock_path.is_symlink() or lock_path.exists():
             findings.append(f"single-lockfile policy forbids root {lock_name}")
 
-    workspace_directories, workspace_findings = declared_workspace_directories(root, root_package)
-    findings.extend(workspace_findings)
     for workspace in workspace_directories:
         relative_workspace = workspace.relative_to(root)
         for lock_name in LOCKFILE_NAMES:
@@ -298,7 +342,11 @@ def check_single_lockfile_policy(root: pathlib.Path, root_package: dict) -> list
     return findings
 
 
-def check_dependency_policy(packages: dict[str, dict]) -> list[str]:
+def check_dependency_policy(
+    packages: dict[str, dict],
+    workspace_packages: list[tuple[pathlib.Path, dict]],
+    compatibility_patterns: list[str],
+) -> list[str]:
     findings: list[str] = []
 
     react_versions: list[tuple[str, str, str]] = []
@@ -322,6 +370,39 @@ def check_dependency_policy(packages: dict[str, dict]) -> list[str]:
         findings.append(f"React and ReactDOM must use one exact version everywhere: {rendered}")
 
     mobile = packages["mobile"]
+    for section in DEPENDENCY_SECTIONS:
+        dependencies = mobile.get(section) or {}
+        if not isinstance(dependencies, dict):
+            findings.append(f"apps/mobile {section} must be an object")
+            continue
+        compatibility_dependencies = {
+            dependency
+            for dependency in dependencies
+            if dependency_matches(dependency, compatibility_patterns)
+        }
+        for dependency in sorted(compatibility_dependencies):
+            value = dependencies[dependency]
+            if not valid_semver_spec(value):
+                findings.append(
+                    f"apps/mobile {section} {dependency} must use numeric semver with ^, ~, or no operator"
+                )
+
+    expected_react = react_versions[0][2]
+    for workspace_path, workspace_package in workspace_packages:
+        for section in DEPENDENCY_SECTIONS:
+            dependencies = workspace_package.get(section) or {}
+            if not isinstance(dependencies, dict):
+                continue
+            for dependency in ("react", "react-dom"):
+                if dependency not in dependencies:
+                    continue
+                value = dependencies[dependency]
+                version = numeric_version(value) if isinstance(value, str) else None
+                if version is None or version[:2] != (19, 2) or value != expected_react:
+                    findings.append(
+                        f"{workspace_path} {section} {dependency} must equal shared exact React {expected_react}"
+                    )
+
     for label, dependency, prefix, expected_major, expected_minor in MOBILE_VERSION_POLICIES:
         require_version_shape(
             findings,
@@ -391,8 +472,35 @@ def check(root: pathlib.Path) -> list[str]:
     except ValueError as exc:
         return [str(exc)]
 
-    findings.extend(check_dependency_policy(packages))
-    findings.extend(check_single_lockfile_policy(root, packages["root"]))
+    workspace_directories, workspace_findings = declared_workspace_directories(
+        root, packages["root"]
+    )
+    findings.extend(workspace_findings)
+    workspace_packages: list[tuple[pathlib.Path, dict]] = []
+    for workspace in workspace_directories:
+        try:
+            workspace_packages.append(
+                (workspace.relative_to(root), load_json(workspace / "package.json"))
+            )
+        except ValueError as exc:
+            findings.append(str(exc))
+
+    bun_updates = [
+        update
+        for update in dependabot.get("updates") or []
+        if update.get("package-ecosystem") == "bun"
+    ]
+    compatibility_patterns: list[str] = []
+    if len(bun_updates) == 1:
+        group = ((bun_updates[0].get("groups") or {}).get("expo-react-native-compatibility") or {})
+        raw_patterns = group.get("patterns") or []
+        if isinstance(raw_patterns, list):
+            compatibility_patterns = [pattern for pattern in raw_patterns if isinstance(pattern, str)]
+
+    findings.extend(
+        check_dependency_policy(packages, workspace_packages, compatibility_patterns)
+    )
+    findings.extend(check_single_lockfile_policy(root, workspace_directories))
 
     jobs = workflow.get("jobs") or {}
 
@@ -545,11 +653,6 @@ def check(root: pathlib.Path) -> list[str]:
     if e2e.get("if") != "always() && !cancelled()":
         findings.append("e2e-test hosts mobile CI guards and must remain enabled on every PR")
 
-    bun_updates = [
-        update
-        for update in dependabot.get("updates") or []
-        if update.get("package-ecosystem") == "bun"
-    ]
     if len(bun_updates) != 1 or bun_updates[0].get("directory") != "/":
         findings.append("Dependabot must have exactly one root-directory Bun updater")
     else:
@@ -571,6 +674,59 @@ def check(root: pathlib.Path) -> list[str]:
                 "Expo compatibility group misses mobile dependencies: " + ", ".join(missing_deps)
             )
         ignores = bun_update.get("ignore") or []
+        actual_mobile_deps = set(mobile_package.get("dependencies") or {}) | set(
+            mobile_package.get("devDependencies") or {}
+        )
+        compatibility_dependencies = {
+            dependency
+            for dependency in actual_mobile_deps
+            if dependency_matches(dependency, patterns)
+        }
+        for dependency in sorted(compatibility_dependencies):
+            matching_ignores = [
+                item
+                for item in ignores
+                if dependency_matches(dependency, [str(item.get("dependency-name", ""))])
+            ]
+            effective_types = {
+                update_type
+                for item in matching_ignores
+                for update_type in (item.get("update-types") or [])
+            }
+            expected_effective_types = MANUAL_UPDATE_POLICIES.get(
+                dependency, {"version-update:semver-major"}
+            )
+            if effective_types != expected_effective_types:
+                findings.append(
+                    f"Dependabot effective update policy for {dependency} must hold exactly "
+                    + ", ".join(sorted(expected_effective_types))
+                )
+            if any(item.get("versions") for item in matching_ignores):
+                findings.append(
+                    f"Dependabot compatibility ignores for {dependency} must not hold specific versions"
+                )
+            if any(
+                not item.get("update-types") and not item.get("versions")
+                for item in matching_ignores
+            ):
+                findings.append(
+                    f"Dependabot compatibility ignores for {dependency} must not hold every update"
+                )
+        for dependency, expected_update_types in MANUAL_UPDATE_POLICIES.items():
+            exact_entries = [
+                item for item in ignores if item.get("dependency-name") == dependency
+            ]
+            if len(exact_entries) != 1:
+                findings.append(
+                    f"Dependabot must define one explicit manual-update policy for {dependency}"
+                )
+                continue
+            actual_update_types = set(exact_entries[0].get("update-types") or [])
+            if actual_update_types != expected_update_types:
+                findings.append(
+                    f"Dependabot manual-update policy for {dependency} must hold "
+                    + ", ".join(sorted(expected_update_types))
+                )
         ignored_majors = {
             str(item.get("dependency-name"))
             for item in ignores
