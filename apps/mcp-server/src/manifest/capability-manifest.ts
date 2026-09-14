@@ -334,6 +334,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excluded('getAdminDeadLetterJobArgs', REASON_ADMIN),
   excluded('getAdminPaymentFailures', REASON_ADMIN),
   excluded('listAdminPlaidOrphanedItems', REASON_ADMIN),
+  excluded('listPostHogErasures', REASON_ADMIN),
   // #1584: the enumerating read over accounts the #1569 T1 pre-deletion-notice gate is holding
   // indefinitely. Excluded under the blanket admin policy — and note it is a READ, so exclusion
   // costs the agent nothing an agent could act on: the surface exists so a human operator can
@@ -344,6 +345,12 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // act on, not for an MCP client to consume.
   excluded('listAdminBudgetHierarchyAudits', REASON_ADMIN),
   excludedWrite('recordAdminPlaidOrphanedItemOperatorResolution', REASON_ADMIN),
+  // All four are operator-only actions. Even reveal is a write: the backend intentionally uses
+  // POST and commits an identity_reveal audit row before returning sensitive identifiers.
+  excludedWrite('recordPostHogErasureEvidence', REASON_ADMIN),
+  excludedWrite('replayPostHogErasure', REASON_ADMIN),
+  excludedWrite('retargetPostHogErasure', REASON_ADMIN),
+  excludedWrite('revealPostHogErasure', REASON_ADMIN),
   excluded('getSystemHealth', REASON_ADMIN),
   excluded('listAdminUsers', REASON_ADMIN),
   excluded('getAdminUserDetail', REASON_ADMIN),
