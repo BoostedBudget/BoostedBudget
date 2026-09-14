@@ -57,7 +57,7 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletionIsDurableAndConcurr
 		go func(next string) {
 			defer wg.Done()
 			<-start
-			disposition, err := repo.RecordTransactionSyncCompletion(ctx, itemID, "", &next)
+			disposition, err := repo.RecordTransactionSyncCompletion(ctx, itemID, "", 0, &next)
 			results <- struct {
 				disposition TransactionSyncCompletionDisposition
 				err         error
@@ -93,7 +93,7 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletionIsDurableAndConcurr
 		SELECT first_transaction_sync_completed_at IS NOT NULL FROM linked_items WHERE id = $1`, partialID).Scan(&completed))
 	assert.False(t, completed, "resumable partial progress is not a completed sync")
 	partialFinal := "cursor-final"
-	disposition, err := repo.RecordTransactionSyncCompletion(ctx, partialID, "cursor-partial", &partialFinal)
+	disposition, err := repo.RecordTransactionSyncCompletion(ctx, partialID, "cursor-partial", 0, &partialFinal)
 	require.NoError(t, err)
 	assert.Equal(t, TransactionSyncCompletionInitial, disposition, "the first eventual full catch-up remains initial after partial progress")
 
@@ -108,7 +108,7 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletionIsDurableAndConcurr
 	_, err = pool.Exec(ctx, `UPDATE linked_items SET cursor = '' WHERE id = $1`, itemID)
 	require.NoError(t, err)
 	recoveryCursor := "cursor-recovered"
-	disposition, err = repo.RecordTransactionSyncCompletion(ctx, itemID, "", &recoveryCursor)
+	disposition, err = repo.RecordTransactionSyncCompletion(ctx, itemID, "", 1, &recoveryCursor)
 	require.NoError(t, err)
 	assert.Equal(t, TransactionSyncCompletionRefresh, disposition)
 
@@ -123,7 +123,7 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletionIsDurableAndConcurr
 		`SELECT transaction_sync_state FROM linked_items WHERE id = $1`, relinkedID).Scan(&syncState))
 	assert.Equal(t, "never_synced", syncState)
 	relinkedCursor := "cursor-relinked"
-	disposition, err = repo.RecordTransactionSyncCompletion(ctx, relinkedID, "", &relinkedCursor)
+	disposition, err = repo.RecordTransactionSyncCompletion(ctx, relinkedID, "", 0, &relinkedCursor)
 	require.NoError(t, err)
 	assert.Equal(t, TransactionSyncCompletionInitial, disposition)
 
@@ -146,11 +146,11 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletionIsDurableAndConcurr
 				SELECT first_transaction_sync_completed_at IS NOT NULL FROM linked_items WHERE id = $1`, legacyID).Scan(&completed))
 			assert.False(t, completed)
 			legacyCompletedCursor := "legacy-completed"
-			got, recordErr := repo.RecordTransactionSyncCompletion(ctx, legacyID, legacyActivity.cursor, &legacyCompletedCursor)
+			got, recordErr := repo.RecordTransactionSyncCompletion(ctx, legacyID, legacyActivity.cursor, 0, &legacyCompletedCursor)
 			require.NoError(t, recordErr)
 			assert.Equal(t, TransactionSyncCompletionSuppressedLegacyAmbiguous, got)
 			nextRefreshCursor := "legacy-next-refresh"
-			got, recordErr = repo.RecordTransactionSyncCompletion(ctx, legacyID, legacyCompletedCursor, &nextRefreshCursor)
+			got, recordErr = repo.RecordTransactionSyncCompletion(ctx, legacyID, legacyCompletedCursor, 1, &nextRefreshCursor)
 			require.NoError(t, recordErr)
 			assert.Equal(t, TransactionSyncCompletionRefresh, got)
 		})
@@ -169,7 +169,7 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletionIsDurableAndConcurr
 		err         error
 	}, 1)
 	go func() {
-		got, recordErr := repo.RecordTransactionSyncCompletion(ctx, racingLegacyID, "", nil)
+		got, recordErr := repo.RecordTransactionSyncCompletion(ctx, racingLegacyID, "", 0, nil)
 		raceResult <- struct {
 			disposition TransactionSyncCompletionDisposition
 			err         error
@@ -231,7 +231,7 @@ func TestLinkedItemRepository_BlankFinalCompletionsLatchInitialOnce(t *testing.T
 		go func() {
 			defer wg.Done()
 			<-start
-			disposition, recordErr := repo.RecordTransactionSyncCompletion(ctx, itemID, "", nil)
+			disposition, recordErr := repo.RecordTransactionSyncCompletion(ctx, itemID, "", 0, nil)
 			results <- struct {
 				disposition TransactionSyncCompletionDisposition
 				err         error
@@ -242,17 +242,20 @@ func TestLinkedItemRepository_BlankFinalCompletionsLatchInitialOnce(t *testing.T
 	wg.Wait()
 	close(results)
 
-	firstCount, refreshCount := 0, 0
+	firstCount, staleCount := 0, 0
 	for result := range results {
-		require.NoError(t, result.err)
-		if result.disposition == TransactionSyncCompletionInitial {
+		if result.err == nil && result.disposition == TransactionSyncCompletionInitial {
 			firstCount++
-		} else if result.disposition == TransactionSyncCompletionRefresh {
-			refreshCount++
+		} else if errors.Is(result.err, ErrLinkedItemSyncStateChanged) {
+			staleCount++
 		}
 	}
 	assert.Equal(t, 1, firstCount)
-	assert.Equal(t, 1, refreshCount)
+	assert.Equal(t, 1, staleCount)
+	var generation int64
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT transaction_sync_completion_generation FROM linked_items WHERE id = $1`, itemID).Scan(&generation))
+	assert.EqualValues(t, 1, generation)
 }
 
 func TestLinkedItemRepository_TransactionSyncCompletionCutover(t *testing.T) {
@@ -282,27 +285,27 @@ func TestLinkedItemRepository_TransactionSyncCompletionCutover(t *testing.T) {
 	repo.SetTransactionSyncCompletionCutover(&cutover)
 
 	beforeID := insertNeverSynced(cutover.Add(-time.Microsecond))
-	disposition, err := repo.RecordTransactionSyncCompletion(ctx, beforeID, "", nil)
+	disposition, err := repo.RecordTransactionSyncCompletion(ctx, beforeID, "", 0, nil)
 	require.NoError(t, err)
 	assert.Equal(t, TransactionSyncCompletionSuppressedPreCutover, disposition,
 		"a new-writer item an old worker could have completed with a blank cursor must suppress")
-	disposition, err = repo.RecordTransactionSyncCompletion(ctx, beforeID, "", nil)
+	disposition, err = repo.RecordTransactionSyncCompletion(ctx, beforeID, "", 1, nil)
 	require.NoError(t, err)
 	assert.Equal(t, TransactionSyncCompletionRefresh, disposition)
 
 	equalID := insertNeverSynced(cutover)
-	disposition, err = repo.RecordTransactionSyncCompletion(ctx, equalID, "", nil)
+	disposition, err = repo.RecordTransactionSyncCompletion(ctx, equalID, "", 0, nil)
 	require.NoError(t, err)
 	assert.Equal(t, TransactionSyncCompletionInitial, disposition)
 
 	afterID := insertNeverSynced(cutover.Add(time.Microsecond))
-	disposition, err = repo.RecordTransactionSyncCompletion(ctx, afterID, "", nil)
+	disposition, err = repo.RecordTransactionSyncCompletion(ctx, afterID, "", 0, nil)
 	require.NoError(t, err)
 	assert.Equal(t, TransactionSyncCompletionInitial, disposition)
 
 	unsetRepo := NewLinkedItemRepository(pool, nil)
 	unsetID := insertNeverSynced(cutover.Add(time.Hour))
-	disposition, err = unsetRepo.RecordTransactionSyncCompletion(ctx, unsetID, "", nil)
+	disposition, err = unsetRepo.RecordTransactionSyncCompletion(ctx, unsetID, "", 0, nil)
 	require.NoError(t, err)
 	assert.Equal(t, TransactionSyncCompletionSuppressedCutoverUnset, disposition,
 		"an unset cutover must fail closed even for newly created items")

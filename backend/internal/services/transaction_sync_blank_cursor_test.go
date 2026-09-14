@@ -56,7 +56,7 @@ type memorySyncCompletionRecorder struct {
 	completed map[string]bool
 }
 
-func (r *memorySyncCompletionRecorder) RecordTransactionSyncCompletion(_ context.Context, id, _ string, _ *string) (repository.TransactionSyncCompletionDisposition, error) {
+func (r *memorySyncCompletionRecorder) RecordTransactionSyncCompletion(_ context.Context, id, _ string, _ int64, _ *string) (repository.TransactionSyncCompletionDisposition, error) {
 	if r.completed == nil {
 		r.completed = make(map[string]bool)
 	}
@@ -174,7 +174,7 @@ func TestSyncTransactions_CompletionFinalizationFailureEmitsNothing(t *testing.T
 	response.SetHasMore(false)
 	plaidService.On("TransactionsSync", ctx, "token", cursor, 0).Return(response, nil).Once()
 	after := "cursor-after"
-	linkedItems.On("RecordTransactionSyncCompletion", ctx, "item-1", cursor, &after).
+	linkedItems.On("RecordTransactionSyncCompletion", ctx, "item-1", cursor, int64(0), &after).
 		Return(repository.TransactionSyncCompletionRefresh, errors.New("commit failed")).Once()
 
 	_, err := service.SyncTransactions(ctx, item)
@@ -210,7 +210,7 @@ func TestSyncTransactions_SuppressedCompletionRecordsBoundedReasonAndEmitsNothin
 			response.SetHasMore(false)
 			plaidService.On("TransactionsSync", ctx, "token", cursor, 0).Return(response, nil).Once()
 			after := "cursor-after"
-			linkedItems.On("RecordTransactionSyncCompletion", ctx, "item-1", cursor, &after).
+			linkedItems.On("RecordTransactionSyncCompletion", ctx, "item-1", cursor, int64(0), &after).
 				Return(tc.disposition, nil).Once()
 			before := financialDataSyncCompletionSuppressionCount(t, tc.reason)
 
@@ -241,7 +241,7 @@ func TestSyncTransactions_UnknownCompletionDispositionEmitsNothing(t *testing.T)
 	response.SetHasMore(false)
 	plaidService.On("TransactionsSync", ctx, "token", cursor, 0).Return(response, nil).Once()
 	after := "cursor-after"
-	linkedItems.On("RecordTransactionSyncCompletion", ctx, "item-1", cursor, &after).
+	linkedItems.On("RecordTransactionSyncCompletion", ctx, "item-1", cursor, int64(0), &after).
 		Return(repository.TransactionSyncCompletionDisposition("unexpected"), nil).Once()
 	before := financialDataSyncCompletionSuppressionCount(t, observability.FinancialDataSyncCompletionSuppressionUnknown)
 
@@ -302,11 +302,12 @@ func TestSyncTransactions_BlankNextCursor_DoesNotOverwriteStoredCursor(t *testin
 
 	goodCursor := "cursor-earned-over-many-syncs"
 	linkedItem := &domain.LinkedItem{
-		ID:          "linked-item-123",
-		UserID:      "user-123",
-		ItemID:      "plaid-item-123",
-		AccessToken: "access-token",
-		Cursor:      &goodCursor,
+		ID:                                  "linked-item-123",
+		UserID:                              "user-123",
+		ItemID:                              "plaid-item-123",
+		AccessToken:                         "access-token",
+		Cursor:                              &goodCursor,
+		TransactionSyncCompletionGeneration: 7,
 	}
 
 	mockAccountRepo.On("GetByLinkedItemIDIncludingRetained", ctx, "linked-item-123").
@@ -324,7 +325,7 @@ func TestSyncTransactions_BlankNextCursor_DoesNotOverwriteStoredCursor(t *testin
 
 	// Permissive so an unexpected call is a readable ASSERTION failure rather than a mock panic.
 	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	mockLinkedItemRepo.On("RecordTransactionSyncCompletion", ctx, "linked-item-123", goodCursor, (*string)(nil)).
+	mockLinkedItemRepo.On("RecordTransactionSyncCompletion", ctx, "linked-item-123", goodCursor, int64(7), (*string)(nil)).
 		Return(repository.TransactionSyncCompletionRefresh, nil).Once()
 
 	result, err := service.SyncTransactions(ctx, linkedItem)
@@ -564,7 +565,7 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 	assert.Equal(t, []string{"cursor-page-1"}, persisted,
 		"exactly page 1's cursor should be persisted — never the blank")
 	assert.Nil(t, analytics.event, "partial pagination is durable progress, not a completed sync")
-	mockLinkedItemRepo.AssertNotCalled(t, "RecordTransactionSyncCompletion", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockLinkedItemRepo.AssertNotCalled(t, "RecordTransactionSyncCompletion", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	storedInSync1 := storedExternalIDs(mockTransactionRepo)
 	assert.Equal(t, 1, storedInSync1["txn-page1"],
@@ -602,7 +603,7 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_KeepsAlreadyFetchedPages(t 
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", resumedCursor, 0).
 		Return(page2Redelivered, nil).Once()
 	completedCursor := "cursor-page-2"
-	mockLinkedItemRepo.On("RecordTransactionSyncCompletion", ctx, "linked-item-multipage", resumedCursor, &completedCursor).
+	mockLinkedItemRepo.On("RecordTransactionSyncCompletion", ctx, "linked-item-multipage", resumedCursor, int64(0), &completedCursor).
 		Return(repository.TransactionSyncCompletionInitial, nil).Once()
 
 	result2, err2 := service.SyncTransactions(ctx, linkedItem)

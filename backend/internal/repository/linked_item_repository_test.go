@@ -95,7 +95,7 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
-		"status_changed_at",
+		"status_changed_at", "transaction_sync_completion_generation",
 	}).
 		AddRow(
 			uuid.New().String(), userID, "item-1", "encrypted-token-1",
@@ -103,7 +103,7 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 			&activeStatus, nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
-			nil, nil, nil,
+			nil, nil, nil, int64(0),
 		).
 		AddRow(
 			uuid.New().String(), userID, "item-2", "encrypted-token-2",
@@ -111,7 +111,7 @@ func TestLinkedItemRepository_GetByUserID(t *testing.T) {
 			&activeStatus, nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
-			nil, nil, nil,
+			nil, nil, nil, int64(0),
 		)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id").
@@ -148,14 +148,14 @@ func TestLinkedItemRepository_GetByItemID(t *testing.T) {
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
-		"status_changed_at",
+		"status_changed_at", "transaction_sync_completion_generation",
 	}).AddRow(
 		linkedItemID, userID, itemID, "encrypted-token",
 		ptrStr("ins_123"), ptrStr("Chase"), "plaid", nil, nil,
 		ptrStr("active"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		nil, nil, nil,
+		nil, nil, nil, int64(0),
 	)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE item_id_blind_idx").
@@ -230,13 +230,13 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletion(t *testing.T) {
 	repo.(*linkedItemRepository).SetTransactionSyncCompletionCutover(&cutover)
 	completedCursor := "cursor-after"
 	mockDB.ExpectQuery("UPDATE linked_items AS li").
-		WithArgs("item-1", "cursor-before", &completedCursor, &cutover).
+		WithArgs("item-1", "cursor-before", int64(0), &completedCursor, &cutover).
 		WillReturnRows(pgxmock.NewRows([]string{"completion_disposition"}).AddRow("initial"))
 
 	recorder := repo.(interface {
-		RecordTransactionSyncCompletion(context.Context, string, string, *string) (TransactionSyncCompletionDisposition, error)
+		RecordTransactionSyncCompletion(context.Context, string, string, int64, *string) (TransactionSyncCompletionDisposition, error)
 	})
-	disposition, err := recorder.RecordTransactionSyncCompletion(context.Background(), "item-1", "cursor-before", &completedCursor)
+	disposition, err := recorder.RecordTransactionSyncCompletion(context.Background(), "item-1", "cursor-before", 0, &completedCursor)
 	require.NoError(t, err)
 	assert.Equal(t, TransactionSyncCompletionInitial, disposition)
 	assert.NoError(t, mockDB.ExpectationsWereMet())
@@ -247,13 +247,13 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletionSuppressesUnsetCuto
 	defer mockDB.Close()
 
 	mockDB.ExpectQuery("UPDATE linked_items AS li").
-		WithArgs("item-1", "cursor-before", (*string)(nil), (*time.Time)(nil)).
+		WithArgs("item-1", "cursor-before", int64(0), (*string)(nil), (*time.Time)(nil)).
 		WillReturnRows(pgxmock.NewRows([]string{"completion_disposition"}).AddRow("suppressed_cutover_unset"))
 
 	recorder := repo.(interface {
-		RecordTransactionSyncCompletion(context.Context, string, string, *string) (TransactionSyncCompletionDisposition, error)
+		RecordTransactionSyncCompletion(context.Context, string, string, int64, *string) (TransactionSyncCompletionDisposition, error)
 	})
-	disposition, err := recorder.RecordTransactionSyncCompletion(context.Background(), "item-1", "cursor-before", nil)
+	disposition, err := recorder.RecordTransactionSyncCompletion(context.Background(), "item-1", "cursor-before", 0, nil)
 	require.NoError(t, err)
 	assert.Equal(t, TransactionSyncCompletionSuppressedCutoverUnset, disposition)
 	assert.NoError(t, mockDB.ExpectationsWereMet())
@@ -310,13 +310,13 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletionRejectsStaleOrTermi
 	defer mockDB.Close()
 
 	mockDB.ExpectQuery("UPDATE linked_items AS li").
-		WithArgs("item-1", "stale-cursor", (*string)(nil), (*time.Time)(nil)).
+		WithArgs("item-1", "stale-cursor", int64(0), (*string)(nil), (*time.Time)(nil)).
 		WillReturnError(pgx.ErrNoRows)
 
 	recorder := repo.(interface {
-		RecordTransactionSyncCompletion(context.Context, string, string, *string) (TransactionSyncCompletionDisposition, error)
+		RecordTransactionSyncCompletion(context.Context, string, string, int64, *string) (TransactionSyncCompletionDisposition, error)
 	})
-	_, err := recorder.RecordTransactionSyncCompletion(context.Background(), "item-1", "stale-cursor", nil)
+	_, err := recorder.RecordTransactionSyncCompletion(context.Background(), "item-1", "stale-cursor", 0, nil)
 	require.ErrorIs(t, err, ErrLinkedItemSyncStateChanged)
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
@@ -381,14 +381,14 @@ func TestLinkedItemRepository_GetByIDAndUser_Success(t *testing.T) {
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
-		"status_changed_at",
+		"status_changed_at", "transaction_sync_completion_generation",
 	}).AddRow(
 		itemID, userID, "plaid-item-123", "encrypted-token",
 		ptrStr("ins_chase"), ptrStr("Chase"), "plaid", nil, nil,
 		ptrStr("active"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		nil, nil, nil,
+		nil, nil, nil, int64(0),
 	)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE id.*AND user_id").
@@ -475,7 +475,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Active(t *testing.T) {
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
-		"status_changed_at",
+		"status_changed_at", "transaction_sync_completion_generation",
 	}).
 		AddRow(
 			itemID, userID, "item-1", "encrypted-token",
@@ -483,7 +483,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Active(t *testing.T) {
 			ptrStr("active"), nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
-			nil, nil, nil,
+			nil, nil, nil, int64(0),
 		)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status").
@@ -518,7 +518,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_NotFound(t *testing.T) {
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
-		"status_changed_at",
+		"status_changed_at", "transaction_sync_completion_generation",
 	})
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status").
@@ -554,7 +554,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Replaced(t *testing.T) {
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
-		"status_changed_at",
+		"status_changed_at", "transaction_sync_completion_generation",
 	}).
 		AddRow(
 			itemID, userID, "item-old", "encrypted-token",
@@ -562,7 +562,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_Replaced(t *testing.T) {
 			ptrStr("replaced"), nil, nil, nil, 0, nil,
 			&replacedAt, &replacedByID,
 			now, now,
-			nil, nil, nil,
+			nil, nil, nil, int64(0),
 		)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status").
@@ -659,14 +659,14 @@ func TestLinkedItemRepository_GetByUserAndInstitution_MultipleDisconnected_Retur
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
-		"status_changed_at",
+		"status_changed_at", "transaction_sync_completion_generation",
 	}).AddRow(
 		mostRecentItemID, userID, "item-recent", "encrypted-token",
 		ptrStr(institutionID), ptrStr("Chase"), "plaid", nil, nil,
 		ptrStr("disconnected"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		nil, nil, nil,
+		nil, nil, nil, int64(0),
 	)
 
 	// The regex must include ORDER BY created_at DESC to verify the fix is in place.
@@ -701,14 +701,14 @@ func TestLinkedItemRepository_GetByUserAndInstitution_SingleDisconnected_Returns
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
-		"status_changed_at",
+		"status_changed_at", "transaction_sync_completion_generation",
 	}).AddRow(
 		itemID, userID, "item-disconnected", "encrypted-token",
 		ptrStr(institutionID), ptrStr("Bank of America"), "plaid", nil, nil,
 		ptrStr("disconnected"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		nil, nil, nil,
+		nil, nil, nil, int64(0),
 	)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status.*ORDER BY created_at DESC").
@@ -741,7 +741,7 @@ func TestLinkedItemRepository_GetByUserAndInstitution_NoMatch_ReturnsNotFound(t 
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
-		"status_changed_at",
+		"status_changed_at", "transaction_sync_completion_generation",
 	})
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id.*AND institution_id_blind_idx.*AND status.*ORDER BY created_at DESC").
@@ -780,14 +780,14 @@ func TestLinkedItemRepository_GetByItemID_ReturnsInvestmentsLastSyncedDate(t *te
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
-		"status_changed_at",
+		"status_changed_at", "transaction_sync_completion_generation",
 	}).AddRow(
 		linkedItemID, userID, itemID, "encrypted-token",
 		ptrStr("ins_123"), ptrStr("Chase"), "plaid", nil, nil,
 		ptrStr("active"), nil, nil, nil, 0, nil,
 		nil, nil,
 		now, now,
-		&syncDate, nil, nil,
+		&syncDate, nil, nil, int64(0),
 	)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE item_id_blind_idx").
@@ -827,7 +827,7 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 		"replaced_at", "replaced_by_id",
 		"created_at", "updated_at",
 		"investments_last_synced_date", "liabilities_last_synced_at",
-		"status_changed_at",
+		"status_changed_at", "transaction_sync_completion_generation",
 	}).
 		AddRow(
 			uuid.New().String(), userID, "item-1", "encrypted-token-1",
@@ -835,7 +835,7 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 			ptrStr("active"), nil, nil, nil, 0, nil,
 			nil, nil,
 			now, now,
-			nil, nil, nil,
+			nil, nil, nil, int64(0),
 		).
 		AddRow(
 			uuid.New().String(), userID, "item-2", "encrypted-token-2",
@@ -843,7 +843,7 @@ func TestLinkedItemRepository_GetByUserID_IncludesAllStatuses(t *testing.T) {
 			ptrStr("replaced"), nil, nil, nil, 0, nil,
 			&now, nil,
 			now, now,
-			nil, nil, nil,
+			nil, nil, nil, int64(0),
 		)
 
 	mock.ExpectQuery("SELECT.*FROM linked_items.*WHERE user_id").
