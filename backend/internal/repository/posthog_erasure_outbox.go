@@ -52,14 +52,18 @@ func buildPostHogErasureEnvelope(enc *appcrypto.FieldEncryptor, internalUserID s
 }
 
 type PostHogErasureRecord struct {
-	ID           string
-	Identities   []string
-	PersonUUIDs  []string
-	ProjectID    string
-	Region       string
-	Phase        string
-	AttemptCount int
-	LeaseToken   string
+	ID                              string
+	Identities                      []string
+	PersonUUIDs                     []string
+	ProjectID                       string
+	Region                          string
+	Phase                           string
+	AttemptCount                    int
+	LeaseToken                      string
+	RequiresManualEventVerification bool
+	ProviderRequestStartedAt        *time.Time
+	AcceptedAt                      *time.Time
+	DeletionBaseline                map[string]*time.Time
 }
 
 type PostHogErasureBacklog struct {
@@ -115,6 +119,7 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 	var record PostHogErasureRecord
 	var encrypted string
 	var encryptedPersonUUIDs *string
+	var encryptedBaseline *string
 	err := r.db.QueryRow(ctx, `
 		WITH candidate AS (
 			SELECT id FROM posthog_erasure_outbox
@@ -130,9 +135,12 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 		    attempt_count = attempt_count + 1, updated_at = clock_timestamp(), version = version + 1
 		FROM candidate WHERE o.id = candidate.id
 		RETURNING o.id, o.identities_encrypted, o.provider_person_uuids_encrypted,
-		          o.project_id, o.region, o.phase, o.attempt_count`, now, leaseToken, lease.String()).Scan(
-		&record.ID, &encrypted, &encryptedPersonUUIDs, &record.ProjectID, &record.Region,
-		&record.Phase, &record.AttemptCount)
+		          o.provider_deletion_baseline_encrypted,
+		          o.project_id, o.region, o.phase, o.attempt_count,
+		          o.requires_manual_event_verification, o.provider_request_started_at, o.accepted_at`, now, leaseToken, lease.String()).Scan(
+		&record.ID, &encrypted, &encryptedPersonUUIDs, &encryptedBaseline, &record.ProjectID, &record.Region,
+		&record.Phase, &record.AttemptCount, &record.RequiresManualEventVerification,
+		&record.ProviderRequestStartedAt, &record.AcceptedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -162,6 +170,15 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 			return nil, fmt.Errorf("claim PostHog erasure failed: correlation_decryption")
 		}
 	}
+	if encryptedBaseline != nil {
+		raw, err = r.enc.DecryptJSON(*encryptedBaseline)
+		if err != nil || json.Unmarshal(raw, &record.DeletionBaseline) != nil {
+			if deadLetterErr := r.deadLetterClaim(ctx, record.ID, leaseToken, "correlation_decryption"); deadLetterErr != nil {
+				return nil, deadLetterErr
+			}
+			return nil, fmt.Errorf("claim PostHog erasure failed: correlation_decryption")
+		}
+	}
 	return &record, nil
 }
 
@@ -180,7 +197,7 @@ func (r *PostHogErasureOutboxRepository) deadLetterClaim(ctx context.Context, id
 // MarkAccepted records only that PostHog accepted the documented asynchronous person/event/
 // recording deletion request. Support has no documented server deletion endpoint, so acceptance
 // deliberately transitions to manual_pending and can never be mistaken for completion.
-func (r *PostHogErasureOutboxRepository) MarkPersonUUIDsResolved(ctx context.Context, id, leaseToken string, personUUIDs []string) (bool, error) {
+func (r *PostHogErasureOutboxRepository) MarkPersonUUIDsResolved(ctx context.Context, id, leaseToken string, personUUIDs []string, hasUnresolved bool) (bool, error) {
 	raw, err := json.Marshal(personUUIDs)
 	if err != nil {
 		return false, fmt.Errorf("encode PostHog person UUIDs: %w", err)
@@ -190,14 +207,48 @@ func (r *PostHogErasureOutboxRepository) MarkPersonUUIDsResolved(ctx context.Con
 		return false, fmt.Errorf("encrypt PostHog person UUIDs: %w", err)
 	}
 	tag, err := r.db.Exec(ctx, `
-		UPDATE posthog_erasure_outbox SET provider_person_uuids_encrypted=$3, phase='person_delete',
+		UPDATE posthog_erasure_outbox SET provider_person_uuids_encrypted=$3,
+		    requires_manual_event_verification=$4, phase='person_delete',
 		    state='retrying', next_attempt_at=clock_timestamp(), lease_token=NULL, lease_until=NULL,
 		    last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
-		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying')`, id, leaseToken, ciphertext)
+		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying')`, id, leaseToken, ciphertext, hasUnresolved)
 	if err != nil {
 		return false, fmt.Errorf("record PostHog person UUID resolution: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+func (r *PostHogErasureOutboxRepository) MarkDeletionRequestStarted(ctx context.Context, id, leaseToken string, baseline map[string]*time.Time) (time.Time, bool, error) {
+	raw, err := json.Marshal(baseline)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("encode PostHog deletion baseline: %w", err)
+	}
+	ciphertext, err := r.enc.EncryptJSON(raw)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("encrypt PostHog deletion baseline: %w", err)
+	}
+	hasExisting := false
+	for _, createdAt := range baseline {
+		if createdAt != nil {
+			hasExisting = true
+			break
+		}
+	}
+	var started time.Time
+	err = r.db.QueryRow(ctx, `UPDATE posthog_erasure_outbox
+		SET provider_request_started_at=COALESCE(provider_request_started_at,clock_timestamp()),
+		    provider_deletion_baseline_encrypted=COALESCE(provider_deletion_baseline_encrypted,$3),
+		    requires_manual_event_verification=requires_manual_event_verification OR $4,
+		    updated_at=clock_timestamp(),version=version+1
+		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying') AND phase='person_delete'
+		RETURNING provider_request_started_at`, id, leaseToken, ciphertext, hasExisting).Scan(&started)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("record PostHog deletion request start: %w", err)
+	}
+	return started, true, nil
 }
 
 func (r *PostHogErasureOutboxRepository) MarkAccepted(ctx context.Context, id, leaseToken string, resolvedPersons int) (bool, error) {
@@ -238,7 +289,10 @@ func (r *PostHogErasureOutboxRepository) RecordPollPending(ctx context.Context, 
 }
 
 func (r *PostHogErasureOutboxRepository) MarkPersonEventsVerified(ctx context.Context, id, leaseToken string) (bool, error) {
-	tag, err := r.db.Exec(ctx, `UPDATE posthog_erasure_outbox SET state='manual_pending', phase='support_manual', events_verified_at=clock_timestamp(), lease_token=NULL, lease_until=NULL, last_error_class=NULL, updated_at=clock_timestamp(), version=version+1 WHERE id=$1 AND lease_token=$2 AND phase='person_poll'`, id, leaseToken)
+	tag, err := r.db.Exec(ctx, `UPDATE posthog_erasure_outbox SET state='manual_pending', phase='support_manual',
+		events_verified_at=CASE WHEN requires_manual_event_verification THEN NULL ELSE clock_timestamp() END,
+		lease_token=NULL, lease_until=NULL, last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
+		WHERE id=$1 AND lease_token=$2 AND phase='person_poll'`, id, leaseToken)
 	return tag.RowsAffected() == 1, err
 }
 
@@ -289,6 +343,7 @@ func (r *PostHogErasureOutboxRepository) RecordOperatorEvidence(ctx context.Cont
 	if err = tx.QueryRow(ctx, `UPDATE posthog_erasure_outbox SET
 		state='completed', phase='complete', completed_at=clock_timestamp(),
 		identities_encrypted=NULL, provider_person_uuids_encrypted=NULL,
+		provider_deletion_baseline_encrypted=NULL,
 		last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
 		WHERE id=$1 AND state='manual_pending' AND person_verified_at IS NOT NULL
 		  AND events_verified_at IS NOT NULL AND recordings_verified_at IS NOT NULL
@@ -313,11 +368,21 @@ func (r *PostHogErasureOutboxRepository) RetargetUnconfigured(ctx context.Contex
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	var priorProject, priorRegion string
+	err = tx.QueryRow(ctx, `SELECT project_id,region FROM posthog_erasure_outbox
+		WHERE id=$1 AND (project_id='unconfigured' OR region='unconfigured')
+		  AND accepted_at IS NULL AND state IN ('pending','retrying','dead_letter') FOR UPDATE`, id).
+		Scan(&priorProject, &priorRegion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read PostHog erasure target: %w", err)
+	}
 	tag, err := tx.Exec(ctx, `UPDATE posthog_erasure_outbox SET project_id=$2, region=$3,
 		state='retrying', phase='person_resolve', next_attempt_at=clock_timestamp(),
 		last_error_class=NULL, lease_token=NULL, lease_until=NULL, updated_at=clock_timestamp(), version=version+1
-		WHERE id=$1 AND project_id='unconfigured' AND region='unconfigured'
-		  AND accepted_at IS NULL AND state IN ('pending','retrying','dead_letter')`, id, projectID, region)
+		WHERE id=$1 AND accepted_at IS NULL`, id, projectID, region)
 	if err != nil {
 		return false, fmt.Errorf("retarget PostHog erasure: %w", err)
 	}
@@ -327,7 +392,7 @@ func (r *PostHogErasureOutboxRepository) RetargetUnconfigured(ctx context.Contex
 	operatorHash := r.enc.BlindIndexWithLabel("posthog_erasure_operator_v1", operatorID)
 	_, err = tx.Exec(ctx, `INSERT INTO posthog_erasure_operator_audit
 		(erasure_id,operator_hash,action,from_project_id,from_region,to_project_id,to_region)
-		VALUES ($1,$2,'retarget','unconfigured','unconfigured',$3,$4)`, id, operatorHash, projectID, region)
+		VALUES ($1,$2,'retarget',$3,$4,$5,$6)`, id, operatorHash, priorProject, priorRegion, projectID, region)
 	if err != nil {
 		return false, fmt.Errorf("audit PostHog erasure retarget: %w", err)
 	}

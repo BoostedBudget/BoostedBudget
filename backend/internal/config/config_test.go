@@ -75,6 +75,33 @@ func TestLoad_PostHogIngestionRequiresCompleteErasureConfiguration(t *testing.T)
 	})
 }
 
+func TestLoad_PostHogIngestionAndErasureRegionsMustMatch(t *testing.T) {
+	for _, tc := range []struct {
+		ingestion, private string
+		wantErr            bool
+	}{
+		{"https://us.i.posthog.com", "https://us.posthog.com", false},
+		{"https://eu.i.posthog.com", "https://eu.posthog.com", false},
+		{"https://us.i.posthog.com", "https://eu.posthog.com", true},
+		{"https://eu.i.posthog.com", "https://us.posthog.com", true},
+	} {
+		t.Run(tc.ingestion+tc.private, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", "development")
+			t.Setenv("POSTHOG_API_KEY", "phc_enabled")
+			t.Setenv("POSTHOG_PERSONAL_API_KEY", "phx_private")
+			t.Setenv("POSTHOG_PROJECT_ID", "42")
+			t.Setenv("POSTHOG_HOST", tc.ingestion)
+			t.Setenv("POSTHOG_PRIVATE_HOST", tc.private)
+			_, err := Load()
+			if tc.wantErr {
+				require.ErrorContains(t, err, "same region")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestLoad_PostHogSyncCompletionCutover(t *testing.T) {
 	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("POSTHOG_SYNC_COMPLETION_CUTOVER_AT", "2026-09-13T20:15:00Z")

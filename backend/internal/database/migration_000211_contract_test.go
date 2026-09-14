@@ -27,6 +27,9 @@ func TestMigration000211_PostHogErasureOutboxContract(t *testing.T) {
 		"identity_reveal",
 		"'replay'",
 		"events_first_verified_at",
+		"requires_manual_event_verification BOOLEAN NOT NULL DEFAULT FALSE",
+		"provider_request_started_at TIMESTAMPTZ",
+		"provider_deletion_baseline_encrypted TEXT",
 		"identities_encrypted IS NULL",
 	} {
 		assert.Contains(t, sql, fragment)

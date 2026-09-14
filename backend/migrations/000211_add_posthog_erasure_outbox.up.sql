@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS posthog_erasure_outbox (
     idempotency_key TEXT NOT NULL,
     identities_encrypted TEXT,
     provider_person_uuids_encrypted TEXT,
+    provider_deletion_baseline_encrypted TEXT,
     project_id TEXT NOT NULL,
     region TEXT NOT NULL,
     state TEXT NOT NULL DEFAULT 'pending',
@@ -15,7 +16,9 @@ CREATE TABLE IF NOT EXISTS posthog_erasure_outbox (
     last_error_class TEXT,
     provider_request_id TEXT,
     provider_status TEXT,
+    provider_request_started_at TIMESTAMPTZ,
     accepted_at TIMESTAMPTZ,
+    requires_manual_event_verification BOOLEAN NOT NULL DEFAULT FALSE,
     person_verified_at TIMESTAMPTZ,
     events_verified_at TIMESTAMPTZ,
     events_first_verified_at TIMESTAMPTZ,
@@ -37,6 +40,7 @@ CREATE TABLE IF NOT EXISTS posthog_erasure_outbox (
     CONSTRAINT uq_posthog_erasure_outbox_idempotency UNIQUE (idempotency_key),
     CONSTRAINT ck_posthog_erasure_outbox_ciphertext CHECK (identities_encrypted IS NULL OR identities_encrypted LIKE 'ENC$%'),
     CONSTRAINT ck_posthog_erasure_outbox_person_ciphertext CHECK (provider_person_uuids_encrypted IS NULL OR provider_person_uuids_encrypted LIKE 'ENC$%'),
+    CONSTRAINT ck_posthog_erasure_outbox_baseline_ciphertext CHECK (provider_deletion_baseline_encrypted IS NULL OR provider_deletion_baseline_encrypted LIKE 'ENC$%'),
     CONSTRAINT ck_posthog_erasure_outbox_state CHECK (state IN ('pending', 'retrying', 'manual_pending', 'completed', 'dead_letter')),
     CONSTRAINT ck_posthog_erasure_outbox_phase CHECK (phase IN ('person_resolve', 'person_delete', 'person_poll', 'support_manual', 'complete')),
     CONSTRAINT ck_posthog_erasure_outbox_attempts CHECK (attempt_count >= 0),
@@ -49,6 +53,7 @@ CREATE TABLE IF NOT EXISTS posthog_erasure_outbox (
         OR
         (state = 'completed' AND phase = 'complete' AND completed_at IS NOT NULL
          AND identities_encrypted IS NULL AND provider_person_uuids_encrypted IS NULL
+         AND provider_deletion_baseline_encrypted IS NULL
          AND person_verified_at IS NOT NULL AND events_verified_at IS NOT NULL
          AND recordings_verified_at IS NOT NULL AND surveys_verified_at IS NOT NULL
          AND support_verified_at IS NOT NULL)

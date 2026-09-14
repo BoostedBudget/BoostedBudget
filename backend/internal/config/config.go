@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -414,6 +415,15 @@ func Load() (*Config, error) {
 		privateURL, err := url.Parse(cfg.PostHogPrivateHost)
 		if err != nil || privateURL.Scheme != "https" || (privateURL.Hostname() != "us.posthog.com" && privateURL.Hostname() != "eu.posthog.com") {
 			return nil, fmt.Errorf("POSTHOG_PRIVATE_HOST must be an allowlisted PostHog HTTPS host when ingestion is enabled")
+		}
+		ingestionURL, err := url.Parse(cfg.PostHogHost)
+		if err != nil || ingestionURL.Scheme != "https" {
+			return nil, fmt.Errorf("POSTHOG_HOST must be a valid PostHog HTTPS ingestion host")
+		}
+		ingestionRegion := map[string]string{"us.i.posthog.com": "us", "eu.i.posthog.com": "eu"}[strings.ToLower(ingestionURL.Hostname())]
+		privateRegion := strings.TrimSuffix(strings.ToLower(privateURL.Hostname()), ".posthog.com")
+		if ingestionRegion == "" || ingestionRegion != privateRegion {
+			return nil, fmt.Errorf("POSTHOG_HOST and POSTHOG_PRIVATE_HOST must target the same region")
 		}
 	}
 

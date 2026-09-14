@@ -22,6 +22,14 @@ The worker uses only PostHog's documented private API on the configured regional
 - [`GET /api/projects/:project_id/persons/?distinct_id=...`](https://posthog.com/docs/api/persons) resolves every historical distinct ID to a stable person UUID before deletion. The UUIDs are encrypted because the bulk response has no request/correlation ID.
 - [`GET /api/projects/:project_id/persons/deletion_status/?person_uuid=...&status=all`](https://posthog.com/docs/api/persons#get-api-projects-project_id-persons-deletion_status) exposes asynchronous **event** deletion status and `delete_verified_at`; it needs `person:read`. The worker polls every resolved UUID. This endpoint does not verify recordings.
 
+`deletion_status` has no bulk-request correlation ID. Before the POST, the worker stores an
+encrypted per-person baseline of the current deletion-status record and a database-clock request
+start. A retry after a crash reuses that persisted baseline; it never captures a new baseline after
+the destructive call may have succeeded. The worker follows validated pagination and selects only
+the record relevant to the persisted baseline/submission window. If a person already had a deletion
+record, or any distinct ID did not resolve to a person, automatic event verification remains
+insufficient and the row requires twice-separated manual `events` evidence.
+
 PostHog documents no public API for deleting an individual Support conversation/ticket/message and
 no public API for deleting an individual survey response. Survey responses may be represented as
 events, but BoostedBudget does not assume that event deletion proves every survey-owned view is
@@ -47,6 +55,8 @@ The official capability references are the [Persons API](https://posthog.com/doc
    targets. Responses are `Cache-Control: no-store`. For a legacy `unconfigured` row, call
    `POST /api/v1/admin/posthog-erasure/{id}/retarget` with a project and `us`/`eu` region. Retarget
    is refused after provider acceptance and is audited with an operator hash and database clock.
+   Ingestion and erasure hosts must be configured for the same PostHog region (`us` with `us`, or
+   `eu` with `eu`); startup fails closed on a mismatch.
 3. Call `POST /api/v1/admin/posthog-erasure/{id}/reveal` for the distinct IDs and resolved person
    UUIDs needed for provider searches. This sensitive reveal is audited and returned `no-store`;
    never paste its response into logs or tickets.
@@ -57,11 +67,12 @@ The official capability references are the [Persons API](https://posthog.com/doc
    tools for every distinct ID and confirm zero person, event/survey-response, recording, survey
    response, Support ticket, conversation, and message results. Request provider-side Support or
    survey cleanup when any remains.
-5. For each of `recordings`, `surveys`, and `support`, call
+5. For each of `recordings`, `surveys`, and `support`—and `events` whenever the detail/reveal
+   workflow shows that manual event verification is required—call
    `POST /api/v1/admin/posthog-erasure/{id}/evidence` with bounded evidence `provider_zero` or
    `provider_case_deleted`. Repeat each check after at least five minutes. Completion is automatic
-   only after all three second confirmations plus person/event verification; that same atomic
-   update nulls both identity ciphertext columns.
+   only after every required second confirmation plus person/event verification; that same atomic
+   update nulls the identity, person-UUID, and deletion-baseline ciphertext columns.
 
 If resolution finds no person (including an event-only distinct ID), the worker still submits the
 documented bulk delete by distinct ID. Because PostHog exposes no deletion-status correlation for

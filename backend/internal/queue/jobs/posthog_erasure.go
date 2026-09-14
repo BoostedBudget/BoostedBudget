@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	postHogErasureLease       = 2 * time.Minute
-	postHogErasureMaxAttempts = 12
-	postHogErasureMaxBackoff  = 24 * time.Hour
+	postHogErasureLease        = 2 * time.Minute
+	postHogErasureMaxAttempts  = 12
+	postHogErasureMaxBackoff   = 24 * time.Hour
+	postHogErasurePhaseTimeout = 90 * time.Second
 )
 
 type PostHogErasureArgs struct {
@@ -29,7 +30,8 @@ func (PostHogErasureArgs) Kind() string { return "posthog_erasure" }
 
 type postHogErasureStore interface {
 	ClaimDue(context.Context, time.Time, time.Duration) (*repository.PostHogErasureRecord, error)
-	MarkPersonUUIDsResolved(context.Context, string, string, []string) (bool, error)
+	MarkPersonUUIDsResolved(context.Context, string, string, []string, bool) (bool, error)
+	MarkDeletionRequestStarted(context.Context, string, string, map[string]*time.Time) (time.Time, bool, error)
 	MarkAccepted(context.Context, string, string, int) (bool, error)
 	RecordPollPending(context.Context, string, string) (bool, error)
 	MarkPersonEventsVerified(context.Context, string, string) (bool, error)
@@ -37,9 +39,10 @@ type postHogErasureStore interface {
 }
 
 type postHogErasureProvider interface {
-	ResolvePersonUUIDs(context.Context, string, string, []string) ([]string, error)
+	ResolvePersonUUIDs(context.Context, string, string, []string) (phclient.ErasurePersonResolution, error)
+	CapturePersonEventDeletionBaseline(context.Context, string, string, []string) (map[string]*time.Time, error)
 	RequestPersonDeletion(context.Context, string, string, []string) (phclient.ErasureDeleteResult, error)
-	PersonEventDeletionComplete(context.Context, string, string, []string) (bool, error)
+	PersonEventDeletionStatus(context.Context, string, string, []string, map[string]*time.Time, time.Time, time.Time) (phclient.ErasureDeletionObservation, error)
 }
 
 type postHogErasureBacklogStore interface {
@@ -86,19 +89,25 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 	if w.provider == nil {
 		return w.persistRetry(ctx, record, "configuration", 0)
 	}
+	phaseCtx, cancel := context.WithTimeout(ctx, postHogErasurePhaseTimeout)
+	defer cancel()
+	if err = phaseCtx.Err(); err != nil {
+		class, retryAfter := classifyErasureFailure(err)
+		return w.persistRetry(ctx, record, class, retryAfter)
+	}
 	switch record.Phase {
 	case "person_resolve":
-		var personUUIDs []string
-		personUUIDs, err = w.provider.ResolvePersonUUIDs(ctx, record.ProjectID, record.Region, record.Identities)
+		var resolution phclient.ErasurePersonResolution
+		resolution, err = w.provider.ResolvePersonUUIDs(phaseCtx, record.ProjectID, record.Region, record.Identities)
 		if err == nil {
 			var updated bool
-			updated, err = w.store.MarkPersonUUIDsResolved(ctx, record.ID, record.LeaseToken, personUUIDs)
+			updated, err = w.store.MarkPersonUUIDsResolved(ctx, record.ID, record.LeaseToken, resolution.PersonUUIDs, resolution.HasUnresolvedIdentities)
 			if err == nil && !updated {
 				err = fmt.Errorf("PostHog erasure lease lost")
 			}
 			if err == nil {
 				outcome := "accepted"
-				if len(personUUIDs) == 0 {
+				if len(resolution.PersonUUIDs) == 0 {
 					outcome = "failure"
 				}
 				observability.RecordPostHogErasureAttempt("person_resolve", outcome, "none")
@@ -106,13 +115,42 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 			}
 		}
 	case "person_delete":
+		baseline := record.DeletionBaseline
+		if record.ProviderRequestStartedAt == nil {
+			baseline, err = w.provider.CapturePersonEventDeletionBaseline(phaseCtx, record.ProjectID, record.Region, record.PersonUUIDs)
+			if err != nil {
+				break
+			}
+		}
+		var startedAt time.Time
+		var updated bool
+		startedAt, updated, err = w.store.MarkDeletionRequestStarted(ctx, record.ID, record.LeaseToken, baseline)
+		if err == nil && !updated {
+			err = fmt.Errorf("PostHog erasure lease lost")
+		}
+		if err != nil {
+			break
+		}
+		if err = phaseCtx.Err(); err != nil {
+			break
+		}
 		var result phclient.ErasureDeleteResult
-		result, err = w.provider.RequestPersonDeletion(ctx, record.ProjectID, record.Region, record.Identities)
+		result, err = w.provider.RequestPersonDeletion(phaseCtx, record.ProjectID, record.Region, record.Identities)
 		if err == nil && (result.PersonsFound != len(record.PersonUUIDs) || result.PersonsDeleted != len(record.PersonUUIDs)) {
-			err = &phclient.ErasureProviderError{Class: "invalid_response"}
+			if result.PersonsFound == 0 && result.PersonsDeleted == 0 && len(record.PersonUUIDs) > 0 {
+				if err = phaseCtx.Err(); err != nil {
+					break
+				}
+				var observation phclient.ErasureDeletionObservation
+				observation, err = w.provider.PersonEventDeletionStatus(phaseCtx, record.ProjectID, record.Region, record.PersonUUIDs, baseline, startedAt, w.now())
+				if err == nil && !observation.Found {
+					err = &phclient.ErasureProviderError{Class: "invalid_response"}
+				}
+			} else {
+				err = &phclient.ErasureProviderError{Class: "invalid_response"}
+			}
 		}
 		if err == nil {
-			var updated bool
 			updated, err = w.store.MarkAccepted(ctx, record.ID, record.LeaseToken, len(record.PersonUUIDs))
 			if err == nil && !updated {
 				err = fmt.Errorf("PostHog erasure lease lost")
@@ -123,9 +161,17 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 			}
 		}
 	case "person_poll":
-		var complete bool
-		complete, err = w.provider.PersonEventDeletionComplete(ctx, record.ProjectID, record.Region, record.PersonUUIDs)
-		if err == nil && !complete {
+		if record.AcceptedAt == nil {
+			err = fmt.Errorf("PostHog erasure accepted timestamp missing")
+			break
+		}
+		var observation phclient.ErasureDeletionObservation
+		submittedAt := *record.AcceptedAt
+		if record.ProviderRequestStartedAt != nil {
+			submittedAt = *record.ProviderRequestStartedAt
+		}
+		observation, err = w.provider.PersonEventDeletionStatus(phaseCtx, record.ProjectID, record.Region, record.PersonUUIDs, record.DeletionBaseline, submittedAt, *record.AcceptedAt)
+		if err == nil && (!observation.Found || !observation.Complete) {
 			updated, updateErr := w.store.RecordPollPending(ctx, record.ID, record.LeaseToken)
 			if updateErr != nil {
 				return updateErr
