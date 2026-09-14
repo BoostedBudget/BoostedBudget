@@ -2050,7 +2050,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO posthog_erasure_outbox
 			(idempotency_key, identities_encrypted, project_id, region, state, phase)
-		VALUES ($1, $2, $3, $4, 'pending', 'person_delete')
+		VALUES ($1, $2, $3, $4, 'pending', 'person_resolve')
 		ON CONFLICT (idempotency_key) DO NOTHING`,
 		erasureEnvelope.IdempotencyKey, erasureEnvelope.Ciphertext,
 		r.postHogProjectID, r.postHogRegion); err != nil {

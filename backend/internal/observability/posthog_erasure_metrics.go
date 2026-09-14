@@ -23,7 +23,7 @@ var (
 var postHogErasureStates = []string{"pending", "retrying", "manual_pending", "dead_letter", "completed"}
 
 func RecordPostHogErasureAttempt(phase, outcome, errorClass string) {
-	if phase != "person_delete" && phase != "person_poll" && phase != "support_manual" {
+	if phase != "person_resolve" && phase != "person_delete" && phase != "person_poll" && phase != "support_manual" {
 		phase = "unknown"
 	}
 	if outcome != "accepted" && outcome != "retry" && outcome != "dead_letter" {

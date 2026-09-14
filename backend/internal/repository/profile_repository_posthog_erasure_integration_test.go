@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,4 +81,37 @@ func TestDeleteUserCascade_Integration_OutboxInsertFailureRollsBackLocalErasure(
 	var count int
 	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM posthog_erasure_outbox WHERE project_id=$1", project).Scan(&count))
 	assert.Zero(t, count)
+}
+
+func TestPostHogErasureOperatorCompletion_IntegrationAtomicallyDestroysIdentity(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewPostHogErasureOutboxRepository(pool, enc)
+	ctx := context.Background()
+	id := uuid.NewString()
+	identities, err := enc.EncryptJSON([]byte(`["clerk_secret"]`))
+	require.NoError(t, err)
+	personUUIDs, err := enc.EncryptJSON([]byte(`["11111111-1111-4111-8111-111111111111"]`))
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO posthog_erasure_outbox
+		(id,idempotency_key,identities_encrypted,provider_person_uuids_encrypted,project_id,region,state,phase,
+		 accepted_at,person_verified_at,events_verified_at,recordings_first_verified_at,surveys_first_verified_at,support_first_verified_at)
+		VALUES($1,$2,$3,$4,'42','us','manual_pending','support_manual',clock_timestamp(),clock_timestamp(),clock_timestamp(),
+		 clock_timestamp()-interval '6 minutes',clock_timestamp()-interval '6 minutes',clock_timestamp()-interval '6 minutes')`,
+		id, "completion:"+id, identities, personUUIDs)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_operator_audit WHERE erasure_id=$1", id)
+		_, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_outbox WHERE id=$1", id)
+	})
+	for _, surface := range []string{"recordings", "surveys", "support"} {
+		_, err = repo.RecordOperatorEvidence(ctx, id, uuid.NewString(), surface, "provider_zero")
+		require.NoError(t, err)
+	}
+	var state string
+	var remainingIdentities, remainingUUIDs *string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT state,identities_encrypted,provider_person_uuids_encrypted FROM posthog_erasure_outbox WHERE id=$1`, id).Scan(&state, &remainingIdentities, &remainingUUIDs))
+	assert.Equal(t, "completed", state)
+	assert.Nil(t, remainingIdentities)
+	assert.Nil(t, remainingUUIDs)
 }

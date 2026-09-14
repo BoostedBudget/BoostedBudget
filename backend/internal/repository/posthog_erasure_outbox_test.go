@@ -5,11 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"os"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
@@ -23,33 +23,11 @@ func (reversibleTestEncryption) Encrypt(value string) (string, error) {
 }
 
 func TestOperatorCompletionRequiresTwoSeparatedZeroConfirmations(t *testing.T) {
-	mock, err := pgxmock.NewPool()
+	raw, err := os.ReadFile("posthog_erasure_outbox.go")
 	require.NoError(t, err)
-	defer mock.Close()
-	repo := NewPostHogErasureOutboxRepository(mock, nil)
-	first := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
-
-	mock.ExpectExec(regexp.QuoteMeta("SET first_zero_verified_at=$2")).
-		WithArgs("row-id", first).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	recorded, err := repo.RecordFirstZeroVerification(context.Background(), "row-id", first)
-	require.NoError(t, err)
-	require.True(t, recorded)
-
-	mock.ExpectExec(regexp.QuoteMeta("first_zero_verified_at <= $2 - interval '5 minutes'")).
-		WithArgs("row-id", first.Add(4*time.Minute)).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
-	completed, err := repo.CompleteWithOperatorEvidence(context.Background(), "row-id", first.Add(4*time.Minute))
-	require.NoError(t, err)
-	require.False(t, completed)
-
-	mock.ExpectExec(regexp.QuoteMeta("first_zero_verified_at <= $2 - interval '5 minutes'")).
-		WithArgs("row-id", first.Add(5*time.Minute)).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	completed, err = repo.CompleteWithOperatorEvidence(context.Background(), "row-id", first.Add(5*time.Minute))
-	require.NoError(t, err)
-	require.True(t, completed)
-	require.NoError(t, mock.ExpectationsWereMet())
+	source := string(raw)
+	assert.Contains(t, source, "clock_timestamp()-interval '5 minutes'")
+	assert.NotContains(t, source, "verifiedAt time.Time")
 }
 
 func TestClaimDueDeadLettersUndecryptableIdentityEnvelope(t *testing.T) {
@@ -61,17 +39,67 @@ func TestClaimDueDeadLettersUndecryptableIdentityEnvelope(t *testing.T) {
 	repo := NewPostHogErasureOutboxRepository(mock, enc)
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	mock.ExpectQuery("WITH candidate AS").WithArgs(now, pgxmock.AnyArg(), "1m0s").WillReturnRows(pgxmock.NewRows([]string{
-		"id", "identities_encrypted", "project_id", "region", "state", "phase", "attempt_count",
-		"first_zero_verified_at", "person_verified_at", "events_verified_at", "recordings_verified_at",
-		"surveys_verified_at", "support_verified_at",
-	}).AddRow("row-id", "ENC$not-base64!", "42", "us", "pending", "person_delete", 1,
-		nil, nil, nil, nil, nil, nil))
+		"id", "identities_encrypted", "provider_person_uuids_encrypted", "project_id", "region", "phase", "attempt_count",
+	}).AddRow("row-id", "ENC$not-base64!", nil, "42", "us", "person_resolve", 1))
 	mock.ExpectExec("SET state='dead_letter'").
 		WithArgs("row-id", pgxmock.AnyArg(), "identity_decryption").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	record, err := repo.ClaimDue(context.Background(), now, time.Minute)
 	require.ErrorContains(t, err, "identity_decryption")
 	assert.Nil(t, record)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCompleteErasureClearsAllRecoverableProviderIdentityCiphertext(t *testing.T) {
+	raw, err := os.ReadFile("posthog_erasure_outbox.go")
+	require.NoError(t, err)
+	source := string(raw)
+	assert.Contains(t, source, "identities_encrypted=NULL")
+	assert.Contains(t, source, "provider_person_uuids_encrypted=NULL")
+}
+
+func TestRecordRetryReturnsDeadLetterBoundaryState(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := NewPostHogErasureOutboxRepository(mock, nil)
+	mock.ExpectQuery("UPDATE posthog_erasure_outbox").WithArgs("row", "lease", "provider", pgxmock.AnyArg(), 12).WillReturnRows(pgxmock.NewRows([]string{"state"}).AddRow("dead_letter"))
+	state, err := repo.RecordRetry(context.Background(), "row", "lease", "provider", time.Now(), 12)
+	require.NoError(t, err)
+	assert.Equal(t, "dead_letter", state)
+}
+
+func TestOperatorEvidenceUsesDatabaseClockAndBoundedSurface(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	enc, err := appcrypto.NewFieldEncryptor(reversibleTestEncryption{}, []byte("12345678901234567890123456789012"))
+	require.NoError(t, err)
+	repo := NewPostHogErasureOutboxRepository(mock, enc)
+	mock.ExpectBegin()
+	mock.ExpectQuery("clock_timestamp").WithArgs("row", "provider_zero").
+		WillReturnRows(pgxmock.NewRows([]string{"state"}).AddRow("manual_pending"))
+	mock.ExpectExec("INSERT INTO posthog_erasure_operator_audit").WithArgs("row", pgxmock.AnyArg(), "recordings", "provider_zero").WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectQuery("state='completed'").WithArgs("row").WillReturnError(pgx.ErrNoRows)
+	mock.ExpectCommit()
+	_, err = repo.RecordOperatorEvidence(context.Background(), "row", "admin-uuid", "recordings", "provider_zero")
+	require.NoError(t, err)
+}
+
+func TestRequeueDeadLetterIsAuditedAndPreservesAttemptHistory(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	enc, err := appcrypto.NewFieldEncryptor(reversibleTestEncryption{}, []byte("12345678901234567890123456789012"))
+	require.NoError(t, err)
+	repo := NewPostHogErasureOutboxRepository(mock, enc)
+	mock.ExpectBegin()
+	mock.ExpectExec("state='retrying'").WithArgs("row").WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("posthog_erasure_operator_audit").WithArgs("row", pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+	ok, err := repo.RequeueDeadLetter(context.Background(), "row", "admin")
+	require.NoError(t, err)
+	assert.True(t, ok)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

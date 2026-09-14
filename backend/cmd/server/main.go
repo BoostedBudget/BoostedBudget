@@ -2672,6 +2672,7 @@ func main() {
 			// is holding indefinitely. Without this the endpoint registers and answers 503 — the
 			// same shape the other optional admin dependencies use.
 			WithRetentionWithheldReader(profileRepo).
+			WithPostHogErasureOperator(postHogErasureRepo).
 			// Issue #1630 Task B7: the enumerating read over budgets the hierarchy audit has
 			// flagged for a human. budgetRepo already implements
 			// operations.BudgetHierarchyAuditReader via ListBudgetHierarchyAuditFindings.

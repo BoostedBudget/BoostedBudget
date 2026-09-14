@@ -401,6 +401,22 @@ func Load() (*Config, error) {
 		)
 	}
 
+	// Capturing new analytics while lacking the credentials needed to honour an erasure request
+	// creates an obligation the deployment cannot discharge. Enforce this relationship in every
+	// environment so a staging or local configuration cannot silently exercise a weaker policy.
+	if cfg.PostHogAPIKey != "" {
+		if cfg.PostHogPersonalAPIKey == "" {
+			return nil, fmt.Errorf("POSTHOG_PERSONAL_API_KEY is required when POSTHOG_API_KEY enables ingestion")
+		}
+		if cfg.PostHogProjectID == "" {
+			return nil, fmt.Errorf("POSTHOG_PROJECT_ID is required when POSTHOG_API_KEY enables ingestion")
+		}
+		privateURL, err := url.Parse(cfg.PostHogPrivateHost)
+		if err != nil || privateURL.Scheme != "https" || (privateURL.Hostname() != "us.posthog.com" && privateURL.Hostname() != "eu.posthog.com") {
+			return nil, fmt.Errorf("POSTHOG_PRIVATE_HOST must be an allowlisted PostHog HTTPS host when ingestion is enabled")
+		}
+	}
+
 	// Validate required fields for production
 	if cfg.Environment == "production" || cfg.Environment == "staging" {
 		if err := cfg.validate(); err != nil {
