@@ -105,17 +105,17 @@ metrics:
 
   - id: mcp_usage_and_outcomes
     question: Which MCP tool families deliver successful outcomes for consenting MCP users?
-    formula: Distinct MCP users and completion counts grouped by bounded tool_family and outcome; success rate is succeeded completions divided by all completions.
+    formula: Distinct MCP users and completion counts grouped by bounded tool_surface, tool_family, outcome, and duration_bucket; success rate is succeeded completions divided by all completions.
     unit: users_completions_and_proportion
     cohort_start: First mcp_tool_completed in the UTC week.
     denominator: All mcp_tool_completed events from consenting, non-excluded MCP users; return null success rate when zero.
-    exclusions: [Internal users, test users, canceled requests before tool completion]
+    exclusions: [Internal users, test users, invalid protocol requests rejected before an authenticated tool callback begins]
     window: P7D
     timezone: UTC
     consent_caveat: MCP sessions without analytics consent are intentionally invisible.
     owner: MCP Product
     review_cadence: monthly
     decision_supported: Improve low-success MCP tool families and invest in high-value usage.
-    availability: planned
-    event_dependencies: []
-    future_event_dependencies: [mcp_tool_completed]
+    availability: live
+    event_dependencies: [mcp_tool_completed]
+    future_event_dependencies: []

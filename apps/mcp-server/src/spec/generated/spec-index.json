@@ -11183,6 +11183,71 @@
       ]
     },
     {
+      "operationId": "recordMCPToolTelemetry",
+      "method": "POST",
+      "path": "/api/v1/mcp/telemetry",
+      "summary": "Record an MCP tool completion",
+      "tags": [
+        "MCP Telemetry"
+      ],
+      "manifestClass": "write",
+      "excluded": true,
+      "description": "Records one bounded, best-effort MCP tool completion through the current-consent analytics gateway. Identity is derived from the authenticated OAuth bearer token, and the Worker secret is required.",
+      "requestBody": [
+        {
+          "name": "duration_bucket",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "under_250ms",
+            "250ms_to_1s",
+            "1s_to_5s",
+            "over_5s"
+          ]
+        },
+        {
+          "name": "outcome",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "succeeded",
+            "failed"
+          ]
+        },
+        {
+          "name": "tool_family",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "accounts",
+            "analytics",
+            "budgets",
+            "boosts",
+            "savings",
+            "transactions",
+            "discovery",
+            "workflows",
+            "cross_domain",
+            "other"
+          ]
+        },
+        {
+          "name": "tool_surface",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "search",
+            "read_execute",
+            "write_execute",
+            "recipe_list",
+            "recipe_save",
+            "recipe_run",
+            "recipe_templates"
+          ]
+        }
+      ]
+    },
+    {
       "operationId": "getMerchants",
       "method": "GET",
       "path": "/api/v1/merchants",
@@ -19446,6 +19511,18 @@
           "type": "string"
         }
       ]
+    },
+    {
+      "operationId": "getPostHogSupportIdentity",
+      "method": "GET",
+      "path": "/api/v1/user/posthog-support-identity",
+      "summary": "Get a verified PostHog Support identity",
+      "tags": [
+        "Support"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Returns the authenticated Clerk subject and its server-generated HMAC for PostHog Support."
     },
     {
       "operationId": "getPrivacySettings",

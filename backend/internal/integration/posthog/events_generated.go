@@ -42,11 +42,13 @@ const (
 	EventInvestmentTransactionsSynced    = "investment_transactions_synced"
 	EventLiabilitiesSynced               = "liabilities_synced"
 	EventLiabilitySyncFailed             = "liability_sync_failed"
-	EventMerchantOverrideCleared         = "merchant_override_cleared"
-	EventMerchantOverrideSet             = "merchant_override_set"
-	EventMerchantsBulkOverridden         = "merchants_bulk_overridden"
-	EventMerchantsMerged                 = "merchants_merged"
-	EventPaddleCleanupFailed             = "paddle_cleanup_failed"
+	// EventMCPToolCompleted One consent-gated completion per authenticated MCP tool callback. The Worker sends only bounded classifications to the backend; the backend derives identity from the verified OAuth bearer token and resolves fresh database consent. Search is discovery, recipe tools are workflows, one-family execute batches use that family, and mixed batches are cross_domain.
+	EventMCPToolCompleted        = "mcp_tool_completed"
+	EventMerchantOverrideCleared = "merchant_override_cleared"
+	EventMerchantOverrideSet     = "merchant_override_set"
+	EventMerchantsBulkOverridden = "merchants_bulk_overridden"
+	EventMerchantsMerged         = "merchants_merged"
+	EventPaddleCleanupFailed     = "paddle_cleanup_failed"
 	// EventPastDueAutoCancelled Fires when the daily dunning job automatically cancels a past-due subscription at the grace-period threshold.
 	EventPastDueAutoCancelled = "past_due_auto_cancelled"
 	// EventPastDuePlaidDisconnected Fires when the daily dunning job disconnects Plaid at the configured past-due disconnect threshold.
@@ -88,6 +90,67 @@ func (FinancialDataSyncCompletedPayload) EventName() EventName {
 func (p FinancialDataSyncCompletedPayload) Properties() map[string]interface{} {
 	return map[string]interface{}{
 		"sync_kind": p.SyncKind,
+	}
+}
+
+type MCPToolCompletedToolSurface string
+
+const (
+	MCPToolCompletedToolSurfaceSearch          MCPToolCompletedToolSurface = "search"
+	MCPToolCompletedToolSurfaceReadExecute     MCPToolCompletedToolSurface = "read_execute"
+	MCPToolCompletedToolSurfaceWriteExecute    MCPToolCompletedToolSurface = "write_execute"
+	MCPToolCompletedToolSurfaceRecipeList      MCPToolCompletedToolSurface = "recipe_list"
+	MCPToolCompletedToolSurfaceRecipeSave      MCPToolCompletedToolSurface = "recipe_save"
+	MCPToolCompletedToolSurfaceRecipeRun       MCPToolCompletedToolSurface = "recipe_run"
+	MCPToolCompletedToolSurfaceRecipeTemplates MCPToolCompletedToolSurface = "recipe_templates"
+)
+
+type MCPToolCompletedToolFamily string
+
+const (
+	MCPToolCompletedToolFamilyAccounts     MCPToolCompletedToolFamily = "accounts"
+	MCPToolCompletedToolFamilyAnalytics    MCPToolCompletedToolFamily = "analytics"
+	MCPToolCompletedToolFamilyBudgets      MCPToolCompletedToolFamily = "budgets"
+	MCPToolCompletedToolFamilyBoosts       MCPToolCompletedToolFamily = "boosts"
+	MCPToolCompletedToolFamilySavings      MCPToolCompletedToolFamily = "savings"
+	MCPToolCompletedToolFamilyTransactions MCPToolCompletedToolFamily = "transactions"
+	MCPToolCompletedToolFamilyDiscovery    MCPToolCompletedToolFamily = "discovery"
+	MCPToolCompletedToolFamilyWorkflows    MCPToolCompletedToolFamily = "workflows"
+	MCPToolCompletedToolFamilyCrossDomain  MCPToolCompletedToolFamily = "cross_domain"
+	MCPToolCompletedToolFamilyOther        MCPToolCompletedToolFamily = "other"
+)
+
+type MCPToolCompletedOutcome string
+
+const (
+	MCPToolCompletedOutcomeSucceeded MCPToolCompletedOutcome = "succeeded"
+	MCPToolCompletedOutcomeFailed    MCPToolCompletedOutcome = "failed"
+)
+
+type MCPToolCompletedDurationBucket string
+
+const (
+	MCPToolCompletedDurationBucketUnder250ms MCPToolCompletedDurationBucket = "under_250ms"
+	MCPToolCompletedDurationBucket250msTo1s  MCPToolCompletedDurationBucket = "250ms_to_1s"
+	MCPToolCompletedDurationBucket1sTo5s     MCPToolCompletedDurationBucket = "1s_to_5s"
+	MCPToolCompletedDurationBucketOver5s     MCPToolCompletedDurationBucket = "over_5s"
+)
+
+type MCPToolCompletedPayload struct {
+	ToolSurface    MCPToolCompletedToolSurface    `json:"tool_surface"`
+	ToolFamily     MCPToolCompletedToolFamily     `json:"tool_family"`
+	Outcome        MCPToolCompletedOutcome        `json:"outcome"`
+	DurationBucket MCPToolCompletedDurationBucket `json:"duration_bucket"`
+}
+
+func (MCPToolCompletedPayload) isGeneratedEvent()    {}
+func (MCPToolCompletedPayload) EventName() EventName { return EventMCPToolCompleted }
+func (p MCPToolCompletedPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"tool_surface":    p.ToolSurface,
+		"tool_family":     p.ToolFamily,
+		"outcome":         p.Outcome,
+		"duration_bucket": p.DurationBucket,
 	}
 }
 
@@ -273,6 +336,17 @@ var generatedEventContracts = map[EventName]EventContract{
 		Status:                     "deprecated",
 		LegacyPropertiesUnreviewed: false,
 		Properties:                 map[string]PropertyContract{},
+	},
+	EventMCPToolCompleted: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"tool_surface":    {Kind: "string", Required: true, Values: []string{"search", "read_execute", "write_execute", "recipe_list", "recipe_save", "recipe_run", "recipe_templates"}, Minimum: nil, Maximum: nil},
+			"tool_family":     {Kind: "string", Required: true, Values: []string{"accounts", "analytics", "budgets", "boosts", "savings", "transactions", "discovery", "workflows", "cross_domain", "other"}, Minimum: nil, Maximum: nil},
+			"outcome":         {Kind: "string", Required: true, Values: []string{"succeeded", "failed"}, Minimum: nil, Maximum: nil},
+			"duration_bucket": {Kind: "string", Required: true, Values: []string{"under_250ms", "250ms_to_1s", "1s_to_5s", "over_5s"}, Minimum: nil, Maximum: nil},
+		},
 	},
 	EventMerchantOverrideCleared: {
 		Consent:                    "analytics_required",

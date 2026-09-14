@@ -388,7 +388,8 @@ describe('completeness', () => {
     //   Re-derive from `bun run src/spec/index-builder.ts`, which prints the entry count it wrote.
     // +1 from #1630 B7: listAdminBudgetHierarchyAudits, the hierarchy audit's operator surface.
     // +1 from #1637: frontend-only budget plan report, explicitly excluded.
-    expect(ALL_OPERATION_IDS.length).toBe(213)
+    // +2 from #1650: Support identity and MCP telemetry, both internal-only and excluded.
+    expect(ALL_OPERATION_IDS.length).toBe(215)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified
