@@ -94,6 +94,15 @@ type PostHogErasureOutboxRepository struct {
 	enc *appcrypto.FieldEncryptor
 }
 
+func hasDeletionBaseline(baseline map[string]*time.Time) bool {
+	for _, createdAt := range baseline {
+		if createdAt != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func NewPostHogErasureOutboxRepository(db DB, enc *appcrypto.FieldEncryptor) *PostHogErasureOutboxRepository {
 	return &PostHogErasureOutboxRepository{db: db, enc: enc}
 }
@@ -255,20 +264,15 @@ func (r *PostHogErasureOutboxRepository) MarkDeletionBaselineCheckpoint(ctx cont
 	if err != nil {
 		return false, fmt.Errorf("encrypt PostHog deletion baseline: %w", err)
 	}
-	hasExisting := false
-	for _, createdAt := range baseline {
-		if createdAt != nil {
-			hasExisting = true
-			break
-		}
-	}
+	requiresManualVerification := hasDeletionBaseline(baseline)
 	tag, err := r.db.Exec(ctx, `UPDATE posthog_erasure_outbox SET
 		provider_deletion_baseline_encrypted=$3, baseline_cursor=$4,
 		requires_manual_event_verification=requires_manual_event_verification OR $6,
 		phase=CASE WHEN $4::integer=$5::integer THEN 'person_delete' ELSE 'person_baseline' END,
 		state='retrying',next_attempt_at=clock_timestamp(),attempt_count=0,last_error_class=NULL,
 		lease_token=NULL,lease_until=NULL,updated_at=clock_timestamp(),version=version+1
-		WHERE id=$1 AND lease_token=$2 AND phase='person_baseline'`, id, leaseToken, ciphertext, nextCursor, personCount, hasExisting)
+		WHERE id=$1 AND lease_token=$2 AND phase='person_baseline'`,
+		id, leaseToken, ciphertext, nextCursor, personCount, requiresManualVerification)
 	if err != nil {
 		return false, fmt.Errorf("checkpoint PostHog deletion baseline: %w", err)
 	}
@@ -284,13 +288,7 @@ func (r *PostHogErasureOutboxRepository) MarkDeletionRequestStarted(ctx context.
 	if err != nil {
 		return time.Time{}, false, fmt.Errorf("encrypt PostHog deletion baseline: %w", err)
 	}
-	hasExisting := false
-	for _, createdAt := range baseline {
-		if createdAt != nil {
-			hasExisting = true
-			break
-		}
-	}
+	requiresManualVerification := hasDeletionBaseline(baseline)
 	var started time.Time
 	err = r.db.QueryRow(ctx, `UPDATE posthog_erasure_outbox
 		SET provider_request_started_at=COALESCE(provider_request_started_at,clock_timestamp()),
@@ -298,7 +296,8 @@ func (r *PostHogErasureOutboxRepository) MarkDeletionRequestStarted(ctx context.
 		    requires_manual_event_verification=requires_manual_event_verification OR $4,
 		    updated_at=clock_timestamp(),version=version+1
 		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying') AND phase='person_delete'
-		RETURNING provider_request_started_at`, id, leaseToken, ciphertext, hasExisting).Scan(&started)
+		RETURNING provider_request_started_at`,
+		id, leaseToken, ciphertext, requiresManualVerification).Scan(&started)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return time.Time{}, false, nil
 	}
