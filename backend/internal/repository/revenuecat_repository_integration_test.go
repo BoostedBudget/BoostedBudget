@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/disposabledb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,11 +25,8 @@ func revenueCatTestDB(t *testing.T) (*pgxpool.Pool, string) {
 	if url == "" {
 		t.Skip("DATABASE_URL required")
 	}
-	cfg, err := pgxpool.ParseConfig(url)
+	cfg, err := disposabledb.ParseURL(url)
 	require.NoError(t, err)
-	if cfg.ConnConfig.Database != "freshcheck" {
-		t.Fatal("RevenueCat fixture requires disposable freshcheck database")
-	}
 	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	require.NoError(t, err)
 	schema := "rc_test_" + uuid.NewString()[:8]

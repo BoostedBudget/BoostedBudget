@@ -4,19 +4,22 @@ package services
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/disposabledb"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRevenueCatAutomaticOffboardFencesGrantUntilCommit(t *testing.T) {
-	f := setupHouseholdServiceIntegration(t)
-	if f.pool.Config().ConnConfig.Database != "freshcheck" {
-		t.Fatal("requires disposable freshcheck database")
+	if raw := os.Getenv("DATABASE_URL"); raw != "" {
+		_, err := disposabledb.ParseURL(raw)
+		require.NoError(t, err)
 	}
+	f := setupHouseholdServiceIntegration(t)
 	ctx := context.Background()
 	owner := insertIntegrationTestUser(t, f.profileRepo, "rc-owner-"+t.Name()+"@example.com", "household_2", "active")
 	t.Cleanup(func() { _, _ = f.pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, owner.ID) })
