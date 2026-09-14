@@ -349,6 +349,13 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excluded('listAdminPaddleWebhooks', REASON_ADMIN),
   excluded('getAdminPaddleWebhookStats', REASON_ADMIN),
   excluded('getAdminPaddleWebhookDetail', REASON_ADMIN),
+  excluded('getAdminRevenueCatHealth', REASON_ADMIN),
+  excluded('listAdminRevenueCatWebhooks', REASON_ADMIN),
+  excluded('getAdminRevenueCatUser', REASON_ADMIN),
+  excludedWrite('replayAdminRevenueCatWebhook', REASON_ADMIN),
+  excludedWrite('requestAdminRevenueCatGrant', REASON_ADMIN),
+  excludedWrite('retryAdminRevenueCatOperation', REASON_ADMIN),
+  excludedWrite('refreshAdminRevenueCatUser', REASON_ADMIN),
   // Hard destruction, in bulk: `DELETE FROM dead_letter_jobs <where>`
   // (dead_letter_job_repository.go:248).
   destructive('bulkDeleteAdminDeadLetterJobs', { excluded: true, reason: REASON_ADMIN }),
@@ -615,6 +622,11 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('get-current-subscription'),
   read('getSubscriptionTiers'),
   read('get-billing-portal-url'),
+  excluded('getRevenueCatSubscription', REASON_SUBSCRIPTION_INAPP),
+  excludedWrite('refreshRevenueCatSubscription', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
+  excludedWrite('beginRevenueCatCheckout', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
+  // Release closes a checkout intent; it does not destroy its retained history.
+  excludedWrite('releaseRevenueCatCheckout', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
   excludedWrite('cancel-paddle-subscription', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
   excludedWrite('create-paddle-checkout', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
   excludedWrite('preview-paddle-subscription-update', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
@@ -702,6 +714,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
 
   // ── Webhooks + QA ────────────────────────────────────────────────────────
   excludedWrite('paddle-webhook', REASON_WEBHOOK),
+  excludedWrite('revenuecat-webhook', REASON_WEBHOOK),
   excludedWrite('handlePlaidWebhook', REASON_WEBHOOK),
   excludedWrite('qaAuthBypass', REASON_QA)
 ]

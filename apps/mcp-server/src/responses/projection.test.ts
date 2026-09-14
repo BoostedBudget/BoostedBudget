@@ -9,6 +9,17 @@ const spec = parse(readFileSync(new URL('../../../../api/openapi.yaml', import.m
 const exposed = specIndex.entries.filter((entry) => !entry.excluded).map((entry) => entry.operationId)
 
 describe('response contract', () => {
+  test('compact profile retains access confirmation and source while omitting provider identities', () => {
+    for (const access of [
+      { access_resolved: false, access_source: '' },
+      { access_resolved: true, access_source: 'comp' },
+    ]) {
+      const visible = { id: 'user', subscription_tier: 'premium', subscription_status: 'active', ...access }
+      const result = projectResponse('getUserProfile', { ...visible, clerk_user_id: 'private', paddle_customer_id: 'private' })
+      expect(result).toEqual({ value: visible, reduced: true })
+    }
+  })
+
   test('compact retains grouped selectors and the budget-counted transaction amount', () => {
     const group = { id: 'group', category_kind: 'group', group_name: 'Everyday', members: [{ category_kind: 'uncategorized' }] }
     expect(projectResponse('getBudget', { id: 'budget', categories: [{ ...group, created_at: 'noise' }] }).value).toEqual({ id: 'budget', categories: [group] })

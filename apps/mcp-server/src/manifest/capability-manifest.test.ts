@@ -13,6 +13,30 @@ import {
 // ── Deny-by-default ────────────────────────────────────────────────────────
 
 describe('deny-by-default', () => {
+  for (const [operationId, operationClass] of [
+    ['getAdminRevenueCatHealth', 'read'],
+    ['listAdminRevenueCatWebhooks', 'read'],
+    ['getAdminRevenueCatUser', 'read'],
+    ['replayAdminRevenueCatWebhook', 'write'],
+    ['requestAdminRevenueCatGrant', 'write'],
+    ['retryAdminRevenueCatOperation', 'write'],
+    ['refreshAdminRevenueCatUser', 'write'],
+    ['getRevenueCatSubscription', 'read'],
+    ['refreshRevenueCatSubscription', 'write'],
+    ['beginRevenueCatCheckout', 'write'],
+    ['releaseRevenueCatCheckout', 'write'],
+    ['revenuecat-webhook', 'write'],
+  ] as const) {
+    it(`explicitly excludes ${operationId} without exposing subscription controls`, () => {
+      const entry = getCapability(operationId)
+      expect(entry).toBeDefined()
+      expect(entry?.class).toBe(operationClass)
+      expect(entry?.excluded).toBe(true)
+      expect(entry?.excludedReason).toBeTruthy()
+      expect(isAllowed(operationId)).toBe(false)
+    })
+  }
+
   it('returns undefined for a completely unknown operationId', () => {
     expect(getCapability('nonExistentOperation')).toBeUndefined()
   })
@@ -388,7 +412,8 @@ describe('completeness', () => {
     //   Re-derive from `bun run src/spec/index-builder.ts`, which prints the entry count it wrote.
     // +1 from #1630 B7: listAdminBudgetHierarchyAudits, the hierarchy audit's operator surface.
     // +1 from #1637: frontend-only budget plan report, explicitly excluded.
-    expect(ALL_OPERATION_IDS.length).toBe(213)
+    // +12 from #1652: RevenueCat admin, subscription and webhook surfaces, all excluded.
+    expect(ALL_OPERATION_IDS.length).toBe(225)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified

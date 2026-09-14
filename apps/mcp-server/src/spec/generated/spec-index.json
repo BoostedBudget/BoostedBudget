@@ -979,6 +979,39 @@
       ]
     },
     {
+      "operationId": "getAdminRevenueCatHealth",
+      "method": "GET",
+      "path": "/api/v1/admin/revenuecat/health",
+      "summary": "Get RevenueCat synchronization metrics",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "listAdminRevenueCatWebhooks",
+      "method": "GET",
+      "path": "/api/v1/admin/revenuecat/webhooks",
+      "summary": "List authenticated webhook receipts and processing results",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "replayAdminRevenueCatWebhook",
+      "method": "POST",
+      "path": "/api/v1/admin/revenuecat/webhooks/{event_id}/replay",
+      "summary": "Retry webhook processing or refresh a completed receipt's customer",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "write",
+      "excluded": true
+    },
+    {
       "operationId": "grantTrial",
       "method": "POST",
       "path": "/api/v1/admin/subscription/grant-trial",
@@ -1082,6 +1115,90 @@
           "type": "string"
         }
       ]
+    },
+    {
+      "operationId": "getAdminRevenueCatUser",
+      "method": "GET",
+      "path": "/api/v1/admin/users/{user_id}/revenuecat",
+      "summary": "Inspect confirmed access, billing and grant operations",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "requestAdminRevenueCatGrant",
+      "method": "POST",
+      "path": "/api/v1/admin/users/{user_id}/revenuecat/grants",
+      "summary": "Request a trial or complimentary entitlement change",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "write",
+      "excluded": true,
+      "description": "Saves an audited, retryable operation. Pending does not mean access has been applied.",
+      "requestBody": [
+        {
+          "name": "class",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "comp",
+            "trial"
+          ]
+        },
+        {
+          "name": "expires_at",
+          "type": "string",
+          "format": "date-time",
+          "required": true
+        },
+        {
+          "name": "reason",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "revoke",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "name": "tier",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "premium",
+            "household_2",
+            "household_3",
+            "household_4",
+            "household_5"
+          ]
+        }
+      ]
+    },
+    {
+      "operationId": "retryAdminRevenueCatOperation",
+      "method": "POST",
+      "path": "/api/v1/admin/users/{user_id}/revenuecat/operations/{operation_id}/retry",
+      "summary": "Retry a pending grant operation",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "write",
+      "excluded": true
+    },
+    {
+      "operationId": "refreshAdminRevenueCatUser",
+      "method": "POST",
+      "path": "/api/v1/admin/users/{user_id}/revenuecat/refresh",
+      "summary": "Queue a customer subscription refresh",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "write",
+      "excluded": true
     },
     {
       "operationId": "get-admin-user-subscription",
@@ -14833,6 +14950,28 @@
       ]
     },
     {
+      "operationId": "getRevenueCatSubscription",
+      "method": "GET",
+      "path": "/api/v1/subscription/authority",
+      "summary": "Get confirmed subscription access and separate billing details",
+      "tags": [
+        "Subscription"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "refreshRevenueCatSubscription",
+      "method": "POST",
+      "path": "/api/v1/subscription/authority/refresh",
+      "summary": "Refresh subscription confirmation",
+      "tags": [
+        "Subscription"
+      ],
+      "manifestClass": "write",
+      "excluded": true
+    },
+    {
       "operationId": "get-billing-portal-url",
       "method": "GET",
       "path": "/api/v1/subscription/billing-portal",
@@ -14901,6 +15040,28 @@
       ]
     },
     {
+      "operationId": "beginRevenueCatCheckout",
+      "method": "POST",
+      "path": "/api/v1/subscription/checkout-intents",
+      "summary": "Coordinate a RevenueCat checkout for the signed-in account",
+      "tags": [
+        "Subscription"
+      ],
+      "manifestClass": "write",
+      "excluded": true
+    },
+    {
+      "operationId": "releaseRevenueCatCheckout",
+      "method": "DELETE",
+      "path": "/api/v1/subscription/checkout-intents/{intent_id}",
+      "summary": "Close this account's checkout coordination lease",
+      "tags": [
+        "Subscription"
+      ],
+      "manifestClass": "write",
+      "excluded": true
+    },
+    {
       "operationId": "get-current-subscription",
       "method": "GET",
       "path": "/api/v1/subscription/current",
@@ -14921,6 +15082,11 @@
           "type": "string",
           "required": true,
           "description": "Subscription amount"
+        },
+        {
+          "name": "authority",
+          "type": "object",
+          "description": "Confirmed access independent of paid billing details"
         },
         {
           "name": "billing_interval",
@@ -19606,6 +19772,14 @@
       },
       "responseBody": [
         {
+          "name": "access_resolved",
+          "type": "boolean"
+        },
+        {
+          "name": "access_source",
+          "type": "string"
+        },
+        {
           "name": "clerk_user_id",
           "type": "string",
           "required": true
@@ -19788,6 +19962,8 @@
         }
       ],
       "compactResponseBody": [
+        "access_resolved",
+        "access_source",
         "comp_ends_at",
         "comp_tier",
         "deletion_requested_at",
@@ -19886,6 +20062,18 @@
       "manifestClass": "write",
       "excluded": true,
       "description": "Receives and processes webhook notifications from Plaid. Validates JWT signature and stores for async processing."
+    },
+    {
+      "operationId": "revenuecat-webhook",
+      "method": "POST",
+      "path": "/webhooks/revenuecat",
+      "summary": "Receive RevenueCat webhook notifications",
+      "tags": [
+        "Webhooks",
+        "RevenueCat"
+      ],
+      "manifestClass": "write",
+      "excluded": true
     }
   ]
 }

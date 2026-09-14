@@ -14,6 +14,7 @@ import (
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/disposabledb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,9 +36,8 @@ func TestRevenueCatService_OneConnectionPoolDoesNotDeadlock(t *testing.T) {
 	if url == "" {
 		t.Skip("DATABASE_URL required")
 	}
-	cfg, err := pgxpool.ParseConfig(url)
+	cfg, err := disposabledb.ParseURL(url)
 	require.NoError(t, err)
-	require.Equal(t, "freshcheck", cfg.ConnConfig.Database, "only disposable database allowed")
 	cfg.MaxConns = 1
 	ctx := context.Background()
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)

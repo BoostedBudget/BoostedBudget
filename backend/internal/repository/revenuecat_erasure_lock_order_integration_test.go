@@ -5,16 +5,21 @@ package repository
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/disposabledb"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRevenueCatExplicitErasureOrdersCustomerBeforeUserDuringRefresh(t *testing.T) {
+	if raw := os.Getenv("DATABASE_URL"); raw != "" {
+		_, err := disposabledb.ParseURL(raw)
+		require.NoError(t, err)
+	}
 	pool := connectTestDB(t)
-	require.Equal(t, "freshcheck", pool.Config().ConnConfig.Database)
 	ctx := context.Background()
 	enc := newTestFieldEncryptor(t)
 	profile := NewProfileRepository(pool, enc)
