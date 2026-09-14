@@ -148,7 +148,7 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletionIsDurableAndConcurr
 			legacyCompletedCursor := "legacy-completed"
 			got, recordErr := repo.RecordTransactionSyncCompletion(ctx, legacyID, legacyActivity.cursor, &legacyCompletedCursor)
 			require.NoError(t, recordErr)
-			assert.Equal(t, TransactionSyncCompletionSuppressedRolloutAmbiguous, got)
+			assert.Equal(t, TransactionSyncCompletionSuppressedLegacyAmbiguous, got)
 			nextRefreshCursor := "legacy-next-refresh"
 			got, recordErr = repo.RecordTransactionSyncCompletion(ctx, legacyID, legacyCompletedCursor, &nextRefreshCursor)
 			require.NoError(t, recordErr)
@@ -198,7 +198,7 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletionIsDurableAndConcurr
 	require.NoError(t, legacyTx.Commit(ctx))
 	raced := <-raceResult
 	require.NoError(t, raced.err)
-	assert.Equal(t, TransactionSyncCompletionSuppressedRolloutAmbiguous, raced.disposition)
+	assert.Equal(t, TransactionSyncCompletionSuppressedLegacyAmbiguous, raced.disposition)
 }
 
 func TestLinkedItemRepository_BlankFinalCompletionsLatchInitialOnce(t *testing.T) {
@@ -284,7 +284,7 @@ func TestLinkedItemRepository_TransactionSyncCompletionCutover(t *testing.T) {
 	beforeID := insertNeverSynced(cutover.Add(-time.Microsecond))
 	disposition, err := repo.RecordTransactionSyncCompletion(ctx, beforeID, "", nil)
 	require.NoError(t, err)
-	assert.Equal(t, TransactionSyncCompletionSuppressedRolloutAmbiguous, disposition,
+	assert.Equal(t, TransactionSyncCompletionSuppressedPreCutover, disposition,
 		"a new-writer item an old worker could have completed with a blank cursor must suppress")
 	disposition, err = repo.RecordTransactionSyncCompletion(ctx, beforeID, "", nil)
 	require.NoError(t, err)
@@ -304,7 +304,7 @@ func TestLinkedItemRepository_TransactionSyncCompletionCutover(t *testing.T) {
 	unsetID := insertNeverSynced(cutover.Add(time.Hour))
 	disposition, err = unsetRepo.RecordTransactionSyncCompletion(ctx, unsetID, "", nil)
 	require.NoError(t, err)
-	assert.Equal(t, TransactionSyncCompletionSuppressedRolloutAmbiguous, disposition,
+	assert.Equal(t, TransactionSyncCompletionSuppressedCutoverUnset, disposition,
 		"an unset cutover must fail closed even for newly created items")
 }
 

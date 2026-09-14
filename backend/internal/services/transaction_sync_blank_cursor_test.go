@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/plaid/plaid-go/v23/plaid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -13,6 +14,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -20,6 +22,28 @@ type recordingSyncProductAnalytics struct {
 	userID string
 	event  phclient.TypedEvent
 	events []phclient.TypedEvent
+}
+
+func financialDataSyncCompletionSuppressionCount(
+	t *testing.T,
+	reason observability.FinancialDataSyncCompletionSuppressionReason,
+) float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() != "financial_data_sync_completion_suppressions_total" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "reason" && label.GetValue() == string(reason) {
+					return metric.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return 0
 }
 
 func (r *recordingSyncProductAnalytics) CaptureEvent(_ context.Context, userID string, event phclient.TypedEvent) {
@@ -158,30 +182,45 @@ func TestSyncTransactions_CompletionFinalizationFailureEmitsNothing(t *testing.T
 	assert.Empty(t, analytics.events, "an uncommitted completion cannot be reported as delivered")
 }
 
-func TestSyncTransactions_AmbiguousRolloutCompletionEmitsNothing(t *testing.T) {
-	ctx := context.Background()
-	plaidService := new(MockPlaidService)
-	linkedItems := new(MockLinkedItemRepository)
-	accounts := new(MockAccountRepository)
-	service := NewTransactionSyncService(nil, linkedItems, new(MockTransactionRepository), accounts, nil, nil,
-		plaidService, nil, nil, nil, nil, nil, nil)
-	analytics := &recordingSyncProductAnalytics{}
-	SetTransactionSyncProductAnalytics(service, analytics)
-	SetTransactionSyncCompletionRecorder(service, linkedItems)
-	cursor := "cursor-before"
-	item := &domain.LinkedItem{ID: "item-1", UserID: "user-1", AccessToken: "token", Cursor: &cursor}
-	accounts.On("GetByLinkedItemIDIncludingRetained", ctx, "item-1").Return([]domain.Account{}, nil).Once()
-	response := &plaid.TransactionsSyncResponse{}
-	response.SetNextCursor("cursor-after")
-	response.SetHasMore(false)
-	plaidService.On("TransactionsSync", ctx, "token", cursor, 0).Return(response, nil).Once()
-	after := "cursor-after"
-	linkedItems.On("RecordTransactionSyncCompletion", ctx, "item-1", cursor, &after).
-		Return(repository.TransactionSyncCompletionSuppressedRolloutAmbiguous, nil).Once()
+func TestSyncTransactions_SuppressedCompletionRecordsBoundedReasonAndEmitsNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		disposition repository.TransactionSyncCompletionDisposition
+		reason      observability.FinancialDataSyncCompletionSuppressionReason
+	}{
+		{"cutover unset", repository.TransactionSyncCompletionSuppressedCutoverUnset, observability.FinancialDataSyncCompletionSuppressionCutoverUnset},
+		{"pre cutover", repository.TransactionSyncCompletionSuppressedPreCutover, observability.FinancialDataSyncCompletionSuppressionPreCutover},
+		{"legacy ambiguous", repository.TransactionSyncCompletionSuppressedLegacyAmbiguous, observability.FinancialDataSyncCompletionSuppressionLegacyAmbiguous},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			plaidService := new(MockPlaidService)
+			linkedItems := new(MockLinkedItemRepository)
+			accounts := new(MockAccountRepository)
+			service := NewTransactionSyncService(nil, linkedItems, new(MockTransactionRepository), accounts, nil, nil,
+				plaidService, nil, nil, nil, nil, nil, nil)
+			analytics := &recordingSyncProductAnalytics{}
+			SetTransactionSyncProductAnalytics(service, analytics)
+			SetTransactionSyncCompletionRecorder(service, linkedItems)
+			cursor := "cursor-before"
+			item := &domain.LinkedItem{ID: "item-1", UserID: "user-1", AccessToken: "token", Cursor: &cursor}
+			accounts.On("GetByLinkedItemIDIncludingRetained", ctx, "item-1").Return([]domain.Account{}, nil).Once()
+			response := &plaid.TransactionsSyncResponse{}
+			response.SetNextCursor("cursor-after")
+			response.SetHasMore(false)
+			plaidService.On("TransactionsSync", ctx, "token", cursor, 0).Return(response, nil).Once()
+			after := "cursor-after"
+			linkedItems.On("RecordTransactionSyncCompletion", ctx, "item-1", cursor, &after).
+				Return(tc.disposition, nil).Once()
+			before := financialDataSyncCompletionSuppressionCount(t, tc.reason)
 
-	_, err := service.SyncTransactions(ctx, item)
-	require.NoError(t, err)
-	assert.Empty(t, analytics.events)
+			_, err := service.SyncTransactions(ctx, item)
+			require.NoError(t, err)
+			assert.Empty(t, analytics.events)
+			got := financialDataSyncCompletionSuppressionCount(t, tc.reason)
+			assert.Equal(t, before+1, got)
+		})
+	}
 }
 
 func TestSyncTransactions_UnknownCompletionDispositionEmitsNothing(t *testing.T) {
@@ -204,10 +243,13 @@ func TestSyncTransactions_UnknownCompletionDispositionEmitsNothing(t *testing.T)
 	after := "cursor-after"
 	linkedItems.On("RecordTransactionSyncCompletion", ctx, "item-1", cursor, &after).
 		Return(repository.TransactionSyncCompletionDisposition("unexpected"), nil).Once()
+	before := financialDataSyncCompletionSuppressionCount(t, observability.FinancialDataSyncCompletionSuppressionUnknown)
 
 	_, err := service.SyncTransactions(ctx, item)
 	require.NoError(t, err)
 	assert.Empty(t, analytics.events)
+	got := financialDataSyncCompletionSuppressionCount(t, observability.FinancialDataSyncCompletionSuppressionUnknown)
+	assert.Equal(t, before+1, got)
 }
 
 // TestSyncTransactions_BlankNextCursor_DoesNotOverwriteStoredCursor pins the LIVE path against a

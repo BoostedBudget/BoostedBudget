@@ -18,7 +18,7 @@ require (
 	github.com/lib/pq v1.12.3
 	github.com/pashagolub/pgxmock/v4 v4.9.0
 	github.com/plaid/plaid-go/v23 v23.0.0
-	github.com/posthog/posthog-go v1.24.3
+	github.com/posthog/posthog-go v1.25.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.70.1
