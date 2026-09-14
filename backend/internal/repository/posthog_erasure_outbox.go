@@ -317,7 +317,8 @@ func (r *PostHogErasureOutboxRepository) MarkAccepted(ctx context.Context, id, l
 		    requires_manual_event_verification=requires_manual_event_verification OR $4,
 		    poll_cursor=0,
 		    next_attempt_at=clock_timestamp()+interval '5 minutes',
-		    lease_token=NULL, lease_until=NULL, last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
+		    attempt_count=0, lease_token=NULL, lease_until=NULL, last_error_class=NULL,
+		    updated_at=clock_timestamp(), version=version+1
 		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying')`, id, leaseToken, resolvedPersons, requiresManualEvents)
 	if err != nil {
 		return false, fmt.Errorf("record PostHog erasure acceptance: %w", err)
@@ -343,7 +344,10 @@ func (r *PostHogErasureOutboxRepository) RecordRetry(ctx context.Context, id, le
 }
 
 func (r *PostHogErasureOutboxRepository) RecordPollPending(ctx context.Context, id, leaseToken string) (bool, error) {
-	tag, err := r.db.Exec(ctx, `UPDATE posthog_erasure_outbox SET state='retrying', next_attempt_at=clock_timestamp()+interval '6 hours', lease_token=NULL, lease_until=NULL, updated_at=clock_timestamp(), version=version+1 WHERE id=$1 AND lease_token=$2 AND phase='person_poll'`, id, leaseToken)
+	tag, err := r.db.Exec(ctx, `UPDATE posthog_erasure_outbox SET state='retrying',
+		next_attempt_at=clock_timestamp()+interval '6 hours', attempt_count=0, last_error_class=NULL,
+		lease_token=NULL, lease_until=NULL, updated_at=clock_timestamp(), version=version+1
+		WHERE id=$1 AND lease_token=$2 AND phase='person_poll'`, id, leaseToken)
 	return tag.RowsAffected() == 1, err
 }
 
