@@ -31,6 +31,12 @@
 
 set -uo pipefail
 
+# lcov is Perl-backed on macOS and can abort when the parent shell exports an
+# unavailable UTF-8 locale. The subject script already pins the portable C
+# locale; this suite invokes lcov directly for its post-run assertions too.
+export LC_ALL=C
+export LANG=C
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'

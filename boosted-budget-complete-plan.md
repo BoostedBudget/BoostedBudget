@@ -1959,31 +1959,10 @@ func (s *CacheService) GetOrSet(ctx context.Context, key string,
 ```
 
 ### 6.3 Mobile App Foundation
-- [ ] Create React Native app structure:
-```typescript
-// mobile/src/App.tsx
-import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
-import { ClerkProvider } from 'react-native-clerk';
-import { Provider } from 'react-redux';
-import { store } from './store';
-import { AppNavigator } from './navigation';
 
-export default function App() {
-  return (
-    <ClerkProvider
-      domain={Config.CLERK_DOMAIN}
-      clientId={Config.CLERK_CLIENT_ID}
-    >
-      <Provider store={store}>
-        <NavigationContainer>
-          <AppNavigator />
-        </NavigationContainer>
-      </Provider>
-    </ClerkProvider>
-  );
-}
-```
+The maintained mobile roadmap is [GitHub milestone #8](https://github.com/BoostedBudget/BoostedBudget/milestone/8),
+with [architecture and delivery index #1653](https://github.com/BoostedBudget/BoostedBudget/issues/1653). Those tickets supersede
+the obsolete sample architecture that previously appeared here.
 
 ### Phase 6 Deliverables
 ✅ **Advanced Features:**
@@ -2672,8 +2651,33 @@ Each phase produces a deployable, valuable product increment. The architecture s
   adversarial review (retry once, then fresh-context fallback if unavailable); update PR #1649
   with evidence before marking it ready.
 
-*Document Version: 2.0.1*
+## 2026-09-13 — #1654 Requirements-Gap Remediation
 
-*Last Updated: 2026-09-13*
+- **Baseline and audit:** Work was staged remotely from base `9b22ed3c`. The initial requirements
+  audit found 10/14 MET, 4 PARTIAL, and 0 NOT MET. The four partial gaps were package-ambient
+  Vite/browser types, a Router 8/React 19.2.3 peer conflict, a non-genuine route smoke test, and
+  incomplete compatibility/dependency guards.
+- **Implemented closures:** The API client now has a package-wide AST/symbol portability boundary,
+  targets ES2020 without DOM libraries, and no longer carries its `vite-env` declaration. Mobile
+  route coverage uses official `expo-router` and Testing Library navigation. React Router is
+  `^7.13.1`, resolving to v7 and remaining compatible with React 19.2.3. A 168-case guard now pins
+  dependency compatibility and Dependabot policy, enforces the exact trigger allowlist, and
+  recursively rejects non-vendored workspace locks.
+- **Scope:** Every named milestone #8 deferral remains separate; this remediation creates no new
+  ticket. #1668 and CI-runner work remain excluded, with no Ubicloud expansion.
+- **Review workflow:** Implementation Tasks 1-4 used fresh subagents and obtained specification
+  and quality approval, followed by the whole-diff simplifier. The GPT-5.6 Sol high adversarial
+  review initially found additional gaps; every finding was remediated through TDD, and its final
+  verdict was **APPROVED** with no actionable findings.
+- **Final validation:** 126 API-client tests, 32 mobile tests at 99.03% coverage, all 168 guard
+  cases, the backend and web suites, design-token checks, frozen install, Expo Doctor 21/21, all
+  three platform exports, and all 27 shell suites passed. The full Playwright run was provisioned
+  and its two unauthenticated production smoke tests passed, but authenticated setup was blocked
+  by the absent `CLERK_PUBLISHABLE_KEY`, leaving 478 tests unrun; this record does not claim that
+  authenticated E2E passed.
+
+*Document Version: 2.0.3*
+
+*Last Updated: 2026-09-14*
 
 *Project: BoostedBudget - Global Financial Automation Platform*

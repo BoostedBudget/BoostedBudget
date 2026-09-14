@@ -32,6 +32,7 @@ jobs:
       config: ${{ steps.filter.outputs.config }}
       deps: ${{ steps.filter.outputs.deps }}
       scanconfig: ${{ steps.filter.outputs.scanconfig }}
+      mobile: ${{ steps.filter.outputs.mobile }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -62,29 +63,26 @@ jobs:
               - 'backend/migrations/**'
             workflow:
               - '.github/workflows/**'
-            # The full source surface apps/mcp-server is built from. `packages/**` is here, not in
-            # `deps` below, because it is not a dependency-pin risk: apps/mcp-server/package.json
+            # The full source surface apps/mcp-server is built from. The API-client path is here,
+            # not in `deps` below, because it is not a dependency-pin risk: apps/mcp-server/package.json
             # declares "@boostedbudget/api-client": "workspace:*", so packages/api-client IS MCP
             # source. Omitting it (#1464 U1a) meant a change confined to packages/api-client/ that
             # touched neither api/openapi.yaml nor bun.lock ran neither the MCP typecheck nor the
-            # MCP integration tests. `packages/**` rather than `packages/api-client/**`: there are
-            # exactly two packages, so the shared-types over-trigger costs one job pair, and the
-            # broad form stays correct if mcp-server ever adds that dependency — whereas the
-            # precise form would silently under-trigger again the moment it did.
+            # MCP integration tests. Keep this dependency-exact: unrelated workspace packages do
+            # not affect the MCP build and must not consume the MCP runners.
             # Enforced row-by-row by scripts/check-mcp-job-triggers.py.
             mcp:
               - 'apps/mcp-server/**'
               - 'api/openapi.yaml'
-              - 'packages/**'
+              - 'packages/api-client/**'
             # Dedicated filter for the undici-pin risk (G5-11/#1464 review): the `frontend`
-            # filter also matches apps/web/**, scripts/**, and packages/** (the last of which is now
-            # deliberately part of the MCP surface via `mcp` above), so wiring the MCP jobs to it (see
+            # filter also matches apps/web/**, scripts/**, and packages/**, so wiring the MCP jobs to it (see
             # mcp-server-validate/mcp-server-integration below) made both run on essentially
             # every frontend PR — two extra jobs on the same 4-runner Mac Mini that hit ENOSPC
             # on 2026-08-04. The dependency-pin risk is narrow: only a change to root
             # package.json/bun.lock can move the undici version miniflare and the root
             # `overrides` both pin. This filter targets exactly that. It deliberately does NOT
-            # carry packages/** — that is real MCP source, matched by `mcp` above, and folding it
+            # carry workspace package paths — API-client source is matched by `mcp` above, and folding it
             # in here would make this filter's name and this comment describe less than it
             # matches (the same defect class #1464 U1a fixed in the conditions below).
             deps:
@@ -105,6 +103,27 @@ jobs:
             # to OpenAPI generation, migrations and integration tests.
             scanconfig:
               - '.grype.yaml'
+            # Universal Expo application inputs. Keep this list dependency-exact: backend source
+            # changes do not rebuild a client unless the generated OpenAPI contract changes, and
+            # desktop-web/shared-types changes are outside the mobile workspace graph.
+            # Root TypeScript configuration is included because API-client and design-token
+            # workspace configs inherit from it.
+            # scripts/check-mobile-ci.py evaluates the positive and negative path matrix and
+            # rejects broad packages/**, backend/**, apps/web/**, api/**, or scripts/** globs.
+            mobile:
+              - 'apps/mobile/**'
+              - 'packages/api-client/**'
+              - 'packages/design-tokens/**'
+              - 'api/openapi.yaml'
+              - 'package.json'
+              - 'bun.lock'
+              - 'bunfig.toml'
+              - 'turbo.json'
+              - 'tsconfig.json'
+              - '.github/workflows/test.yml'
+              - '.github/dependabot.yml'
+              - 'scripts/check-mobile-ci.py'
+              - 'scripts/__tests__/check-mobile-ci.test.sh'
 
   # =============================================================================
   # E2E Tests (starts immediately — no needs — so it gets runner priority over
@@ -401,6 +420,12 @@ jobs:
       - name: Guard — runner placement and Linux portability (#1598)
         run: python3 scripts/check-runner-portability.py
 
+      - name: Test mobile CI and dependency-policy guard (#1654 regression suite)
+        run: bash scripts/__tests__/check-mobile-ci.test.sh
+
+      - name: Guard — mobile CI triggers and dependency policy (#1654)
+        run: python3 scripts/check-mobile-ci.py
+
       - name: Setup Bun
         id: setup-bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -464,7 +489,7 @@ jobs:
         # the installed package.
         run: |
           set -euo pipefail
-          version="$(node -p "require('./apps/web/node_modules/@playwright/test/package.json').version")"
+          version="$(node -p "require(require.resolve('@playwright/test/package.json', { paths: ['./apps/web'] })).version")"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "Playwright ${version}"
 
@@ -1124,7 +1149,7 @@ jobs:
     # scripts/**, so both MCP jobs ran on nearly every frontend PR — two extra jobs on the
     # same 4-runner Mac Mini that hit ENOSPC on 2026-08-04. `deps` matches only root
     # package.json/bun.lock, the actual pin risk; real MCP source surface (including
-    # packages/**) is covered by the `mcp` filter instead.
+    # packages/api-client/**) is covered by the `mcp` filter instead.
     #
     # `backend` is deliberately NOT OR'd in (#1464 U1a). It matched scripts/**, so a
     # script-only PR still launched both MCP jobs and the load reduction above never actually
@@ -1455,7 +1480,7 @@ jobs:
     name: MCP Server Integration Tests
     needs: [detect-changes, openapi-validate]
     # Condition is identical to mcp-server-validate's — see that job's comment for the `deps`,
-    # `mcp`/packages/**, and dropped-`backend` rationale, and for the truth-table guard that
+    # `mcp`/packages/api-client/**, and dropped-`backend` rationale, and for the truth-table guard that
     # enforces both jobs. This is the job that actually exercises
     # miniflare/@cloudflare/vitest-pool-workers and their pinned undici.
     if: |
@@ -2304,6 +2329,75 @@ jobs:
         run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
+  # Universal Expo Mobile Build (iOS, Android, and mobile web)
+  # =============================================================================
+  mobile-test:
+    name: Mobile Build Scaffold
+    needs: detect-changes
+    if: needs.detect-changes.outputs.mobile == 'true'
+    runs-on: ubicloud-standard-2
+    permissions:
+      contents: read
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          # Expo SDK 57 requires Node >=22.13. Pin the compatibility floor so the
+          # ephemeral runner image cannot silently change the toolchain underneath us.
+          node-version: '22.13.x'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check generated design tokens
+        run: bun run --filter @boostedbudget/design-tokens check
+
+      - name: Test shared design tokens
+        run: bun run --filter @boostedbudget/design-tokens test
+
+      - name: Test portable API client
+        run: bun run --filter @boostedbudget/api-client test
+
+      - name: Lint mobile application
+        run: bun run --cwd apps/mobile lint
+
+      - name: Typecheck mobile application
+        run: bun run --cwd apps/mobile typecheck
+
+      - name: Test mobile application with coverage
+        run: >-
+          bun run --cwd apps/mobile test:ci
+          --coverageThreshold='{"global":{"lines":82}}'
+
+      - name: Validate Expo dependency compatibility
+        working-directory: apps/mobile
+        # This is the compatibility gate for Dependabot's grouped Expo/React Native updates.
+        # `expo-doctor` is an exact mobile devDependency: never replace this with `bunx`, which
+        # may resolve a registry version absent from the reviewed lockfile.
+        run: bun run doctor
+
+      - name: Export mobile web bundle
+        run: bun run --cwd apps/mobile export:web
+
+      - name: Export iOS bundle
+        run: bun run --cwd apps/mobile export:ios
+
+      - name: Export Android bundle
+        run: bun run --cwd apps/mobile export:android
+
+  # =============================================================================
   # Frontend Tests (Single job - no sharding)
   # =============================================================================
   frontend-test:
@@ -2333,6 +2427,11 @@ jobs:
       - name: Install workspace dependencies
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bun install --frozen-lockfile
+
+      - name: Check generated design tokens
+        if: always() && !cancelled()
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bun run --filter @boostedbudget/design-tokens check
 
       # Runs BEFORE the suite on purpose: it asserts the suite will run with a usable per-test
       # timeout. bunfig.toml's `[test] timeout = 30000` was not taking effect, so the 362-file suite

@@ -16,7 +16,7 @@ help:
 	@echo "  make test-ci          - Run CI tests with coverage enforcement"
 	@echo "  make backend-test     - Run backend tests only"
 	@echo "  make frontend-test    - Run frontend tests only"
-	@echo "  make test-scripts     - Run the 24 shell regression suites (scripts/**, apps/web/scripts/**)"
+	@echo "  make test-scripts     - Run the 27 shell regression suites (scripts/**, apps/web/scripts/**)"
 	@echo ""
 	@echo "Backend:"
 	@echo "  make backend-build    - Build backend binary"
@@ -249,44 +249,45 @@ test-scripts:
 	@echo "Running shell script regression suites"
 	@echo "========================================"
 	@echo ""
-	@echo "1/26: check-frontend-coverage.test.sh (exercises the real lcov merger)"
+	@echo "1/27: check-frontend-coverage.test.sh (exercises the real lcov merger)"
 	@if command -v lcov &> /dev/null; then \
 		bash scripts/check-frontend-coverage.test.sh; \
 	else \
 		echo "⚠️  lcov not installed — skipping (install: brew install lcov). CI always has lcov."; \
 	fi
 	@echo ""
-	@echo "2/26: check-orphan-chunks.test.sh"
+	@echo "2/27: check-orphan-chunks.test.sh"
 	@bash scripts/__tests__/check-orphan-chunks.test.sh
 	@echo ""
-	@echo "3/26: rollback-residue.test.sh"
+	@echo "3/27: rollback-residue.test.sh"
 	@bash scripts/__tests__/rollback-residue.test.sh
 	@echo ""
-	@echo "4/26: pg_dump-via-docker.test.sh"
+	@echo "4/27: pg_dump-via-docker.test.sh"
 	@bash scripts/__tests__/pg_dump-via-docker.test.sh
 	@echo ""
-	@echo "5/26: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
+	@echo "5/27: check-e2e-storage-state.test.sh (#1464 G5-13 — negative fixtures for the E2E auth guard)"
 	@bash scripts/__tests__/check-e2e-storage-state.test.sh
 	@echo ""
-	@echo "6/26: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
+	@echo "6/27: check-mcp-job-triggers.test.sh (#1464 U1a — MCP job trigger truth table + mutations)"
 	@bash scripts/__tests__/check-mcp-job-triggers.test.sh
 	@echo ""
-	@echo "7/26: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
+	@echo "7/27: check-typographic-quotes.test.sh (#1487 — gofmt -w corruption guard)"
 	@bash scripts/__tests__/check-typographic-quotes.test.sh
 	@echo ""
-	@echo "8/26: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is not in effect; cause unestablished)"
+	@echo "8/27: check-frontend-test-timeout.test.sh (#1537 — bunfig [test] timeout is not in effect; cause unestablished)"
 	@bash scripts/__tests__/check-frontend-test-timeout.test.sh
 	@echo ""
-	@echo "9/26: check-isolated-test-lists.test.sh (#1537 — the 23 process-isolated test paths must exist and stay in sync)"
+	@echo "9/27: check-isolated-test-lists.test.sh (#1537 — the 23 process-isolated test paths must exist and stay in sync)"
 	@bash scripts/__tests__/check-isolated-test-lists.test.sh
 	@echo ""
-	@echo "10/26: check-e2e-seed-fails-loudly.test.sh (#1569 A1 — the E2E seeder must not swallow a failed seed)"
+	@echo "10/27: check-e2e-seed-fails-loudly.test.sh (#1569 A1 — the E2E seeder must not swallow a failed seed)"
 	@bash scripts/__tests__/check-e2e-seed-fails-loudly.test.sh
 	@echo ""
-	@echo "11/26: test-migrations-target-guard.test.sh (#1589/#1569 — host + name + live-cluster gates on the DROP target; needs a live local Postgres)"
+	@echo "11/27: test-migrations-target-guard.test.sh (#1589/#1569 — host + name + live-cluster gates on the DROP target; needs a live local Postgres)"
 	@if [ -n "$$GUARD_TEST_ADMIN_URL" ] || [ -n "$$DATABASE_URL" ] || \
-	    (command -v pg_isready >/dev/null 2>&1 && \
-	     (pg_isready -h localhost -p 5434 >/dev/null 2>&1 || pg_isready -h localhost -p 5432 >/dev/null 2>&1)); then \
+	    (command -v psql >/dev/null 2>&1 && \
+	     (psql 'postgres://devuser:devpass@localhost:5434/postgres?sslmode=disable' -tAc 'SELECT 1' >/dev/null 2>&1 || \
+	      psql 'postgres://devuser:devpass@localhost:5432/postgres?sslmode=disable' -tAc 'SELECT 1' >/dev/null 2>&1)); then \
 		bash scripts/__tests__/test-migrations-target-guard.test.sh; \
 	else \
 		echo "⚠️  SKIPPED — no live Postgres reachable (tried GUARD_TEST_ADMIN_URL, DATABASE_URL, localhost:5434, localhost:5432)."; \
@@ -294,10 +295,11 @@ test-scripts:
 		echo "    CI always has a live Postgres and runs this suite unconditionally — this skip is local-only."; \
 	fi
 	@echo ""
-	@echo "12/26: migrate-reset-target-guard.test.sh (#1569 round 12 task 7 — entry-point guard on 'make migrate-reset'; needs a live local Postgres)"
+	@echo "12/27: migrate-reset-target-guard.test.sh (#1569 round 12 task 7 — entry-point guard on 'make migrate-reset'; needs a live local Postgres)"
 	@if [ -n "$$GUARD_TEST_ADMIN_URL" ] || [ -n "$$DATABASE_URL" ] || \
-	    (command -v pg_isready >/dev/null 2>&1 && \
-	     (pg_isready -h localhost -p 5434 >/dev/null 2>&1 || pg_isready -h localhost -p 5432 >/dev/null 2>&1)); then \
+	    (command -v psql >/dev/null 2>&1 && \
+	     (psql 'postgres://devuser:devpass@localhost:5434/postgres?sslmode=disable' -tAc 'SELECT 1' >/dev/null 2>&1 || \
+	      psql 'postgres://devuser:devpass@localhost:5432/postgres?sslmode=disable' -tAc 'SELECT 1' >/dev/null 2>&1)); then \
 		bash scripts/__tests__/migrate-reset-target-guard.test.sh; \
 	else \
 		echo "⚠️  SKIPPED — no live Postgres reachable (tried GUARD_TEST_ADMIN_URL, DATABASE_URL, localhost:5434, localhost:5432)."; \
@@ -305,47 +307,50 @@ test-scripts:
 		echo "    CI always has a live Postgres and runs this suite unconditionally — this skip is local-only."; \
 	fi
 	@echo ""
-	@echo "13/26: no-ungated-migrate-down-invocation-guard.test.sh (#1569 round 13 task 1 — mechanical guard: no new ungated 'migrate ... down' invocation anywhere in the tree; pure static analysis, never skips)"
+	@echo "13/27: no-ungated-migrate-down-invocation-guard.test.sh (#1569 round 13 task 1 — mechanical guard: no new ungated 'migrate ... down' invocation anywhere in the tree; pure static analysis, never skips)"
 	@bash scripts/__tests__/no-ungated-migrate-down-invocation-guard.test.sh
 	@echo ""
-	@echo "14/26: root-migrate-delegation.test.sh (#1588 — one migration runner; schema_migrations cannot lie)"
+	@echo "14/27: root-migrate-delegation.test.sh (#1588 — one migration runner; schema_migrations cannot lie)"
 	@bash scripts/__tests__/root-migrate-delegation.test.sh
 	@echo ""
-	@echo "15/26: typecheck-tests-gate.test.sh (#1569 — the test typecheck gate must fail closed when tsc did not finish)"
+	@echo "15/27: typecheck-tests-gate.test.sh (#1569 — the test typecheck gate must fail closed when tsc did not finish)"
 	@bash apps/web/scripts/__tests__/typecheck-tests-gate.test.sh
 	@echo ""
-	@echo "16/26: check-ci-env-drift.test.sh (#1569 round 14 task 3 — local integration-test env vars must not silently drift from what CI's own guard step requires; pure static analysis, never skips)"
+	@echo "16/27: check-ci-env-drift.test.sh (#1569 round 14 task 3 — local integration-test env vars must not silently drift from what CI's own guard step requires; pure static analysis, never skips)"
 	@bash scripts/__tests__/check-ci-env-drift.test.sh
 	@echo ""
-	@echo "17/26: summarize-go-test.test.sh (#1569 round 14 task 3 — a skipped test must never read as an indistinguishable clean pass; pure static analysis against a throwaway fixture module, never skips)"
+	@echo "17/27: summarize-go-test.test.sh (#1569 round 14 task 3 — a skipped test must never read as an indistinguishable clean pass; pure static analysis against a throwaway fixture module, never skips)"
 	@bash scripts/__tests__/summarize-go-test.test.sh
 	@echo ""
-	@echo "18/26: replay-concurrently-transaction.test.sh (#1569 round 15 task 9 — the migration replay must run a CONCURRENTLY file the way golang-migrate does, i.e. NOT inside a transaction; static half never skips, live half needs a reachable DATABASE_URL)"
+	@echo "18/27: replay-concurrently-transaction.test.sh (#1569 round 15 task 9 — the migration replay must run a CONCURRENTLY file the way golang-migrate does, i.e. NOT inside a transaction; static half never skips, live half needs a reachable DATABASE_URL)"
 	@bash scripts/__tests__/replay-concurrently-transaction.test.sh
 	@echo ""
-	@echo "19/26: check-ungated-guard-steps.test.sh (#1569 round 17 task 1 — every whole-tree guard step must live in a CI job no paths-filter can skip; pure static analysis against a mutated copy of the workflow, never skips)"
+	@echo "19/27: check-ungated-guard-steps.test.sh (#1569 round 17 task 1 — every whole-tree guard step must live in a CI job no paths-filter can skip; pure static analysis against a mutated copy of the workflow, never skips)"
 	@bash scripts/__tests__/check-ungated-guard-steps.test.sh
 	@echo ""
-	@echo "20/26: schema-constraint-history-fks.test.sh (#1569 round 17 task 2 — the migration suite's schema-constraint check must be able to FAIL on the history tables' ON DELETE behaviour; pure shell against synthetic fixtures + the real Go guard, never skips)"
+	@echo "20/27: schema-constraint-history-fks.test.sh (#1569 round 17 task 2 — the migration suite's schema-constraint check must be able to FAIL on the history tables' ON DELETE behaviour; pure shell against synthetic fixtures + the real Go guard, never skips)"
 	@bash scripts/__tests__/schema-constraint-history-fks.test.sh
 	@echo ""
-	@echo "21/26: smoke-test-failure-paths.test.sh (#1569 round 17 task 3 — the production/staging deploy gate must be able to FAIL on a lost HTTPS redirect, absent CORS and an RFC 9728 resource mismatch, and must NOT fail on an unreachable probe; runs the real script against a stubbed curl, never touches the network)"
+	@echo "21/27: smoke-test-failure-paths.test.sh (#1569 round 17 task 3 — the production/staging deploy gate must be able to FAIL on a lost HTTPS redirect, absent CORS and an RFC 9728 resource mismatch, and must NOT fail on an unreachable probe; runs the real script against a stubbed curl, never touches the network)"
 	@bash scripts/__tests__/smoke-test-failure-paths.test.sh
 	@echo ""
-	@echo "22/26: check-portable-sed.test.sh (#1598 — no BSD-only or GNU-only in-place sed anywhere in the cross-platform script corpus; the motivating defect was four BSD `sed -i` call sites in a suite that runs inside the e2e-test job, which broke the moment that job moved to a Linux runner while still passing on macOS. Pure shell against synthetic fixtures, never skips)"
+	@echo "22/27: check-portable-sed.test.sh (#1598 — no BSD-only or GNU-only in-place sed anywhere in the cross-platform script corpus; the motivating defect was four BSD `sed -i` call sites in a suite that runs inside the e2e-test job, which broke the moment that job moved to a Linux runner while still passing on macOS. Pure shell against synthetic fixtures, never skips)"
 	@bash scripts/__tests__/check-portable-sed.test.sh
 	@echo ""
-	@echo "23/26: check-runner-portability.test.sh (#1598 — every CI job must run on an allowlisted runner, and a Linux job must not carry macOS-only artefacts, mac-pool workspace scaffolding or hand-rolled `docker run` containers. Pure Python against synthetic workflow fixtures, never skips)"
+	@echo "23/27: check-runner-portability.test.sh (#1598 — every CI job must run on an allowlisted runner, and a Linux job must not carry macOS-only artefacts, mac-pool workspace scaffolding or hand-rolled `docker run` containers. Pure Python against synthetic workflow fixtures, never skips)"
 	@bash scripts/__tests__/check-runner-portability.test.sh
 	@echo ""
-	@echo "24/26: check-route-weight.test.sh (#1601 — the LANDING ROUTE's eager download must stay within budget. size-limit checks each chunk in isolation and check-orphan-chunks only asserts a chunk HAS a budget, so nothing modelled what a route actually downloads: `/` shipped 847 KiB gzip of eager JS against 17 KiB of landing code, all budgets green. Pure shell against synthetic dist fixtures; the real-dist case skips if apps/web/dist is absent)"
+	@echo "24/27: check-route-weight.test.sh (#1601 — the LANDING ROUTE's eager download must stay within budget. size-limit checks each chunk in isolation and check-orphan-chunks only asserts a chunk HAS a budget, so nothing modelled what a route actually downloads: `/` shipped 847 KiB gzip of eager JS against 17 KiB of landing code, all budgets green. Pure shell against synthetic dist fixtures; the real-dist case skips if apps/web/dist is absent)"
 	@bash scripts/__tests__/check-route-weight.test.sh
 	@echo ""
-	@echo "25/26: check-coverage.test.sh (#1622 — the backend coverage gate must report a MALFORMED profile as malformed, distinguishably from below-threshold. Its friendly diagnostic was dead code: the assignment `VAR=$$(... | grep total)` under `set -euo pipefail` exits at the assignment when go tool cover fails, so a corrupt profile printed a bare `cover:` parse error naming neither the artifact nor how to regenerate it. Pure shell against synthetic profiles; needs the Go toolchain, and fails closed under CI rather than skipping)"
+	@echo "25/27: check-coverage.test.sh (#1622 — the backend coverage gate must report a MALFORMED profile as malformed, distinguishably from below-threshold. Its friendly diagnostic was dead code: the assignment `VAR=$$(... | grep total)` under `set -euo pipefail` exits at the assignment when go tool cover fails, so a corrupt profile printed a bare `cover:` parse error naming neither the artifact nor how to regenerate it. Pure shell against synthetic profiles; needs the Go toolchain, and fails closed under CI rather than skipping)"
 	@bash scripts/__tests__/check-coverage.test.sh
 	@echo ""
-	@echo "26/26: check-nginx-secret-paths.test.sh (#1625 cluster F — drives a REAL nginx against apps/web/nginx.conf and asserts credential-shaped paths 404 while the SPA's own assets still 200. nginx.conf cited a behavioural test that was never committed, so the extension-split rule this config already got wrong once (/id_rsa returned 200) could regress unseen. Skips with a warning without Docker/openssl; CI always has both)"
+	@echo "26/27: check-nginx-secret-paths.test.sh (#1625 cluster F — drives a REAL nginx against apps/web/nginx.conf and asserts credential-shaped paths 404 while the SPA's own assets still 200. nginx.conf cited a behavioural test that was never committed, so the extension-split rule this config already got wrong once (/id_rsa returned 200) could regress unseen. Skips with a warning without Docker/openssl; CI always has both)"
 	@bash scripts/__tests__/check-nginx-secret-paths.test.sh
+	@echo ""
+	@echo "27/27: check-mobile-ci.test.sh (#1654 — mobile trigger truth table, build gates, runner placement, Dependabot compatibility grouping, and single-lockfile policy)"
+	@bash scripts/__tests__/check-mobile-ci.test.sh
 	@echo ""
 	@echo "✅ Shell script regression suites passed!"
 
