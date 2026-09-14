@@ -422,8 +422,16 @@ type LinkedItemRepository interface {
 // paginated sync. It remains separate from the broad linked-item repository so unrelated readers
 // and their test doubles do not gain a completion-only method.
 type TransactionSyncCompletionRepository interface {
-	RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, completedCursor *string) (bool, error)
+	RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, completedCursor *string) (TransactionSyncCompletionDisposition, error)
 }
+
+type TransactionSyncCompletionDisposition string
+
+const (
+	TransactionSyncCompletionInitial                    TransactionSyncCompletionDisposition = "initial"
+	TransactionSyncCompletionRefresh                    TransactionSyncCompletionDisposition = "refresh"
+	TransactionSyncCompletionSuppressedRolloutAmbiguous TransactionSyncCompletionDisposition = "suppressed_rollout_ambiguous"
+)
 
 // TransactionSyncCursorResetRepository compare-and-resets a cursor rejected by Plaid without
 // overwriting progress committed by another sync.
@@ -841,8 +849,8 @@ func (r *linkedItemRepository) ResetCursorIfUnchanged(ctx context.Context, id, e
 }
 
 // RecordTransactionSyncProgress records resumable partial pagination progress without touching
-// last_synced_at. That distinction keeps partial progress from tripping the legacy-completion
-// trigger used during rolling deployments.
+// last_synced_at. That distinction preserves last_synced_at as the rollout classification signal
+// while the first-completion latch is still empty.
 func (r *linkedItemRepository) RecordTransactionSyncProgress(ctx context.Context, id, expectedCursor, nextCursor string) error {
 	query := `
 		UPDATE linked_items
@@ -870,10 +878,15 @@ func (r *linkedItemRepository) RecordTransactionSyncCompletion(
 	ctx context.Context,
 	id, expectedCursor string,
 	completedCursor *string,
-) (bool, error) {
+) (TransactionSyncCompletionDisposition, error) {
 	query := `
 		WITH candidate AS (
-			SELECT id, first_transaction_sync_completed_at IS NULL AS first_completion
+			SELECT id,
+			       CASE
+			           WHEN first_transaction_sync_completed_at IS NOT NULL THEN 'refresh'
+			           WHEN last_synced_at IS NULL THEN 'initial'
+			           ELSE 'suppressed_rollout_ambiguous'
+			       END AS completion_disposition
 			FROM linked_items
 			WHERE id = $1
 			  AND COALESCE(cursor, '') = $2
@@ -887,17 +900,17 @@ func (r *linkedItemRepository) RecordTransactionSyncCompletion(
 		    updated_at = NOW()
 		FROM candidate
 		WHERE li.id = candidate.id
-		RETURNING candidate.first_completion
+		RETURNING candidate.completion_disposition
 	`
 
-	var firstCompletion bool
-	if err := r.db.QueryRow(ctx, query, id, expectedCursor, completedCursor).Scan(&firstCompletion); err != nil {
+	var disposition TransactionSyncCompletionDisposition
+	if err := r.db.QueryRow(ctx, query, id, expectedCursor, completedCursor).Scan(&disposition); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, ErrLinkedItemSyncStateChanged
+			return "", ErrLinkedItemSyncStateChanged
 		}
-		return false, fmt.Errorf("record transaction sync completion: %w", err)
+		return "", fmt.Errorf("record transaction sync completion: %w", err)
 	}
-	return firstCompletion, nil
+	return disposition, nil
 }
 
 // Update updates a linked item's fields (e.g., status, error details)
