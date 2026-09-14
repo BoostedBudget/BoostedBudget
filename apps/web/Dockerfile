@@ -11,6 +11,7 @@ WORKDIR /build
 COPY package.json ./
 COPY apps/web/package.json ./apps/web/
 COPY packages/api-client/package.json ./packages/api-client/
+COPY packages/design-tokens/package.json ./packages/design-tokens/
 COPY packages/shared-types/package.json ./packages/shared-types/
 
 # Remove workspace:* dependencies from apps/web/package.json

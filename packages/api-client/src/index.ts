@@ -13,9 +13,15 @@
 // Re-export client utilities
 export {
   customInstance,
+  configureApiClient,
   setAuthTokenProvider,
   getApiUrl,
   AXIOS_INSTANCE,
+  CAPABILITY_URL_PATH_PATTERNS,
+  redactCapabilityUrlPath,
+  type ApiClientErrorDetails,
+  type ApiClientRuntimeConfig,
+  type GetTokenFunction,
   type ErrorType,
   type BodyType,
 } from './client'
