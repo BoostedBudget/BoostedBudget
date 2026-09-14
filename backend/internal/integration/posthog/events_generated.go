@@ -2,6 +2,8 @@
 
 package posthog
 
+type EventName string
+
 const (
 	EventAccountSynced = "account_synced"
 	// EventAdminSubscriptionOverrideAppliedServer Identifies the target user whose tier changed; the unsuffixed frontend event instead identifies the acting admin, so analysts must not combine them as one subject.
@@ -13,11 +15,12 @@ const (
 	EventAutoCategorizationExecuted             = "auto_categorization_executed"
 	EventBoostTriggered                         = "boost_triggered"
 	// EventDataExportGenerated Tracks completed GDPR Article 20 exports; row_count is load-bearing telemetry for deciding when synchronous generation has outgrown its reasoned size bound.
-	EventDataExportGenerated           = "data_export_generated"
-	EventDeadLetterCreated             = "dead_letter_created"
-	EventDeletionCancelled             = "deletion_cancelled"
-	EventDeletionRequested             = "deletion_requested"
-	EventEmailChanged                  = "email_changed"
+	EventDataExportGenerated = "data_export_generated"
+	EventDeadLetterCreated   = "dead_letter_created"
+	EventDeletionCancelled   = "deletion_cancelled"
+	EventDeletionRequested   = "deletion_requested"
+	EventEmailChanged        = "email_changed"
+	// EventFinancialDataSyncCompleted Fires best-effort after the authoritative Plaid transaction sync completes; initial versus refresh is derived from the pre-sync durable cursor.
 	EventFinancialDataSyncCompleted    = "financial_data_sync_completed"
 	EventHouseholdAccountHidden        = "household_account_hidden"
 	EventHouseholdAccountShared        = "household_account_shared"
@@ -66,3 +69,353 @@ const (
 	TransferSuggestionCanceled           = "transfer_suggestion_canceled"
 	TransferSuggestionRejected           = "transfer_suggestion_rejected"
 )
+
+type FinancialDataSyncCompletedSyncKind string
+
+const (
+	FinancialDataSyncCompletedSyncKindInitial FinancialDataSyncCompletedSyncKind = "initial"
+	FinancialDataSyncCompletedSyncKindRefresh FinancialDataSyncCompletedSyncKind = "refresh"
+)
+
+type FinancialDataSyncCompletedPayload struct {
+	SyncKind FinancialDataSyncCompletedSyncKind `json:"sync_kind"`
+}
+
+func (FinancialDataSyncCompletedPayload) isGeneratedEvent() {}
+func (FinancialDataSyncCompletedPayload) EventName() EventName {
+	return EventFinancialDataSyncCompleted
+}
+func (p FinancialDataSyncCompletedPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"sync_kind": p.SyncKind,
+	}
+}
+
+var generatedEventContracts = map[EventName]EventContract{
+	EventAccountSynced: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventAdminSubscriptionOverrideAppliedServer: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventAdminSubscriptionOverrideExpired: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventAdminSubscriptionOverrideRemovedServer: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventAutoCategorizationExecuted: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventBoostTriggered: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventDataExportGenerated: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventDeadLetterCreated: {
+		Consent:                    "operational",
+		Status:                     "deprecated",
+		LegacyPropertiesUnreviewed: false,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventDeletionCancelled: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventDeletionRequested: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventEmailChanged: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventFinancialDataSyncCompleted: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"sync_kind": {Kind: "string", Required: true, Values: []string{"initial", "refresh"}, Minimum: nil, Maximum: nil},
+		},
+	},
+	EventHouseholdAccountHidden: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventHouseholdAccountShared: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventHouseholdCreated: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventHouseholdDisbanded: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventHouseholdForceDisbanded: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventHouseholdInviteAccepted: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventHouseholdInviteSent: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventHouseholdMemberAutoOffboarded: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventHouseholdMemberLeft: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventHouseholdMemberRemoved: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventHouseholdMembershipPurged: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventHouseholdOverCapacityEntered: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventInvalidSignatureWebhookRejected: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventInvestmentHoldingsSynced: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventInvestmentSyncFailed: {
+		Consent:                    "operational",
+		Status:                     "deprecated",
+		LegacyPropertiesUnreviewed: false,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventInvestmentTransactionsSynced: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventLiabilitiesSynced: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventLiabilitySyncFailed: {
+		Consent:                    "operational",
+		Status:                     "deprecated",
+		LegacyPropertiesUnreviewed: false,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventMerchantOverrideCleared: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventMerchantOverrideSet: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventMerchantsBulkOverridden: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventMerchantsMerged: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventPaddleCleanupFailed: {
+		Consent:                    "operational",
+		Status:                     "deprecated",
+		LegacyPropertiesUnreviewed: false,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventPastDueAutoCancelled: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventPastDuePlaidDisconnected: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventPaymentFailed: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventPaymentSucceeded: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventSavingsGoalProgressBasisChanged: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventSubscriptionCancelled: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventSubscriptionCreated: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventSyncCompleted: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventSyncFailed: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventTransactionRecategorized: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventTransactionReviewStateChanged: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventTransferSuggestionMatched: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventTransferSuggestionValidated: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventUserDeleted: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventUserRegistered: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	EventWebhookReceived: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	TransferSuggestionAccepted: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	TransferSuggestionCanceled: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+	TransferSuggestionRejected: {
+		Consent:                    "analytics_required",
+		Status:                     "legacy",
+		LegacyPropertiesUnreviewed: true,
+		Properties:                 map[string]PropertyContract{},
+	},
+}

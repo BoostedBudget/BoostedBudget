@@ -470,6 +470,40 @@ describe('deterministic generation', () => {
     expect(formatted.stdout.toString()).toBe(generated)
   })
 
+  test('namespaces bounded Go enum types shared by multiple events', () => {
+	const catalog = validEventCatalog()
+	for (const [suffix, symbol] of [['one', 'EventOneCompleted'], ['two', 'EventTwoCompleted']]) {
+	  catalog.events.push({
+		...activeEvent(),
+		contract_id: `backend_${suffix}_completed`,
+		name: `${suffix}_completed`,
+		symbols: { typescript: [], go: [symbol] },
+		producers: ['backend'],
+		properties: { outcome: { type: 'string', required: true, cardinality: 'bounded', values: ['success', 'failure'] } },
+	  } as any)
+	}
+	const events = validateEventCatalog(catalog)
+	const generated = renderGeneratedArtifacts(events, validateProductMetrics(validMetrics(), events)).go
+	expect(generated).toContain('type OneCompletedOutcome string')
+	expect(generated).toContain('type TwoCompletedOutcome string')
+	expect(generated.match(/type Outcome string/g)).toBeNull()
+  })
+
+  test('keeps bounded Go enum names stable before a property is shared', () => {
+	const catalog = validEventCatalog()
+	catalog.events.push({
+	  ...activeEvent(),
+	  contract_id: 'backend_one_completed',
+	  name: 'one_completed',
+	  symbols: { typescript: [], go: ['EventOneCompleted'] },
+	  producers: ['backend'],
+	  properties: { outcome: { type: 'string', required: true, cardinality: 'bounded', values: ['success'] } },
+	} as any)
+	const events = validateEventCatalog(catalog)
+	const generated = renderGeneratedArtifacts(events, validateProductMetrics(validMetrics(), events)).go
+	expect(generated).toContain('type OneCompletedOutcome string')
+  })
+
   test('renders catalog guidance as Go documentation on generated symbols', () => {
     const catalog = validEventCatalog()
     ;(catalog.events[0] as any).description = 'Reports completed account links.\n// Prose stays prose.'

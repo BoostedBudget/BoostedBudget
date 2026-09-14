@@ -32,8 +32,8 @@ metrics:
     review_cadence: monthly
     decision_supported: Prioritize account-link, initial-sync, or first-value funnel improvements.
     availability: planned
-    event_dependencies: [budget_created, transaction_categorized, savings_goal_created, rule_previewed, reports_viewed]
-    future_event_dependencies: [account_link_completed, financial_data_sync_completed]
+    event_dependencies: [budget_created, transaction_categorized, savings_goal_created, rule_previewed, reports_viewed, financial_data_sync_completed]
+    future_event_dependencies: [account_link_completed]
 
   - id: observed_w1_retention
     question: What share of consenting activated users return for observed value in week one?
@@ -49,8 +49,8 @@ metrics:
     review_cadence: monthly
     decision_supported: Decide whether onboarding creates repeatable first-week value.
     availability: planned
-    event_dependencies: [budget_created, transaction_categorized, savings_goal_created, rule_previewed, reports_viewed]
-    future_event_dependencies: [account_link_completed, financial_data_sync_completed]
+    event_dependencies: [budget_created, transaction_categorized, savings_goal_created, rule_previewed, reports_viewed, financial_data_sync_completed]
+    future_event_dependencies: [account_link_completed]
 
   - id: observed_w4_retention
     question: What share of consenting activated users return for observed value in week four?
@@ -66,8 +66,8 @@ metrics:
     review_cadence: monthly
     decision_supported: Decide whether the product sustains monthly budgeting value.
     availability: planned
-    event_dependencies: [budget_created, transaction_categorized, savings_goal_created, rule_previewed, reports_viewed]
-    future_event_dependencies: [account_link_completed, financial_data_sync_completed]
+    event_dependencies: [budget_created, transaction_categorized, savings_goal_created, rule_previewed, reports_viewed, financial_data_sync_completed]
+    future_event_dependencies: [account_link_completed]
 
   - id: consenting_subscription_conversion
     question: What share of consenting activated trial users become paying subscribers?
@@ -83,8 +83,8 @@ metrics:
     review_cadence: monthly
     decision_supported: Evaluate trial packaging and conversion interventions without overstating non-consenting users.
     availability: planned
-    event_dependencies: [subscription_created, payment_succeeded, budget_created, transaction_categorized, savings_goal_created, rule_previewed, reports_viewed]
-    future_event_dependencies: [account_link_completed, financial_data_sync_completed]
+    event_dependencies: [subscription_created, payment_succeeded, budget_created, transaction_categorized, savings_goal_created, rule_previewed, reports_viewed, financial_data_sync_completed]
+    future_event_dependencies: [account_link_completed]
 
   - id: feature_adoption
     question: Which curated product features are adopted by consenting weekly observed-value users?

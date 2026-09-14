@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/merchant"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
@@ -178,6 +179,7 @@ type transactionSyncService struct {
 	// Plaid stops returning it. Optional (nil = no audit entry, same nil-safe shape as every other
 	// setter-injected dependency here); wired by SetAuditLogger.
 	auditLogger AuditLogger
+	analytics   phclient.ProductAnalytics
 }
 
 // NewTransactionSyncService creates a new TransactionSyncService instance
@@ -259,6 +261,20 @@ func (s *transactionSyncService) SetCacheInvalidation(gens *cache.Generations, h
 // method's doc comment. Issue #1569 Task 5.
 func (s *transactionSyncService) SetAuditLogger(al AuditLogger) {
 	s.auditLogger = al
+}
+
+func (s *transactionSyncService) SetProductAnalytics(analytics phclient.ProductAnalytics) {
+	s.analytics = analytics
+}
+
+// SetTransactionSyncProductAnalytics wires the optional typed completion producer without
+// widening the long-standing TransactionSyncService interface implemented by worker test doubles.
+func SetTransactionSyncProductAnalytics(service TransactionSyncService, analytics phclient.ProductAnalytics) {
+	if setter, ok := service.(interface {
+		SetProductAnalytics(phclient.ProductAnalytics)
+	}); ok {
+		setter.SetProductAnalytics(analytics)
+	}
 }
 
 // bumpCacheForSync invalidates userID's cached analytics (and, when resolvable, their
@@ -865,7 +881,20 @@ func (s *transactionSyncService) SyncTransactions(
 	// progress, and budget sync above may have written even with zero transaction changes).
 	cacheBumpNeeded = true
 
+	if s.analytics != nil {
+		s.analytics.CaptureEvent(ctx, linkedItem.UserID, phclient.FinancialDataSyncCompletedPayload{
+			SyncKind: financialDataSyncKind(cursor),
+		})
+	}
+
 	return result, nil
+}
+
+func financialDataSyncKind(preSyncCursor string) phclient.FinancialDataSyncCompletedSyncKind {
+	if preSyncCursor == "" {
+		return phclient.FinancialDataSyncCompletedSyncKindInitial
+	}
+	return phclient.FinancialDataSyncCompletedSyncKindRefresh
 }
 
 // ============================================================================
@@ -1474,24 +1503,24 @@ func (s *transactionSyncService) detectAndUpsertProposedContributions(ctx contex
 // provider's own pointer cannot.
 //
 // WHERE THE PIECES ARE, so the next reader does not have to search:
-//   1. migration 000168 adds transactions.pending_transaction_id_blind_idx (blind index only -- the
-//      value is never read back, only matched, so no plaintext and no ciphertext is stored);
-//   2. services/plaid_mapper.go MapPlaidTransactionBase populates
-//      domain.Transaction.PendingTransactionID, and BOTH repository write paths derive the blind
-//      index from it -- CreateBatch for `added`, Update for `modified`. Both accept it via COALESCE
-//      so a row can LEARN a pointer that arrives later and a pointer-less re-delivery cannot erase
-//      one; omitting the column from CreateBatch's ON CONFLICT SET clause, which an earlier draft of
-//      this note recommended, would have made the first of those impossible;
-//   3. the annotation move is a data-modifying CTE inside TombstoneByExternalID's single statement,
-//      so it is atomic with the tombstoning and there is no window in which a crash could leave the
-//      annotations on both rows, i.e. double-categorised. (This line used to add "with no
-//      transaction to introduce". T4 wrote that; T6 falsified it five commits later by routing the
-//      statement through runCapturingStatement, which opens one -- see
-//      repository/transaction_annotation_capture.go:~249.);
-//   4. the refusal to overwrite the note asked for is implemented as two predicates: a MANUAL
-//      category already on the twin wins over the pending row's, and tags move only onto a twin that
-//      has none. A twin categorised by a RULE does NOT block the move -- rules run in place before
-//      the twin is ever inserted, so a blank-row-only gate would have refused in the common case.
+//  1. migration 000168 adds transactions.pending_transaction_id_blind_idx (blind index only -- the
+//     value is never read back, only matched, so no plaintext and no ciphertext is stored);
+//  2. services/plaid_mapper.go MapPlaidTransactionBase populates
+//     domain.Transaction.PendingTransactionID, and BOTH repository write paths derive the blind
+//     index from it -- CreateBatch for `added`, Update for `modified`. Both accept it via COALESCE
+//     so a row can LEARN a pointer that arrives later and a pointer-less re-delivery cannot erase
+//     one; omitting the column from CreateBatch's ON CONFLICT SET clause, which an earlier draft of
+//     this note recommended, would have made the first of those impossible;
+//  3. the annotation move is a data-modifying CTE inside TombstoneByExternalID's single statement,
+//     so it is atomic with the tombstoning and there is no window in which a crash could leave the
+//     annotations on both rows, i.e. double-categorised. (This line used to add "with no
+//     transaction to introduce". T4 wrote that; T6 falsified it five commits later by routing the
+//     statement through runCapturingStatement, which opens one -- see
+//     repository/transaction_annotation_capture.go:~249.);
+//  4. the refusal to overwrite the note asked for is implemented as two predicates: a MANUAL
+//     category already on the twin wins over the pending row's, and tags move only onto a twin that
+//     has none. A twin categorised by a RULE does NOT block the move -- rules run in place before
+//     the twin is ever inserted, so a blank-row-only gate would have refused in the common case.
 //
 // ORDERING IS ALREADY IN THIS FUNCTION'S FAVOUR and does not need a second hook for the common
 // case: processTransactions aggregates EVERY page into result.Added/Modified/Removed before storing
