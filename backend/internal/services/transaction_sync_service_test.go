@@ -2355,6 +2355,7 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 			)
 			analytics := &recordingSyncProductAnalytics{}
 			SetTransactionSyncProductAnalytics(service, analytics)
+			SetTransactionSyncCompletionRecorder(service, mockLinkedItemRepo)
 
 			linkedItem := &domain.LinkedItem{
 				ID:          "linked-item-first-sync",
@@ -2390,8 +2391,9 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 			// CRITICAL: Both nil and "" should result in empty string being passed; 730 days for premium
 			mockPlaidService.On("TransactionsSync", ctx, "access-token", "", 730).Return(plaidResponse, nil)
 
-			// Mock: Cursor update
-			mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-first-sync", firstCursor).Return(nil)
+			// The completion latch and final cursor are committed atomically.
+			mockLinkedItemRepo.On("RecordTransactionSyncCompletion", ctx, "linked-item-first-sync", "", &firstCursor).
+				Return(true, nil).Once()
 
 			// Execute
 			result, err := service.SyncTransactions(ctx, linkedItem)
@@ -2526,7 +2528,7 @@ func TestSyncTransactions_InvalidCursorAutoReset(t *testing.T) {
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", corruptedCursor, 0).Return(nil, invalidCursorErr)
 
 	// CRITICAL: Cursor should be reset to empty string for full re-sync
-	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", "").Return(nil)
+	mockLinkedItemRepo.On("ResetCursorIfUnchanged", ctx, "linked-item-123", corruptedCursor).Return(nil)
 
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
@@ -2536,7 +2538,7 @@ func TestSyncTransactions_InvalidCursorAutoReset(t *testing.T) {
 	assert.Contains(t, err.Error(), "cursor reset")
 
 	// Assert: Cursor was reset to empty string
-	mockLinkedItemRepo.AssertCalled(t, "UpdateCursor", ctx, "linked-item-123", "")
+	mockLinkedItemRepo.AssertCalled(t, "ResetCursorIfUnchanged", ctx, "linked-item-123", corruptedCursor)
 
 	// Assert: Partial results returned
 	assert.NotNil(t, result)
@@ -2571,7 +2573,7 @@ func TestSyncTransactions_InvalidCursorResetFailure(t *testing.T) {
 	mockPlaidService.On("TransactionsSync", ctx, "access-token", corruptedCursor, 0).Return(nil, invalidCursorErr)
 
 	// Mock: Cursor reset FAILS (database error)
-	mockLinkedItemRepo.On("UpdateCursor", ctx, "linked-item-123", "").Return(errors.New("database connection lost"))
+	mockLinkedItemRepo.On("ResetCursorIfUnchanged", ctx, "linked-item-123", corruptedCursor).Return(errors.New("database connection lost"))
 
 	// Execute
 	result, err := service.SyncTransactions(ctx, linkedItem)
@@ -2582,6 +2584,33 @@ func TestSyncTransactions_InvalidCursorResetFailure(t *testing.T) {
 
 	// Assert: Partial results returned
 	assert.NotNil(t, result)
+}
+
+func TestSyncTransactions_InvalidCursorAfterPageOneResetsDurableStartingCursor(t *testing.T) {
+	ctx := context.Background()
+	mockPlaidService := new(MockPlaidService)
+	mockLinkedItemRepo := new(MockLinkedItemRepository)
+	service := NewTransactionSyncService(
+		nil, mockLinkedItemRepo, nil, nil, nil, nil,
+		mockPlaidService, nil, nil, nil, nil, nil, nil,
+	)
+
+	startingCursor := "durable-start"
+	linkedItem := &domain.LinkedItem{
+		ID: "linked-item-123", UserID: "user-123", ItemID: "plaid-item-123",
+		AccessToken: "access-token", Cursor: &startingCursor,
+	}
+	pageOne := &plaid.TransactionsSyncResponse{}
+	pageOne.SetNextCursor("not-yet-durable-page-cursor")
+	pageOne.SetHasMore(true)
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", startingCursor, 0).Return(pageOne, nil).Once()
+	mockPlaidService.On("TransactionsSync", ctx, "access-token", "not-yet-durable-page-cursor", 0).
+		Return(nil, createPlaidInvalidCursorError()).Once()
+	mockLinkedItemRepo.On("ResetCursorIfUnchanged", ctx, "linked-item-123", startingCursor).Return(nil).Once()
+
+	_, err := service.SyncTransactions(ctx, linkedItem)
+	require.ErrorContains(t, err, "cursor reset")
+	mockLinkedItemRepo.AssertExpectations(t)
 }
 
 // createPlaidInvalidCursorError creates a mock Plaid error that classifies as INVALID_CURSOR.

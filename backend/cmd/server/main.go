@@ -1557,6 +1557,7 @@ func main() {
 				// happen with no trace a user could be shown. Same auditLogger instance as
 				// accountService's user-initiated account.removed entries above.
 				transactionSyncService.SetAuditLogger(auditLogger)
+				services.SetTransactionSyncCompletionRecorder(transactionSyncService, linkedItemRepo)
 				services.SetTransactionSyncProductAnalytics(transactionSyncService, analyticsGateway)
 
 				// Issue #972: Initialize TransferCorrelationService and wire into sync pipeline (B4)
@@ -3314,6 +3315,13 @@ func startJobHealthMetricsCollector(ctx context.Context, repo repository.JobHeal
 // Per-metric error isolation throughout: one failing query must not suppress the others, and none of
 // them is fatal.
 func refreshJobHealthMetrics(ctx context.Context, repo repository.JobHealthRepository, logger *slog.Logger) {
+	deadLetterCount, err := repo.GetDeadLetterQueueSize(ctx)
+	if err != nil {
+		logger.Warn("failed to refresh dead-letter queue gauge", "error", err)
+	} else {
+		observability.DeadLetterQueueSize.WithLabelValues().Set(float64(deadLetterCount))
+	}
+
 	age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(ctx)
 	if err != nil {
 		logger.Warn("failed to refresh manual tier override job-health gauge", "error", err)

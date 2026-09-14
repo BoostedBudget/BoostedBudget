@@ -504,6 +504,32 @@ describe('deterministic generation', () => {
 	expect(generated).toContain('type OneCompletedOutcome string')
   })
 
+  test('renders optional Go properties as pointers and omits absent values', () => {
+    const catalog = validEventCatalog()
+    const backend = catalog.events[1] as any
+    backend.properties = {
+      required_string: { type: 'string', required: true, cardinality: 'bounded', values: ['ready'] },
+      optional_enum: { type: 'string', required: false, cardinality: 'bounded', values: ['known'] },
+      optional_string: { type: 'string', required: false, cardinality: 'high' },
+      optional_integer: { type: 'integer', required: false, cardinality: 'bounded' },
+      optional_number: { type: 'number', required: false, cardinality: 'bounded' },
+      optional_boolean: { type: 'boolean', required: false, cardinality: 'bounded' },
+    }
+    backend.legacy_exceptions = ['unbounded_string']
+    const events = validateEventCatalog(catalog)
+    const generated = renderGeneratedArtifacts(events, validateProductMetrics(validMetrics(), events)).go
+
+    expect(generated).toMatch(/RequiredString\s+SyncCompletedRequiredString `json:"required_string"`/)
+    expect(generated).toMatch(/OptionalEnum\s+\*SyncCompletedOptionalEnum\s+`json:"optional_enum,omitempty"`/)
+    expect(generated).toMatch(/OptionalString\s+\*string\s+`json:"optional_string,omitempty"`/)
+    expect(generated).toMatch(/OptionalInteger\s+\*int64\s+`json:"optional_integer,omitempty"`/)
+    expect(generated).toMatch(/OptionalNumber\s+\*float64\s+`json:"optional_number,omitempty"`/)
+    expect(generated).toMatch(/OptionalBoolean\s+\*bool\s+`json:"optional_boolean,omitempty"`/)
+    expect(generated).toContain('if p.OptionalBoolean != nil {')
+    expect(generated).toContain('properties["optional_boolean"] = *p.OptionalBoolean')
+    expect(generated).not.toContain('"optional_boolean": p.OptionalBoolean')
+  })
+
   test('renders catalog guidance as Go documentation on generated symbols', () => {
     const catalog = validEventCatalog()
     ;(catalog.events[0] as any).description = 'Reports completed account links.\n// Prose stays prose.'

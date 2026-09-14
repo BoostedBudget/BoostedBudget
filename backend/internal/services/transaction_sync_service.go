@@ -147,6 +147,21 @@ type SyncProposedContributionUpserter interface {
 	UpsertProposedFromTransaction(ctx context.Context, userID, goalID, transactionID string, magnitude float64) error
 }
 
+// TransactionSyncCompletionRecorder atomically finalizes a fully paginated sync and latches the
+// first completion for its linked-item generation. It is intentionally narrower than the full
+// linked-item repository so worker test doubles do not gain unrelated methods.
+type TransactionSyncCompletionRecorder interface {
+	RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, completedCursor *string) (bool, error)
+}
+
+type transactionSyncCursorResetter interface {
+	ResetCursorIfUnchanged(ctx context.Context, id, expectedCursor string) error
+}
+
+type transactionSyncCursorAdvancer interface {
+	RecordTransactionSyncProgress(ctx context.Context, id, expectedCursor, nextCursor string) error
+}
+
 // transactionSyncService implements TransactionSyncService
 type transactionSyncService struct {
 	logger                    *slog.Logger
@@ -178,8 +193,9 @@ type transactionSyncService struct {
 	// Issue #1569 Task 5: records account.removed_by_provider when a bank closes an account and
 	// Plaid stops returning it. Optional (nil = no audit entry, same nil-safe shape as every other
 	// setter-injected dependency here); wired by SetAuditLogger.
-	auditLogger AuditLogger
-	analytics   phclient.ProductAnalytics
+	auditLogger        AuditLogger
+	analytics          phclient.ProductAnalytics
+	completionRecorder TransactionSyncCompletionRecorder
 }
 
 // NewTransactionSyncService creates a new TransactionSyncService instance
@@ -275,6 +291,20 @@ func SetTransactionSyncProductAnalytics(service TransactionSyncService, analytic
 	}); ok {
 		setter.SetProductAnalytics(analytics)
 	}
+}
+
+// SetTransactionSyncCompletionRecorder wires the durable completion boundary without widening the
+// long-standing TransactionSyncService interface implemented by worker test doubles.
+func SetTransactionSyncCompletionRecorder(service TransactionSyncService, recorder TransactionSyncCompletionRecorder) {
+	if setter, ok := service.(interface {
+		SetCompletionRecorder(TransactionSyncCompletionRecorder)
+	}); ok {
+		setter.SetCompletionRecorder(recorder)
+	}
+}
+
+func (s *transactionSyncService) SetCompletionRecorder(recorder TransactionSyncCompletionRecorder) {
+	s.completionRecorder = recorder
 }
 
 // bumpCacheForSync invalidates userID's cached analytics (and, when resolvable, their
@@ -433,7 +463,7 @@ func (s *transactionSyncService) SyncTransactions(
 	if linkedItem.Cursor != nil {
 		cursor = *linkedItem.Cursor
 	}
-	syncKind := financialDataSyncKind(cursor)
+	preSyncCursor := cursor
 
 	// Step 2: Determine historical depth for first sync
 	// Only applies on FIRST sync (empty cursor). Re-syncs use cursor-based incremental sync.
@@ -474,6 +504,7 @@ func (s *transactionSyncService) SyncTransactions(
 	// "nothing earned yet, leave the stored cursor alone".
 	pendingCursor := ""
 	hasMore := true
+	fullyPaginated := false
 	pageCount := 0
 
 	for hasMore {
@@ -492,8 +523,12 @@ func (s *transactionSyncService) SyncTransactions(
 			}
 			if plaidErr.ErrorType == domain.PlaidErrorInvalidCursor {
 				// Reset cursor to empty string for full re-sync
-				s.logger.Warn("invalid cursor detected, resetting for full re-sync", "item_id", linkedItem.ID)
-				if resetErr := s.linkedItemRepo.UpdateCursor(ctx, linkedItem.ID, ""); resetErr != nil {
+				s.logger.Warn("invalid cursor detected, resetting for full re-sync")
+				resetter, ok := s.linkedItemRepo.(transactionSyncCursorResetter)
+				if !ok {
+					return result, errors.New("failed to reset cursor after INVALID_CURSOR: compare-and-reset repository unavailable")
+				}
+				if resetErr := resetter.ResetCursorIfUnchanged(ctx, linkedItem.ID, preSyncCursor); resetErr != nil {
 					return result, fmt.Errorf("failed to reset cursor after INVALID_CURSOR: %w", resetErr)
 				}
 				// Return error to trigger retry with empty cursor
@@ -630,6 +665,9 @@ func (s *transactionSyncService) SyncTransactions(
 
 		// Check if more pages exist
 		hasMore = resp.GetHasMore()
+		if !hasMore {
+			fullyPaginated = true
+		}
 
 		s.logger.Info("synced page",
 			"page", pageCount,
@@ -806,7 +844,36 @@ func (s *transactionSyncService) SyncTransactions(
 	// fail the sync, so blocking the cursor on them would only cause pointless re-delivery.
 	// pendingCursor is empty when Plaid returned no real cursor this run (see the #1537 blank-cursor
 	// guard) — in that case the stored cursor is left exactly as it was.
-	if pendingCursor != "" {
+	var syncKind phclient.FinancialDataSyncCompletedSyncKind
+	completionRecorded := false
+	if fullyPaginated && s.completionRecorder != nil {
+		var completedCursor *string
+		if pendingCursor != "" {
+			completedCursor = &pendingCursor
+		}
+		firstCompletion, err := s.completionRecorder.RecordTransactionSyncCompletion(
+			ctx, linkedItem.ID, preSyncCursor, completedCursor,
+		)
+		if err != nil {
+			s.logger.Error("failed to finalize transaction sync completion", "error", err)
+			return result, fmt.Errorf("failed to finalize transaction sync completion: %w", err)
+		}
+		completionRecorded = true
+		if firstCompletion {
+			syncKind = phclient.FinancialDataSyncCompletedSyncKindInitial
+		} else {
+			syncKind = phclient.FinancialDataSyncCompletedSyncKindRefresh
+		}
+	} else if pendingCursor != "" && !fullyPaginated {
+		advancer, ok := s.linkedItemRepo.(transactionSyncCursorAdvancer)
+		if !ok {
+			return result, errors.New("failed to persist partial cursor progress: compare-and-advance repository unavailable")
+		}
+		if err := advancer.RecordTransactionSyncProgress(ctx, linkedItem.ID, preSyncCursor, pendingCursor); err != nil {
+			s.logger.Error("failed to persist partial cursor progress", "error", err)
+			return result, fmt.Errorf("failed to persist partial cursor progress: %w", err)
+		}
+	} else if pendingCursor != "" {
 		if err := s.linkedItemRepo.UpdateCursor(ctx, linkedItem.ID, pendingCursor); err != nil {
 			s.logger.Error("failed to advance cursor after storage", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to update cursor after storage: %w", err)
@@ -882,20 +949,13 @@ func (s *transactionSyncService) SyncTransactions(
 	// progress, and budget sync above may have written even with zero transaction changes).
 	cacheBumpNeeded = true
 
-	if s.analytics != nil {
+	if completionRecorded && s.analytics != nil {
 		s.analytics.CaptureEvent(ctx, linkedItem.UserID, phclient.FinancialDataSyncCompletedPayload{
 			SyncKind: syncKind,
 		})
 	}
 
 	return result, nil
-}
-
-func financialDataSyncKind(preSyncCursor string) phclient.FinancialDataSyncCompletedSyncKind {
-	if preSyncCursor == "" {
-		return phclient.FinancialDataSyncCompletedSyncKindInitial
-	}
-	return phclient.FinancialDataSyncCompletedSyncKindRefresh
 }
 
 // ============================================================================

@@ -19,6 +19,10 @@ var (
 	ErrLinkedItemNotFound = errors.New("linked item not found")
 	// ErrDuplicateLinkedItem is returned when attempting to create a linked item that already exists
 	ErrDuplicateLinkedItem = errors.New("linked item already exists for this user")
+	// ErrLinkedItemSyncStateChanged means a concurrent sync/reset or terminal lifecycle transition
+	// changed the item after the caller began fetching pages. The caller must retry from the newly
+	// durable state instead of overwriting it with a stale completion.
+	ErrLinkedItemSyncStateChanged = errors.New("linked item sync state changed")
 	// ErrLinkedItemNotDisconnected is returned by PurgeLinkedItem when the item's Plaid side has
 	// not yet been stopped (plaid_removed_at IS NULL). Purging first would permanently destroy the
 	// only local record of a Plaid Item that may still be billing, with no way to find or remove
@@ -414,11 +418,34 @@ type LinkedItemRepository interface {
 	UpdateLiabilitiesLastSyncedAt(ctx context.Context, id string, t time.Time) error
 }
 
-// linkedItemRepository implements LinkedItemRepository using PostgreSQL
+// TransactionSyncCompletionRepository is the narrow metadata write boundary for a fully
+// paginated sync. It remains separate from the broad linked-item repository so unrelated readers
+// and their test doubles do not gain a completion-only method.
+type TransactionSyncCompletionRepository interface {
+	RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, completedCursor *string) (bool, error)
+}
+
+// TransactionSyncCursorResetRepository compare-and-resets a cursor rejected by Plaid without
+// overwriting progress committed by another sync.
+type TransactionSyncCursorResetRepository interface {
+	ResetCursorIfUnchanged(ctx context.Context, id, expectedCursor string) error
+}
+
+// TransactionSyncProgressRepository persists resumable partial pagination without marking a
+// sync completed or overwriting progress from a concurrent run.
+type TransactionSyncProgressRepository interface {
+	RecordTransactionSyncProgress(ctx context.Context, id, expectedCursor, nextCursor string) error
+}
+
+// linkedItemRepository implements LinkedItemRepository using PostgreSQL.
 type linkedItemRepository struct {
 	db  DB
 	enc *appcrypto.FieldEncryptor
 }
+
+var _ TransactionSyncCompletionRepository = (*linkedItemRepository)(nil)
+var _ TransactionSyncCursorResetRepository = (*linkedItemRepository)(nil)
+var _ TransactionSyncProgressRepository = (*linkedItemRepository)(nil)
 
 // Standard SELECT columns for linked_items (used across all repository methods).
 // Order matters: MUST match the order in Scan calls.
@@ -790,6 +817,87 @@ func (r *linkedItemRepository) UpdateCursor(ctx context.Context, id, cursor stri
 	}
 
 	return nil
+}
+
+// ResetCursorIfUnchanged clears an INVALID_CURSOR value only while it remains the item's current
+// nonterminal cursor. A stale Plaid response therefore cannot erase progress from a newer sync.
+func (r *linkedItemRepository) ResetCursorIfUnchanged(ctx context.Context, id, expectedCursor string) error {
+	query := `
+		UPDATE linked_items
+		SET cursor = '',
+		    updated_at = NOW()
+		WHERE id = $1
+		  AND COALESCE(cursor, '') = $2
+		  AND COALESCE(status, 'active') NOT IN ('replaced', 'disconnected', 'revoked')
+	`
+	commandTag, err := r.db.Exec(ctx, query, id, expectedCursor)
+	if err != nil {
+		return fmt.Errorf("reset transaction sync cursor: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return ErrLinkedItemSyncStateChanged
+	}
+	return nil
+}
+
+// RecordTransactionSyncProgress records resumable partial pagination progress without touching
+// last_synced_at. That distinction keeps partial progress from tripping the legacy-completion
+// trigger used during rolling deployments.
+func (r *linkedItemRepository) RecordTransactionSyncProgress(ctx context.Context, id, expectedCursor, nextCursor string) error {
+	query := `
+		UPDATE linked_items
+		SET cursor = $3,
+		    updated_at = NOW()
+		WHERE id = $1
+		  AND COALESCE(cursor, '') = $2
+		  AND COALESCE(status, 'active') NOT IN ('replaced', 'disconnected', 'revoked')
+	`
+	commandTag, err := r.db.Exec(ctx, query, id, expectedCursor, nextCursor)
+	if err != nil {
+		return fmt.Errorf("advance partial transaction sync cursor: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return ErrLinkedItemSyncStateChanged
+	}
+	return nil
+}
+
+// RecordTransactionSyncCompletion finalizes only a fully paginated transaction sync. A single
+// UPDATE is the concurrency boundary: PostgreSQL rechecks the expected cursor after waiting on a
+// competing writer, so at most one caller can latch the first completion or advance from a given
+// starting cursor.
+func (r *linkedItemRepository) RecordTransactionSyncCompletion(
+	ctx context.Context,
+	id, expectedCursor string,
+	completedCursor *string,
+) (bool, error) {
+	query := `
+		WITH candidate AS (
+			SELECT id, first_transaction_sync_completed_at IS NULL AS first_completion
+			FROM linked_items
+			WHERE id = $1
+			  AND COALESCE(cursor, '') = $2
+			  AND COALESCE(status, 'active') NOT IN ('replaced', 'disconnected', 'revoked')
+			FOR UPDATE
+		)
+		UPDATE linked_items AS li
+		SET cursor = CASE WHEN $3::text IS NULL THEN li.cursor ELSE $3::text END,
+		    first_transaction_sync_completed_at = COALESCE(li.first_transaction_sync_completed_at, NOW()),
+		    last_synced_at = NOW(),
+		    updated_at = NOW()
+		FROM candidate
+		WHERE li.id = candidate.id
+		RETURNING candidate.first_completion
+	`
+
+	var firstCompletion bool
+	if err := r.db.QueryRow(ctx, query, id, expectedCursor, completedCursor).Scan(&firstCompletion); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, ErrLinkedItemSyncStateChanged
+		}
+		return false, fmt.Errorf("record transaction sync completion: %w", err)
+	}
+	return firstCompletion, nil
 }
 
 // Update updates a linked item's fields (e.g., status, error details)

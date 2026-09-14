@@ -154,6 +154,21 @@ func (m *MockLinkedItemRepository) UpdateCursor(ctx context.Context, id, cursor 
 	return args.Error(0)
 }
 
+func (m *MockLinkedItemRepository) ResetCursorIfUnchanged(ctx context.Context, id, expectedCursor string) error {
+	args := m.Called(ctx, id, expectedCursor)
+	return args.Error(0)
+}
+
+func (m *MockLinkedItemRepository) RecordTransactionSyncProgress(ctx context.Context, id, expectedCursor, nextCursor string) error {
+	args := m.Called(ctx, id, expectedCursor, nextCursor)
+	return args.Error(0)
+}
+
+func (m *MockLinkedItemRepository) RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, completedCursor *string) (bool, error) {
+	args := m.Called(ctx, id, expectedCursor, completedCursor)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockLinkedItemRepository) Update(ctx context.Context, item *domain.LinkedItem) error {
 	args := m.Called(ctx, item)
 	return args.Error(0)
