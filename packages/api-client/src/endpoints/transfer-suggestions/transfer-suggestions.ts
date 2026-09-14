@@ -55,7 +55,9 @@ import type {
   CancelTransferSuggestionInputBody,
   CancelTransferSuggestionOutputBody,
   ConfirmMatchBody,
+  ConfirmTransferSuggestionMatchHeaders,
   ConfirmTransferSuggestionMatchOutputBody,
+  DeclineTransferSuggestionMatchHeaders,
   DeclineTransferSuggestionMatchOutputBody,
   ErrorModel,
   GetTransferSuggestionsParams,
@@ -347,13 +349,14 @@ export const useCancelTransferSuggestion = <TError = ErrorType<ErrorModel>,
 export const confirmTransferSuggestionMatch = (
     id: string,
     confirmMatchBody: BodyType<NonReadonly<ConfirmMatchBody>>,
+    headers?: ConfirmTransferSuggestionMatchHeaders,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<ConfirmTransferSuggestionMatchOutputBody>(
       {url: `/api/v1/transfer-suggestions/${id}/confirm-match`, method: 'POST',
-      headers: {'Content-Type': 'application/json', },
+      headers: {'Content-Type': 'application/json', ...headers},
       data: confirmMatchBody, signal
     },
       options);
@@ -363,8 +366,8 @@ export const confirmTransferSuggestionMatch = (
 
 
 export const getConfirmTransferSuggestionMatchMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>, TError,{id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>, TError,{id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>}, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>, TError,{id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>;headers?: ConfirmTransferSuggestionMatchHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>, TError,{id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>;headers?: ConfirmTransferSuggestionMatchHeaders}, TContext> => {
 
 const mutationKey = ['confirmTransferSuggestionMatch'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -376,10 +379,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>, {id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>}> = (props) => {
-          const {id,data} = props ?? {};
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>, {id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>;headers?: ConfirmTransferSuggestionMatchHeaders}> = (props) => {
+          const {id,data,headers} = props ?? {};
 
-          return  confirmTransferSuggestionMatch(id,data,requestOptions)
+          return  confirmTransferSuggestionMatch(id,data,headers,requestOptions)
         }
 
 
@@ -397,11 +400,11 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
  * @summary Confirm transfer suggestion match
  */
 export const useConfirmTransferSuggestionMatch = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>, TError,{id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>, TError,{id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>;headers?: ConfirmTransferSuggestionMatchHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof confirmTransferSuggestionMatch>>,
         TError,
-        {id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>},
+        {id: string;data: BodyType<NonReadonly<ConfirmMatchBody>>;headers?: ConfirmTransferSuggestionMatchHeaders},
         TContext
       > => {
       return useMutation(getConfirmTransferSuggestionMatchMutationOptions(options), queryClient);
@@ -412,12 +415,14 @@ export const useConfirmTransferSuggestionMatch = <TError = ErrorType<ErrorModel>
  */
 export const declineTransferSuggestionMatch = (
     id: string,
+    headers?: DeclineTransferSuggestionMatchHeaders,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<DeclineTransferSuggestionMatchOutputBody>(
-      {url: `/api/v1/transfer-suggestions/${id}/decline-match`, method: 'POST', signal
+      {url: `/api/v1/transfer-suggestions/${id}/decline-match`, method: 'POST',
+      headers, signal
     },
       options);
     }
@@ -426,8 +431,8 @@ export const declineTransferSuggestionMatch = (
 
 
 export const getDeclineTransferSuggestionMatchMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof declineTransferSuggestionMatch>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof declineTransferSuggestionMatch>>, TError,{id: string}, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof declineTransferSuggestionMatch>>, TError,{id: string;headers?: DeclineTransferSuggestionMatchHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof declineTransferSuggestionMatch>>, TError,{id: string;headers?: DeclineTransferSuggestionMatchHeaders}, TContext> => {
 
 const mutationKey = ['declineTransferSuggestionMatch'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -439,10 +444,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof declineTransferSuggestionMatch>>, {id: string}> = (props) => {
-          const {id} = props ?? {};
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof declineTransferSuggestionMatch>>, {id: string;headers?: DeclineTransferSuggestionMatchHeaders}> = (props) => {
+          const {id,headers} = props ?? {};
 
-          return  declineTransferSuggestionMatch(id,requestOptions)
+          return  declineTransferSuggestionMatch(id,headers,requestOptions)
         }
 
 
@@ -460,11 +465,11 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
  * @summary Decline transfer suggestion match
  */
 export const useDeclineTransferSuggestionMatch = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof declineTransferSuggestionMatch>>, TError,{id: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof declineTransferSuggestionMatch>>, TError,{id: string;headers?: DeclineTransferSuggestionMatchHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof declineTransferSuggestionMatch>>,
         TError,
-        {id: string},
+        {id: string;headers?: DeclineTransferSuggestionMatchHeaders},
         TContext
       > => {
       return useMutation(getDeclineTransferSuggestionMatchMutationOptions(options), queryClient);

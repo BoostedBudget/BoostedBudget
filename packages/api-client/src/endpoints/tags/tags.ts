@@ -50,6 +50,7 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  CreateTagHeaders,
   CreateUserTagRequest,
   ErrorModel,
   UpdateUserTagRequest,
@@ -205,13 +206,14 @@ export function useGetUserTags<TData = Awaited<ReturnType<typeof getUserTags>>, 
  */
 export const createTag = (
     createUserTagRequest: BodyType<NonReadonly<CreateUserTagRequest>>,
+    headers?: CreateTagHeaders,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<UserTag>(
       {url: `/api/v1/tags`, method: 'POST',
-      headers: {'Content-Type': 'application/json', },
+      headers: {'Content-Type': 'application/json', ...headers},
       data: createUserTagRequest, signal
     },
       options);
@@ -221,8 +223,8 @@ export const createTag = (
 
 
 export const getCreateTagMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createTag>>, TError,{data: BodyType<NonReadonly<CreateUserTagRequest>>}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof createTag>>, TError,{data: BodyType<NonReadonly<CreateUserTagRequest>>}, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createTag>>, TError,{data: BodyType<NonReadonly<CreateUserTagRequest>>;headers?: CreateTagHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof createTag>>, TError,{data: BodyType<NonReadonly<CreateUserTagRequest>>;headers?: CreateTagHeaders}, TContext> => {
 
 const mutationKey = ['createTag'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -234,10 +236,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createTag>>, {data: BodyType<NonReadonly<CreateUserTagRequest>>}> = (props) => {
-          const {data} = props ?? {};
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createTag>>, {data: BodyType<NonReadonly<CreateUserTagRequest>>;headers?: CreateTagHeaders}> = (props) => {
+          const {data,headers} = props ?? {};
 
-          return  createTag(data,requestOptions)
+          return  createTag(data,headers,requestOptions)
         }
 
 
@@ -255,11 +257,11 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
  * @summary Create a new tag
  */
 export const useCreateTag = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createTag>>, TError,{data: BodyType<NonReadonly<CreateUserTagRequest>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createTag>>, TError,{data: BodyType<NonReadonly<CreateUserTagRequest>>;headers?: CreateTagHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof createTag>>,
         TError,
-        {data: BodyType<NonReadonly<CreateUserTagRequest>>},
+        {data: BodyType<NonReadonly<CreateUserTagRequest>>;headers?: CreateTagHeaders},
         TContext
       > => {
       return useMutation(getCreateTagMutationOptions(options), queryClient);

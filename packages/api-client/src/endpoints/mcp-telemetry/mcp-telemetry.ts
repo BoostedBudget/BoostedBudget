@@ -42,7 +42,8 @@ import type {
 
 import type {
   ErrorModel,
-  RecordMCPToolTelemetryBody
+  RecordMCPToolTelemetryBody,
+  RecordMCPToolTelemetryHeaders
 } from '../../models';
 
 import { customInstance } from '../../client';
@@ -86,13 +87,14 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
  */
 export const recordMCPToolTelemetry = (
     recordMCPToolTelemetryBody: BodyType<NonReadonly<RecordMCPToolTelemetryBody>>,
+    headers: RecordMCPToolTelemetryHeaders,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<void>(
       {url: `/api/v1/mcp/telemetry`, method: 'POST',
-      headers: {'Content-Type': 'application/json', },
+      headers: {'Content-Type': 'application/json', ...headers},
       data: recordMCPToolTelemetryBody, signal
     },
       options);
@@ -102,8 +104,8 @@ export const recordMCPToolTelemetry = (
 
 
 export const getRecordMCPToolTelemetryMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordMCPToolTelemetry>>, TError,{data: BodyType<NonReadonly<RecordMCPToolTelemetryBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof recordMCPToolTelemetry>>, TError,{data: BodyType<NonReadonly<RecordMCPToolTelemetryBody>>}, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordMCPToolTelemetry>>, TError,{data: BodyType<NonReadonly<RecordMCPToolTelemetryBody>>;headers: RecordMCPToolTelemetryHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof recordMCPToolTelemetry>>, TError,{data: BodyType<NonReadonly<RecordMCPToolTelemetryBody>>;headers: RecordMCPToolTelemetryHeaders}, TContext> => {
 
 const mutationKey = ['recordMCPToolTelemetry'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -115,10 +117,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof recordMCPToolTelemetry>>, {data: BodyType<NonReadonly<RecordMCPToolTelemetryBody>>}> = (props) => {
-          const {data} = props ?? {};
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof recordMCPToolTelemetry>>, {data: BodyType<NonReadonly<RecordMCPToolTelemetryBody>>;headers: RecordMCPToolTelemetryHeaders}> = (props) => {
+          const {data,headers} = props ?? {};
 
-          return  recordMCPToolTelemetry(data,requestOptions)
+          return  recordMCPToolTelemetry(data,headers,requestOptions)
         }
 
 
@@ -136,11 +138,11 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
  * @summary Record an MCP tool completion
  */
 export const useRecordMCPToolTelemetry = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordMCPToolTelemetry>>, TError,{data: BodyType<NonReadonly<RecordMCPToolTelemetryBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordMCPToolTelemetry>>, TError,{data: BodyType<NonReadonly<RecordMCPToolTelemetryBody>>;headers: RecordMCPToolTelemetryHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof recordMCPToolTelemetry>>,
         TError,
-        {data: BodyType<NonReadonly<RecordMCPToolTelemetryBody>>},
+        {data: BodyType<NonReadonly<RecordMCPToolTelemetryBody>>;headers: RecordMCPToolTelemetryHeaders},
         TContext
       > => {
       return useMutation(getRecordMCPToolTelemetryMutationOptions(options), queryClient);

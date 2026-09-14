@@ -50,6 +50,7 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  CreateMCPRecipeHeaders,
   CreateMCPRecipeRequest,
   ErrorModel,
   MCPRecipe,
@@ -206,13 +207,14 @@ export function useListMCPRecipes<TData = Awaited<ReturnType<typeof listMCPRecip
  */
 export const createMCPRecipe = (
     createMCPRecipeRequest: BodyType<NonReadonly<CreateMCPRecipeRequest>>,
+    headers?: CreateMCPRecipeHeaders,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<MCPRecipe>(
       {url: `/api/v1/mcp/recipes`, method: 'POST',
-      headers: {'Content-Type': 'application/json', },
+      headers: {'Content-Type': 'application/json', ...headers},
       data: createMCPRecipeRequest, signal
     },
       options);
@@ -222,8 +224,8 @@ export const createMCPRecipe = (
 
 
 export const getCreateMCPRecipeMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createMCPRecipe>>, TError,{data: BodyType<NonReadonly<CreateMCPRecipeRequest>>}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof createMCPRecipe>>, TError,{data: BodyType<NonReadonly<CreateMCPRecipeRequest>>}, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createMCPRecipe>>, TError,{data: BodyType<NonReadonly<CreateMCPRecipeRequest>>;headers?: CreateMCPRecipeHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof createMCPRecipe>>, TError,{data: BodyType<NonReadonly<CreateMCPRecipeRequest>>;headers?: CreateMCPRecipeHeaders}, TContext> => {
 
 const mutationKey = ['createMCPRecipe'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -235,10 +237,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createMCPRecipe>>, {data: BodyType<NonReadonly<CreateMCPRecipeRequest>>}> = (props) => {
-          const {data} = props ?? {};
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createMCPRecipe>>, {data: BodyType<NonReadonly<CreateMCPRecipeRequest>>;headers?: CreateMCPRecipeHeaders}> = (props) => {
+          const {data,headers} = props ?? {};
 
-          return  createMCPRecipe(data,requestOptions)
+          return  createMCPRecipe(data,headers,requestOptions)
         }
 
 
@@ -256,11 +258,11 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
  * @summary Create a recipe
  */
 export const useCreateMCPRecipe = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createMCPRecipe>>, TError,{data: BodyType<NonReadonly<CreateMCPRecipeRequest>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createMCPRecipe>>, TError,{data: BodyType<NonReadonly<CreateMCPRecipeRequest>>;headers?: CreateMCPRecipeHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof createMCPRecipe>>,
         TError,
-        {data: BodyType<NonReadonly<CreateMCPRecipeRequest>>},
+        {data: BodyType<NonReadonly<CreateMCPRecipeRequest>>;headers?: CreateMCPRecipeHeaders},
         TContext
       > => {
       return useMutation(getCreateMCPRecipeMutationOptions(options), queryClient);

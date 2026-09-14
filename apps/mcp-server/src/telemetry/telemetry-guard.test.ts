@@ -32,4 +32,20 @@ describe('MCP telemetry architecture guard', () => {
     expect(registrations).toHaveLength(7)
     expect(wrappers).toHaveLength(registrations.length)
   })
+
+  it('keeps the generated endpoint client explicit about its required Worker secret header', () => {
+    const client = readFileSync(
+      resolve(import.meta.dir, '../../../../packages/api-client/src/endpoints/mcp-telemetry/mcp-telemetry.ts'),
+      'utf8',
+    )
+    const headersModel = readFileSync(
+      resolve(import.meta.dir, '../../../../packages/api-client/src/models/recordMCPToolTelemetryHeaders.ts'),
+      'utf8',
+    )
+
+    expect(client).toContain('headers: RecordMCPToolTelemetryHeaders')
+    expect(client).toContain("headers: {'Content-Type': 'application/json', ...headers}")
+    expect(headersModel).toContain("'X-MCP-Worker-Secret': string")
+    expect(headersModel).not.toContain("'X-MCP-Worker-Secret'?: string")
+  })
 })
