@@ -8,7 +8,7 @@ GUARD="$REPO_ROOT/scripts/check-mobile-ci.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-TOTAL=71
+TOTAL=113
 case_no=0
 pass=0
 fail=0
@@ -21,11 +21,14 @@ announce() {
 
 copy_fixture() {
   local dest="$1"
-  mkdir -p "$dest/.github/workflows" "$dest/apps/mobile"
+  mkdir -p "$dest/.github/workflows" "$dest/apps/mobile" "$dest/apps/web" "$dest/packages/api-client"
   cp "$REPO_ROOT/.github/workflows/test.yml" "$dest/.github/workflows/test.yml"
   cp "$REPO_ROOT/.github/workflows/warm-ci-cache.yml" "$dest/.github/workflows/warm-ci-cache.yml"
   cp "$REPO_ROOT/.github/dependabot.yml" "$dest/.github/dependabot.yml"
   cp "$REPO_ROOT/apps/mobile/package.json" "$dest/apps/mobile/package.json"
+  cp "$REPO_ROOT/apps/web/package.json" "$dest/apps/web/package.json"
+  cp "$REPO_ROOT/packages/api-client/package.json" "$dest/packages/api-client/package.json"
+  cp "$REPO_ROOT/package.json" "$dest/package.json"
   touch "$dest/bun.lock"
 }
 
@@ -149,6 +152,60 @@ path.write_text(json.dumps(doc, indent=2) + '\n')
 PY
 }
 
+mutate_dependency_policy() {
+  python3 - "$1" "$2" <<'PY'
+import json, pathlib, sys
+root, action = pathlib.Path(sys.argv[1]), sys.argv[2]
+paths = {
+    'root': root / 'package.json',
+    'web': root / 'apps/web/package.json',
+    'mobile': root / 'apps/mobile/package.json',
+    'api-client': root / 'packages/api-client/package.json',
+}
+
+def load(name):
+    path = paths[name]
+    return path, json.loads(path.read_text())
+
+def save(path, doc):
+    path.write_text(json.dumps(doc, indent=2) + '\n')
+
+if action == 'allowed-react-patch':
+    for name, section in (('root', 'dependencies'), ('web', 'dependencies'), ('mobile', 'dependencies'), ('api-client', 'devDependencies')):
+        path, doc = load(name)
+        doc[section]['react'] = '19.2.4'
+        doc[section]['react-dom'] = '19.2.4'
+        save(path, doc)
+elif action in ('coordinated-react-range', 'coordinated-react-minor'):
+    value = '^19.2.3' if action == 'coordinated-react-range' else '19.3.0'
+    for name, section in (('root', 'dependencies'), ('web', 'dependencies'), ('mobile', 'dependencies'), ('api-client', 'devDependencies')):
+        path, doc = load(name)
+        doc[section]['react'] = value
+        doc[section]['react-dom'] = value
+        save(path, doc)
+elif action.startswith('set:'):
+    _, name, section, dependency, value = action.split(':', 4)
+    path, doc = load(name)
+    doc[section][dependency] = value
+    save(path, doc)
+elif action.startswith('override:'):
+    _, dependency, value = action.split(':', 2)
+    path, doc = load('root')
+    doc.setdefault('overrides', {})[dependency] = value
+    save(path, doc)
+elif action == 'qualified-override':
+    path, doc = load('root')
+    doc.setdefault('overrides', {})['lightningcss@*'] = '1.30.2'
+    save(path, doc)
+elif action == 'nested-override':
+    path, doc = load('root')
+    doc.setdefault('overrides', {})['some-package'] = {'react': '19.2.3'}
+    save(path, doc)
+else:
+    raise AssertionError(action)
+PY
+}
+
 mutate_dependabot() {
   python3 - "$1" "$2" <<'PY'
 import pathlib, sys, yaml
@@ -209,6 +266,22 @@ reject_mobile_package() {
   copy_fixture "$dir"
   mutate_mobile_package "$dir/apps/mobile/package.json" "$action"
   if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
+}
+
+reject_dependency_policy() {
+  local label="$1" action="$2" dir="$TMP/case-$((case_no + 1))"
+  announce "$label"
+  copy_fixture "$dir"
+  mutate_dependency_policy "$dir" "$action"
+  if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
+}
+
+accept_dependency_policy() {
+  local label="$1" action="$2" dir="$TMP/case-$((case_no + 1))"
+  announce "$label"
+  copy_fixture "$dir"
+  mutate_dependency_policy "$dir" "$action"
+  if guard_passes "$dir"; then ok "accepted"; else bad "rejected: $label"; fi
 }
 
 announce "the real repository configuration passes"
@@ -315,6 +388,50 @@ reject_dependabot "generic frontend group competes for React DOM" "generic-overl
 reject_dependabot "Expo major updates are no longer held" "remove-expo-major-ignore"
 reject_dependabot "React Native major updates are no longer held" "remove-react-native-major-ignore"
 reject_dependabot "NativeWind major updates are no longer held" "remove-nativewind-major-ignore"
+
+accept_dependency_policy "React patch updates remain available to Dependabot" "allowed-react-patch"
+accept_dependency_policy "Expo 57 patch updates remain available to Dependabot" "set:mobile:dependencies:expo:~57.0.99"
+accept_dependency_policy "Expo Router 57 patch updates remain available to Dependabot" "set:mobile:dependencies:expo-router:~57.0.99"
+accept_dependency_policy "React Native 0.86 patch updates remain available to Dependabot" "set:mobile:dependencies:react-native:0.86.99"
+accept_dependency_policy "React Native Web 0.21 patch updates remain available to Dependabot" "set:mobile:dependencies:react-native-web:~0.21.99"
+accept_dependency_policy "TanStack Query 5 updates remain available to Dependabot" "set:mobile:dependencies:@tanstack/react-query:^5.102.0"
+accept_dependency_policy "React Router 7 updates remain available to Dependabot" "set:web:dependencies:react-router:^7.14.0"
+
+reject_dependency_policy "React Router 8 is incompatible with React 19.2.3" "set:web:dependencies:react-router:^8.3.0"
+reject_dependency_policy "React Router requires a caret range" "set:web:dependencies:react-router:7.13.1"
+reject_dependency_policy "React Router versions below 7.13.1 are unsupported" "set:web:dependencies:react-router:^7.12.0"
+reject_dependency_policy "root React cannot drift from React DOM" "set:root:dependencies:react:19.2.4"
+reject_dependency_policy "web React DOM cannot drift from the shared runtime" "set:web:dependencies:react-dom:19.2.4"
+reject_dependency_policy "mobile React cannot drift from the shared runtime" "set:mobile:dependencies:react:19.2.4"
+reject_dependency_policy "API-client React DOM cannot drift from the shared runtime" "set:api-client:devDependencies:react-dom:19.2.4"
+reject_dependency_policy "moving latest tags are forbidden" "set:mobile:dependencies:expo:latest"
+reject_dependency_policy "moving preview tags are forbidden" "set:mobile:dependencies:expo-router:preview"
+reject_dependency_policy "wildcard dependency versions are forbidden" "set:mobile:dependencies:react-native:*"
+reject_dependency_policy "empty dependency versions are forbidden" "set:mobile:dependencies:react-native-web:"
+reject_dependency_policy "other unconstrained tags are forbidden" "set:mobile:dependencies:@tanstack/react-query:next"
+reject_dependency_policy "React must be exact rather than ranged" "set:root:dependencies:react:^19.2.3"
+reject_dependency_policy "Expo requires a tilde range" "set:mobile:dependencies:expo:57.0.1"
+reject_dependency_policy "Expo Router requires a tilde range" "set:mobile:dependencies:expo-router:^57.0.1"
+reject_dependency_policy "React Native must be exact" "set:mobile:dependencies:react-native:^0.86.3"
+reject_dependency_policy "React Native Web requires a tilde range" "set:mobile:dependencies:react-native-web:0.21.1"
+reject_dependency_policy "TanStack Query requires a caret range" "set:mobile:dependencies:@tanstack/react-query:5.102.0"
+reject_dependency_policy "web TanStack Query must stay on caret major 5" "set:web:dependencies:@tanstack/react-query:latest"
+reject_dependency_policy "API-client peer TanStack Query must stay on caret major 5" "set:api-client:peerDependencies:@tanstack/react-query:^6.0.0"
+reject_dependency_policy "API-client dev TanStack Query must stay on caret major 5" "set:api-client:devDependencies:@tanstack/react-query:next"
+reject_dependency_policy "coordinated React ranges are still forbidden" "coordinated-react-range"
+reject_dependency_policy "coordinated React 19.3 upgrades require validation" "coordinated-react-minor"
+reject_dependency_policy "Expo SDK 58 requires an explicit compatibility upgrade" "set:mobile:dependencies:expo:~58.0.0"
+reject_dependency_policy "Expo Router must stay within SDK 57" "set:mobile:dependencies:expo-router:~58.0.0"
+reject_dependency_policy "React Native 0.87 requires an explicit compatibility upgrade" "set:mobile:dependencies:react-native:0.87.0"
+reject_dependency_policy "React Native Web 0.22 requires an explicit compatibility upgrade" "set:mobile:dependencies:react-native-web:~0.22.0"
+reject_dependency_policy "TanStack Query must stay on major 5" "set:mobile:dependencies:@tanstack/react-query:^6.0.0"
+reject_dependency_policy "NativeWind must use the validated release candidate" "set:mobile:dependencies:nativewind:5.0.0-rc.1"
+reject_dependency_policy "react-native-css must use the validated prerelease" "set:mobile:dependencies:react-native-css:3.1.0-rc.1"
+reject_dependency_policy "global React overrides are forbidden" "override:react:19.2.3"
+reject_dependency_policy "global React DOM overrides are forbidden" "override:react-dom:19.2.3"
+reject_dependency_policy "global lightningcss overrides are forbidden" "override:lightningcss:1.30.2"
+reject_dependency_policy "version-qualified global overrides are forbidden" "qualified-override"
+reject_dependency_policy "nested React overrides are forbidden" "nested-override"
 
 echo "check-mobile-ci.test.sh: $pass passed, $fail failed"
 if [ "$case_no" -ne "$TOTAL" ]; then
