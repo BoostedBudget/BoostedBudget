@@ -4,7 +4,12 @@ import posthog, {
   type Properties,
 } from 'posthog-js'
 import { redactCapabilityUrlPath } from '@boostedbudget/api-client/client'
-import { ANALYTICS_EVENTS } from '../analytics'
+import {
+  ANALYTICS_EVENTS,
+  normalizeAnalyticsEventPayload,
+  type AnalyticsEventArguments,
+  type AnalyticsEventName,
+} from '../analytics'
 import { isPiiKey } from './piiScrubbing'
 import {
   createAnalyticsCaptureGate,
@@ -430,8 +435,13 @@ export function capturePageView(url: string): void {
   })
 }
 
-export function captureProductEvent(event: string, properties?: Properties): void {
-  analyticsLifecycle.capture(event, properties)
+export function captureProductEvent<Event extends AnalyticsEventName>(
+  event: Event,
+  ...[properties]: AnalyticsEventArguments<Event>
+): void {
+  const normalized = normalizeAnalyticsEventPayload(event, properties)
+  if (normalized === null) return
+  analyticsLifecycle.capture(event, normalized)
 }
 
 export function setProductAnalyticsPersonProperties(properties: Properties): void {

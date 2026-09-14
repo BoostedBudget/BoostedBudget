@@ -195,4 +195,849 @@ export const ANALYTICS_EVENTS = {
   WIDGET_REMOVED: 'widget_removed',
 } as const
 
-export type AnalyticsEventName = (typeof ANALYTICS_EVENTS)[keyof typeof ANALYTICS_EVENTS]
+export interface AnalyticsEventProperties {
+  'account_balance_history_viewed': {
+    account_type?: string
+    retained_days: number
+  }
+  'account_detail_viewed': Record<string, unknown>
+  'account_holdings_history_date_changed': Record<string, unknown>
+  'account_holdings_history_viewed': {
+    account_type?: string
+    retained_days: number
+    positions_shown: number
+  }
+  'account_investment_activity_clicked': Record<string, unknown>
+  'account_link_completed': {
+    provider: 'plaid'
+  }
+  'account_purged': Record<string, unknown>
+  'account_reconnect_failed': Record<string, unknown>
+  'account_reconnect_link_started': Record<string, unknown>
+  'account_reconnect_succeeded': Record<string, unknown>
+  'account_removed': Record<string, unknown>
+  'account_replaced_filtered': Record<string, unknown>
+  'admin_dlq_bulk_delete': Record<string, unknown>
+  'admin_dlq_delete': Record<string, unknown>
+  'admin_dlq_retry': Record<string, unknown>
+  'admin_orphaned_plaid_item_attested': Record<string, unknown>
+  'admin_page_viewed': Record<string, unknown>
+  'admin_subscription_override_applied': Record<string, unknown>
+  'admin_subscription_override_removed': Record<string, unknown>
+  'admin_webhook_replay': Record<string, unknown>
+  'analytics_average_monthly_spend_viewed': Record<string, unknown>
+  'analytics_budget_vs_actual_viewed': Record<string, unknown>
+  'analytics_financial_summary_viewed': Record<string, unknown>
+  'analytics_income_sources_viewed': Record<string, unknown>
+  'analytics_largest_transactions_viewed': Record<string, unknown>
+  'analytics_mom_change_viewed': Record<string, unknown>
+  'analytics_net_worth_trend_viewed': Record<string, unknown>
+  'analytics_recurring_subs_viewed': Record<string, unknown>
+  'analytics_savings_rate_viewed': Record<string, unknown>
+  'analytics_unusual_spend_viewed': Record<string, unknown>
+  'asset_allocation_widget_viewed': Record<string, unknown>
+  'auto_categorization_viewed': Record<string, unknown>
+  'boosts_create_clicked': Record<string, unknown>
+  'boosts_filter_changed': Record<string, unknown>
+  'boosts_page_viewed': Record<string, unknown>
+  'boosts_tab_changed': Record<string, unknown>
+  'boost_created': Record<string, unknown>
+  'boost_deleted': Record<string, unknown>
+  'boost_edited': Record<string, unknown>
+  'boost_execution_history_viewed': {
+    has_deleted_boost_rows: boolean
+    deleted_markers_unavailable: boolean
+  }
+  'budget_category_added': Record<string, unknown>
+  'budget_category_deleted': Record<string, unknown>
+  'budget_category_updated': Record<string, unknown>
+  'budget_created': Record<string, unknown>
+  'budget_deleted': Record<string, unknown>
+  'budget_detail_viewed': Record<string, unknown>
+  'budget_edited': Record<string, unknown>
+  'budget_plan_full_table_viewed': Record<string, unknown>
+  'budget_plan_line_opened': Record<string, unknown>
+  'budget_sub_allocation_added': Record<string, unknown>
+  'category_filter_applied': Record<string, unknown>
+  'category_filter_cleared': Record<string, unknown>
+  'checkout_completed': Record<string, unknown>
+  'checkout_started': Record<string, unknown>
+  'custom_category_created': Record<string, unknown>
+  'custom_category_deleted': Record<string, unknown>
+  'custom_category_manager_opened': Record<string, unknown>
+  'custom_category_updated': Record<string, unknown>
+  'dashboard_scope_changed': Record<string, unknown>
+  'dashboard_viewed': Record<string, unknown>
+  'datatable_column_pinned': Record<string, unknown>
+  'datatable_column_reordered': Record<string, unknown>
+  'datatable_column_resized': Record<string, unknown>
+  'datatable_column_visibility_toggled': Record<string, unknown>
+  'data_export_downloaded': Record<string, unknown>
+  'data_export_failed': Record<string, unknown>
+  'first_account_linked': Record<string, never>
+  'first_budget_created': Record<string, unknown>
+  'getting_started_completed': Record<string, unknown>
+  'getting_started_dismissed': Record<string, unknown>
+  'getting_started_step_clicked': Record<string, unknown>
+  'getting_started_viewed': Record<string, unknown>
+  'household_account_share_changed': Record<string, unknown>
+  'household_created': Record<string, unknown>
+  'household_disbanded': Record<string, unknown>
+  'household_invite_accepted': Record<string, unknown>
+  'household_invite_created': Record<string, unknown>
+  'household_invite_declined': Record<string, unknown>
+  'household_invite_regenerated': Record<string, unknown>
+  'household_invite_revoked': Record<string, unknown>
+  'household_left': Record<string, unknown>
+  'household_member_removed': Record<string, unknown>
+  'household_new_accounts_share_saved': Record<string, unknown>
+  'household_over_capacity_banner_cta_clicked': Record<string, unknown>
+  'household_over_capacity_banner_dismissed': Record<string, unknown>
+  'household_over_capacity_banner_viewed': Record<string, unknown>
+  'household_renamed': Record<string, unknown>
+  'insights_page_viewed': Record<string, unknown>
+  'insights_tab_changed': Record<string, unknown>
+  'investment_activity_filter_toggled': Record<string, unknown>
+  'investment_activity_type_filter_applied': Record<string, unknown>
+  'investment_detail_drawer_opened': Record<string, unknown>
+  'landing_cta_clicked': Record<string, unknown>
+  'mcp_band_cta_clicked': Record<string, unknown>
+  'mcp_config_copied': {
+    client: 'claude_desktop' | 'claude_code' | 'cursor' | 'vscode'
+  }
+  'mcp_page_cta_clicked': Record<string, unknown>
+  'mcp_page_viewed': Record<string, unknown>
+  'mcp_setup_tab_changed': {
+    client: 'claude_desktop' | 'claude_code' | 'cursor' | 'vscode'
+  }
+  'merchants_merged': Record<string, unknown>
+  'merchants_tab_viewed': Record<string, unknown>
+  'merchant_override_cleared': Record<string, unknown>
+  'merchant_override_set': Record<string, unknown>
+  'net_worth_page_viewed': Record<string, unknown>
+  'net_worth_range_changed': Record<string, unknown>
+  'notification_action_clicked': Record<string, unknown>
+  'notification_all_read': Record<string, unknown>
+  'notification_drawer_opened': Record<string, unknown>
+  'notification_read': Record<string, unknown>
+  'plaid_link_failed': Record<string, unknown>
+  'plaid_link_started': Record<string, unknown>
+  'plaid_link_succeeded': Record<string, never>
+  'planning_page_viewed': Record<string, unknown>
+  'planning_tab_changed': Record<string, unknown>
+  'portfolio_allocation_config_changed': Record<string, unknown>
+  'portfolio_holdings_widget_viewed': Record<string, unknown>
+  'portfolio_page_viewed': Record<string, unknown>
+  'portfolio_range_changed': Record<string, unknown>
+  'portfolio_summary_widget_viewed': Record<string, unknown>
+  '$pageview': Record<string, unknown>
+  'pricing_viewed': Record<string, unknown>
+  'privacy_settings_changed': Record<string, never>
+  'profile_updated': Record<string, unknown>
+  'reports_viewed': Record<string, unknown>
+  'report_category_clicked': Record<string, unknown>
+  'report_custom_category_filtered': Record<string, unknown>
+  'report_date_changed': Record<string, unknown>
+  'report_merchant_clicked': Record<string, unknown>
+  'report_sankey_category_focused': {
+    depth: number
+  }
+  'report_sankey_node_navigated': {
+    depth: number
+    direction: 'income' | 'expense'
+  }
+  'report_sankey_privacy_toggled': Record<string, unknown>
+  'report_sankey_view_mode_changed': {
+    mode: 'parents' | 'expanded'
+  }
+  'reversed_transactions_filter_toggled': Record<string, unknown>
+  'review_all_caught_up': Record<string, unknown>
+  'review_bulk_recategorized': Record<string, unknown>
+  'review_inbox_viewed': Record<string, unknown>
+  'review_preset_changed': Record<string, unknown>
+  'review_undo': Record<string, unknown>
+  'rule_execution_history_viewed': {
+    has_deleted_rule_rows: boolean
+    deleted_row_count: number
+  }
+  'rule_previewed': Record<string, unknown>
+  'rule_saved': Record<string, unknown>
+  'savings_contributions_viewed': Record<string, unknown>
+  'savings_contribution_confirmed': Record<string, unknown>
+  'savings_contribution_deleted': Record<string, unknown>
+  'savings_contribution_logged': Record<string, unknown>
+  'savings_contribution_rejected': Record<string, unknown>
+  'savings_filter_changed': Record<string, unknown>
+  'savings_goal_created': Record<string, unknown>
+  'savings_goal_deleted': Record<string, unknown>
+  'savings_goal_deleted_ledger_viewed': Record<string, unknown>
+  'savings_goal_edited': Record<string, unknown>
+  'savings_goal_progress_basis_changed': Record<string, unknown>
+  'savings_goal_purged': Record<string, unknown>
+  'savings_impact_viewed': Record<string, unknown>
+  'savings_page_viewed': Record<string, unknown>
+  'savings_sort_changed': Record<string, unknown>
+  'sign_in_completed': Record<string, never>
+  'sign_out_completed': Record<string, never>
+  'sign_up_completed': Record<string, never>
+  'subscription_banner_cta_clicked': Record<string, unknown>
+  'subscription_banner_dismissed': Record<string, unknown>
+  'subscription_banner_viewed': Record<string, unknown>
+  'subscription_managed': Record<string, unknown>
+  'theme_changed': Record<string, unknown>
+  'timeframe_changed': Record<string, unknown>
+  'transactions_page_loaded_more': Record<string, unknown>
+  'transactions_viewed': Record<string, unknown>
+  'transaction_approved': Record<string, unknown>
+  'transaction_categorized': Record<string, unknown>
+  'transaction_editor_opened': Record<string, unknown>
+  'transaction_reviewed': Record<string, unknown>
+  'transaction_review_filter_changed': Record<string, unknown>
+  'transaction_searched': Record<string, unknown>
+  'transaction_skipped': Record<string, unknown>
+  'transfer_suggestion_accepted': Record<string, unknown>
+  'transfer_suggestion_canceled': Record<string, unknown>
+  'transfer_suggestion_match_confirmed': Record<string, unknown>
+  'transfer_suggestion_match_declined': Record<string, unknown>
+  'transfer_suggestion_rejected': Record<string, unknown>
+  'transfer_suggestion_validated': Record<string, unknown>
+  'uncategorized_filter_cleared': Record<string, unknown>
+  'widget_added': Record<string, unknown>
+  'widget_removed': Record<string, unknown>
+}
+
+export type AnalyticsEventName = keyof AnalyticsEventProperties
+export type AnalyticsEventArguments<Event extends AnalyticsEventName> =
+  keyof AnalyticsEventProperties[Event] extends never
+    ? [properties?: never]
+    : Record<never, never> extends AnalyticsEventProperties[Event]
+      ? [properties?: AnalyticsEventProperties[Event]]
+      : [properties: AnalyticsEventProperties[Event]]
+
+export const ANALYTICS_EVENTS_WITH_UNREVIEWED_PROPERTIES: ReadonlySet<AnalyticsEventName> =
+  new Set([
+    'account_detail_viewed',
+    'account_holdings_history_date_changed',
+    'account_investment_activity_clicked',
+    'account_purged',
+    'account_reconnect_failed',
+    'account_reconnect_link_started',
+    'account_reconnect_succeeded',
+    'account_removed',
+    'account_replaced_filtered',
+    'admin_dlq_bulk_delete',
+    'admin_dlq_delete',
+    'admin_dlq_retry',
+    'admin_orphaned_plaid_item_attested',
+    'admin_page_viewed',
+    'admin_subscription_override_applied',
+    'admin_subscription_override_removed',
+    'admin_webhook_replay',
+    'analytics_average_monthly_spend_viewed',
+    'analytics_budget_vs_actual_viewed',
+    'analytics_financial_summary_viewed',
+    'analytics_income_sources_viewed',
+    'analytics_largest_transactions_viewed',
+    'analytics_mom_change_viewed',
+    'analytics_net_worth_trend_viewed',
+    'analytics_recurring_subs_viewed',
+    'analytics_savings_rate_viewed',
+    'analytics_unusual_spend_viewed',
+    'asset_allocation_widget_viewed',
+    'auto_categorization_viewed',
+    'boosts_create_clicked',
+    'boosts_filter_changed',
+    'boosts_page_viewed',
+    'boosts_tab_changed',
+    'boost_created',
+    'boost_deleted',
+    'boost_edited',
+    'budget_category_added',
+    'budget_category_deleted',
+    'budget_category_updated',
+    'budget_created',
+    'budget_deleted',
+    'budget_detail_viewed',
+    'budget_edited',
+    'budget_plan_full_table_viewed',
+    'budget_plan_line_opened',
+    'budget_sub_allocation_added',
+    'category_filter_applied',
+    'category_filter_cleared',
+    'checkout_completed',
+    'checkout_started',
+    'custom_category_created',
+    'custom_category_deleted',
+    'custom_category_manager_opened',
+    'custom_category_updated',
+    'dashboard_scope_changed',
+    'dashboard_viewed',
+    'datatable_column_pinned',
+    'datatable_column_reordered',
+    'datatable_column_resized',
+    'datatable_column_visibility_toggled',
+    'data_export_downloaded',
+    'data_export_failed',
+    'first_budget_created',
+    'getting_started_completed',
+    'getting_started_dismissed',
+    'getting_started_step_clicked',
+    'getting_started_viewed',
+    'household_account_share_changed',
+    'household_created',
+    'household_disbanded',
+    'household_invite_accepted',
+    'household_invite_created',
+    'household_invite_declined',
+    'household_invite_regenerated',
+    'household_invite_revoked',
+    'household_left',
+    'household_member_removed',
+    'household_new_accounts_share_saved',
+    'household_over_capacity_banner_cta_clicked',
+    'household_over_capacity_banner_dismissed',
+    'household_over_capacity_banner_viewed',
+    'household_renamed',
+    'insights_page_viewed',
+    'insights_tab_changed',
+    'investment_activity_filter_toggled',
+    'investment_activity_type_filter_applied',
+    'investment_detail_drawer_opened',
+    'landing_cta_clicked',
+    'mcp_band_cta_clicked',
+    'mcp_page_cta_clicked',
+    'mcp_page_viewed',
+    'merchants_merged',
+    'merchants_tab_viewed',
+    'merchant_override_cleared',
+    'merchant_override_set',
+    'net_worth_page_viewed',
+    'net_worth_range_changed',
+    'notification_action_clicked',
+    'notification_all_read',
+    'notification_drawer_opened',
+    'notification_read',
+    'plaid_link_failed',
+    'plaid_link_started',
+    'planning_page_viewed',
+    'planning_tab_changed',
+    'portfolio_allocation_config_changed',
+    'portfolio_holdings_widget_viewed',
+    'portfolio_page_viewed',
+    'portfolio_range_changed',
+    'portfolio_summary_widget_viewed',
+    '$pageview',
+    'pricing_viewed',
+    'profile_updated',
+    'reports_viewed',
+    'report_category_clicked',
+    'report_custom_category_filtered',
+    'report_date_changed',
+    'report_merchant_clicked',
+    'report_sankey_privacy_toggled',
+    'reversed_transactions_filter_toggled',
+    'review_all_caught_up',
+    'review_bulk_recategorized',
+    'review_inbox_viewed',
+    'review_preset_changed',
+    'review_undo',
+    'rule_previewed',
+    'rule_saved',
+    'savings_contributions_viewed',
+    'savings_contribution_confirmed',
+    'savings_contribution_deleted',
+    'savings_contribution_logged',
+    'savings_contribution_rejected',
+    'savings_filter_changed',
+    'savings_goal_created',
+    'savings_goal_deleted',
+    'savings_goal_deleted_ledger_viewed',
+    'savings_goal_edited',
+    'savings_goal_progress_basis_changed',
+    'savings_goal_purged',
+    'savings_impact_viewed',
+    'savings_page_viewed',
+    'savings_sort_changed',
+    'subscription_banner_cta_clicked',
+    'subscription_banner_dismissed',
+    'subscription_banner_viewed',
+    'subscription_managed',
+    'theme_changed',
+    'timeframe_changed',
+    'transactions_page_loaded_more',
+    'transactions_viewed',
+    'transaction_approved',
+    'transaction_categorized',
+    'transaction_editor_opened',
+    'transaction_reviewed',
+    'transaction_review_filter_changed',
+    'transaction_searched',
+    'transaction_skipped',
+    'transfer_suggestion_accepted',
+    'transfer_suggestion_canceled',
+    'transfer_suggestion_match_confirmed',
+    'transfer_suggestion_match_declined',
+    'transfer_suggestion_rejected',
+    'transfer_suggestion_validated',
+    'uncategorized_filter_cleared',
+    'widget_added',
+    'widget_removed',
+  ])
+
+export interface AnalyticsPropertyContract {
+  type: 'boolean' | 'integer' | 'number' | 'string'
+  required: boolean
+  values?: readonly string[]
+  minimum?: number
+  maximum?: number
+}
+
+export const ANALYTICS_EVENT_CONTRACTS: Readonly<Record<
+  AnalyticsEventName,
+  Readonly<Record<string, AnalyticsPropertyContract>>
+>> = {
+  'account_balance_history_viewed': {
+    account_type: { type: 'string', required: false },
+    retained_days: { type: 'integer', required: true, minimum: 0 },
+  },
+  'account_detail_viewed': {
+  },
+  'account_holdings_history_date_changed': {
+  },
+  'account_holdings_history_viewed': {
+    account_type: { type: 'string', required: false },
+    retained_days: { type: 'integer', required: true, minimum: 0 },
+    positions_shown: { type: 'integer', required: true, minimum: 0 },
+  },
+  'account_investment_activity_clicked': {
+  },
+  'account_link_completed': {
+    provider: { type: 'string', required: true, values: ['plaid'] },
+  },
+  'account_purged': {
+  },
+  'account_reconnect_failed': {
+  },
+  'account_reconnect_link_started': {
+  },
+  'account_reconnect_succeeded': {
+  },
+  'account_removed': {
+  },
+  'account_replaced_filtered': {
+  },
+  'admin_dlq_bulk_delete': {
+  },
+  'admin_dlq_delete': {
+  },
+  'admin_dlq_retry': {
+  },
+  'admin_orphaned_plaid_item_attested': {
+  },
+  'admin_page_viewed': {
+  },
+  'admin_subscription_override_applied': {
+  },
+  'admin_subscription_override_removed': {
+  },
+  'admin_webhook_replay': {
+  },
+  'analytics_average_monthly_spend_viewed': {
+  },
+  'analytics_budget_vs_actual_viewed': {
+  },
+  'analytics_financial_summary_viewed': {
+  },
+  'analytics_income_sources_viewed': {
+  },
+  'analytics_largest_transactions_viewed': {
+  },
+  'analytics_mom_change_viewed': {
+  },
+  'analytics_net_worth_trend_viewed': {
+  },
+  'analytics_recurring_subs_viewed': {
+  },
+  'analytics_savings_rate_viewed': {
+  },
+  'analytics_unusual_spend_viewed': {
+  },
+  'asset_allocation_widget_viewed': {
+  },
+  'auto_categorization_viewed': {
+  },
+  'boosts_create_clicked': {
+  },
+  'boosts_filter_changed': {
+  },
+  'boosts_page_viewed': {
+  },
+  'boosts_tab_changed': {
+  },
+  'boost_created': {
+  },
+  'boost_deleted': {
+  },
+  'boost_edited': {
+  },
+  'boost_execution_history_viewed': {
+    has_deleted_boost_rows: { type: 'boolean', required: true },
+    deleted_markers_unavailable: { type: 'boolean', required: true },
+  },
+  'budget_category_added': {
+  },
+  'budget_category_deleted': {
+  },
+  'budget_category_updated': {
+  },
+  'budget_created': {
+  },
+  'budget_deleted': {
+  },
+  'budget_detail_viewed': {
+  },
+  'budget_edited': {
+  },
+  'budget_plan_full_table_viewed': {
+  },
+  'budget_plan_line_opened': {
+  },
+  'budget_sub_allocation_added': {
+  },
+  'category_filter_applied': {
+  },
+  'category_filter_cleared': {
+  },
+  'checkout_completed': {
+  },
+  'checkout_started': {
+  },
+  'custom_category_created': {
+  },
+  'custom_category_deleted': {
+  },
+  'custom_category_manager_opened': {
+  },
+  'custom_category_updated': {
+  },
+  'dashboard_scope_changed': {
+  },
+  'dashboard_viewed': {
+  },
+  'datatable_column_pinned': {
+  },
+  'datatable_column_reordered': {
+  },
+  'datatable_column_resized': {
+  },
+  'datatable_column_visibility_toggled': {
+  },
+  'data_export_downloaded': {
+  },
+  'data_export_failed': {
+  },
+  'first_account_linked': {
+  },
+  'first_budget_created': {
+  },
+  'getting_started_completed': {
+  },
+  'getting_started_dismissed': {
+  },
+  'getting_started_step_clicked': {
+  },
+  'getting_started_viewed': {
+  },
+  'household_account_share_changed': {
+  },
+  'household_created': {
+  },
+  'household_disbanded': {
+  },
+  'household_invite_accepted': {
+  },
+  'household_invite_created': {
+  },
+  'household_invite_declined': {
+  },
+  'household_invite_regenerated': {
+  },
+  'household_invite_revoked': {
+  },
+  'household_left': {
+  },
+  'household_member_removed': {
+  },
+  'household_new_accounts_share_saved': {
+  },
+  'household_over_capacity_banner_cta_clicked': {
+  },
+  'household_over_capacity_banner_dismissed': {
+  },
+  'household_over_capacity_banner_viewed': {
+  },
+  'household_renamed': {
+  },
+  'insights_page_viewed': {
+  },
+  'insights_tab_changed': {
+  },
+  'investment_activity_filter_toggled': {
+  },
+  'investment_activity_type_filter_applied': {
+  },
+  'investment_detail_drawer_opened': {
+  },
+  'landing_cta_clicked': {
+  },
+  'mcp_band_cta_clicked': {
+  },
+  'mcp_config_copied': {
+    client: { type: 'string', required: true, values: ['claude_desktop', 'claude_code', 'cursor', 'vscode'] },
+  },
+  'mcp_page_cta_clicked': {
+  },
+  'mcp_page_viewed': {
+  },
+  'mcp_setup_tab_changed': {
+    client: { type: 'string', required: true, values: ['claude_desktop', 'claude_code', 'cursor', 'vscode'] },
+  },
+  'merchants_merged': {
+  },
+  'merchants_tab_viewed': {
+  },
+  'merchant_override_cleared': {
+  },
+  'merchant_override_set': {
+  },
+  'net_worth_page_viewed': {
+  },
+  'net_worth_range_changed': {
+  },
+  'notification_action_clicked': {
+  },
+  'notification_all_read': {
+  },
+  'notification_drawer_opened': {
+  },
+  'notification_read': {
+  },
+  'plaid_link_failed': {
+  },
+  'plaid_link_started': {
+  },
+  'plaid_link_succeeded': {
+  },
+  'planning_page_viewed': {
+  },
+  'planning_tab_changed': {
+  },
+  'portfolio_allocation_config_changed': {
+  },
+  'portfolio_holdings_widget_viewed': {
+  },
+  'portfolio_page_viewed': {
+  },
+  'portfolio_range_changed': {
+  },
+  'portfolio_summary_widget_viewed': {
+  },
+  '$pageview': {
+  },
+  'pricing_viewed': {
+  },
+  'privacy_settings_changed': {
+  },
+  'profile_updated': {
+  },
+  'reports_viewed': {
+  },
+  'report_category_clicked': {
+  },
+  'report_custom_category_filtered': {
+  },
+  'report_date_changed': {
+  },
+  'report_merchant_clicked': {
+  },
+  'report_sankey_category_focused': {
+    depth: { type: 'integer', required: true, minimum: 0 },
+  },
+  'report_sankey_node_navigated': {
+    depth: { type: 'integer', required: true, minimum: 0 },
+    direction: { type: 'string', required: true, values: ['income', 'expense'] },
+  },
+  'report_sankey_privacy_toggled': {
+  },
+  'report_sankey_view_mode_changed': {
+    mode: { type: 'string', required: true, values: ['parents', 'expanded'] },
+  },
+  'reversed_transactions_filter_toggled': {
+  },
+  'review_all_caught_up': {
+  },
+  'review_bulk_recategorized': {
+  },
+  'review_inbox_viewed': {
+  },
+  'review_preset_changed': {
+  },
+  'review_undo': {
+  },
+  'rule_execution_history_viewed': {
+    has_deleted_rule_rows: { type: 'boolean', required: true },
+    deleted_row_count: { type: 'integer', required: true, minimum: 0 },
+  },
+  'rule_previewed': {
+  },
+  'rule_saved': {
+  },
+  'savings_contributions_viewed': {
+  },
+  'savings_contribution_confirmed': {
+  },
+  'savings_contribution_deleted': {
+  },
+  'savings_contribution_logged': {
+  },
+  'savings_contribution_rejected': {
+  },
+  'savings_filter_changed': {
+  },
+  'savings_goal_created': {
+  },
+  'savings_goal_deleted': {
+  },
+  'savings_goal_deleted_ledger_viewed': {
+  },
+  'savings_goal_edited': {
+  },
+  'savings_goal_progress_basis_changed': {
+  },
+  'savings_goal_purged': {
+  },
+  'savings_impact_viewed': {
+  },
+  'savings_page_viewed': {
+  },
+  'savings_sort_changed': {
+  },
+  'sign_in_completed': {
+  },
+  'sign_out_completed': {
+  },
+  'sign_up_completed': {
+  },
+  'subscription_banner_cta_clicked': {
+  },
+  'subscription_banner_dismissed': {
+  },
+  'subscription_banner_viewed': {
+  },
+  'subscription_managed': {
+  },
+  'theme_changed': {
+  },
+  'timeframe_changed': {
+  },
+  'transactions_page_loaded_more': {
+  },
+  'transactions_viewed': {
+  },
+  'transaction_approved': {
+  },
+  'transaction_categorized': {
+  },
+  'transaction_editor_opened': {
+  },
+  'transaction_reviewed': {
+  },
+  'transaction_review_filter_changed': {
+  },
+  'transaction_searched': {
+  },
+  'transaction_skipped': {
+  },
+  'transfer_suggestion_accepted': {
+  },
+  'transfer_suggestion_canceled': {
+  },
+  'transfer_suggestion_match_confirmed': {
+  },
+  'transfer_suggestion_match_declined': {
+  },
+  'transfer_suggestion_rejected': {
+  },
+  'transfer_suggestion_validated': {
+  },
+  'uncategorized_filter_cleared': {
+  },
+  'widget_added': {
+  },
+  'widget_removed': {
+  },
+}
+
+function isValidAnalyticsProperty(
+  value: unknown,
+  contract: AnalyticsPropertyContract,
+): boolean {
+  switch (contract.type) {
+    case 'boolean':
+      return typeof value === 'boolean'
+    case 'integer':
+      return typeof value === 'number'
+        && Number.isInteger(value)
+        && (contract.minimum === undefined || value >= contract.minimum)
+        && (contract.maximum === undefined || value <= contract.maximum)
+    case 'number':
+      return typeof value === 'number'
+        && Number.isFinite(value)
+        && (contract.minimum === undefined || value >= contract.minimum)
+        && (contract.maximum === undefined || value <= contract.maximum)
+    case 'string':
+      return typeof value === 'string'
+        && (contract.values === undefined || contract.values.includes(value))
+  }
+}
+
+function isAnalyticsProperties(value: unknown): value is Record<string, unknown> | undefined {
+  if (value === undefined) return true
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  try {
+    const prototype = Object.getPrototypeOf(value)
+    return prototype === Object.prototype || prototype === null
+  } catch {
+    return false
+  }
+}
+
+export function normalizeAnalyticsEventPayload(
+  event: string,
+  properties?: unknown,
+): Record<string, unknown> | null {
+  if (!Object.prototype.hasOwnProperty.call(ANALYTICS_EVENT_CONTRACTS, event)) return null
+  if (!isAnalyticsProperties(properties)) return null
+  const input = (properties ?? {}) as Record<string, unknown>
+  if (ANALYTICS_EVENTS_WITH_UNREVIEWED_PROPERTIES.has(event as AnalyticsEventName)) return {}
+  const contract = ANALYTICS_EVENT_CONTRACTS[event as AnalyticsEventName]
+  for (const key of Object.keys(input)) {
+    if (!Object.prototype.hasOwnProperty.call(contract, key)) return null
+  }
+  for (const [key, propertyContract] of Object.entries(contract)) {
+    const value = input[key]
+    if (value === undefined) {
+      if (propertyContract.required) return null
+      continue
+    }
+    if (!isValidAnalyticsProperty(value, propertyContract)) return null
+  }
+  return input
+}
+
+export function isValidAnalyticsEventPayload(
+  event: string,
+  properties?: unknown,
+): boolean {
+  return normalizeAnalyticsEventPayload(event, properties) !== null
+}

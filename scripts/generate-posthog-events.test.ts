@@ -436,6 +436,56 @@ describe('deterministic generation', () => {
     expect(generated.go.endsWith('\n')).toBe(true)
   })
 
+  test('renders frontend payload types and runtime property contracts from the catalog', () => {
+    const catalog = validEventCatalog()
+    catalog.events[0].properties = {
+      method: {
+        type: 'string',
+        required: true,
+        cardinality: 'bounded',
+        values: ['plaid'],
+      },
+      retries: {
+        type: 'integer',
+        required: false,
+        cardinality: 'bounded',
+        minimum: 0,
+        maximum: 3,
+      },
+    }
+    const events = validateEventCatalog(catalog)
+    const generated = renderGeneratedArtifacts(events, validateProductMetrics(validMetrics(), events))
+
+    expect(generated.typescript).toContain('export interface AnalyticsEventProperties')
+    expect(generated.typescript).toContain("'account_link_completed': {")
+    expect(generated.typescript).toContain("method: 'plaid'")
+    expect(generated.typescript).toContain('retries?: number')
+    expect(generated.typescript).toContain('export type AnalyticsEventArguments')
+    expect(generated.typescript).toContain('export const ANALYTICS_EVENT_CONTRACTS')
+    expect(generated.typescript).toContain('export function isValidAnalyticsEventPayload')
+    expect(generated.typescript).toContain("type: 'integer', required: false")
+    expect(generated.typescript).toContain('minimum: 0, maximum: 3')
+  })
+
+  test('types legacy unreviewed properties broadly but generates a stripping boundary', () => {
+    const catalog = validEventCatalog()
+    catalog.events[0].status = 'legacy'
+    catalog.events[0].introduced = 'pre_1650'
+    catalog.events[0].properties = {}
+    catalog.events[0].legacy_exceptions = ['property_schema_unreviewed']
+    const events = validateEventCatalog(catalog)
+    const generated = renderGeneratedArtifacts(events, validateProductMetrics(validMetrics(), events))
+
+    expect(generated.typescript).toContain(
+      "'account_link_completed': Record<string, unknown>",
+    )
+    expect(generated.typescript).toContain(
+      "export const ANALYTICS_EVENTS_WITH_UNREVIEWED_PROPERTIES",
+    )
+    expect(generated.typescript).toContain("'account_link_completed',")
+    expect(generated.typescript).toContain('export function normalizeAnalyticsEventPayload')
+  })
+
   test('renders MCP Worker constants separately from frontend constants', () => {
     const catalog = validEventCatalog()
     catalog.events.push({

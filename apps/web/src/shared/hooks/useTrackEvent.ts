@@ -1,11 +1,17 @@
 import { useCallback } from 'react'
 import { captureProductEvent } from '../lib/posthog'
-import type { AnalyticsEventName } from '../analytics/events'
+import type { AnalyticsEventArguments, AnalyticsEventName } from '../analytics/events'
 
-type TrackEvent = (event: AnalyticsEventName, properties?: Record<string, unknown>) => void
+type TrackEvent = <Event extends AnalyticsEventName>(
+  event: Event,
+  ...args: AnalyticsEventArguments<Event>
+) => void
 
 export function useTrackEvent(): TrackEvent {
-  return useCallback((event: AnalyticsEventName, properties?: Record<string, unknown>) => {
-    captureProductEvent(event, properties)
+  return useCallback(<Event extends AnalyticsEventName>(
+    event: Event,
+    ...args: AnalyticsEventArguments<Event>
+  ) => {
+    captureProductEvent(event, ...args)
   }, [])
 }
