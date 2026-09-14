@@ -30,11 +30,11 @@ func (PostHogErasureArgs) Kind() string { return "posthog_erasure" }
 
 type postHogErasureStore interface {
 	ClaimDue(context.Context, time.Time, time.Duration) (*repository.PostHogErasureRecord, error)
-	MarkPersonUUIDsResolved(context.Context, string, string, []string, bool) (bool, error)
+	MarkPersonUUIDsResolved(context.Context, string, string, []string, bool, int, int) (bool, error)
 	MarkDeletionRequestStarted(context.Context, string, string, map[string]*time.Time) (time.Time, bool, error)
-	MarkAccepted(context.Context, string, string, int) (bool, error)
+	MarkAccepted(context.Context, string, string, int, bool) (bool, error)
 	RecordPollPending(context.Context, string, string) (bool, error)
-	MarkPersonEventsVerified(context.Context, string, string) (bool, error)
+	MarkPersonEventsVerified(context.Context, string, string, bool) (bool, error)
 	RecordRetry(context.Context, string, string, string, time.Time, int) (string, error)
 }
 
@@ -97,17 +97,23 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 	}
 	switch record.Phase {
 	case "person_resolve":
+		if record.ResolutionCursor >= len(record.Identities) {
+			err = fmt.Errorf("PostHog erasure resolution cursor exhausted")
+			break
+		}
 		var resolution phclient.ErasurePersonResolution
-		resolution, err = w.provider.ResolvePersonUUIDs(phaseCtx, record.ProjectID, record.Region, record.Identities)
+		resolution, err = w.provider.ResolvePersonUUIDs(phaseCtx, record.ProjectID, record.Region, record.Identities[record.ResolutionCursor:record.ResolutionCursor+1])
 		if err == nil {
+			personUUIDs := appendUniqueStrings(record.PersonUUIDs, resolution.PersonUUIDs)
+			nextCursor := record.ResolutionCursor + 1
 			var updated bool
-			updated, err = w.store.MarkPersonUUIDsResolved(ctx, record.ID, record.LeaseToken, resolution.PersonUUIDs, resolution.HasUnresolvedIdentities)
+			updated, err = w.store.MarkPersonUUIDsResolved(ctx, record.ID, record.LeaseToken, personUUIDs, resolution.HasUnresolvedIdentities, nextCursor, len(record.Identities))
 			if err == nil && !updated {
 				err = fmt.Errorf("PostHog erasure lease lost")
 			}
 			if err == nil {
 				outcome := "accepted"
-				if len(resolution.PersonUUIDs) == 0 {
+				if nextCursor == len(record.Identities) && len(personUUIDs) == 0 {
 					outcome = "failure"
 				}
 				observability.RecordPostHogErasureAttempt("person_resolve", outcome, "none")
@@ -115,6 +121,7 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 			}
 		}
 	case "person_delete":
+		requiresManualEvents := false
 		baseline := record.DeletionBaseline
 		if record.ProviderRequestStartedAt == nil {
 			baseline, err = w.provider.CapturePersonEventDeletionBaseline(phaseCtx, record.ProjectID, record.Region, record.PersonUUIDs)
@@ -143,6 +150,7 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 				}
 				var observation phclient.ErasureDeletionObservation
 				observation, err = w.provider.PersonEventDeletionStatus(phaseCtx, record.ProjectID, record.Region, record.PersonUUIDs, baseline, startedAt, w.now())
+				requiresManualEvents = observation.RequiresManualVerification
 				if err == nil && !observation.Found {
 					err = &phclient.ErasureProviderError{Class: "invalid_response"}
 				}
@@ -151,7 +159,7 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 			}
 		}
 		if err == nil {
-			updated, err = w.store.MarkAccepted(ctx, record.ID, record.LeaseToken, len(record.PersonUUIDs))
+			updated, err = w.store.MarkAccepted(ctx, record.ID, record.LeaseToken, len(record.PersonUUIDs), requiresManualEvents)
 			if err == nil && !updated {
 				err = fmt.Errorf("PostHog erasure lease lost")
 			}
@@ -183,7 +191,7 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 		}
 		if err == nil {
 			var updated bool
-			updated, err = w.store.MarkPersonEventsVerified(ctx, record.ID, record.LeaseToken)
+			updated, err = w.store.MarkPersonEventsVerified(ctx, record.ID, record.LeaseToken, observation.RequiresManualVerification)
 			if err == nil && !updated {
 				err = fmt.Errorf("PostHog erasure lease lost")
 			}
@@ -200,6 +208,19 @@ func (w *PostHogErasureWorker) Work(ctx context.Context, _ *river.Job[PostHogEra
 		return w.persistRetry(ctx, record, class, retryAfter)
 	}
 	return nil
+}
+
+func appendUniqueStrings(existing, additions []string) []string {
+	seen := make(map[string]struct{}, len(existing)+len(additions))
+	result := make([]string, 0, len(existing)+len(additions))
+	for _, value := range append(existing, additions...) {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func (w *PostHogErasureWorker) publishBacklog(ctx context.Context, now time.Time) {

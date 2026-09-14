@@ -20,7 +20,9 @@ func (f *fakePostHogErasureOperator) RetargetUnconfigured(context.Context, strin
 	return true, nil
 }
 func (f *fakePostHogErasureOperator) ListOutstanding(context.Context, int) ([]repository.PostHogErasureOperatorRow, error) {
-	return []repository.PostHogErasureOperatorRow{{ID: "row"}}, nil
+	return []repository.PostHogErasureOperatorRow{{
+		ID: "row", RequiredManualSurfaces: []string{"events", "recordings", "surveys", "support"},
+	}}, nil
 }
 func (f *fakePostHogErasureOperator) RevealOperatorIdentity(context.Context, string, string) (repository.PostHogErasureOperatorIdentity, error) {
 	return repository.PostHogErasureOperatorIdentity{DistinctIDs: []string{"secret"}}, nil
@@ -41,6 +43,7 @@ func TestAdminPostHogErasureOperatorActionsAreExecutable(t *testing.T) {
 	listed, err := h.ListPostHogErasures(context.Background(), &ListPostHogErasuresInput{Limit: 50})
 	require.NoError(t, err)
 	assert.Equal(t, "no-store", listed.CacheControl)
+	assert.Equal(t, []string{"events", "recordings", "surveys", "support"}, listed.Body[0].RequiredManualSurfaces)
 	revealed, err := h.RevealPostHogErasure(context.Background(), &RevealPostHogErasureInput{ErasureID: "11111111-1111-4111-8111-111111111111"})
 	require.NoError(t, err)
 	assert.Equal(t, "no-store", revealed.CacheControl)

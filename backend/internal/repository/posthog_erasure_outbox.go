@@ -59,6 +59,7 @@ type PostHogErasureRecord struct {
 	Region                          string
 	Phase                           string
 	AttemptCount                    int
+	ResolutionCursor                int
 	LeaseToken                      string
 	RequiresManualEventVerification bool
 	ProviderRequestStartedAt        *time.Time
@@ -72,12 +73,13 @@ type PostHogErasureBacklog struct {
 }
 
 type PostHogErasureOperatorRow struct {
-	ID          string    `json:"id"`
-	ProjectID   string    `json:"project_id"`
-	Region      string    `json:"region"`
-	State       string    `json:"state"`
-	Phase       string    `json:"phase"`
-	RequestedAt time.Time `json:"requested_at"`
+	ID                     string    `json:"id"`
+	ProjectID              string    `json:"project_id"`
+	Region                 string    `json:"region"`
+	State                  string    `json:"state"`
+	Phase                  string    `json:"phase"`
+	RequestedAt            time.Time `json:"requested_at"`
+	RequiredManualSurfaces []string  `json:"required_manual_surfaces" doc:"Provider surfaces requiring twice-separated operator evidence before completion"`
 }
 
 type PostHogErasureOperatorIdentity struct {
@@ -136,10 +138,10 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 		FROM candidate WHERE o.id = candidate.id
 		RETURNING o.id, o.identities_encrypted, o.provider_person_uuids_encrypted,
 		          o.provider_deletion_baseline_encrypted,
-		          o.project_id, o.region, o.phase, o.attempt_count,
+		          o.project_id, o.region, o.phase, o.attempt_count, o.resolution_cursor,
 		          o.requires_manual_event_verification, o.provider_request_started_at, o.accepted_at`, now, leaseToken, lease.String()).Scan(
 		&record.ID, &encrypted, &encryptedPersonUUIDs, &encryptedBaseline, &record.ProjectID, &record.Region,
-		&record.Phase, &record.AttemptCount, &record.RequiresManualEventVerification,
+		&record.Phase, &record.AttemptCount, &record.ResolutionCursor, &record.RequiresManualEventVerification,
 		&record.ProviderRequestStartedAt, &record.AcceptedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -155,13 +157,7 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 		}
 		return nil, fmt.Errorf("claim PostHog erasure failed: identity_decryption")
 	}
-	if record.Phase != "person_resolve" {
-		if encryptedPersonUUIDs == nil {
-			if deadLetterErr := r.deadLetterClaim(ctx, record.ID, leaseToken, "correlation_decryption"); deadLetterErr != nil {
-				return nil, deadLetterErr
-			}
-			return nil, fmt.Errorf("claim PostHog erasure failed: correlation_decryption")
-		}
+	if encryptedPersonUUIDs != nil {
 		raw, err = r.enc.DecryptJSON(*encryptedPersonUUIDs)
 		if err != nil || json.Unmarshal(raw, &record.PersonUUIDs) != nil || (record.Phase == "person_poll" && len(record.PersonUUIDs) == 0) {
 			if deadLetterErr := r.deadLetterClaim(ctx, record.ID, leaseToken, "correlation_decryption"); deadLetterErr != nil {
@@ -169,6 +165,17 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 			}
 			return nil, fmt.Errorf("claim PostHog erasure failed: correlation_decryption")
 		}
+	} else if record.Phase != "person_resolve" {
+		if deadLetterErr := r.deadLetterClaim(ctx, record.ID, leaseToken, "correlation_decryption"); deadLetterErr != nil {
+			return nil, deadLetterErr
+		}
+		return nil, fmt.Errorf("claim PostHog erasure failed: correlation_decryption")
+	}
+	if record.ResolutionCursor < 0 || record.ResolutionCursor > len(record.Identities) {
+		if deadLetterErr := r.deadLetterClaim(ctx, record.ID, leaseToken, "invalid_correlation"); deadLetterErr != nil {
+			return nil, deadLetterErr
+		}
+		return nil, fmt.Errorf("claim PostHog erasure failed: invalid_correlation")
 	}
 	if encryptedBaseline != nil {
 		raw, err = r.enc.DecryptJSON(*encryptedBaseline)
@@ -197,7 +204,10 @@ func (r *PostHogErasureOutboxRepository) deadLetterClaim(ctx context.Context, id
 // MarkAccepted records only that PostHog accepted the documented asynchronous person/event/
 // recording deletion request. Support has no documented server deletion endpoint, so acceptance
 // deliberately transitions to manual_pending and can never be mistaken for completion.
-func (r *PostHogErasureOutboxRepository) MarkPersonUUIDsResolved(ctx context.Context, id, leaseToken string, personUUIDs []string, hasUnresolved bool) (bool, error) {
+func (r *PostHogErasureOutboxRepository) MarkPersonUUIDsResolved(ctx context.Context, id, leaseToken string, personUUIDs []string, hasUnresolved bool, nextCursor, identityCount int) (bool, error) {
+	if nextCursor < 1 || nextCursor > identityCount {
+		return false, fmt.Errorf("invalid PostHog resolution cursor")
+	}
 	raw, err := json.Marshal(personUUIDs)
 	if err != nil {
 		return false, fmt.Errorf("encode PostHog person UUIDs: %w", err)
@@ -208,10 +218,12 @@ func (r *PostHogErasureOutboxRepository) MarkPersonUUIDsResolved(ctx context.Con
 	}
 	tag, err := r.db.Exec(ctx, `
 		UPDATE posthog_erasure_outbox SET provider_person_uuids_encrypted=$3,
-		    requires_manual_event_verification=$4, phase='person_delete',
+		    requires_manual_event_verification=requires_manual_event_verification OR $4,
+		    resolution_cursor=$5,
+		    phase=CASE WHEN $5::integer=$6::integer THEN 'person_delete' ELSE 'person_resolve' END,
 		    state='retrying', next_attempt_at=clock_timestamp(), lease_token=NULL, lease_until=NULL,
-		    last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
-		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying')`, id, leaseToken, ciphertext, hasUnresolved)
+		    attempt_count=0, last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
+		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying')`, id, leaseToken, ciphertext, hasUnresolved, nextCursor, identityCount)
 	if err != nil {
 		return false, fmt.Errorf("record PostHog person UUID resolution: %w", err)
 	}
@@ -251,15 +263,16 @@ func (r *PostHogErasureOutboxRepository) MarkDeletionRequestStarted(ctx context.
 	return started, true, nil
 }
 
-func (r *PostHogErasureOutboxRepository) MarkAccepted(ctx context.Context, id, leaseToken string, resolvedPersons int) (bool, error) {
+func (r *PostHogErasureOutboxRepository) MarkAccepted(ctx context.Context, id, leaseToken string, resolvedPersons int, requiresManualEvents bool) (bool, error) {
 	tag, err := r.db.Exec(ctx, `
 		UPDATE posthog_erasure_outbox
 		SET state=CASE WHEN $3=0 THEN 'manual_pending' ELSE 'retrying' END,
 		    phase=CASE WHEN $3=0 THEN 'support_manual' ELSE 'person_poll' END,
 		    provider_status='accepted', accepted_at=clock_timestamp(), person_verified_at=clock_timestamp(),
+		    requires_manual_event_verification=requires_manual_event_verification OR $4,
 		    next_attempt_at=clock_timestamp()+interval '5 minutes',
 		    lease_token=NULL, lease_until=NULL, last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
-		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying')`, id, leaseToken, resolvedPersons)
+		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying')`, id, leaseToken, resolvedPersons, requiresManualEvents)
 	if err != nil {
 		return false, fmt.Errorf("record PostHog erasure acceptance: %w", err)
 	}
@@ -288,11 +301,12 @@ func (r *PostHogErasureOutboxRepository) RecordPollPending(ctx context.Context, 
 	return tag.RowsAffected() == 1, err
 }
 
-func (r *PostHogErasureOutboxRepository) MarkPersonEventsVerified(ctx context.Context, id, leaseToken string) (bool, error) {
+func (r *PostHogErasureOutboxRepository) MarkPersonEventsVerified(ctx context.Context, id, leaseToken string, requiresManualEvents bool) (bool, error) {
 	tag, err := r.db.Exec(ctx, `UPDATE posthog_erasure_outbox SET state='manual_pending', phase='support_manual',
-		events_verified_at=CASE WHEN requires_manual_event_verification THEN NULL ELSE clock_timestamp() END,
+		requires_manual_event_verification=requires_manual_event_verification OR $3,
+		events_verified_at=CASE WHEN requires_manual_event_verification OR $3 THEN NULL ELSE clock_timestamp() END,
 		lease_token=NULL, lease_until=NULL, last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
-		WHERE id=$1 AND lease_token=$2 AND phase='person_poll'`, id, leaseToken)
+		WHERE id=$1 AND lease_token=$2 AND phase='person_poll'`, id, leaseToken, requiresManualEvents)
 	return tag.RowsAffected() == 1, err
 }
 
@@ -381,6 +395,9 @@ func (r *PostHogErasureOutboxRepository) RetargetUnconfigured(ctx context.Contex
 	}
 	tag, err := tx.Exec(ctx, `UPDATE posthog_erasure_outbox SET project_id=$2, region=$3,
 		state='retrying', phase='person_resolve', next_attempt_at=clock_timestamp(),
+		resolution_cursor=0, provider_person_uuids_encrypted=NULL,
+		provider_deletion_baseline_encrypted=NULL, provider_request_started_at=NULL,
+		requires_manual_event_verification=FALSE,
 		last_error_class=NULL, lease_token=NULL, lease_until=NULL, updated_at=clock_timestamp(), version=version+1
 		WHERE id=$1 AND accepted_at IS NULL`, id, projectID, region)
 	if err != nil {
@@ -437,7 +454,8 @@ func (r *PostHogErasureOutboxRepository) ListOutstanding(ctx context.Context, li
 	if limit < 1 || limit > 100 {
 		return nil, fmt.Errorf("limit must be 1..100")
 	}
-	rows, err := r.db.Query(ctx, `SELECT id,project_id,region,state,phase,requested_at
+	rows, err := r.db.Query(ctx, `SELECT id,project_id,region,state,phase,requested_at,
+		requires_manual_event_verification
 		FROM posthog_erasure_outbox WHERE state<>'completed' ORDER BY requested_at,id LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list PostHog erasures: %w", err)
@@ -446,8 +464,13 @@ func (r *PostHogErasureOutboxRepository) ListOutstanding(ctx context.Context, li
 	var out []PostHogErasureOperatorRow
 	for rows.Next() {
 		var row PostHogErasureOperatorRow
-		if err := rows.Scan(&row.ID, &row.ProjectID, &row.Region, &row.State, &row.Phase, &row.RequestedAt); err != nil {
+		var requiresManualEvents bool
+		if err := rows.Scan(&row.ID, &row.ProjectID, &row.Region, &row.State, &row.Phase, &row.RequestedAt, &requiresManualEvents); err != nil {
 			return nil, err
+		}
+		row.RequiredManualSurfaces = []string{"recordings", "surveys", "support"}
+		if requiresManualEvents {
+			row.RequiredManualSurfaces = append([]string{"events"}, row.RequiredManualSurfaces...)
 		}
 		out = append(out, row)
 	}

@@ -40,8 +40,8 @@ func TestClaimDueDeadLettersUndecryptableIdentityEnvelope(t *testing.T) {
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	mock.ExpectQuery("WITH candidate AS").WithArgs(now, pgxmock.AnyArg(), "1m0s").WillReturnRows(pgxmock.NewRows([]string{
 		"id", "identities_encrypted", "provider_person_uuids_encrypted", "provider_deletion_baseline_encrypted", "project_id", "region", "phase", "attempt_count",
-		"requires_manual_event_verification", "provider_request_started_at", "accepted_at",
-	}).AddRow("row-id", "ENC$not-base64!", nil, nil, "42", "us", "person_resolve", 1, false, nil, nil))
+		"resolution_cursor", "requires_manual_event_verification", "provider_request_started_at", "accepted_at",
+	}).AddRow("row-id", "ENC$not-base64!", nil, nil, "42", "us", "person_resolve", 1, 0, false, nil, nil))
 	mock.ExpectExec("SET state='dead_letter'").
 		WithArgs("row-id", pgxmock.AnyArg(), "identity_decryption").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -112,6 +112,44 @@ func TestRetargetAcceptsEitherMissingComponentAndAuditsActualPriorTarget(t *test
 	assert.Contains(t, source, "project_id='unconfigured' OR region='unconfigured'")
 	assert.Contains(t, source, "from_project_id,from_region")
 	assert.NotContains(t, source, "VALUES ($1,$2,'retarget','unconfigured','unconfigured'")
+}
+
+func TestListOutstandingExplicitlyIdentifiesRequiredManualSurfaces(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := NewPostHogErasureOutboxRepository(mock, nil)
+	requestedAt := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT id,project_id,region,state,phase,requested_at").WithArgs(50).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "project_id", "region", "state", "phase", "requested_at", "requires_manual_event_verification",
+		}).
+			AddRow("fully-correlated", "42", "us", "manual_pending", "support_manual", requestedAt, false).
+			AddRow("mixed-or-ambiguous", "42", "us", "manual_pending", "support_manual", requestedAt, true))
+
+	rows, err := repo.ListOutstanding(context.Background(), 50)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, []string{"recordings", "surveys", "support"}, rows[0].RequiredManualSurfaces)
+	assert.Equal(t, []string{"events", "recordings", "surveys", "support"}, rows[1].RequiredManualSurfaces)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestResolutionCheckpointResetsFailureBudgetForNextIdentity(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	enc, err := appcrypto.NewFieldEncryptor(reversibleTestEncryption{}, []byte("12345678901234567890123456789012"))
+	require.NoError(t, err)
+	repo := NewPostHogErasureOutboxRepository(mock, enc)
+	mock.ExpectExec("attempt_count=0").
+		WithArgs("row", "lease", pgxmock.AnyArg(), false, 1, 1000).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	updated, err := repo.MarkPersonUUIDsResolved(context.Background(), "row", "lease", []string{"11111111-1111-4111-8111-111111111111"}, false, 1, 1000)
+	require.NoError(t, err)
+	assert.True(t, updated)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestDeleteUserCascadeCreatesPostHogOutboxBeforeDeletingIdentity(t *testing.T) {
