@@ -37,6 +37,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/pgtime"
 )
 
 // applyMigration000127 runs the real 000127 up SQL in tx — reading from the actual file, not a
@@ -204,7 +206,8 @@ func TestMigration000127_BackfillMalformedTierOverrideAndMarkerResidue(t *testin
 		userID := seedMig127User(t, tx, suffix, "cancelled", nil, nil, &staleMarker)
 
 		// Put the user into the 30-day deletion grace window.
-		deletionRequestedAt := time.Now().Add(-24 * time.Hour)
+		// Keep the database-precision regression reproducible on every host clock.
+		deletionRequestedAt := time.Now().Add(-24 * time.Hour).Truncate(time.Microsecond).Add(527 * time.Nanosecond)
 		_, err = tx.Exec(ctx,
 			`UPDATE users SET deletion_requested_at = $1, deletion_scheduled_at = $2 WHERE id = $3`,
 			deletionRequestedAt, deletionRequestedAt.Add(30*24*time.Hour), userID)
@@ -229,7 +232,7 @@ func TestMigration000127_BackfillMalformedTierOverrideAndMarkerResidue(t *testin
 		require.NoError(t, tx.QueryRow(ctx,
 			"SELECT deletion_requested_at FROM users WHERE id = $1", userID).Scan(&requestedAt))
 		require.NotNil(t, requestedAt, "the migration must not disturb a pending deletion")
-		assert.True(t, deletionRequestedAt.Equal(*requestedAt))
+		assert.Equal(t, pgtime.Stored(deletionRequestedAt), requestedAt.UTC())
 	})
 
 	// ─── Scenario E: a user with AT LEAST ONE linked_items row (even a disconnected one) must be
@@ -256,7 +259,7 @@ func TestMigration000127_BackfillMalformedTierOverrideAndMarkerResidue(t *testin
 		var pendingAt *time.Time
 		require.NoError(t, tx.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", userID).Scan(&pendingAt))
 		require.NotNil(t, pendingAt, "a user with at least one linked_items row must not be touched by this one-time migration")
-		assert.True(t, staleMarker.Equal(*pendingAt))
+		assert.Equal(t, pgtime.Stored(staleMarker), pendingAt.UTC())
 	})
 
 	// ─── Scenario F: an ACTIVE-status user's marker must never be touched, regardless of
@@ -277,7 +280,7 @@ func TestMigration000127_BackfillMalformedTierOverrideAndMarkerResidue(t *testin
 		var pendingAt *time.Time
 		require.NoError(t, tx.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", userID).Scan(&pendingAt))
 		require.NotNil(t, pendingAt, "an active-status user must never be touched by this migration")
-		assert.True(t, staleMarker.Equal(*pendingAt))
+		assert.Equal(t, pgtime.Stored(staleMarker), pendingAt.UTC())
 	})
 
 	// ─── Scenario G: idempotency — running the up SQL twice must not error and must leave an

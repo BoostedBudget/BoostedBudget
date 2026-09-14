@@ -32,6 +32,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/pgtime"
 )
 
 // applyMigration000120 runs the real 000120 up SQL in tx — reading from the actual file (not a
@@ -131,14 +133,15 @@ func TestMigration000120_FixPlaidCleanupPendingAtBackfill(t *testing.T) {
 		require.NoError(t, err)
 		defer tx.Rollback(ctx) //nolint:errcheck
 
-		stray := time.Now().Add(-200 * time.Hour)
+		// Exercise Linux-style nanosecond precision even on a microsecond-resolution host clock.
+		stray := time.Now().Add(-200 * time.Hour).Truncate(time.Microsecond).Add(527 * time.Nanosecond)
 		userID := seedMig120User(t, tx, suffix, "active", &stray, nil, nil)
 
 		applyMigration000120(t, tx)
 
 		got := getMig120PlaidCleanupPendingAt(t, tx, userID)
 		require.NotNil(t, got)
-		assert.True(t, got.Equal(stray), "an active user's marker must be left completely untouched by this migration")
+		assert.Equal(t, pgtime.Stored(stray), got.UTC(), "an active user's marker must be left completely untouched by this migration")
 	})
 
 	// ─── Scenario D: a LAPSED (expired, never cleared) manual tier override must NOT exempt a
@@ -186,7 +189,7 @@ func TestMigration000120_FixPlaidCleanupPendingAtBackfill(t *testing.T) {
 
 		got := getMig120PlaidCleanupPendingAt(t, tx, userID)
 		require.NotNil(t, got)
-		assert.True(t, got.Equal(stale), "a user with a CURRENTLY-ACTIVE override must be left untouched by this migration")
+		assert.Equal(t, pgtime.Stored(stale), got.UTC(), "a user with a CURRENTLY-ACTIVE override must be left untouched by this migration")
 	})
 
 	// ─── Scenario F: idempotency — running the up SQL twice must not error and must leave a

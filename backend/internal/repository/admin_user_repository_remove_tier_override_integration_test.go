@@ -23,6 +23,7 @@ import (
 
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/pgtime"
 )
 
 // testRetentionMonths is deliberately NOT the config default (6) so an implementation that
@@ -784,7 +785,8 @@ func TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_Clears(t *testing.
 	seedLinkedItem(t, pool, target.ID, "item-"+suffix, "active")
 
 	override := "household_2"
-	endsAt := time.Now().Add(-1 * time.Hour) // expired — exactly what the worker would have selected
+	// Deliberately retain sub-microsecond data, as time.Now does on the Linux CI runner.
+	endsAt := time.Now().Add(-1 * time.Hour).Truncate(time.Microsecond).Add(527 * time.Nanosecond) // expired
 	setManualOverride(t, pool, target.ID, &override, &endsAt)
 	// retention_started_at/expires_at/notice flags and plaid_cleanup_pending_at all remain NULL
 	// from creation — same starting state as
@@ -822,7 +824,7 @@ func TestRemoveUserTierOverrideIfMatches_Integration_CASMatch_Clears(t *testing.
 	// would hand the user 1 extra hour of grace they did not earn. Before this fix, the CASE wrote
 	// NOW() unconditionally and this assertion read assertBetweenFence(before, after, ...) — the
 	// exact behavior this test now proves is WRONG for a lapsed (as opposed to still-live) comp.
-	require.True(t, endsAt.Equal(*snap.PlaidCleanupPendingAt),
+	require.Equal(t, pgtime.Stored(endsAt), snap.PlaidCleanupPendingAt.UTC(),
 		"plaid_cleanup_pending_at must be anchored at manual_tier_ends_at (the lapse instant), not at removal time — got %v, want %v", *snap.PlaidCleanupPendingAt, endsAt)
 
 	audit := fetchLatestAuditRow(t, pool, target.ID, "remove_manual_tier")
@@ -1088,7 +1090,7 @@ func TestRemoveUserTierOverride_Integration_Finding1PathA_AllDisconnectedWithSta
 	var markerAfterGrant *time.Time
 	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", target.ID).Scan(&markerAfterGrant))
 	require.NotNil(t, markerAfterGrant)
-	require.True(t, staleMarker.Equal(*markerAfterGrant), "precondition: granting a comp must not touch the stale marker (round-13)")
+	require.Equal(t, pgtime.Stored(staleMarker), markerAfterGrant.UTC(), "precondition: granting a comp must not touch the stale marker (round-13)")
 
 	// Step 3: the user relinks a bank — a genuinely NEW live item, permitted because the comp makes
 	// their effective status active.
@@ -1148,7 +1150,7 @@ func TestRemoveUserTierOverride_Integration_Finding1PathB_ZeroLinkedItemsPopulat
 	var markerAfterClearAttempt *time.Time
 	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", target.ID).Scan(&markerAfterClearAttempt))
 	require.NotNil(t, markerAfterClearAttempt)
-	require.True(t, staleMarker.Equal(*markerAfterClearAttempt),
+	require.Equal(t, pgtime.Stored(staleMarker), markerAfterClearAttempt.UTC(),
 		"precondition: Clear must be a structural no-op here (#1453 — zero linked_items rows), unlike Path A where Clear COULD have healed the row given different timing")
 
 	// Step 2: admin grants a comp.
@@ -1225,7 +1227,7 @@ func TestRemoveUserTierOverride_Integration_LapsedCompAnchorsMarkerAtLapseTime_N
 
 	snap := fetchRetentionSnapshot(t, pool, target.ID)
 	require.NotNil(t, snap.PlaidCleanupPendingAt)
-	assert.True(t, lapsedAt.Equal(*snap.PlaidCleanupPendingAt),
+	assert.Equal(t, pgtime.Stored(lapsedAt), snap.PlaidCleanupPendingAt.UTC(),
 		"plaid_cleanup_pending_at must equal manual_tier_ends_at (the lapse instant), got %v want %v", *snap.PlaidCleanupPendingAt, lapsedAt)
 	assert.True(t, snap.PlaidCleanupPendingAt.Before(removalFenceBefore),
 		"the marker must predate the removal call itself — it must NOT fall inside the removal's own before/after fence")
@@ -1265,7 +1267,7 @@ func TestRemoveUserTierOverride_Integration_LapsedCompLongerThanGrace_Immediatel
 
 	snap := fetchRetentionSnapshot(t, pool, target.ID)
 	require.NotNil(t, snap.PlaidCleanupPendingAt)
-	assert.True(t, lapsedAt.Equal(*snap.PlaidCleanupPendingAt),
+	assert.Equal(t, pgtime.Stored(lapsedAt), snap.PlaidCleanupPendingAt.UTC(),
 		"plaid_cleanup_pending_at must be anchored at the lapse instant, already outside the grace period")
 
 	// The real-world consequence: the very next repair pass must select this user right now, with no
