@@ -447,8 +447,9 @@ type TransactionSyncProgressRepository interface {
 
 // linkedItemRepository implements LinkedItemRepository using PostgreSQL.
 type linkedItemRepository struct {
-	db  DB
-	enc *appcrypto.FieldEncryptor
+	db                               DB
+	enc                              *appcrypto.FieldEncryptor
+	transactionSyncCompletionCutover *time.Time
 }
 
 var _ TransactionSyncCompletionRepository = (*linkedItemRepository)(nil)
@@ -489,6 +490,18 @@ var _ LinkedItemRepository = (*linkedItemRepository)(nil)
 
 func NewLinkedItemRepository(db DB, enc *appcrypto.FieldEncryptor) *linkedItemRepository { //nolint:revive // deliberate: see doc comment (mirrors NewProfileRepository)
 	return &linkedItemRepository{db: db, enc: enc}
+}
+
+// SetTransactionSyncCompletionCutover sets the shared deployment instant after which a newly
+// created item can be proven not to have been processed by a pre-cutover worker. Nil fails closed:
+// first completions are latched but suppressed, while already-completed items remain refreshes.
+func (r *linkedItemRepository) SetTransactionSyncCompletionCutover(cutover *time.Time) {
+	if cutover == nil {
+		r.transactionSyncCompletionCutover = nil
+		return
+	}
+	normalized := cutover.UTC()
+	r.transactionSyncCompletionCutover = &normalized
 }
 
 // encryptLinkedItemPIIFields encrypts PII fields on the item before writing to the database.
@@ -602,8 +615,8 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 
 	query := `
 		INSERT INTO linked_items
-		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at, item_id_blind_idx, institution_id_blind_idx, status_changed_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at, item_id_blind_idx, institution_id_blind_idx, status_changed_at, transaction_sync_state)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'never_synced')
 	`
 
 	_, err = r.db.Exec(ctx, query,
@@ -882,10 +895,13 @@ func (r *linkedItemRepository) RecordTransactionSyncCompletion(
 	query := `
 		WITH candidate AS (
 			SELECT id,
-			       CASE
-			           WHEN first_transaction_sync_completed_at IS NOT NULL THEN 'refresh'
-			           WHEN last_synced_at IS NULL THEN 'initial'
-			           ELSE 'suppressed_rollout_ambiguous'
+			       CASE transaction_sync_state
+			           WHEN 'completed' THEN 'refresh'
+			           WHEN 'never_synced' THEN CASE
+			               WHEN $4::timestamptz IS NOT NULL AND created_at >= $4::timestamptz THEN 'initial'
+			               ELSE 'suppressed_rollout_ambiguous'
+			           END
+			           WHEN 'legacy_ambiguous' THEN 'suppressed_rollout_ambiguous'
 			       END AS completion_disposition
 			FROM linked_items
 			WHERE id = $1
@@ -896,6 +912,7 @@ func (r *linkedItemRepository) RecordTransactionSyncCompletion(
 		UPDATE linked_items AS li
 		SET cursor = CASE WHEN $3::text IS NULL THEN li.cursor ELSE $3::text END,
 		    first_transaction_sync_completed_at = COALESCE(li.first_transaction_sync_completed_at, NOW()),
+		    transaction_sync_state = 'completed',
 		    last_synced_at = NOW(),
 		    updated_at = NOW()
 		FROM candidate
@@ -904,7 +921,7 @@ func (r *linkedItemRepository) RecordTransactionSyncCompletion(
 	`
 
 	var disposition TransactionSyncCompletionDisposition
-	if err := r.db.QueryRow(ctx, query, id, expectedCursor, completedCursor).Scan(&disposition); err != nil {
+	if err := r.db.QueryRow(ctx, query, id, expectedCursor, completedCursor, r.transactionSyncCompletionCutover).Scan(&disposition); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", ErrLinkedItemSyncStateChanged
 		}

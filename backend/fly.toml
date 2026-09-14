@@ -49,6 +49,7 @@ kill_timeout = 30
   # - PADDLE_WEBHOOK_SECRET
   # - POSTHOG_API_KEY (public project token; also required by Support identity endpoint)
   # - POSTHOG_SECRET_API_TOKEN (server-only Support identity-verification HMAC key)
+  # - POSTHOG_SYNC_COMPLETION_CUTOVER_AT (RFC3339; set only after pre-cutover pods drain)
   # - SENTRY_DSN (Issue #1531 gap round 2: if unset, Error-level logs — including the rate-limiter
   #   fallback-activation log, "the metric that actually matters" per Issue #1531 — never reach
   #   Sentry and nothing pages. main.go logs a startup ERROR when this is unset in

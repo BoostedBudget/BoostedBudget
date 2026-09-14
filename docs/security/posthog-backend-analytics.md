@@ -54,15 +54,27 @@ with `Close` during graceful server shutdown; enqueue failures are logged withou
 `financial_data_sync_completed` is produced only at the end of
 `transactionSyncService.SyncTransactions`, after transaction storage, full pagination, and an
 atomic durable completion/cursor write succeed. Partial progress is retained but never reported as
-completion. A retained per-linked-item first-completion timestamp makes classification independent
-of cursor shape: the first full catch-up for a new or relinked connection is `initial`; subsequent
-completions and invalid-cursor recoveries are `refresh`. Invalid-cursor recovery compare-and-resets
+completion. A constrained per-linked-item state makes classification independent of cursor shape:
+current creation paths explicitly write `never_synced`, atomic completion transitions it to
+`completed`, and later completions or invalid-cursor recoveries emit `refresh`.
+The retained first-completion timestamp records when that transition occurred. Invalid-cursor recovery compare-and-resets
 only the cursor value that Plaid rejected, so a stale recovery cannot overwrite newer progress.
-The migration backfills connections with durable `last_synced_at` evidence already present at
-cutover. If an older binary writes `last_synced_at` after that snapshot while the latch remains
-empty, the first new-code completion atomically sets the latch but emits no event: the old write
-cannot prove full versus partial pagination. The next completion is reported as `refresh`. This
-bounded rollout undercounts one completion instead of inventing an `initial` or `refresh` event.
+The database default is `legacy_ambiguous`, so pre-cutover blank-cursor rows and inserts from an
+older binary that omits the state never masquerade as new. The migration marks rows with existing
+`last_synced_at` evidence `completed`; every remaining ambiguous row suppresses its first new-code
+completion while atomically transitioning to `completed`. The next completion is reported as
+`refresh`. This bounded rollout undercounts one completion instead of inventing an `initial` or
+`refresh` event.
+
+Initial-event classification also has an explicit mixed-version cutover. While
+`POSTHOG_SYNC_COMPLETION_CUTOVER_AT` is unset, every `never_synced` first completion is latched but
+suppressed; already-completed rows may still emit `refresh`. After all binaries that predate the
+state column are confirmed drained, operators set the same RFC3339 instant on every backend pod and
+restart them. The atomic completion query compares that instant to the row's durable `created_at`:
+items created before the cutover suppress once, including a new-writer item that an old worker may
+have completed without leaving a cursor, while items created at or after it may emit `initial`.
+Do not set or advance this value until old workers are drained; it is a deployment epoch, not a
+feature toggle.
 The latch can commit before a best-effort
 PostHog enqueue and is therefore a semantic completion fact, not a delivery receipt. That shared
 boundary covers scheduled jobs and transaction webhooks without duplicate success producers.

@@ -39,6 +39,33 @@ func TestLoad_PostHogSupportIdentitySecretIsServerOnlyConfiguration(t *testing.T
 	assert.Equal(t, "phs_server_only", cfg.PostHogSecretAPIToken)
 }
 
+func TestLoad_PostHogSyncCompletionCutover(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("POSTHOG_SYNC_COMPLETION_CUTOVER_AT", "2026-09-13T20:15:00Z")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.NotNil(t, cfg.PostHogSyncCompletionCutoverAt)
+	assert.Equal(t, time.Date(2026, 9, 13, 20, 15, 0, 0, time.UTC), *cfg.PostHogSyncCompletionCutoverAt)
+}
+
+func TestLoad_PostHogSyncCompletionCutoverUnsetFailsClosed(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("POSTHOG_SYNC_COMPLETION_CUTOVER_AT", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Nil(t, cfg.PostHogSyncCompletionCutoverAt)
+}
+
+func TestLoad_PostHogSyncCompletionCutoverRejectsInvalidValue(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("POSTHOG_SYNC_COMPLETION_CUTOVER_AT", "not-rfc3339")
+
+	_, err := Load()
+	require.ErrorContains(t, err, "POSTHOG_SYNC_COMPLETION_CUTOVER_AT must be RFC3339")
+}
+
 func TestLoad_ServerTimeoutsConfigurable(t *testing.T) {
 	// See TestLoad_ServerTimeoutDefaults: an ambient production/staging ENVIRONMENT
 	// would fail require.NoError below for an unrelated reason.
