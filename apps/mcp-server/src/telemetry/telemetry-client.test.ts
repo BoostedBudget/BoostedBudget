@@ -1,11 +1,41 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test'
 import { createMCPToolTelemetryClient } from './telemetry-client'
+import { instrumentTool } from './tool-telemetry'
 
 const originalFetch = globalThis.fetch
 
 afterEach(() => {
   globalThis.fetch = originalFetch
 })
+
+class FakeTelemetryClock {
+  private now = 0
+  private tasks: Array<{ at: number, run: () => void }> = []
+
+  after(milliseconds: number, run: () => void): void {
+    this.tasks.push({ at: this.now + milliseconds, run })
+  }
+
+  timeoutSignal = (milliseconds: number): AbortSignal => {
+    const controller = new AbortController()
+    this.after(milliseconds, () => controller.abort(new DOMException('timed out', 'TimeoutError')))
+    return controller.signal
+  }
+
+  advance(milliseconds: number): void {
+    this.now += milliseconds
+    const due = this.tasks.filter(task => task.at <= this.now)
+    this.tasks = this.tasks.filter(task => task.at > this.now)
+    due.sort((left, right) => left.at - right.at).forEach(task => task.run())
+  }
+}
+
+function installDelayedTelemetryTransport(clock: FakeTelemetryClock, delayMilliseconds: number): void {
+  globalThis.fetch = mock((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+    clock.after(delayMilliseconds, () => resolve(new Response(null, { status: 204 })))
+  })) as unknown as typeof fetch
+}
 
 describe('createMCPToolTelemetryClient', () => {
   it('posts only bounded telemetry with the current bearer token and Worker credentials', async () => {
@@ -92,6 +122,77 @@ describe('createMCPToolTelemetryClient', () => {
       })).resolves.toBeUndefined()
       expect(JSON.stringify(warnings)).toContain('timeout')
     } finally {
+      console.warn = oldWarn
+    }
+  })
+
+  it('allows a four-second backend response within the default timeout without delaying the tool result', async () => {
+    const clock = new FakeTelemetryClock()
+    installDelayedTelemetryTransport(clock, 4_000)
+    const requestedTimeouts: number[] = []
+    const telemetry = createMCPToolTelemetryClient({
+      baseUrl: 'https://api.boostedbudget.com',
+      originSecret: 'origin',
+      workerSecret: 'worker',
+      getAccessToken: () => 'token',
+      timeoutSignal: milliseconds => {
+        requestedTimeouts.push(milliseconds)
+        return clock.timeoutSignal(milliseconds)
+      },
+    })
+    const scheduled: Promise<void>[] = []
+    const wrapped = instrumentTool({
+      surface: 'search',
+      family: () => 'discovery',
+      telemetry,
+      schedule: promise => scheduled.push(promise),
+      now: () => 0,
+    }, async () => 'tool-result')
+
+    await expect(wrapped({ query: 'private query' })).resolves.toBe('tool-result')
+    expect(scheduled).toHaveLength(1)
+    expect(requestedTimeouts).toEqual([5_000])
+
+    clock.advance(4_000)
+    await expect(scheduled[0]).resolves.toBeUndefined()
+  })
+
+  it('times out after five seconds without delaying the tool result or leaking an unhandled rejection', async () => {
+    const clock = new FakeTelemetryClock()
+    installDelayedTelemetryTransport(clock, 6_000)
+    const warnings: unknown[][] = []
+    const oldWarn = console.warn
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
+    console.warn = (...args: unknown[]) => { warnings.push(args) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const telemetry = createMCPToolTelemetryClient({
+        baseUrl: 'https://api.boostedbudget.com',
+        originSecret: 'origin',
+        workerSecret: 'worker',
+        getAccessToken: () => 'token',
+        timeoutSignal: clock.timeoutSignal,
+      })
+      const scheduled: Promise<void>[] = []
+      const wrapped = instrumentTool({
+        surface: 'search',
+        family: () => 'discovery',
+        telemetry,
+        schedule: promise => scheduled.push(promise),
+        now: () => 0,
+      }, async () => 'tool-result')
+
+      await expect(wrapped({})).resolves.toBe('tool-result')
+      expect(scheduled).toHaveLength(1)
+
+      clock.advance(5_000)
+      await expect(scheduled[0]).resolves.toBeUndefined()
+      await Promise.resolve()
+      expect(JSON.stringify(warnings)).toContain('timeout')
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
       console.warn = oldWarn
     }
   })

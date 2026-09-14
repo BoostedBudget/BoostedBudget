@@ -42,8 +42,6 @@ import type {
 
 import type {
   ErrorModel,
-  HandlePlaidWebhookHeaders,
-  PaddleWebhookHeaders,
   PaddleWebhookResponseBody,
   PlaidWebhookResponseBody
 } from '../../models';
@@ -62,14 +60,13 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
  */
 export const paddleWebhook = (
     paddleWebhookBody: BodyType<Blob>,
-    headers?: PaddleWebhookHeaders,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<PaddleWebhookResponseBody>(
       {url: `/webhooks/paddle`, method: 'POST',
-      headers: {'Content-Type': 'application/octet-stream', ...headers},
+      headers: {'Content-Type': 'application/octet-stream', },
       data: paddleWebhookBody, signal
     },
       options);
@@ -79,8 +76,8 @@ export const paddleWebhook = (
 
 
 export const getPaddleWebhookMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof paddleWebhook>>, TError,{data: BodyType<Blob>;headers?: PaddleWebhookHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof paddleWebhook>>, TError,{data: BodyType<Blob>;headers?: PaddleWebhookHeaders}, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof paddleWebhook>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof paddleWebhook>>, TError,{data: BodyType<Blob>}, TContext> => {
 
 const mutationKey = ['paddleWebhook'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -92,10 +89,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof paddleWebhook>>, {data: BodyType<Blob>;headers?: PaddleWebhookHeaders}> = (props) => {
-          const {data,headers} = props ?? {};
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof paddleWebhook>>, {data: BodyType<Blob>}> = (props) => {
+          const {data} = props ?? {};
 
-          return  paddleWebhook(data,headers,requestOptions)
+          return  paddleWebhook(data,requestOptions)
         }
 
 
@@ -113,11 +110,11 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
  * @summary Receive Paddle webhook notifications
  */
 export const usePaddleWebhook = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof paddleWebhook>>, TError,{data: BodyType<Blob>;headers?: PaddleWebhookHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof paddleWebhook>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof paddleWebhook>>,
         TError,
-        {data: BodyType<Blob>;headers?: PaddleWebhookHeaders},
+        {data: BodyType<Blob>},
         TContext
       > => {
       return useMutation(getPaddleWebhookMutationOptions(options), queryClient);
@@ -128,14 +125,13 @@ export const usePaddleWebhook = <TError = ErrorType<ErrorModel>,
  */
 export const handlePlaidWebhook = (
     handlePlaidWebhookBody: BodyType<Blob>,
-    headers?: HandlePlaidWebhookHeaders,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<PlaidWebhookResponseBody>(
       {url: `/webhooks/plaid`, method: 'POST',
-      headers: {'Content-Type': 'application/octet-stream', ...headers},
+      headers: {'Content-Type': 'application/octet-stream', },
       data: handlePlaidWebhookBody, signal
     },
       options);
@@ -145,8 +141,8 @@ export const handlePlaidWebhook = (
 
 
 export const getHandlePlaidWebhookMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof handlePlaidWebhook>>, TError,{data: BodyType<Blob>;headers?: HandlePlaidWebhookHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof handlePlaidWebhook>>, TError,{data: BodyType<Blob>;headers?: HandlePlaidWebhookHeaders}, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof handlePlaidWebhook>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof handlePlaidWebhook>>, TError,{data: BodyType<Blob>}, TContext> => {
 
 const mutationKey = ['handlePlaidWebhook'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -158,10 +154,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof handlePlaidWebhook>>, {data: BodyType<Blob>;headers?: HandlePlaidWebhookHeaders}> = (props) => {
-          const {data,headers} = props ?? {};
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof handlePlaidWebhook>>, {data: BodyType<Blob>}> = (props) => {
+          const {data} = props ?? {};
 
-          return  handlePlaidWebhook(data,headers,requestOptions)
+          return  handlePlaidWebhook(data,requestOptions)
         }
 
 
@@ -179,11 +175,11 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
  * @summary Handle Plaid webhook
  */
 export const useHandlePlaidWebhook = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof handlePlaidWebhook>>, TError,{data: BodyType<Blob>;headers?: HandlePlaidWebhookHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof handlePlaidWebhook>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof handlePlaidWebhook>>,
         TError,
-        {data: BodyType<Blob>;headers?: HandlePlaidWebhookHeaders},
+        {data: BodyType<Blob>},
         TContext
       > => {
       return useMutation(getHandlePlaidWebhookMutationOptions(options), queryClient);

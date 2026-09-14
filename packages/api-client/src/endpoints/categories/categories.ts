@@ -51,7 +51,6 @@ import type {
 
 import type {
   CategoryUsage,
-  CreateCategoryHeaders,
   CreateCustomCategoryRequest,
   CustomCategory,
   Detailed,
@@ -209,14 +208,13 @@ export function useGetUserCategories<TData = Awaited<ReturnType<typeof getUserCa
  */
 export const createCategory = (
     createCustomCategoryRequest: BodyType<NonReadonly<CreateCustomCategoryRequest>>,
-    headers?: CreateCategoryHeaders,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<CustomCategory>(
       {url: `/api/v1/categories`, method: 'POST',
-      headers: {'Content-Type': 'application/json', ...headers},
+      headers: {'Content-Type': 'application/json', },
       data: createCustomCategoryRequest, signal
     },
       options);
@@ -226,8 +224,8 @@ export const createCategory = (
 
 
 export const getCreateCategoryMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createCategory>>, TError,{data: BodyType<NonReadonly<CreateCustomCategoryRequest>>;headers?: CreateCategoryHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof createCategory>>, TError,{data: BodyType<NonReadonly<CreateCustomCategoryRequest>>;headers?: CreateCategoryHeaders}, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createCategory>>, TError,{data: BodyType<NonReadonly<CreateCustomCategoryRequest>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof createCategory>>, TError,{data: BodyType<NonReadonly<CreateCustomCategoryRequest>>}, TContext> => {
 
 const mutationKey = ['createCategory'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -239,10 +237,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createCategory>>, {data: BodyType<NonReadonly<CreateCustomCategoryRequest>>;headers?: CreateCategoryHeaders}> = (props) => {
-          const {data,headers} = props ?? {};
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createCategory>>, {data: BodyType<NonReadonly<CreateCustomCategoryRequest>>}> = (props) => {
+          const {data} = props ?? {};
 
-          return  createCategory(data,headers,requestOptions)
+          return  createCategory(data,requestOptions)
         }
 
 
@@ -260,11 +258,11 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
  * @summary Create a new category
  */
 export const useCreateCategory = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createCategory>>, TError,{data: BodyType<NonReadonly<CreateCustomCategoryRequest>>;headers?: CreateCategoryHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createCategory>>, TError,{data: BodyType<NonReadonly<CreateCustomCategoryRequest>>}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof createCategory>>,
         TError,
-        {data: BodyType<NonReadonly<CreateCustomCategoryRequest>>;headers?: CreateCategoryHeaders},
+        {data: BodyType<NonReadonly<CreateCustomCategoryRequest>>},
         TContext
       > => {
       return useMutation(getCreateCategoryMutationOptions(options), queryClient);

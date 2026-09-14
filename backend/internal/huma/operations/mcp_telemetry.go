@@ -8,6 +8,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	humamiddleware "github.com/maxnussbaum/BoostedBudget/internal/huma/middleware"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 )
 
@@ -68,5 +69,8 @@ func RegisterMCPToolTelemetryRoutes(api huma.API, handler *MCPToolTelemetryHandl
 		Tags:          []string{"MCP Telemetry"},
 		Security:      []map[string][]string{{"clerk": {}}},
 		DefaultStatus: http.StatusNoContent,
+		Metadata: map[string]any{
+			humamiddleware.ReadEquivalentOperationMetadataKey: true,
+		},
 	}, handler.Record)
 }

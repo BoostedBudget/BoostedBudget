@@ -42,8 +42,7 @@ import type {
 
 import type {
   ErrorModel,
-  RecordMCPAuditBody,
-  RecordMCPAuditEntryHeaders
+  RecordMCPAuditBody
 } from '../../models';
 
 import { customInstance } from '../../client';
@@ -87,14 +86,13 @@ type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
  */
 export const recordMCPAuditEntry = (
     recordMCPAuditBody: BodyType<NonReadonly<RecordMCPAuditBody>>,
-    headers?: RecordMCPAuditEntryHeaders,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<void>(
       {url: `/api/v1/mcp/audit`, method: 'POST',
-      headers: {'Content-Type': 'application/json', ...headers},
+      headers: {'Content-Type': 'application/json', },
       data: recordMCPAuditBody, signal
     },
       options);
@@ -104,8 +102,8 @@ export const recordMCPAuditEntry = (
 
 
 export const getRecordMCPAuditEntryMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordMCPAuditEntry>>, TError,{data: BodyType<NonReadonly<RecordMCPAuditBody>>;headers?: RecordMCPAuditEntryHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof recordMCPAuditEntry>>, TError,{data: BodyType<NonReadonly<RecordMCPAuditBody>>;headers?: RecordMCPAuditEntryHeaders}, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordMCPAuditEntry>>, TError,{data: BodyType<NonReadonly<RecordMCPAuditBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof recordMCPAuditEntry>>, TError,{data: BodyType<NonReadonly<RecordMCPAuditBody>>}, TContext> => {
 
 const mutationKey = ['recordMCPAuditEntry'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -117,10 +115,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof recordMCPAuditEntry>>, {data: BodyType<NonReadonly<RecordMCPAuditBody>>;headers?: RecordMCPAuditEntryHeaders}> = (props) => {
-          const {data,headers} = props ?? {};
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof recordMCPAuditEntry>>, {data: BodyType<NonReadonly<RecordMCPAuditBody>>}> = (props) => {
+          const {data} = props ?? {};
 
-          return  recordMCPAuditEntry(data,headers,requestOptions)
+          return  recordMCPAuditEntry(data,requestOptions)
         }
 
 
@@ -138,11 +136,11 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
  * @summary Record MCP audit entry
  */
 export const useRecordMCPAuditEntry = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordMCPAuditEntry>>, TError,{data: BodyType<NonReadonly<RecordMCPAuditBody>>;headers?: RecordMCPAuditEntryHeaders}, TContext>, request?: SecondParameter<typeof customInstance>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof recordMCPAuditEntry>>, TError,{data: BodyType<NonReadonly<RecordMCPAuditBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof recordMCPAuditEntry>>,
         TError,
-        {data: BodyType<NonReadonly<RecordMCPAuditBody>>;headers?: RecordMCPAuditEntryHeaders},
+        {data: BodyType<NonReadonly<RecordMCPAuditBody>>},
         TContext
       > => {
       return useMutation(getRecordMCPAuditEntryMutationOptions(options), queryClient);
