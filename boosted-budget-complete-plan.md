@@ -2660,7 +2660,7 @@ Each phase produces a deployable, valuable product increment. The architecture s
 - **Implemented closures:** The API client now has a package-wide AST/symbol portability boundary,
   targets ES2020 without DOM libraries, and no longer carries its `vite-env` declaration. Mobile
   route coverage uses official `expo-router` and Testing Library navigation. React Router is
-  `^7.13.1`, resolving to v7 and remaining compatible with React 19.2.3. A 165-case guard now pins
+  `^7.13.1`, resolving to v7 and remaining compatible with React 19.2.3. A 167-case guard now pins
   dependency compatibility and Dependabot policy, enforces the exact trigger allowlist, and
   recursively rejects non-vendored workspace locks.
 - **Scope:** Every named milestone #8 deferral remains separate; this remediation creates no new
@@ -2668,8 +2668,8 @@ Each phase produces a deployable, valuable product increment. The architecture s
 - **Review workflow:** Implementation Tasks 1-4 used fresh subagents and obtained specification
   and quality approval. The final whole-diff remediation review remains pending; this entry does
   not claim its own approval.
-- **Validation so far:** Available local evidence includes 110 API-client tests, 32 mobile tests at
-  99.03% coverage, all 165 guard cases, Expo Doctor 21/21, package-export checks, and the complete
+- **Validation so far:** Available local evidence includes 116 API-client tests, 32 mobile tests at
+  99.03% coverage, all 167 guard cases, Expo Doctor 21/21, package-export checks, and the complete
   web test/typecheck/lint checks. Two unauthenticated production smoke tests passed in Playwright;
   authenticated E2E setup was blocked because `CLERK_PUBLISHABLE_KEY` was absent, so this entry
   does not claim a complete authenticated E2E run. Final whole-repository validation and the

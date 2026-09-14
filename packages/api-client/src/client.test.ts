@@ -211,12 +211,43 @@ function collectGlobalThisAliases(
           changed = true
         }
       }
+      if (
+        ts.isBinaryExpression(node)
+        && node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+        && ts.isIdentifier(unwrapExpression(node.left))
+        && isGlobalThisLike(node.right)
+      ) {
+        const symbol = checker.getSymbolAtLocation(unwrapExpression(node.left))
+        if (symbol && !aliases.has(symbol)) {
+          aliases.add(symbol)
+          changed = true
+        }
+      }
       ts.forEachChild(node, visit)
     }
     visit(sourceFile)
   }
 
   return aliases
+}
+
+function destructuredBrowserMemberOnGlobalThis(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+  aliases: Set<ts.Symbol>,
+): string | undefined {
+  if (!ts.isBindingElement(node) || !ts.isObjectBindingPattern(node.parent)) return undefined
+  const declaration = node.parent.parent
+  if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) return undefined
+  if (!isGlobalThisLike(declaration.initializer, checker, aliases)) return undefined
+
+  const property = node.propertyName ?? node.name
+  if (!ts.isIdentifier(property) && !ts.isStringLiteralLike(property)
+    && !ts.isComputedPropertyName(property)) {
+    return undefined
+  }
+  const name = propertyNameText(property)
+  return name && browserRuntimeGlobals.has(name) ? name : undefined
 }
 
 function isGlobalThisLike(
@@ -447,6 +478,15 @@ function findPortabilityViolations(source: string, relativePath: string): string
     const globalThisMember = browserMemberOnGlobalThis(node, checker, globalThisAliases)
     if (globalThisMember) violations.add(`globalThis browser member ${globalThisMember}`)
 
+    const destructuredMember = destructuredBrowserMemberOnGlobalThis(
+      node,
+      checker,
+      globalThisAliases,
+    )
+    if (destructuredMember) {
+      violations.add(`destructured globalThis browser member ${destructuredMember}`)
+    }
+
     ts.forEachChild(node, visit)
   }
 
@@ -471,6 +511,23 @@ describe('API client portability detector', () => {
     ['asserted globalThis computed browser property', "globalThis['window' as const]"],
     ['aliased globalThis browser property', 'const root = globalThis; root.location.href'],
     ['chained globalThis alias', 'const root = globalThis; const runtime = root; runtime.window'],
+    ['shorthand globalThis destructuring', 'const { window } = globalThis as any; window.location'],
+    [
+      'destructured globalThis browser property',
+      'const { window: browserWindow } = globalThis as any; browserWindow.location',
+    ],
+    [
+      'computed destructuring through a globalThis alias',
+      "const root = globalThis; const { ['location']: current } = (root as any); current.href",
+    ],
+    [
+      'post-declaration globalThis assignment',
+      'let runtime: any; runtime = globalThis; runtime.location.href',
+    ],
+    [
+      'wrapped assignment with a chained alias',
+      "let runtime: any; runtime = (globalThis as any); const next = runtime; next['window']",
+    ],
     ['ImportMeta declaration', 'interface ImportMeta { readonly env: Config }'],
     ['ImportMetaEnv declaration', 'interface ImportMetaEnv {}'],
     ['Window declaration', 'interface Window {}'],
@@ -594,6 +651,23 @@ describe('API client portability detector', () => {
       const root = { window: 'fixture' }
       void location.href
       void root.window
+    `
+
+    expect(findPortabilityViolations(source, 'fixture.ts')).toEqual([])
+  })
+
+  test('ignores destructuring and assignments sourced from local data', () => {
+    const source = `
+      const local = { window: { location: 'fixture' }, location: { href: 'fixture' } }
+      const { window } = local
+      const { window: browserWindow, ['location']: current } = local
+      let runtime: typeof local
+      runtime = local
+      const next = runtime
+      void browserWindow.location
+      void window.location
+      void current.href
+      void next.window
     `
 
     expect(findPortabilityViolations(source, 'fixture.ts')).toEqual([])

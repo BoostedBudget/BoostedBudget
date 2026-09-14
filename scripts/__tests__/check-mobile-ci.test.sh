@@ -8,7 +8,7 @@ GUARD="$REPO_ROOT/scripts/check-mobile-ci.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-TOTAL=165
+TOTAL=167
 case_no=0
 pass=0
 fail=0
@@ -558,6 +558,24 @@ import pathlib, sys
 pathlib.Path(sys.argv[1]).symlink_to('missing-lock-target')
 PY
 if guard_rejects "$nested_symlink_dir" 'packages/api-client/tooling/yarn.lock'; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated nested-lock diagnostic"; fi
+
+announce "non-vendored symlink directories below apps are rejected"
+symlink_directory_dir="$TMP/case-$case_no"
+copy_fixture "$symlink_directory_dir"
+external_directory="$TMP/external-directory-$case_no"
+mkdir -p "$external_directory"
+touch "$external_directory/bun.lock"
+ln -s "$external_directory" "$symlink_directory_dir/apps/web/linked-tooling"
+if guard_rejects "$symlink_directory_dir" 'apps/web/linked-tooling'; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated symlink-directory diagnostic"; fi
+
+announce "a symlink named node_modules remains outside lockfile traversal"
+symlink_node_modules_dir="$TMP/case-$case_no"
+copy_fixture "$symlink_node_modules_dir"
+external_modules="$TMP/external-node-modules-$case_no"
+mkdir -p "$external_modules/vendor"
+touch "$external_modules/vendor/bun.lock"
+ln -s "$external_modules" "$symlink_node_modules_dir/apps/web/node_modules"
+if guard_passes "$symlink_node_modules_dir"; then ok "ignored"; else bad "symlinked node_modules lockfile was not ignored"; fi
 
 reject_workspace_config "root package must declare workspaces" "missing"
 reject_workspace_config "root workspaces must be a list of safe patterns" "malformed"
