@@ -8,7 +8,7 @@ GUARD="$REPO_ROOT/scripts/check-mobile-ci.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-TOTAL=167
+TOTAL=168
 case_no=0
 pass=0
 fail=0
@@ -414,6 +414,7 @@ reject_workflow "missing root package trigger" "remove-path" "package.json"
 reject_workflow "missing root lockfile trigger" "remove-path" "bun.lock"
 reject_workflow "missing bunfig trigger" "remove-path" "bunfig.toml"
 reject_workflow "missing Turbo graph trigger" "remove-path" "turbo.json"
+reject_workflow "missing root TypeScript config trigger" "remove-path" "tsconfig.json"
 reject_workflow "missing test-workflow self-trigger" "remove-path" ".github/workflows/test.yml"
 reject_workflow "missing Dependabot-policy trigger" "remove-path" ".github/dependabot.yml"
 reject_workflow "missing production-guard trigger" "remove-path" "scripts/check-mobile-ci.py"
