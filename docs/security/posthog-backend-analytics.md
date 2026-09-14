@@ -56,8 +56,10 @@ one `POST /api/v1/mcp/telemetry` after its result settles. The request carries o
 `tool_surface`, `tool_family`, `outcome`, and `duration_bucket` dimensions; its OAuth bearer token
 is authentication, never an event property. The backend derives the internal user UUID from that
 token and applies a fresh database authority check through `Gateway`. The Worker has no PostHog key,
-SDK, host, or direct capture path. Delivery uses `waitUntil` with a 750 ms request timeout, no retry
-or durable queue, so it is best effort and at most once and cannot delay or change the tool result.
+SDK, host, or direct capture path. Delivery uses `waitUntil` with a 5-second request timeout so a
+cold Clerk authentication and consent-authority lookup can complete. There is no retry or durable
+queue: timeout, Worker eviction, or backend failure can lose the event, while at-most-once delivery
+and response independence ensure analytics cannot delay or change the tool result.
 Failures produce only a bounded Worker log classification. Search is classified as `discovery`,
 recipe tools as `workflows`, single-family execute batches from the selected manifest entries, mixed
 batches as `cross_domain`, and unrecognized families as `other`. Manifest tags are grouped into the

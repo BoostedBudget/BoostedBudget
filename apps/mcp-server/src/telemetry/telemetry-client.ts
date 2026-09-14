@@ -7,9 +7,12 @@ interface MCPToolTelemetryClientOptions {
   workerSecret: string
   getAccessToken: () => string | undefined
   timeoutMilliseconds?: number
+  timeoutSignal?: (milliseconds: number) => AbortSignal
 }
 
 type FailureClass = 'authentication' | 'http_4xx' | 'http_5xx' | 'http_other' | 'network' | 'timeout'
+
+const DEFAULT_TELEMETRY_TIMEOUT_MILLISECONDS = 5_000
 
 function warnDeliveryFailure(failureClass: FailureClass): void {
   console.warn('[mcp-telemetry] delivery failed', { failureClass })
@@ -31,6 +34,7 @@ export function createMCPToolTelemetryClient(options: MCPToolTelemetryClientOpti
       }
 
       try {
+        const timeoutMilliseconds = options.timeoutMilliseconds ?? DEFAULT_TELEMETRY_TIMEOUT_MILLISECONDS
         const response = await fetch(`${options.baseUrl}/api/v1/mcp/telemetry`, {
           method: 'POST',
           headers: {
@@ -41,7 +45,7 @@ export function createMCPToolTelemetryClient(options: MCPToolTelemetryClientOpti
             'X-MCP-Worker-Secret': options.workerSecret,
           },
           body: JSON.stringify(completion),
-          signal: AbortSignal.timeout(options.timeoutMilliseconds ?? 750),
+          signal: options.timeoutSignal?.(timeoutMilliseconds) ?? AbortSignal.timeout(timeoutMilliseconds),
         })
         if (!response.ok) warnDeliveryFailure(httpFailureClass(response.status))
       } catch (error) {

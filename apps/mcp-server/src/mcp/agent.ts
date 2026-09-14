@@ -124,8 +124,9 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       rateLimiter,
     })
 
-    // Completion delivery is best effort and at most once. waitUntil lets the short, bounded
-    // backend request finish without delaying or changing the MCP tool response.
+    // Completion delivery is best effort and at most once. waitUntil lets the bounded backend
+    // request (up to 5s for cold auth/consent resolution) finish without delaying or changing the
+    // MCP tool response.
     const telemetry = createMCPToolTelemetryClient({
       baseUrl: env.BOOSTEDBUDGET_API_URL,
       originSecret: env.BOOSTEDBUDGET_ORIGIN_SECRET,

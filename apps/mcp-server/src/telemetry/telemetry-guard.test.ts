@@ -48,4 +48,13 @@ describe('MCP telemetry architecture guard', () => {
     expect(headersModel).toContain("'X-MCP-Worker-Secret': string")
     expect(headersModel).not.toContain("'X-MCP-Worker-Secret'?: string")
   })
+
+  it('does not add typed header parameters to unrelated generated endpoint signatures', () => {
+    const endpointRoot = resolve(import.meta.dir, '../../../../packages/api-client/src/endpoints')
+    const endpointsWithHeaderParameters = productionFiles(endpointRoot)
+      .filter(path => /headers\??:\s*\w+Headers/.test(readFileSync(path, 'utf8')))
+      .map(path => path.slice(endpointRoot.length + 1))
+
+    expect(endpointsWithHeaderParameters).toEqual(['mcp-telemetry/mcp-telemetry.ts'])
+  })
 })
