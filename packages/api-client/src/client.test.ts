@@ -15,6 +15,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { readdir } from 'node:fs/promises'
 import type { AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios'
 import { AxiosError, AxiosHeaders } from 'axios'
+import ts from 'typescript'
 import {
   AXIOS_INSTANCE,
   configureApiClient,
@@ -74,19 +75,18 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
-const forbiddenPackageCouplings = [
-  ['vite/client', /vite\/client/],
-  ['ImportMetaEnv', /\bImportMetaEnv\b/],
-  ['ambient Window declaration', /\b(?:interface|type)\s+Window\b/],
-  ['window.', /\bwindow\s*\./],
-  ['document.', /\bdocument\s*\./],
-  ['import.meta', /\bimport\.meta\b/],
-  ['VITE_', /\bVITE_/],
-] as const
+const browserRuntimeGlobals = new Set([
+  'document',
+  'localStorage',
+  'navigator',
+  'sessionStorage',
+  'window',
+])
+const browserAmbientDeclarations = new Set(['ImportMeta', 'ImportMetaEnv', 'Window'])
 
 function isTestSource(relativePath: string) {
   return relativePath.split('/').includes('__tests__')
-    || /\.(?:test|spec)\.tsx?$/.test(relativePath)
+    || /\.(?:test|spec)(?:\.d)?\.tsx?$/.test(relativePath)
 }
 
 async function findPackageSources(
@@ -96,7 +96,11 @@ async function findPackageSources(
   const entries = await readdir(directory, { withFileTypes: true })
   const sources: Array<{ relativePath: string; url: URL }> = []
 
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+  for (const entry of entries.sort((left, right) => {
+    if (left.name < right.name) return -1
+    if (left.name > right.name) return 1
+    return 0
+  })) {
     const relativePath = `${relativeDirectory}${entry.name}`
     const url = new URL(entry.isDirectory() ? `${entry.name}/` : entry.name, directory)
     if (entry.isDirectory()) {
@@ -109,15 +113,321 @@ async function findPackageSources(
   return sources
 }
 
+function isNamedDeclaration(node: ts.Node, identifier: ts.Identifier): boolean {
+  if (
+    ts.isBindingElement(node)
+    || ts.isClassDeclaration(node)
+    || ts.isClassExpression(node)
+    || ts.isEnumDeclaration(node)
+    || ts.isEnumMember(node)
+    || ts.isFunctionDeclaration(node)
+    || ts.isFunctionExpression(node)
+    || ts.isInterfaceDeclaration(node)
+    || ts.isMethodDeclaration(node)
+    || ts.isMethodSignature(node)
+    || ts.isParameter(node)
+    || ts.isPropertyDeclaration(node)
+    || ts.isPropertySignature(node)
+    || ts.isTypeAliasDeclaration(node)
+    || ts.isTypeParameterDeclaration(node)
+    || ts.isVariableDeclaration(node)
+  ) {
+    return node.name === identifier
+  }
+
+  return false
+}
+
+function isRuntimeIdentifier(node: ts.Identifier, checker: ts.TypeChecker): boolean {
+  const parent = node.parent
+  if (isNamedDeclaration(parent, node)) return false
+  if (ts.isPropertyAccessExpression(parent) && parent.name === node) return false
+  if (ts.isQualifiedName(parent) && parent.right === node) return false
+  if (ts.isPropertyAssignment(parent) && parent.name === node) return false
+  if (ts.isImportClause(parent) || ts.isImportSpecifier(parent) || ts.isNamespaceImport(parent)) {
+    return false
+  }
+
+  if (ts.isShorthandPropertyAssignment(parent)) {
+    return checker.getShorthandAssignmentValueSymbol(parent) === undefined
+  }
+
+  return checker.getSymbolAtLocation(node) === undefined
+}
+
+function unwrapExpression(expression: ts.Expression): ts.Expression {
+  let unwrapped = expression
+  while (
+    ts.isParenthesizedExpression(unwrapped)
+    || ts.isAsExpression(unwrapped)
+    || ts.isTypeAssertionExpression(unwrapped)
+    || ts.isSatisfiesExpression(unwrapped)
+    || ts.isNonNullExpression(unwrapped)
+  ) {
+    unwrapped = unwrapped.expression
+  }
+  return unwrapped
+}
+
+function isUnboundGlobalThis(expression: ts.Expression, checker: ts.TypeChecker): boolean {
+  const root = unwrapExpression(expression)
+  if (!ts.isIdentifier(root) || root.text !== 'globalThis') return false
+  const symbol = checker.getSymbolAtLocation(root)
+  return symbol === undefined
+    || symbol.declarations === undefined
+    || symbol.declarations.length === 0
+}
+
+function browserMemberOnGlobalThis(
+  node: ts.Node,
+  checker: ts.TypeChecker,
+): string | undefined {
+  if (
+    ts.isPropertyAccessExpression(node)
+    && isUnboundGlobalThis(node.expression, checker)
+    && browserRuntimeGlobals.has(node.name.text)
+  ) {
+    return node.name.text
+  }
+
+  if (
+    ts.isElementAccessExpression(node)
+    && isUnboundGlobalThis(node.expression, checker)
+  ) {
+    const argument = unwrapExpression(node.argumentExpression)
+    if (ts.isStringLiteralLike(argument) && browserRuntimeGlobals.has(argument.text)) {
+      return argument.text
+    }
+  }
+
+  return undefined
+}
+
+function isViteClientImport(node: ts.Node): boolean {
+  if (
+    (ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+    && node.moduleSpecifier
+    && ts.isStringLiteral(node.moduleSpecifier)
+  ) {
+    return node.moduleSpecifier.text === 'vite/client'
+  }
+
+  if (
+    ts.isImportTypeNode(node)
+    && ts.isLiteralTypeNode(node.argument)
+    && ts.isStringLiteral(node.argument.literal)
+  ) {
+    return node.argument.literal.text === 'vite/client'
+  }
+
+  return ts.isCallExpression(node)
+    && node.expression.kind === ts.SyntaxKind.ImportKeyword
+    && node.arguments.length === 1
+    && ts.isStringLiteral(node.arguments[0])
+    && node.arguments[0].text === 'vite/client'
+}
+
+function propertyNameText(name: ts.PropertyName): string | undefined {
+  const candidate = ts.isComputedPropertyName(name) ? unwrapExpression(name.expression) : name
+  return ts.isIdentifier(candidate) || ts.isStringLiteralLike(candidate)
+    ? candidate.text
+    : undefined
+}
+
+function vitePropertyDeclaration(node: ts.Node): string | undefined {
+  if (
+    !ts.isPropertyAssignment(node)
+    && !ts.isPropertyDeclaration(node)
+    && !ts.isPropertySignature(node)
+    && !ts.isMethodDeclaration(node)
+    && !ts.isMethodSignature(node)
+    && !ts.isGetAccessorDeclaration(node)
+    && !ts.isSetAccessorDeclaration(node)
+  ) {
+    return undefined
+  }
+
+  const name = propertyNameText(node.name)
+  return name?.startsWith('VITE_') ? name : undefined
+}
+
+function isGlobalDeclaration(node: ts.Node, sourceFile: ts.SourceFile): boolean {
+  for (let parent = node.parent; parent !== sourceFile; parent = parent.parent) {
+    if (ts.isModuleDeclaration(parent)) {
+      return (parent.flags & ts.NodeFlags.GlobalAugmentation) !== 0
+    }
+  }
+
+  return !ts.isExternalModule(sourceFile)
+}
+
+function createTypeChecker(sourceFile: ts.SourceFile): ts.TypeChecker {
+  const options: ts.CompilerOptions = {
+    noLib: true,
+    noResolve: true,
+    target: ts.ScriptTarget.Latest,
+  }
+  const host: ts.CompilerHost = {
+    fileExists: (fileName) => fileName === sourceFile.fileName,
+    getCanonicalFileName: (fileName) => fileName,
+    getCurrentDirectory: () => '',
+    getDefaultLibFileName: () => 'lib.d.ts',
+    getNewLine: () => '\n',
+    getSourceFile: (fileName) => fileName === sourceFile.fileName ? sourceFile : undefined,
+    readFile: (fileName) => fileName === sourceFile.fileName ? sourceFile.text : undefined,
+    useCaseSensitiveFileNames: () => true,
+    writeFile: () => {},
+  }
+  return ts.createProgram([sourceFile.fileName], options, host).getTypeChecker()
+}
+
+function findPortabilityViolations(source: string, relativePath: string): string[] {
+  const scriptKind = relativePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  const sourceFile = ts.createSourceFile(
+    relativePath,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    scriptKind,
+  )
+  const checker = createTypeChecker(sourceFile)
+  const violations = new Set<string>()
+
+  for (const reference of sourceFile.typeReferenceDirectives) {
+    if (reference.fileName === 'vite/client') violations.add('vite/client type reference')
+  }
+
+  function visit(node: ts.Node): void {
+    if (isViteClientImport(node)) violations.add('vite/client import')
+
+    if (
+      (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node))
+      && browserAmbientDeclarations.has(node.name.text)
+      && isGlobalDeclaration(node, sourceFile)
+    ) {
+      violations.add(`${node.name.text} ambient declaration`)
+    }
+
+    if (
+      ts.isMetaProperty(node)
+      && node.keywordToken === ts.SyntaxKind.ImportKeyword
+      && node.name.text === 'meta'
+    ) {
+      violations.add('import.meta')
+    }
+
+    if (ts.isIdentifier(node) && node.text.startsWith('VITE_')) {
+      violations.add(`VITE_ identifier ${node.text}`)
+    }
+
+    const viteProperty = vitePropertyDeclaration(node)
+    if (viteProperty) violations.add(`VITE_ property ${viteProperty}`)
+
+    if (
+      ts.isIdentifier(node)
+      && browserRuntimeGlobals.has(node.text)
+      && isRuntimeIdentifier(node, checker)
+    ) {
+      violations.add(`browser runtime global ${node.text}`)
+    }
+
+    const globalThisMember = browserMemberOnGlobalThis(node, checker)
+    if (globalThisMember) violations.add(`globalThis browser member ${globalThisMember}`)
+
+    ts.forEachChild(node, visit)
+  }
+
+  visit(sourceFile)
+  return [...violations].sort().map((description) => `${relativePath}: ${description}`)
+}
+
+describe('API client portability detector', () => {
+  const forbiddenSyntax = [
+    ['optional window access', 'window?.location'],
+    ['computed window access', "window['location']"],
+    ['optional document access', 'document?.body'],
+    ['computed document access', "document['body']"],
+    ['local storage access', "localStorage.getItem('key')"],
+    ['session storage access', "sessionStorage['token']"],
+    ['navigator access', 'navigator.userAgent'],
+    ['globalThis browser property', 'globalThis.window'],
+    ['globalThis computed browser property', "globalThis['window']"],
+    ['parenthesized globalThis browser property', '(globalThis).window'],
+    ['wrapped globalThis computed browser property', "globalThis[(('window'))]"],
+    ['asserted globalThis computed browser property', "globalThis['window' as const]"],
+    ['ImportMeta declaration', 'interface ImportMeta { readonly env: Config }'],
+    ['ImportMetaEnv declaration', 'interface ImportMetaEnv {}'],
+    ['Window declaration', 'interface Window {}'],
+    ['import.meta expression', 'import.meta.env'],
+    ['Vite identifier', "const VITE_API_URL = 'https://api.example.com'"],
+    ['Vite property declaration', 'interface Config { VITE_API_URL: string }'],
+    ['computed Vite property declaration', 'interface Config { ["VITE_API_URL"]: string }'],
+    ['Vite side-effect import', "import 'vite/client'"],
+    ['Vite type import', "import type {} from 'vite/client'"],
+    ['Vite type-reference directive', '/// <reference types="vite/client" />'],
+  ] as const
+
+  test.each(forbiddenSyntax)('rejects %s', (_description, source) => {
+    expect(findPortabilityViolations(source, 'fixture.ts')).not.toEqual([])
+  })
+
+  test('ignores comments and ordinary string prose', () => {
+    const source = `
+      // window.location document.body import.meta.env VITE_API_URL
+      /* interface Window {} and interface ImportMetaEnv {} */
+      const prose = 'vite/client globalThis["window"] navigator localStorage sessionStorage'
+    `
+
+    expect(findPortabilityViolations(source, 'fixture.ts')).toEqual([])
+  })
+
+  test('ignores locally bound and type-only browser-shaped names', () => {
+    const source = `
+      type window = string
+      function read(window: { value: string }): window {
+        return window.value
+      }
+      const model = { window: 'value', navigator: 'value' }
+    `
+
+    expect(findPortabilityViolations(source, 'fixture.ts')).toEqual([])
+  })
+
+  test('ignores module-scoped browser-shaped declarations', () => {
+    const source = `
+      export interface Window { value: string }
+      export interface ImportMeta { value: string }
+      export interface ImportMetaEnv { value: string }
+    `
+
+    expect(findPortabilityViolations(source, 'fixture.ts')).toEqual([])
+  })
+
+  test('excludes test declaration files from package source discovery', () => {
+    expect(isTestSource('fixtures/browser.test.d.ts')).toBe(true)
+    expect(isTestSource('fixtures/browser.spec.d.ts')).toBe(true)
+  })
+
+  test('does not include browser libraries in the package typecheck', async () => {
+    const tsconfig = await Bun.file(new URL('../tsconfig.json', import.meta.url)).json()
+
+    expect(tsconfig.compilerOptions.lib).toEqual(['ES2020'])
+    expect(tsconfig.exclude).toEqual([
+      'node_modules',
+      '**/__tests__/**',
+      '**/*.test.*',
+      '**/*.spec.*',
+    ])
+  })
+})
+
 describe('portable API client runtime', () => {
   test('does not couple package-owned source to browser or Vite globals', async () => {
     const violations: string[] = []
 
     for (const { relativePath, url } of await findPackageSources()) {
       const source = await Bun.file(url).text()
-      for (const [description, pattern] of forbiddenPackageCouplings) {
-        if (pattern.test(source)) violations.push(`${relativePath}: ${description}`)
-      }
+      violations.push(...findPortabilityViolations(source, relativePath))
     }
 
     expect(violations).toEqual([])
