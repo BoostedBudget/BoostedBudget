@@ -319,6 +319,7 @@ func TestPostHogErasureSuccessfulAcceptanceAndPendingPollResetRetryBudget_Integr
 	require.NoError(t, err)
 	require.True(t, updated)
 	assertRetryAccountingCleared(t, ctx, pool, id)
+	prioritizePostHogErasureFixture(t, ctx, pool, id)
 
 	claimed, err := repo.ClaimDue(ctx, time.Now().Add(6*time.Minute), time.Minute)
 	require.NoError(t, err)
@@ -330,6 +331,7 @@ func TestPostHogErasureSuccessfulAcceptanceAndPendingPollResetRetryBudget_Integr
 	require.NoError(t, err)
 	require.True(t, updated)
 	assertRetryAccountingCleared(t, ctx, pool, id)
+	prioritizePostHogErasureFixture(t, ctx, pool, id)
 
 	claimed, err = repo.ClaimDue(ctx, time.Now().Add(7*time.Hour), time.Minute)
 	require.NoError(t, err)
@@ -349,4 +351,13 @@ func assertRetryAccountingCleared(t *testing.T, ctx context.Context, pool *pgxpo
 		FROM posthog_erasure_outbox WHERE id=$1`, id).Scan(&attempts, &lastError))
 	assert.Zero(t, attempts)
 	assert.Nil(t, lastError)
+}
+
+// ClaimDue is intentionally global. Give this fixture the earliest possible due time so retained
+// obligations left by other integration tests cannot win the claim without modifying those rows.
+func prioritizePostHogErasureFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id string) {
+	t.Helper()
+	tag, err := pool.Exec(ctx, `UPDATE posthog_erasure_outbox SET next_attempt_at='-infinity' WHERE id=$1`, id)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, tag.RowsAffected())
 }
