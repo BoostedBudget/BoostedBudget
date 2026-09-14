@@ -56,6 +56,7 @@ func testGateway(transport Analytics, authority stubAuthority) *Gateway {
 func TestGatewayCaptureEventUsesCanonicalClerkSubject(t *testing.T) {
 	transport := &recordingTransport{}
 	gateway := testGateway(transport, stubAuthority{subject: "user_clerk", granted: true})
+	before := testutil.ToFloat64(analyticsEventsTotal.WithLabelValues(string(EventFinancialDataSyncCompleted)))
 
 	gateway.CaptureEvent(context.Background(), "internal-user", FinancialDataSyncCompletedPayload{SyncKind: FinancialDataSyncCompletedSyncKindInitial})
 
@@ -63,6 +64,8 @@ func TestGatewayCaptureEventUsesCanonicalClerkSubject(t *testing.T) {
 	assert.Equal(t, "user_clerk", transport.captures[0].distinctID)
 	assert.Equal(t, string(EventFinancialDataSyncCompleted), transport.captures[0].event)
 	assert.Equal(t, map[string]interface{}{"sync_kind": "initial"}, transport.captures[0].properties)
+	after := testutil.ToFloat64(analyticsEventsTotal.WithLabelValues(string(EventFinancialDataSyncCompleted)))
+	assert.Equal(t, before+1, after)
 }
 
 func TestGatewayFailsClosedForConsentAndIdentityFailures(t *testing.T) {

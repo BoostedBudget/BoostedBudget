@@ -61,9 +61,15 @@ func TestLegacyRawCaptureProducersArePinned(t *testing.T) {
 		"internal/workers/plaid_sync_provider.go":           3,
 		"internal/workers/webhook_processor.go":             2,
 	}
+	wantConsent := map[string]int{
+		"internal/queue/jobs/manual_tier_override_expiry_check.go": 1,
+		"internal/services/admin_user_service.go":                  2,
+		"internal/services/transfer_suggestion_service.go":         3,
+	}
 
 	backendRoot := filepath.Join("..", "..", "..")
 	got := make(map[string]int)
+	gotConsent := make(map[string]int)
 	err := filepath.WalkDir(backendRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return walkErr
@@ -78,10 +84,14 @@ func TestLegacyRawCaptureProducersArePinned(t *testing.T) {
 		if count := strings.Count(string(source), ".Capture("); count > 0 {
 			got[filepath.ToSlash(rel)] = count
 		}
+		if count := strings.Count(string(source), ".CaptureIfConsented("); count > 0 {
+			gotConsent[filepath.ToSlash(rel)] = count
+		}
 		return nil
 	})
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
+	assert.Equal(t, wantConsent, gotConsent)
 }
 
 func TestOperationalFailuresAreNotPostHogProducers(t *testing.T) {

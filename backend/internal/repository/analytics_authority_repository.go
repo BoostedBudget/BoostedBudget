@@ -46,6 +46,9 @@ func (r *AnalyticsAuthorityRepository) WithConsentedSubject(
 	if err != nil {
 		return false, fmt.Errorf("begin analytics authority read: %w", err)
 	}
+	// The read-only transaction exists only to hold SHARE locks through emit. Rollback releases
+	// those locks; its cleanup result cannot retroactively change an event already accepted by the
+	// transport, so it is deliberately ignored.
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var encryptedSubject string
@@ -64,8 +67,5 @@ func (r *AnalyticsAuthorityRepository) WithConsentedSubject(
 	}
 
 	emit(subject)
-	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("commit analytics authority read: %w", err)
-	}
 	return true, nil
 }
