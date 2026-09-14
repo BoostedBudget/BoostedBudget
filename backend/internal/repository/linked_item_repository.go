@@ -428,9 +428,11 @@ type TransactionSyncCompletionRepository interface {
 type TransactionSyncCompletionDisposition string
 
 const (
-	TransactionSyncCompletionInitial                    TransactionSyncCompletionDisposition = "initial"
-	TransactionSyncCompletionRefresh                    TransactionSyncCompletionDisposition = "refresh"
-	TransactionSyncCompletionSuppressedRolloutAmbiguous TransactionSyncCompletionDisposition = "suppressed_rollout_ambiguous"
+	TransactionSyncCompletionInitial                   TransactionSyncCompletionDisposition = "initial"
+	TransactionSyncCompletionRefresh                   TransactionSyncCompletionDisposition = "refresh"
+	TransactionSyncCompletionSuppressedCutoverUnset    TransactionSyncCompletionDisposition = "suppressed_cutover_unset"
+	TransactionSyncCompletionSuppressedPreCutover      TransactionSyncCompletionDisposition = "suppressed_pre_cutover"
+	TransactionSyncCompletionSuppressedLegacyAmbiguous TransactionSyncCompletionDisposition = "suppressed_legacy_ambiguous"
 )
 
 // TransactionSyncCursorResetRepository compare-and-resets a cursor rejected by Plaid without
@@ -898,10 +900,11 @@ func (r *linkedItemRepository) RecordTransactionSyncCompletion(
 			       CASE transaction_sync_state
 			           WHEN 'completed' THEN 'refresh'
 			           WHEN 'never_synced' THEN CASE
-			               WHEN $4::timestamptz IS NOT NULL AND created_at >= $4::timestamptz THEN 'initial'
-			               ELSE 'suppressed_rollout_ambiguous'
+			               WHEN $4::timestamptz IS NULL THEN 'suppressed_cutover_unset'
+			               WHEN created_at < $4::timestamptz THEN 'suppressed_pre_cutover'
+			               ELSE 'initial'
 			           END
-			           WHEN 'legacy_ambiguous' THEN 'suppressed_rollout_ambiguous'
+			           WHEN 'legacy_ambiguous' THEN 'suppressed_legacy_ambiguous'
 			       END AS completion_disposition
 			FROM linked_items
 			WHERE id = $1

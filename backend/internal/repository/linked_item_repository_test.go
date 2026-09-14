@@ -242,20 +242,20 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletion(t *testing.T) {
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
-func TestLinkedItemRepository_RecordTransactionSyncCompletionSuppressesAmbiguousRollout(t *testing.T) {
+func TestLinkedItemRepository_RecordTransactionSyncCompletionSuppressesUnsetCutover(t *testing.T) {
 	mockDB, repo := setupLinkedItemMockDB(t)
 	defer mockDB.Close()
 
 	mockDB.ExpectQuery("UPDATE linked_items AS li").
 		WithArgs("item-1", "cursor-before", (*string)(nil), (*time.Time)(nil)).
-		WillReturnRows(pgxmock.NewRows([]string{"completion_disposition"}).AddRow("suppressed_rollout_ambiguous"))
+		WillReturnRows(pgxmock.NewRows([]string{"completion_disposition"}).AddRow("suppressed_cutover_unset"))
 
 	recorder := repo.(interface {
 		RecordTransactionSyncCompletion(context.Context, string, string, *string) (TransactionSyncCompletionDisposition, error)
 	})
 	disposition, err := recorder.RecordTransactionSyncCompletion(context.Background(), "item-1", "cursor-before", nil)
 	require.NoError(t, err)
-	assert.Equal(t, TransactionSyncCompletionSuppressedRolloutAmbiguous, disposition)
+	assert.Equal(t, TransactionSyncCompletionSuppressedCutoverUnset, disposition)
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 

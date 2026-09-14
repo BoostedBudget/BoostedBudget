@@ -75,6 +75,12 @@ items created before the cutover suppress once, including a new-writer item that
 have completed without leaving a cursor, while items created at or after it may emit `initial`.
 Do not set or advance this value until old workers are drained; it is a deployment epoch, not a
 feature toggle.
+Every suppressed completion increments
+`financial_data_sync_completion_suppressions_total{reason=...}` with one of four bounded reasons:
+`cutover_unset`, `pre_cutover`, `legacy_ambiguous`, or `unknown`. This makes a forgotten cutover and
+the expected rollout undercount visible without logging per-sync identifiers or creating
+high-cardinality metric series. Known suppression paths do not emit a duplicate log; only an
+impossible unknown disposition retains the existing generic error log.
 The latch can commit before a best-effort
 PostHog enqueue and is therefore a semantic completion fact, not a delivery receipt. That shared
 boundary covers scheduled jobs and transaction webhooks without duplicate success producers.

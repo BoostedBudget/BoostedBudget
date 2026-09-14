@@ -13,6 +13,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/merchant"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 )
@@ -865,9 +866,22 @@ func (s *transactionSyncService) SyncTransactions(
 		case repository.TransactionSyncCompletionRefresh:
 			completionRecorded = true
 			syncKind = phclient.FinancialDataSyncCompletedSyncKindRefresh
-		case repository.TransactionSyncCompletionSuppressedRolloutAmbiguous:
-			// The durable write succeeded, but mixed-version evidence cannot prove event semantics.
+		case repository.TransactionSyncCompletionSuppressedCutoverUnset:
+			observability.RecordFinancialDataSyncCompletionSuppression(
+				observability.FinancialDataSyncCompletionSuppressionCutoverUnset,
+			)
+		case repository.TransactionSyncCompletionSuppressedPreCutover:
+			observability.RecordFinancialDataSyncCompletionSuppression(
+				observability.FinancialDataSyncCompletionSuppressionPreCutover,
+			)
+		case repository.TransactionSyncCompletionSuppressedLegacyAmbiguous:
+			observability.RecordFinancialDataSyncCompletionSuppression(
+				observability.FinancialDataSyncCompletionSuppressionLegacyAmbiguous,
+			)
 		default:
+			observability.RecordFinancialDataSyncCompletionSuppression(
+				observability.FinancialDataSyncCompletionSuppressionUnknown,
+			)
 			s.logger.Error("transaction sync completion returned an unknown analytics disposition")
 		}
 	} else if pendingCursor != "" && !fullyPaginated {
