@@ -10,7 +10,33 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 )
+
+type recordingSyncProductAnalytics struct {
+	userID string
+	event  phclient.TypedEvent
+}
+
+func (r *recordingSyncProductAnalytics) CaptureEvent(_ context.Context, userID string, event phclient.TypedEvent) {
+	r.userID = userID
+	r.event = event
+}
+
+func TestFinancialDataSyncKindUsesPreSyncCursor(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cursor string
+		want   phclient.FinancialDataSyncCompletedSyncKind
+	}{
+		{name: "initial nil or blank cursor", want: phclient.FinancialDataSyncCompletedSyncKindInitial},
+		{name: "refresh existing cursor", cursor: "cursor-1", want: phclient.FinancialDataSyncCompletedSyncKindRefresh},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, financialDataSyncKind(tc.cursor))
+		})
+	}
+}
 
 // TestSyncTransactions_BlankNextCursor_DoesNotOverwriteStoredCursor pins the LIVE path against a
 // blank cursor write. Issue #1537 round 9.
@@ -56,6 +82,8 @@ func TestSyncTransactions_BlankNextCursor_DoesNotOverwriteStoredCursor(t *testin
 		nil, // merchantRepo
 		nil, // logger
 	)
+	analytics := &recordingSyncProductAnalytics{}
+	SetTransactionSyncProductAnalytics(service, analytics)
 
 	goodCursor := "cursor-earned-over-many-syncs"
 	linkedItem := &domain.LinkedItem{
@@ -85,6 +113,10 @@ func TestSyncTransactions_BlankNextCursor_DoesNotOverwriteStoredCursor(t *testin
 	result, err := service.SyncTransactions(ctx, linkedItem)
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	assert.Equal(t, "user-123", analytics.userID)
+	payload, ok := analytics.event.(phclient.FinancialDataSyncCompletedPayload)
+	require.True(t, ok)
+	assert.Equal(t, phclient.FinancialDataSyncCompletedSyncKindRefresh, payload.SyncKind)
 
 	mockLinkedItemRepo.AssertNotCalled(t, "UpdateCursor", ctx, "linked-item-123", "")
 
@@ -133,6 +165,8 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_FailsClosedWithoutLooping(t
 		nil, mockLinkedItemRepo, mockTransactionRepo, mockAccountRepo,
 		nil, nil, mockPlaidService, nil, nil, nil, nil, nil, nil,
 	)
+	analytics := &recordingSyncProductAnalytics{}
+	SetTransactionSyncProductAnalytics(service, analytics)
 
 	goodCursor := "cursor-earned-over-many-syncs"
 	linkedItem := &domain.LinkedItem{
@@ -180,6 +214,7 @@ func TestSyncTransactions_BlankNextCursorWithHasMore_FailsClosedWithoutLooping(t
 	require.Error(t, err,
 		"an empty next_cursor alongside has_more=true is a Plaid contract violation with no safe "+
 			"continuation; it must fail closed so the job retries, not spin")
+	assert.Nil(t, analytics.event, "a failed sync must not emit a completion event")
 
 	for _, c := range mockLinkedItemRepo.Calls {
 		if c.Method == "UpdateCursor" {

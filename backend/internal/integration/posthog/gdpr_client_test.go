@@ -24,7 +24,7 @@ func (s *stubAnalytics) Capture(distinctID, event string, _ map[string]interface
 }
 
 func (s *stubAnalytics) Identify(_ string, _ map[string]interface{}) {}
-func (s *stubAnalytics) Close()                                       {}
+func (s *stubAnalytics) Close()                                      {}
 
 // stubConsent is a test double for the ConsentChecker interface.
 type stubConsent struct {

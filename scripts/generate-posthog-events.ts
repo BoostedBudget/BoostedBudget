@@ -529,6 +529,87 @@ interface SymbolEntry {
   symbol: string
   name: string
   description?: string
+  event?: EventDefinition
+}
+
+function goIdentifier(value: string): string {
+  return value
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join('')
+}
+
+function renderGoPropertyTypes(entries: SymbolEntry[]): string[] {
+  function enumTypeName(base: string, key: string): string {
+    return `${base}${goIdentifier(key)}`
+  }
+  return entries.flatMap(({ symbol, event }) => {
+    if (!event || Object.keys(event.properties).length === 0) return []
+    const base = symbol.replace(/^Event/, '')
+    const enumTypes = Object.entries(event.properties).flatMap(([key, property]) => {
+      if (property.type !== 'string' || !Array.isArray(property.values)) return []
+      const typeName = enumTypeName(base, key)
+      return [
+        `type ${typeName} string`,
+        '',
+        'const (',
+        ...(property.values as string[]).map((value) => `\t${typeName}${goIdentifier(value)} ${typeName} = "${value}"`),
+        ')',
+        '',
+      ]
+    })
+    const fields = Object.entries(event.properties).map(([key, property]) => {
+      let typeName = 'string'
+      if (property.type === 'string' && Array.isArray(property.values)) {
+        typeName = enumTypeName(base, key)
+      } else if (property.type === 'boolean') {
+        typeName = 'bool'
+      } else if (property.type === 'integer') {
+        typeName = 'int64'
+      } else if (property.type === 'number') {
+        typeName = 'float64'
+      }
+      return `\t${goIdentifier(key)} ${typeName} \`json:"${key}"\``
+    })
+    const props = Object.keys(event.properties).map((key) => `\t\t"${key}": p.${goIdentifier(key)},`)
+    return [
+      ...enumTypes,
+      `type ${base}Payload struct {`,
+      ...fields,
+      '}',
+      '',
+      `func (${base}Payload) isGeneratedEvent() {}`,
+      `func (${base}Payload) EventName() EventName { return ${symbol} }`,
+      `func (p ${base}Payload) Properties() map[string]interface{} {`,
+      '\treturn map[string]interface{}{',
+      ...props,
+      '\t}',
+      '}',
+      '',
+    ]
+  })
+}
+
+function renderGoContracts(entries: SymbolEntry[]): string[] {
+  return [
+    'var generatedEventContracts = map[EventName]EventContract{',
+    ...entries.flatMap(({ symbol, event }) => {
+      if (!event) return []
+      const properties = Object.entries(event.properties)
+      return [
+        `\t${symbol}: {`,
+        `\t\tConsent: "${event.consent}",`,
+        `\t\tStatus: "${event.status}",`,
+        `\t\tLegacyPropertiesUnreviewed: ${event.legacy_exceptions?.includes('property_schema_unreviewed') ?? false},`,
+        '\t\tProperties: map[string]PropertyContract{',
+        ...properties.map(([key, property]) => `\t\t\t"${key}": {Kind: "${property.type}", Required: ${property.required}, Values: []string{${Array.isArray(property.values) ? property.values.map((value) => `"${value}"`).join(', ') : ''}}, Minimum: ${typeof property.minimum === 'number' ? property.minimum : 'nil'}, Maximum: ${typeof property.maximum === 'number' ? property.maximum : 'nil'}},`),
+        '\t\t},',
+        '\t},',
+      ]
+    }),
+    '}',
+    '',
+  ]
 }
 
 function renderDescription(description: string | undefined, indent: string, firstPrefix = ''): string[] {
@@ -571,7 +652,7 @@ export function renderGeneratedArtifacts(
     .flatMap((event) => event.symbols.typescript.map((symbol) => ({ symbol, name: event.name, description: event.description })))
     .sort((left, right) => compareCodePoints(left.symbol, right.symbol))
   const goEntries = events.events
-    .flatMap((event) => event.symbols.go.map((symbol) => ({ symbol, name: event.name, description: event.description })))
+    .flatMap((event) => event.symbols.go.map((symbol) => ({ symbol, name: event.name, description: event.description, event })))
     .sort((left, right) => compareCodePoints(left.symbol, right.symbol))
   const typescript = renderTypeScriptConstants('ANALYTICS_EVENTS', 'AnalyticsEventName', tsEntries)
   const mcpTypescript = renderTypeScriptConstants('MCP_EVENTS', 'McpEvent', mcpEntries)
@@ -580,6 +661,8 @@ export function renderGeneratedArtifacts(
     '',
     'package posthog',
     '',
+    'type EventName string',
+    '',
     'const (',
     ...goEntries.flatMap(({ symbol, name, description }) => [
       ...renderDescription(description, '\t', `${symbol} `),
@@ -587,6 +670,8 @@ export function renderGeneratedArtifacts(
     ]),
     ')',
     '',
+    ...renderGoPropertyTypes(goEntries),
+    ...renderGoContracts(goEntries),
   ].join('\n'))
   return { typescript, mcpTypescript, go }
 }

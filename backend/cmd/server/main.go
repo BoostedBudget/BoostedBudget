@@ -724,13 +724,12 @@ func main() {
 		// repositories, and passed to all four workers below.
 		sweepCursorRepo := repository.NewSweepCursorRepository(db)
 
-		// Create GDPR-consent-gated analytics client.
-		// User-behavior analytics events (e.g. transfer suggestion accept/reject) use
-		// gdprClient.CaptureIfConsented, which checks privacy settings before firing.
-		// Operational/system events use phClient.Capture directly.
-		// New backend user-behavior events MUST use gdprClient; existing operational events are NOT retrofitted.
-		consentChecker := phclient.NewPrivacyConsentAdapter(privacyRepo)
-		gdprClient := phclient.NewGDPRClient(phClient, consentChecker, appLogger)
+		// The gateway is the only production path to PostHog. It resolves internal UUIDs to
+		// canonical Clerk subjects and reads current DB consent for every product event.
+		// Operational signals stay in Prometheus/Sentry/logs and are rejected by the gateway.
+		analyticsAuthorityRepo := repository.NewAnalyticsAuthorityRepository(db, fieldEncryptor)
+		analyticsGateway := phclient.NewGateway(phClient, analyticsAuthorityRepo, appLogger)
+		gdprClient := analyticsGateway
 
 		// GDPR audit trail. Until Issue #1505 this was &mockAuditLogger{} — a stub that logged a
 		// line and persisted nothing, while audit_logs existed and was already being queried and
@@ -756,8 +755,8 @@ func main() {
 			Logger:          appLogger,
 		})
 		// Consent-gated (Issue #1413 round 10): this worker's event carries the expired target user's
-		// own UUID as distinct_id, so it is that user's personal data even though a system job fired
-		// it — see SetGDPRAnalytics' doc comment for why the earlier raw-phClient clearance was reversed.
+		// own canonical Clerk subject, so it is that user's personal data even though a system job fired
+		// it — the gateway applies current target-user consent before capture.
 		manualTierOverrideExpiryCheckWorker.SetGDPRAnalytics(gdprClient)
 		appLogger.Info("Manual tier override expiry check worker created (River)")
 
@@ -770,12 +769,12 @@ func main() {
 		})
 		privacyService := services.NewPrivacyService(privacyRepo)
 		dataExportService := services.NewDataExportService(dataExportRepo)
-		dataExportService.SetAnalytics(phClient)
+		dataExportService.SetAnalytics(analyticsGateway)
 		transactionService := services.NewTransactionService(transactionRepo, customCategoryRepo)
-		transactionService.SetAnalytics(phClient)
+		transactionService.SetAnalytics(analyticsGateway)
 		transactionService.SetAccountRepository(accountRepo) // #1329: embed account in investment rows
 		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db)
-		registrationService.SetAnalytics(phClient)
+		registrationService.SetAnalytics(analyticsGateway)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
 		subscriptionService := services.NewSubscriptionService(tierConfig, subscriptionOverrideRepo)
 		// Issue #1413 (tier axis, this task): same validator as profileRepo/humaProfileHandler/
@@ -820,7 +819,7 @@ func main() {
 			svc.SetTransactionReader(transactionRepo)
 		}
 		ruleApplicationService := services.NewRuleApplicationService(categorizationRuleRepo)
-		ruleApplicationService.SetAnalytics(phClient)
+		ruleApplicationService.SetAnalytics(analyticsGateway)
 		// #1625 Task 11: lets a rule match `effective_merchant` -- the name the user sees after
 		// their own rename or merge -- during sync, not just in preview. Fail-open: unwired, such
 		// conditions fall back to the raw provider name.
@@ -880,7 +879,7 @@ func main() {
 		// Issue #1300 M14: Wire contribution repo + analytics for basis-switch semantics.
 		savingsGoalService.SetBasisSwitchContribRepo(savingsContribRepo)
 		if phClient != nil {
-			savingsGoalService.SetAnalytics(phClient)
+			savingsGoalService.SetAnalytics(analyticsGateway)
 		}
 		// Issue #1569 Task 8: savings_goal.deleted / savings_goal.history_purged audit entries,
 		// written inside the repository's own transaction via LogInTx. Declared later in this
@@ -894,7 +893,7 @@ func main() {
 		investmentService = services.NewInvestmentService(holdingRepo, portfolioSnapshotRepo, investmentTxnRepo)
 		investmentAnalyticsService = services.NewInvestmentAnalyticsService(investmentAnalyticsRepo)
 		if phClient != nil {
-			investmentService.SetAnalytics(phClient)
+			investmentService.SetAnalytics(analyticsGateway)
 		}
 
 		// Issue #494: Budget Sync Service for Envelope Budgeting
@@ -928,7 +927,7 @@ func main() {
 		// Issue #37: Boost Execution Service
 		boostExecutionRepo := repository.NewBoostExecutionRepository(db)
 		boostExecutionService := services.NewBoostExecutionService(boostExecutionRepo, transferSuggestionRepo, boostRepo, nil)
-		boostExecutionService.SetAnalytics(phClient)
+		boostExecutionService.SetAnalytics(analyticsGateway)
 		// Issue #1630 review round 2: without this, a category_rollover boost's sub-allocation
 		// check has no live budget-category data to verify against and fails CLOSED (skips)
 		// every execution rather than trusting a possibly-stale triggerData snapshot.
@@ -984,7 +983,7 @@ func main() {
 			db, householdRepo, householdInviteRepo, householdShareRepo, entitlementRepo,
 			householdEntitlementService, profileRepo, tierConfig, emailService, fieldEncryptor,
 		)
-		householdService.SetAnalytics(phClient)
+		householdService.SetAnalytics(analyticsGateway)
 		// #1367 — Phase 3 Round 2 (GT-3): enrich GET /households/me/members with a Clerk
 		// display name + avatar. identityRepo maps internal user_id -> Clerk ID;
 		// NewDefaultClerkUserGetter reuses the same Clerk SDK plumbing as AdminService
@@ -1044,7 +1043,7 @@ func main() {
 				cfg.DeletionGracePeriodDays,
 				cfg.DeletionTokenSecret,
 			)
-			deletionService.SetAnalytics(phClient)
+			deletionService.SetAnalytics(analyticsGateway)
 			// Issue #1367 — Phase 3: block owner deletion while active non-owner members
 			// exist, and revoke pending household invites when deletion proceeds. SetDB
 			// runs the whole guard atomically under one household row lock (closes a race
@@ -1217,7 +1216,7 @@ func main() {
 					DB:            db,
 					Logger:        logger,
 				})
-				subscriptionWebhookWorker.SetAnalytics(phClient)
+				subscriptionWebhookWorker.SetAnalytics(analyticsGateway)
 				// Issue #1413 High finding H7 (Codex review round 4): required for
 				// processSubscriptionCanceled to gain EXCLUSIVITY on
 				// ActionSubscriptionCancelledCleanup before its Plaid disconnect / retention-clock
@@ -1265,7 +1264,7 @@ func main() {
 			pastDueCfg.GraceDays,
 			pastDueCfg.PlaidDisconnectDays,
 		)
-		pastDueService.SetAnalytics(phClient)
+		pastDueService.SetAnalytics(analyticsGateway)
 		// #1413: exempt actively covered household members from past_due dunning, closing an
 		// asymmetry with TrialService's #1367 household exemption (wired identically above).
 		pastDueService.SetHouseholdChecker(householdEntitlementService)
@@ -1321,7 +1320,7 @@ func main() {
 			Logger:        appLogger,
 		})
 		appLogger.Info("Email change propagation worker created (River)")
-		emailChangePropagationWorker.SetAnalytics(phClient)
+		emailChangePropagationWorker.SetAnalytics(analyticsGateway)
 
 		// Issue #1015: Create rule evaluation worker (depends only on boostExecutionService, no Plaid dependency)
 		boostEvaluationWorker = jobs.NewBoostEvaluationWorker(jobs.BoostEvaluationWorkerDeps{
@@ -1558,6 +1557,7 @@ func main() {
 				// happen with no trace a user could be shown. Same auditLogger instance as
 				// accountService's user-initiated account.removed entries above.
 				transactionSyncService.SetAuditLogger(auditLogger)
+				services.SetTransactionSyncProductAnalytics(transactionSyncService, analyticsGateway)
 
 				// Issue #972: Initialize TransferCorrelationService and wire into sync pipeline (B4)
 				transferCorrelationService := services.NewTransferCorrelationService(
@@ -1566,7 +1566,7 @@ func main() {
 					notificationRepo,
 				)
 				if phClient != nil {
-					transferCorrelationService.SetAnalytics(phClient)
+					transferCorrelationService.SetAnalytics(analyticsGateway)
 				}
 				// Issue #1300 M19: Wire D6 source-c boost-match → confirmed contribution
 				// savingsGoalRepo.GetActiveByUserID satisfies CorrelationGoalResolver
@@ -1639,7 +1639,7 @@ func main() {
 				)
 				appLogger.Info("Investment sync service initialized")
 				if phClient != nil {
-					investmentSyncService.SetAnalytics(phClient)
+					investmentSyncService.SetAnalytics(analyticsGateway)
 				}
 				// Issue #1531 Task 10b-2a-ii: wire cache invalidation so a HOLDINGS/
 				// INVESTMENTS_TRANSACTIONS webhook (routed through ProcessWebhook, which is also
@@ -1662,7 +1662,7 @@ func main() {
 				)
 				appLogger.Info("Liability sync service initialized")
 				if phClient != nil {
-					liabilitySyncService.SetAnalytics(phClient)
+					liabilitySyncService.SetAnalytics(analyticsGateway)
 				}
 				// Issue #1531 Task 10b-2a-ii: wire cache invalidation so a LIABILITIES webhook
 				// (routed through ProcessWebhook, which calls SyncLiabilities below) bumps the
@@ -1698,8 +1698,6 @@ func main() {
 					ItemErrorSvc:   itemErrorService,
 				})
 				appLogger.Info("Plaid sync worker created")
-				plaidSyncWorker.SetAnalytics(phClient)
-
 				// Issue #659: Create InvestmentHoldingsSyncWorker
 				// Issue #1609 P3-T2: ItemErrorSvc — see PlaidSyncWorker comment above.
 				investmentHoldingsSyncWorker = jobs.NewInvestmentHoldingsSyncWorker(jobs.InvestmentHoldingsSyncWorkerDeps{
@@ -1834,7 +1832,6 @@ func main() {
 				DB:     db,
 				Logger: appLogger,
 			})
-			deadLetterHandler.SetAnalytics(phClient)
 			riverConfig.ErrorHandler = deadLetterHandler.ErrorHandlerFunc()
 			appLogger.Info("Dead letter handler configured for failed jobs")
 
@@ -2261,9 +2258,8 @@ func main() {
 		// Issue #1413: tierConfig validates manual tier overrides and sizes the household seat-capacity warning.
 		adminUserService := services.NewAdminUserService(adminUserRepo, adminService, clerkService, cfg.RetentionPeriodMonths, tierConfig)
 		// Issue #1413 Task NB (Codex High finding): these events land on the TARGET user's
-		// PostHog profile (their UUID is distinct_id), so consent is gated the same way
-		// transfer_suggestion_service's user-initiated events are — via gdprClient, not the raw
-		// phClient other admin-triggered-but-operational events use.
+		// PostHog profile (resolved to their canonical Clerk subject), so the gateway applies the
+		// same current target-user consent authority as user-initiated events.
 		adminUserService.SetGDPRAnalytics(gdprClient)
 
 		// Issue #640: System health monitoring service
@@ -2407,7 +2403,7 @@ func main() {
 		merchantOverrideRepo := repository.NewMerchantOverrideRepository(db)
 		merchantService := services.NewMerchantService(merchantRepo, merchantOverrideRepo)
 		if phClient != nil {
-			merchantService.SetAnalytics(phClient)
+			merchantService.SetAnalytics(analyticsGateway)
 		}
 		humaMerchantHandler := operations.NewMerchantHandler(merchantService)
 		operations.RegisterMerchantRoutes(humaAPI, humaMerchantHandler)
@@ -2429,7 +2425,7 @@ func main() {
 				MCPWorkerSecret: cfg.MCPWorkerSecret,
 			})
 		if phClient != nil {
-			humaTransferSuggestionHandler.SetAnalytics(phClient)
+			humaTransferSuggestionHandler.SetAnalytics(analyticsGateway)
 		}
 		operations.RegisterTransferSuggestionRoutes(humaAPI, humaTransferSuggestionHandler)
 		appLogger.Info("Huma transfer suggestion routes registered")

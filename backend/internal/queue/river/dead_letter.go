@@ -9,7 +9,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
-	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -19,9 +18,8 @@ import (
 // It moves failed jobs to a dead letter table for manual review and
 // optionally notifies users about failures that affect them.
 type DeadLetterHandler struct {
-	repo      *repository.DeadLetterJobRepository
-	logger    *slog.Logger
-	analytics phclient.Analytics
+	repo   *repository.DeadLetterJobRepository
+	logger *slog.Logger
 }
 
 // DeadLetterHandlerDeps contains dependencies for DeadLetterHandler.
@@ -40,11 +38,6 @@ func NewDeadLetterHandler(deps DeadLetterHandlerDeps) *DeadLetterHandler {
 		repo:   repository.NewDeadLetterJobRepository(deps.DB),
 		logger: logger,
 	}
-}
-
-// SetAnalytics injects the analytics client for capturing dead letter events.
-func (h *DeadLetterHandler) SetAnalytics(analytics phclient.Analytics) {
-	h.analytics = analytics
 }
 
 // HandleError is called by River when a job has exhausted all retry attempts.
@@ -99,12 +92,6 @@ func (h *DeadLetterHandler) HandleError(ctx context.Context, job *rivertype.JobR
 			"dead_letter_id", deadLetterJob.ID,
 			"user_id", userID,
 		)
-		if h.analytics != nil {
-			h.analytics.Capture("system", phclient.EventDeadLetterCreated, map[string]interface{}{
-				"job_kind": job.Kind,
-				"queue":    job.Queue,
-			})
-		}
 	}
 
 	return nil
