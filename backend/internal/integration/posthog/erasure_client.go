@@ -74,8 +74,9 @@ func (c *ErasureClient) ResolvePersonUUIDs(ctx context.Context, projectID, regio
 }
 
 type ErasureDeletionObservation struct {
-	Found    bool
-	Complete bool
+	Found                      bool
+	Complete                   bool
+	RequiresManualVerification bool
 }
 
 type erasureDeletionRecord struct {
@@ -108,15 +109,19 @@ func (c *ErasureClient) PersonEventDeletionStatus(ctx context.Context, projectID
 	if err := c.checkTarget(projectID, region); err != nil {
 		return ErasureDeletionObservation{}, err
 	}
+	observation := ErasureDeletionObservation{}
 	allComplete := true
 	for _, personUUID := range personUUIDs {
 		records, err := c.personDeletionRecords(ctx, personUUID)
 		if err != nil {
 			return ErasureDeletionObservation{}, err
 		}
-		relevant := relevantDeletionRecord(records, baseline[personUUID], submittedAt, acceptedAt)
+		relevant, ambiguous := relevantDeletionRecord(records, baseline[personUUID], submittedAt, acceptedAt)
 		if relevant == nil {
 			return ErasureDeletionObservation{Found: false}, nil
+		}
+		if ambiguous {
+			observation.RequiresManualVerification = true
 		}
 		if relevant.Status != "completed" || relevant.DeleteVerified == nil {
 			if relevant.Status != "pending" && relevant.Status != "completed" {
@@ -129,33 +134,40 @@ func (c *ErasureClient) PersonEventDeletionStatus(ctx context.Context, projectID
 			return ErasureDeletionObservation{}, &ErasureProviderError{Class: "invalid_response"}
 		}
 	}
-	return ErasureDeletionObservation{Found: true, Complete: allComplete}, nil
+	observation.Found = true
+	observation.Complete = allComplete
+	return observation, nil
 }
 
-func relevantDeletionRecord(records []erasureDeletionRecord, baseline *time.Time, submittedAt, acceptedAt time.Time) *erasureDeletionRecord {
+func relevantDeletionRecord(records []erasureDeletionRecord, baseline *time.Time, submittedAt, acceptedAt time.Time) (*erasureDeletionRecord, bool) {
 	if baseline != nil {
 		for i := range records {
 			if records[i].CreatedAt.Equal(*baseline) {
-				return &records[i]
+				return &records[i], true
 			}
 		}
-		return nil
+		return nil, false
 	}
 
-	earliestCreatedAt := submittedAt.Add(-time.Minute)
 	latestCreatedAt := acceptedAt.Add(time.Minute)
 	for i := range records {
 		createdAt := records[i].CreatedAt
-		if !createdAt.Before(earliestCreatedAt) && !createdAt.After(latestCreatedAt) {
-			return &records[i]
+		if !createdAt.Before(submittedAt) && !createdAt.After(latestCreatedAt) {
+			return &records[i], false
 		}
 	}
-	return nil
+	for i := range records {
+		createdAt := records[i].CreatedAt
+		if createdAt.Before(submittedAt) && !createdAt.Before(submittedAt.Add(-time.Minute)) {
+			return &records[i], true
+		}
+	}
+	return nil, false
 }
 
 func (c *ErasureClient) PersonEventDeletionComplete(ctx context.Context, projectID, region string, personUUIDs []string, submittedAt time.Time) (bool, error) {
 	status, err := c.PersonEventDeletionStatus(ctx, projectID, region, personUUIDs, map[string]*time.Time{}, submittedAt, submittedAt.Add(5*time.Minute))
-	return status.Found && status.Complete, err
+	return status.Found && status.Complete && !status.RequiresManualVerification, err
 }
 
 func (c *ErasureClient) personDeletionRecords(ctx context.Context, personUUID string) ([]erasureDeletionRecord, error) {

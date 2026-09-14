@@ -139,7 +139,7 @@ func TestPostHogErasureMixedIdentity_IntegrationRequiresManualEventEvidence(t *t
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_outbox WHERE id=$1", id) })
 
-	updated, err := repo.MarkPersonEventsVerified(ctx, id, leaseToken)
+	updated, err := repo.MarkPersonEventsVerified(ctx, id, leaseToken, false)
 	require.NoError(t, err)
 	require.True(t, updated)
 	var state, phase string
@@ -192,4 +192,42 @@ func TestPostHogErasureRetarget_IntegrationAcceptsEitherMissingComponentAndAudit
 			assert.Equal(t, tc.priorRegion, priorRegion)
 		})
 	}
+}
+
+func TestPostHogErasureResolutionCheckpoint_IntegrationPersistsAcrossLeases(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewPostHogErasureOutboxRepository(pool, enc)
+	ctx := context.Background()
+	id := uuid.NewString()
+	leaseToken := uuid.NewString()
+	identities, err := enc.EncryptJSON([]byte(`["first","second"]`))
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO posthog_erasure_outbox
+		(id,idempotency_key,identities_encrypted,project_id,region,state,phase,attempt_count,lease_token,lease_until)
+		VALUES($1,$2,$3,'42','us','retrying','person_resolve',7,$4,clock_timestamp()+interval '1 minute')`,
+		id, "checkpoint:"+id, identities, leaseToken)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_outbox WHERE id=$1", id) })
+
+	personUUID := "11111111-1111-4111-8111-111111111111"
+	updated, err := repo.MarkPersonUUIDsResolved(ctx, id, leaseToken, []string{personUUID}, true, 1, 2)
+	require.NoError(t, err)
+	require.True(t, updated)
+	var ciphertext, phase string
+	var cursor, attempts int
+	var requiresManualEvents bool
+	var immediatelyDue bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT provider_person_uuids_encrypted,phase,resolution_cursor,
+		attempt_count,requires_manual_event_verification,next_attempt_at <= clock_timestamp()
+		FROM posthog_erasure_outbox WHERE id=$1`, id).
+		Scan(&ciphertext, &phase, &cursor, &attempts, &requiresManualEvents, &immediatelyDue))
+	raw, err := enc.DecryptJSON(ciphertext)
+	require.NoError(t, err)
+	assert.JSONEq(t, `["`+personUUID+`"]`, string(raw))
+	assert.Equal(t, "person_resolve", phase)
+	assert.Equal(t, 1, cursor)
+	assert.Zero(t, attempts)
+	assert.True(t, requiresManualEvents)
+	assert.True(t, immediatelyDue)
 }

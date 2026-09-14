@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -33,22 +34,28 @@ func (s *stubPostHogErasureStore) Backlog(context.Context, time.Time) (repositor
 func (s *stubPostHogErasureStore) ClaimDue(context.Context, time.Time, time.Duration) (*repository.PostHogErasureRecord, error) {
 	return s.record, s.claimErr
 }
-func (s *stubPostHogErasureStore) MarkPersonUUIDsResolved(_ context.Context, _, _ string, uuids []string, unresolved bool) (bool, error) {
+func (s *stubPostHogErasureStore) MarkPersonUUIDsResolved(_ context.Context, _, _ string, uuids []string, unresolved bool, nextCursor, total int) (bool, error) {
 	s.record.PersonUUIDs = uuids
-	s.record.RequiresManualEventVerification = unresolved
+	s.record.RequiresManualEventVerification = s.record.RequiresManualEventVerification || unresolved
+	s.record.ResolutionCursor = nextCursor
+	if nextCursor == total {
+		s.record.Phase = "person_delete"
+	}
 	return true, nil
 }
 func (s *stubPostHogErasureStore) MarkDeletionRequestStarted(context.Context, string, string, map[string]*time.Time) (time.Time, bool, error) {
 	return time.Unix(50, 0), true, nil
 }
-func (s *stubPostHogErasureStore) MarkAccepted(context.Context, string, string, int) (bool, error) {
+func (s *stubPostHogErasureStore) MarkAccepted(_ context.Context, _, _ string, _ int, requiresManualEvents bool) (bool, error) {
 	s.accepted = true
+	s.record.RequiresManualEventVerification = s.record.RequiresManualEventVerification || requiresManualEvents
 	return true, nil
 }
 func (s *stubPostHogErasureStore) RecordPollPending(context.Context, string, string) (bool, error) {
 	return true, nil
 }
-func (s *stubPostHogErasureStore) MarkPersonEventsVerified(context.Context, string, string) (bool, error) {
+func (s *stubPostHogErasureStore) MarkPersonEventsVerified(_ context.Context, _, _ string, requiresManualEvents bool) (bool, error) {
+	s.record.RequiresManualEventVerification = s.record.RequiresManualEventVerification || requiresManualEvents
 	return true, nil
 }
 func (s *stubPostHogErasureStore) RecordRetry(_ context.Context, _, _, class string, at time.Time, max int) (string, error) {
@@ -63,6 +70,7 @@ type stubPostHogErasureProvider struct {
 	err               error
 	noPerson          bool
 	zeroAfterAccepted bool
+	manualStatus      bool
 }
 
 func (s stubPostHogErasureProvider) ResolvePersonUUIDs(context.Context, string, string, []string) (phclient.ErasurePersonResolution, error) {
@@ -93,7 +101,53 @@ func TestPostHogErasureWorker_NoPersonStillSubmitsDistinctIDDeletion(t *testing.
 	assert.True(t, store.accepted)
 }
 func (s stubPostHogErasureProvider) PersonEventDeletionStatus(context.Context, string, string, []string, map[string]*time.Time, time.Time, time.Time) (phclient.ErasureDeletionObservation, error) {
-	return phclient.ErasureDeletionObservation{Found: true, Complete: true}, s.err
+	return phclient.ErasureDeletionObservation{Found: true, Complete: true, RequiresManualVerification: s.manualStatus}, s.err
+}
+
+func TestPostHogErasureWorker_PersistsClockAmbiguityAsManualEventRequirement(t *testing.T) {
+	startedAt := time.Unix(50, 0)
+	acceptedAt := time.Unix(51, 0)
+	store := &stubPostHogErasureStore{record: &repository.PostHogErasureRecord{
+		ID: "row", PersonUUIDs: []string{"11111111-1111-4111-8111-111111111111"}, LeaseToken: "lease",
+		Phase: "person_poll", ProviderRequestStartedAt: &startedAt, AcceptedAt: &acceptedAt,
+	}}
+	worker := NewPostHogErasureWorker(PostHogErasureWorkerDeps{Store: store, Provider: stubPostHogErasureProvider{manualStatus: true}})
+	require.NoError(t, worker.Work(context.Background(), &river.Job[PostHogErasureArgs]{}))
+	assert.True(t, store.record.RequiresManualEventVerification)
+}
+
+type progressiveResolutionProvider struct{ distinctIDs []string }
+
+func (p *progressiveResolutionProvider) ResolvePersonUUIDs(_ context.Context, _, _ string, distinctIDs []string) (phclient.ErasurePersonResolution, error) {
+	p.distinctIDs = append(p.distinctIDs, distinctIDs...)
+	return phclient.ErasurePersonResolution{PersonUUIDs: []string{"11111111-1111-4111-8111-111111111111"}}, nil
+}
+func (*progressiveResolutionProvider) CapturePersonEventDeletionBaseline(context.Context, string, string, []string) (map[string]*time.Time, error) {
+	panic("unexpected external call")
+}
+func (*progressiveResolutionProvider) RequestPersonDeletion(context.Context, string, string, []string) (phclient.ErasureDeleteResult, error) {
+	panic("unexpected external call")
+}
+func (*progressiveResolutionProvider) PersonEventDeletionStatus(context.Context, string, string, []string, map[string]*time.Time, time.Time, time.Time) (phclient.ErasureDeletionObservation, error) {
+	panic("unexpected external call")
+}
+
+func TestPostHogErasureWorker_CheckpointsLargeIdentityResolutionAcrossLeases(t *testing.T) {
+	identities := make([]string, 1000)
+	for i := range identities {
+		identities[i] = fmt.Sprintf("identity-%d", i)
+	}
+	store := &stubPostHogErasureStore{record: &repository.PostHogErasureRecord{
+		ID: "row", Identities: identities, LeaseToken: "lease", Phase: "person_resolve",
+	}}
+	provider := &progressiveResolutionProvider{}
+	worker := NewPostHogErasureWorker(PostHogErasureWorkerDeps{Store: store, Provider: provider})
+	for range 3 {
+		require.NoError(t, worker.Work(context.Background(), &river.Job[PostHogErasureArgs]{}))
+	}
+	assert.Equal(t, 3, store.record.ResolutionCursor)
+	assert.Equal(t, identities[:3], provider.distinctIDs)
+	assert.Equal(t, "person_resolve", store.record.Phase)
 }
 
 func TestPostHogErasureWorker_ReconcilesLost202PersistenceWhenRetryFindsNoPerson(t *testing.T) {

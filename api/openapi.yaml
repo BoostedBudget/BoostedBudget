@@ -5979,6 +5979,13 @@ components:
         requested_at:
           format: date-time
           type: string
+        required_manual_surfaces:
+          description: Provider surfaces requiring twice-separated operator evidence before completion
+          items:
+            type: string
+          type:
+            - array
+            - "null"
         state:
           type: string
       required:
@@ -5988,6 +5995,7 @@ components:
         - state
         - phase
         - requested_at
+        - required_manual_surfaces
       type: object
     PostHogErasureRetargetBody:
       additionalProperties: false

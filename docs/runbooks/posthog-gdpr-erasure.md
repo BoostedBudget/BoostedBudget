@@ -26,9 +26,15 @@ The worker uses only PostHog's documented private API on the configured regional
 encrypted per-person baseline of the current deletion-status record and a database-clock request
 start. A retry after a crash reuses that persisted baseline; it never captures a new baseline after
 the destructive call may have succeeded. The worker follows validated pagination and selects only
-the record relevant to the persisted baseline/submission window. If a person already had a deletion
-record, or any distinct ID did not resolve to a person, automatic event verification remains
-insufficient and the row requires twice-separated manual `events` evidence.
+the record relevant to the persisted baseline/submission window. A status created before the
+database-clock request start is never automatic proof. A status inside the bounded pre-start
+clock-skew window is treated as ambiguous and requires manual evidence. If a person already had a
+deletion record, or any distinct ID did not resolve to a person, automatic event verification
+remains insufficient and the row requires twice-separated manual `events` evidence.
+
+Person resolution is durably checkpointed one distinct ID per leased worker run. The encrypted
+person-UUID set, sticky unresolved flag, and cursor survive retries, so even the maximum supported
+identity set advances without exceeding the two-minute lease or restarting from its first identity.
 
 PostHog documents no public API for deleting an individual Support conversation/ticket/message and
 no public API for deleting an individual survey response. Survey responses may be represented as
@@ -52,7 +58,10 @@ The official capability references are the [Persons API](https://posthog.com/doc
    and the age metric `posthog_erasure_oldest_outstanding_seconds`. Attempt counters have only
    bounded `phase`, `outcome`, and `error_class` labels and contain no identity.
 2. Use authenticated `GET /api/v1/admin/posthog-erasure?limit=50` to discover outstanding IDs and
-   targets. Responses are `Cache-Control: no-store`. For a legacy `unconfigured` row, call
+   targets. Responses are `Cache-Control: no-store`. Each row's `required_manual_surfaces` is the
+   authoritative checklist: `recordings`, `surveys`, and `support` are always listed; `events` is
+   also listed when an event-only identity, preexisting deletion, or clock attribution ambiguity
+   prevents automatic event certification. For a legacy `unconfigured` row, call
    `POST /api/v1/admin/posthog-erasure/{id}/retarget` with a project and `us`/`eu` region. Retarget
    is refused after provider acceptance and is audited with an operator hash and database clock.
    Ingestion and erasure hosts must be configured for the same PostHog region (`us` with `us`, or

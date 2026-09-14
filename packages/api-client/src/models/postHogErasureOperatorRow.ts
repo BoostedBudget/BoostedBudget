@@ -37,5 +37,10 @@ export interface PostHogErasureOperatorRow {
   project_id: string;
   region: string;
   requested_at: string;
+  /**
+     * Provider surfaces requiring twice-separated operator evidence before completion
+     * @nullable
+     */
+  required_manual_surfaces: string[] | null;
   state: string;
 }

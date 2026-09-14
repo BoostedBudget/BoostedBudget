@@ -221,6 +221,28 @@ func TestErasureClient_DeletionStatusDoesNotUseOldCompletionForCurrentPendingReq
 	assert.False(t, observation.Complete)
 }
 
+func TestErasureClient_PreStartStatusIsManualAmbiguityNotAutomaticCorrelation(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"next":null,"results":[
+			{"person_uuid":"11111111-1111-4111-8111-111111111111","created_at":"2026-09-14T11:59:30Z","status":"completed","delete_verified_at":"2026-09-14T11:59:45Z"}
+		]}`))
+	}))
+	defer server.Close()
+	client, err := NewErasureClient(ErasureClientConfig{Host: "https://us.posthog.com", ProjectID: "42", PersonalAPIKey: "secret", HTTPClient: server.Client(), ResolveHost: func(string) string { return server.URL }})
+	require.NoError(t, err)
+
+	observation, err := client.PersonEventDeletionStatus(
+		context.Background(), "42", "us", []string{"11111111-1111-4111-8111-111111111111"},
+		map[string]*time.Time{"11111111-1111-4111-8111-111111111111": nil},
+		time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, 9, 14, 12, 1, 0, 0, time.UTC),
+	)
+	require.NoError(t, err)
+	assert.True(t, observation.Found)
+	assert.True(t, observation.Complete)
+	assert.True(t, observation.RequiresManualVerification)
+}
+
 func TestErasureClient_PollsDocumentedDeletionStatusByPersonUUID(t *testing.T) {
 	var query string
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
