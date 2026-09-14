@@ -13,6 +13,8 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test'
 import { readdir } from 'node:fs/promises'
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios'
 import { AxiosError, AxiosHeaders } from 'axios'
 import ts from 'typescript'
@@ -78,6 +80,7 @@ function deferred<T>() {
 const browserRuntimeGlobals = new Set([
   'document',
   'localStorage',
+  'location',
   'navigator',
   'sessionStorage',
   'window',
@@ -178,13 +181,64 @@ function isUnboundGlobalThis(expression: ts.Expression, checker: ts.TypeChecker)
     || symbol.declarations.length === 0
 }
 
+function collectGlobalThisAliases(
+  sourceFile: ts.SourceFile,
+  checker: ts.TypeChecker,
+): Set<ts.Symbol> {
+  const aliases = new Set<ts.Symbol>()
+  let changed = true
+
+  function isGlobalThisLike(expression: ts.Expression): boolean {
+    const root = unwrapExpression(expression)
+    if (!ts.isIdentifier(root)) return false
+    if (root.text === 'globalThis' && isUnboundGlobalThis(root, checker)) return true
+    const symbol = checker.getSymbolAtLocation(root)
+    return symbol !== undefined && aliases.has(symbol)
+  }
+
+  while (changed) {
+    changed = false
+    function visit(node: ts.Node): void {
+      if (
+        ts.isVariableDeclaration(node)
+        && ts.isIdentifier(node.name)
+        && node.initializer
+        && isGlobalThisLike(node.initializer)
+      ) {
+        const symbol = checker.getSymbolAtLocation(node.name)
+        if (symbol && !aliases.has(symbol)) {
+          aliases.add(symbol)
+          changed = true
+        }
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(sourceFile)
+  }
+
+  return aliases
+}
+
+function isGlobalThisLike(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  aliases: Set<ts.Symbol>,
+): boolean {
+  const root = unwrapExpression(expression)
+  if (!ts.isIdentifier(root)) return false
+  if (root.text === 'globalThis') return isUnboundGlobalThis(root, checker)
+  const symbol = checker.getSymbolAtLocation(root)
+  return symbol !== undefined && aliases.has(symbol)
+}
+
 function browserMemberOnGlobalThis(
   node: ts.Node,
   checker: ts.TypeChecker,
+  aliases: Set<ts.Symbol>,
 ): string | undefined {
   if (
     ts.isPropertyAccessExpression(node)
-    && isUnboundGlobalThis(node.expression, checker)
+    && isGlobalThisLike(node.expression, checker, aliases)
     && browserRuntimeGlobals.has(node.name.text)
   ) {
     return node.name.text
@@ -192,7 +246,7 @@ function browserMemberOnGlobalThis(
 
   if (
     ts.isElementAccessExpression(node)
-    && isUnboundGlobalThis(node.expression, checker)
+    && isGlobalThisLike(node.expression, checker, aliases)
   ) {
     const argument = unwrapExpression(node.argumentExpression)
     if (ts.isStringLiteralLike(argument) && browserRuntimeGlobals.has(argument.text)) {
@@ -339,6 +393,7 @@ function findPortabilityViolations(source: string, relativePath: string): string
     scriptKind,
   )
   const checker = createTypeChecker(sourceFile)
+  const globalThisAliases = collectGlobalThisAliases(sourceFile, checker)
   const violations = new Set<string>()
 
   for (const reference of sourceFile.typeReferenceDirectives) {
@@ -389,7 +444,7 @@ function findPortabilityViolations(source: string, relativePath: string): string
       violations.add(`browser runtime global ${node.text}`)
     }
 
-    const globalThisMember = browserMemberOnGlobalThis(node, checker)
+    const globalThisMember = browserMemberOnGlobalThis(node, checker, globalThisAliases)
     if (globalThisMember) violations.add(`globalThis browser member ${globalThisMember}`)
 
     ts.forEachChild(node, visit)
@@ -408,11 +463,14 @@ describe('API client portability detector', () => {
     ['local storage access', "localStorage.getItem('key')"],
     ['session storage access', "sessionStorage['token']"],
     ['navigator access', 'navigator.userAgent'],
+    ['location access', 'location.href'],
     ['globalThis browser property', 'globalThis.window'],
     ['globalThis computed browser property', "globalThis['window']"],
     ['parenthesized globalThis browser property', '(globalThis).window'],
     ['wrapped globalThis computed browser property', "globalThis[(('window'))]"],
     ['asserted globalThis computed browser property', "globalThis['window' as const]"],
+    ['aliased globalThis browser property', 'const root = globalThis; root.location.href'],
+    ['chained globalThis alias', 'const root = globalThis; const runtime = root; runtime.window'],
     ['ImportMeta declaration', 'interface ImportMeta { readonly env: Config }'],
     ['ImportMetaEnv declaration', 'interface ImportMetaEnv {}'],
     ['Window declaration', 'interface Window {}'],
@@ -433,6 +491,7 @@ describe('API client portability detector', () => {
     'window',
     'document',
     'navigator',
+    'location',
     'localStorage',
     'sessionStorage',
   ] as const
@@ -531,6 +590,10 @@ describe('API client portability detector', () => {
         return window.value
       }
       const model = { window: 'value', navigator: 'value' }
+      const location = { href: 'fixture' }
+      const root = { window: 'fixture' }
+      void location.href
+      void root.window
     `
 
     expect(findPortabilityViolations(source, 'fixture.ts')).toEqual([])
@@ -555,12 +618,37 @@ describe('API client portability detector', () => {
     const tsconfig = await Bun.file(new URL('../tsconfig.json', import.meta.url)).json()
 
     expect(tsconfig.compilerOptions.lib).toEqual(['ES2020'])
+    expect(tsconfig.compilerOptions.types).toEqual(['react', 'node'])
     expect(tsconfig.exclude).toEqual([
       'node_modules',
       '**/__tests__/**',
       '**/*.test.*',
       '**/*.spec.*',
     ])
+  })
+
+  test('effective package typecheck excludes DOM, WebWorker, and jsdom declarations', () => {
+    const configUrl = new URL('../tsconfig.json', import.meta.url)
+    const configPath = fileURLToPath(configUrl)
+    const configFile = ts.readConfigFile(configPath, ts.sys.readFile)
+    expect(configFile.error).toBeUndefined()
+
+    const parsed = ts.parseJsonConfigFileContent(
+      configFile.config,
+      ts.sys,
+      dirname(configPath),
+      undefined,
+      configPath,
+    )
+    expect(parsed.errors).toEqual([])
+
+    const program = ts.createProgram(parsed.fileNames, parsed.options)
+    const forbiddenFiles = program.getSourceFiles()
+      .map((sourceFile) => sourceFile.fileName.replaceAll('\\', '/').toLowerCase())
+      .filter((fileName) => /\/(?:lib\.dom(?:\.iterable)?|lib\.webworker(?:\.[^/]*)?)\.d\.ts$/.test(fileName)
+        || fileName.includes('/@types/jsdom/'))
+
+    expect(forbiddenFiles).toEqual([])
   })
 })
 

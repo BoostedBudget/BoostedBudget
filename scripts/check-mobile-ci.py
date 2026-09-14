@@ -318,9 +318,7 @@ def declared_workspace_directories(
     return sorted(workspace_directories), findings
 
 
-def check_single_lockfile_policy(
-    root: pathlib.Path, workspace_directories: list[pathlib.Path]
-) -> list[str]:
+def check_single_lockfile_policy(root: pathlib.Path) -> list[str]:
     findings: list[str] = []
     root_lockfile = root / "bun.lock"
     if root_lockfile.is_symlink() or not root_lockfile.is_file():
@@ -331,14 +329,24 @@ def check_single_lockfile_policy(
         if lock_path.is_symlink() or lock_path.exists():
             findings.append(f"single-lockfile policy forbids root {lock_name}")
 
-    for workspace in workspace_directories:
-        relative_workspace = workspace.relative_to(root)
-        for lock_name in LOCKFILE_NAMES:
-            lock_path = workspace / lock_name
-            if lock_path.is_symlink() or lock_path.exists():
+    for namespace in (root / "apps", root / "packages"):
+        pending = [namespace]
+        while pending:
+            directory = pending.pop()
+            try:
+                entries = list(directory.iterdir())
+            except OSError as exc:
                 findings.append(
-                    f"single-lockfile policy forbids {relative_workspace / lock_name}"
+                    f"single-lockfile policy cannot inspect {directory.relative_to(root)}: {exc}"
                 )
+                continue
+            for entry in entries:
+                if entry.name in LOCKFILE_NAMES and (entry.is_symlink() or entry.exists()):
+                    findings.append(
+                        f"single-lockfile policy forbids {entry.relative_to(root)}"
+                    )
+                if entry.name != "node_modules" and not entry.is_symlink() and entry.is_dir():
+                    pending.append(entry)
     return findings
 
 
@@ -500,7 +508,7 @@ def check(root: pathlib.Path) -> list[str]:
     findings.extend(
         check_dependency_policy(packages, workspace_packages, compatibility_patterns)
     )
-    findings.extend(check_single_lockfile_policy(root, workspace_directories))
+    findings.extend(check_single_lockfile_policy(root))
 
     jobs = workflow.get("jobs") or {}
 
@@ -561,6 +569,12 @@ def check(root: pathlib.Path) -> list[str]:
     missing_paths = sorted(REQUIRED_MOBILE_PATHS - set(mobile_paths))
     if missing_paths:
         findings.append(f"mobile filter is missing required paths: {', '.join(missing_paths)}")
+
+    unexpected_paths = sorted(set(mobile_paths) - REQUIRED_MOBILE_PATHS)
+    if unexpected_paths:
+        findings.append(
+            f"mobile filter contains unexpected paths: {', '.join(unexpected_paths)}"
+        )
 
     for path in POSITIVE_PATHS:
         if not any(matches(path, pattern) for pattern in mobile_paths):

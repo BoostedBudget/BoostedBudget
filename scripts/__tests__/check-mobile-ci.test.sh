@@ -8,7 +8,7 @@ GUARD="$REPO_ROOT/scripts/check-mobile-ci.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-TOTAL=160
+TOTAL=165
 case_no=0
 pass=0
 fail=0
@@ -429,6 +429,9 @@ reject_workflow "docs changes over-trigger mobile" "add-path" "docs/**"
 reject_workflow "shared-types changes over-trigger mobile" "add-path" "packages/shared-types/**"
 reject_workflow "product config changes over-trigger mobile" "add-path" "config/**"
 reject_workflow "root README changes over-trigger mobile" "add-path" "README.md"
+reject_workflow "broad API changes over-trigger mobile" "add-path" "api/**"
+reject_workflow "broad script changes over-trigger mobile" "add-path" "scripts/**"
+reject_workflow "infrastructure changes over-trigger mobile" "add-path" "infrastructure/**"
 
 reject_workflow "mobile job has wrong needs" "mobile-field" "needs=frontend-test"
 reject_workflow "mobile job has wrong if expression" "mobile-field" "if=needs.detect-changes.outputs.frontend == 'true'"
@@ -538,6 +541,23 @@ copy_fixture "$vendored_lock_dir"
 mkdir -p "$vendored_lock_dir/apps/web/node_modules/vendor"
 touch "$vendored_lock_dir/apps/web/node_modules/vendor/bun.lock"
 if guard_passes "$vendored_lock_dir"; then ok "ignored"; else bad "unrelated vendored lockfile rejected"; fi
+
+announce "nested non-vendored lockfiles below apps are forbidden"
+nested_lock_dir="$TMP/case-$case_no"
+copy_fixture "$nested_lock_dir"
+mkdir -p "$nested_lock_dir/apps/web/tooling/cache"
+touch "$nested_lock_dir/apps/web/tooling/cache/package-lock.json"
+if guard_rejects "$nested_lock_dir" 'apps/web/tooling/cache/package-lock.json'; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated nested-lock diagnostic"; fi
+
+announce "nested lockfile symlinks below packages are forbidden"
+nested_symlink_dir="$TMP/case-$case_no"
+copy_fixture "$nested_symlink_dir"
+mkdir -p "$nested_symlink_dir/packages/api-client/tooling"
+python3 - "$nested_symlink_dir/packages/api-client/tooling/yarn.lock" <<'PY'
+import pathlib, sys
+pathlib.Path(sys.argv[1]).symlink_to('missing-lock-target')
+PY
+if guard_rejects "$nested_symlink_dir" 'packages/api-client/tooling/yarn.lock'; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated nested-lock diagnostic"; fi
 
 reject_workspace_config "root package must declare workspaces" "missing"
 reject_workspace_config "root workspaces must be a list of safe patterns" "malformed"
