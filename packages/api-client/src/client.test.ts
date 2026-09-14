@@ -192,6 +192,12 @@ function collectGlobalThisAliases(
 
   function isGlobalThisLike(expression: ts.Expression): boolean {
     const root = unwrapExpression(expression)
+    if (
+      ts.isBinaryExpression(root)
+      && root.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    ) {
+      return isGlobalThisLike(root.right)
+    }
     if (!ts.isIdentifier(root)) return false
     if (root.text === 'globalThis' && isUnboundGlobalThis(root, checker)) return true
     const symbol = checker.getSymbolAtLocation(root)
@@ -202,7 +208,7 @@ function collectGlobalThisAliases(
     changed = false
     function visit(node: ts.Node): void {
       if (
-        ts.isVariableDeclaration(node)
+        (ts.isVariableDeclaration(node) || ts.isParameter(node))
         && ts.isIdentifier(node.name)
         && node.initializer
         && isGlobalThisLike(node.initializer)
@@ -572,6 +578,14 @@ describe('API client portability detector', () => {
       'computed destructuring assignment from a wrapped alias',
       "const root = globalThis; let current: any; ({ ['location']: current } = (root as any)); current.href",
     ],
+    [
+      'parameter default from globalThis',
+      'function read(root: any = globalThis) { return root.window }',
+    ],
+    [
+      'chained assignment from globalThis',
+      'let root: any, next: any; root = next = globalThis; root.location.href',
+    ],
     ['ImportMeta declaration', 'interface ImportMeta { readonly env: Config }'],
     ['ImportMetaEnv declaration', 'interface ImportMetaEnv {}'],
     ['Window declaration', 'interface Window {}'],
@@ -740,6 +754,21 @@ describe('API client portability detector', () => {
     `
 
     expect(findPortabilityViolations(source, 'fixture.ts')).not.toEqual([])
+  })
+
+  test('ignores parameter defaults and chained assignments sourced from local data', () => {
+    const source = `
+      const local = { window: 'fixture', location: { href: 'fixture' } }
+      function read(root: typeof local = local) { return root.window }
+      let root: typeof local
+      let next: typeof local
+      root = next = local
+      void read()
+      void root.location.href
+      void next.window
+    `
+
+    expect(findPortabilityViolations(source, 'fixture.ts')).toEqual([])
   })
 
   test('ignores module-scoped browser-shaped declarations', () => {

@@ -106,6 +106,8 @@ jobs:
             # Universal Expo application inputs. Keep this list dependency-exact: backend source
             # changes do not rebuild a client unless the generated OpenAPI contract changes, and
             # desktop-web/shared-types changes are outside the mobile workspace graph.
+            # Root TypeScript configuration is included because API-client and design-token
+            # workspace configs inherit from it.
             # scripts/check-mobile-ci.py evaluates the positive and negative path matrix and
             # rejects broad packages/**, backend/**, apps/web/**, api/**, or scripts/** globs.
             mobile:
@@ -117,6 +119,7 @@ jobs:
               - 'bun.lock'
               - 'bunfig.toml'
               - 'turbo.json'
+              - 'tsconfig.json'
               - '.github/workflows/test.yml'
               - '.github/dependabot.yml'
               - 'scripts/check-mobile-ci.py'
