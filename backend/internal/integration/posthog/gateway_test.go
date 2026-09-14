@@ -75,6 +75,7 @@ func TestGatewayFailsClosedForConsentAndIdentityFailures(t *testing.T) {
 		authority stubAuthority
 	}{
 		{name: "missing or withdrawn consent", authority: stubAuthority{}},
+		{name: "locally deleted user with external erasure pending or complete", authority: stubAuthority{}},
 		{name: "authority lookup failed", authority: stubAuthority{err: errors.New("db unavailable")}},
 	}
 	for _, tc := range cases {

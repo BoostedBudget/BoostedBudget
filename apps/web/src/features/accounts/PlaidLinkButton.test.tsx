@@ -14,7 +14,7 @@ import { render, screen, waitFor, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { PlaidLinkButton } from './PlaidLinkButton'
-import { mockUsePlaidLink } from '@/test/mocks/plaid-api'
+import { mockExchangePublicTokenMutateAsync, mockUsePlaidLink } from '@/test/mocks/plaid-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import type { PlaidLinkError, PlaidLinkOnExitMetadata } from 'react-plaid-link'
@@ -64,10 +64,51 @@ function getCapturedOnExit(): (
   return onExit as (err: PlaidLinkError | null, metadata: PlaidLinkOnExitMetadata) => void
 }
 
+function getCapturedOnSuccess(): (
+  publicToken: string,
+  metadata: { institution: { institution_id: string; name: string } }
+) => Promise<void> {
+  const lastCall = mockUsePlaidLink.mock.calls.at(-1)
+  const onSuccess = (lastCall?.[0] as { onSuccess?: unknown } | undefined)?.onSuccess
+  if (typeof onSuccess !== 'function') {
+    throw new Error('usePlaidLink was not called with an onSuccess option')
+  }
+  return onSuccess as (
+    publicToken: string,
+    metadata: { institution: { institution_id: string; name: string } }
+  ) => Promise<void>
+}
+
 describe('PlaidLinkButton onExit handling', () => {
   beforeEach(() => {
     mockTrackEvent.mockClear()
     mockUsePlaidLink.mockClear()
+    mockExchangePublicTokenMutateAsync.mockClear()
+  })
+
+  it('records one canonical account-link completion after the token exchange succeeds', async () => {
+    renderButton()
+    await waitFor(() => screen.getByText('Connect Bank Account'))
+
+    await act(async () => {
+      await getCapturedOnSuccess()('public-token', {
+        institution: { institution_id: 'ins_5', name: 'Citibank Online' },
+      })
+    })
+
+    expect(mockExchangePublicTokenMutateAsync).toHaveBeenCalledTimes(1)
+    expect(mockTrackEvent).toHaveBeenCalledWith(
+      ANALYTICS_EVENTS.ACCOUNT_LINK_COMPLETED,
+      { provider: 'plaid' },
+    )
+    const calls = mockTrackEvent.mock.calls as unknown as Array<[string, Record<string, unknown>?]>
+    const completionEventNames = new Set<string>([
+      ANALYTICS_EVENTS.ACCOUNT_LINK_COMPLETED,
+      ANALYTICS_EVENTS.PLAID_LINK_SUCCEEDED,
+      ANALYTICS_EVENTS.FIRST_ACCOUNT_LINKED,
+    ])
+    const completionEvents = calls.filter(([event]) => completionEventNames.has(event))
+    expect(completionEvents).toHaveLength(1)
   })
 
   it('surfaces a specific, diagnosable message when Link exits with an error', async () => {

@@ -39,6 +39,19 @@ func TestLoad_PostHogSupportIdentitySecretIsServerOnlyConfiguration(t *testing.T
 	assert.Equal(t, "phs_server_only", cfg.PostHogSecretAPIToken)
 }
 
+func TestLoad_PostHogErasureUsesServerOnlyPrivateAPIConfiguration(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("POSTHOG_PERSONAL_API_KEY", "phx_private")
+	t.Setenv("POSTHOG_PROJECT_ID", "357017")
+	t.Setenv("POSTHOG_PRIVATE_HOST", "https://us.posthog.com")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "phx_private", cfg.PostHogPersonalAPIKey)
+	assert.Equal(t, "357017", cfg.PostHogProjectID)
+	assert.Equal(t, "https://us.posthog.com", cfg.PostHogPrivateHost)
+}
+
 func TestLoad_PostHogSyncCompletionCutover(t *testing.T) {
 	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("POSTHOG_SYNC_COMPLETION_CUTOVER_AT", "2026-09-13T20:15:00Z")

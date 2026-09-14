@@ -14,6 +14,16 @@ All configuration in this directory is:
 
 ## Files
 
+### PostHog contracts
+
+`posthog_events.yaml` is the allowlisted event/property contract, `product_metrics.yaml` defines
+decision-complete product metrics, and `posthog_rollout.yaml` records the desired staging and
+production PostHog project state. Run `bun run validate:posthog` after editing any of them.
+
+The rollout file is validated in CI but is not applied remotely. Follow
+`docs/operations/posthog-rollout.md` for operator setup, least-privilege access, evidence, and
+post-deploy verification. A metric with `availability: planned` must not be described as live.
+
 ### `subscription_tiers.yaml`
 
 **Primary configuration** for all subscription tier definitions, limits, pricing, and features.

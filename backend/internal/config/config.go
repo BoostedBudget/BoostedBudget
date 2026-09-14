@@ -248,6 +248,9 @@ type Config struct {
 	PostHogAPIKey                  string     // from POSTHOG_API_KEY — empty = disabled
 	PostHogHost                    string     // from POSTHOG_HOST — default us.i.posthog.com
 	PostHogSecretAPIToken          string     // from POSTHOG_SECRET_API_TOKEN — server-only Support identity HMAC key
+	PostHogPersonalAPIKey          string     // from POSTHOG_PERSONAL_API_KEY — server-only GDPR deletion credential
+	PostHogProjectID               string     // from POSTHOG_PROJECT_ID — environment-isolated project target
+	PostHogPrivateHost             string     // from POSTHOG_PRIVATE_HOST — us.posthog.com or eu.posthog.com
 	PostHogSyncCompletionCutoverAt *time.Time // from POSTHOG_SYNC_COMPLETION_CUTOVER_AT — unset suppresses first-sync telemetry
 
 	// Paddle Reconciliation
@@ -363,6 +366,9 @@ func Load() (*Config, error) {
 		PostHogAPIKey:         getEnv("POSTHOG_API_KEY", ""),
 		PostHogHost:           getEnv("POSTHOG_HOST", "https://us.i.posthog.com"),
 		PostHogSecretAPIToken: getEnv("POSTHOG_SECRET_API_TOKEN", ""),
+		PostHogPersonalAPIKey: getEnv("POSTHOG_PERSONAL_API_KEY", ""),
+		PostHogProjectID:      getEnv("POSTHOG_PROJECT_ID", ""),
+		PostHogPrivateHost:    getEnv("POSTHOG_PRIVATE_HOST", "https://us.posthog.com"),
 
 		// Paddle Reconciliation
 		PaddleReconciliationEnabled: getEnvBool("PADDLE_RECONCILIATION_ENABLED", true),
