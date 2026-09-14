@@ -12,6 +12,7 @@
  * `bun test` runs it directly with no browser preload or module mocking.
  */
 import { afterEach, describe, expect, test } from 'bun:test'
+import { readdir } from 'node:fs/promises'
 import type { AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios'
 import { AxiosError, AxiosHeaders } from 'axios'
 import {
@@ -73,13 +74,53 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
-describe('portable API client runtime', () => {
-  test('does not couple package source to browser or Vite globals', async () => {
-    const source = await Bun.file(new URL('./client.ts', import.meta.url)).text()
+const forbiddenPackageCouplings = [
+  ['vite/client', /vite\/client/],
+  ['ImportMetaEnv', /\bImportMetaEnv\b/],
+  ['ambient Window declaration', /\b(?:interface|type)\s+Window\b/],
+  ['window.', /\bwindow\s*\./],
+  ['document.', /\bdocument\s*\./],
+  ['import.meta', /\bimport\.meta\b/],
+  ['VITE_', /\bVITE_/],
+] as const
 
-    expect(source).not.toContain('window.')
-    expect(source).not.toContain('document.')
-    expect(source).not.toContain('import.meta')
+function isTestSource(relativePath: string) {
+  return relativePath.split('/').includes('__tests__')
+    || /\.(?:test|spec)\.tsx?$/.test(relativePath)
+}
+
+async function findPackageSources(
+  directory = new URL('./', import.meta.url),
+  relativeDirectory = '',
+): Promise<Array<{ relativePath: string; url: URL }>> {
+  const entries = await readdir(directory, { withFileTypes: true })
+  const sources: Array<{ relativePath: string; url: URL }> = []
+
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    const relativePath = `${relativeDirectory}${entry.name}`
+    const url = new URL(entry.isDirectory() ? `${entry.name}/` : entry.name, directory)
+    if (entry.isDirectory()) {
+      sources.push(...await findPackageSources(url, `${relativePath}/`))
+    } else if (/\.tsx?$/.test(relativePath) && !isTestSource(relativePath)) {
+      sources.push({ relativePath, url })
+    }
+  }
+
+  return sources
+}
+
+describe('portable API client runtime', () => {
+  test('does not couple package-owned source to browser or Vite globals', async () => {
+    const violations: string[] = []
+
+    for (const { relativePath, url } of await findPackageSources()) {
+      const source = await Bun.file(url).text()
+      for (const [description, pattern] of forbiddenPackageCouplings) {
+        if (pattern.test(source)) violations.push(`${relativePath}: ${description}`)
+      }
+    }
+
+    expect(violations).toEqual([])
   })
 
   test('imports with no browser globals and retains compatibility exports', async () => {
