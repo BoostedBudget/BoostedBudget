@@ -85,6 +85,11 @@ MIGRATED_JOBS = {
         "Cannot run on the macOS pool at all: Chrome headless under LHCI shared a process group "
         "with the host's browser session, which LHCI then SIGKILLs. See #996."
     ),
+    ("test.yml", "mobile-test"): (
+        "Build-only Expo validation is Linux-portable and benefits from an ephemeral runner: "
+        "it installs a pinned Node/Bun toolchain, runs Expo Doctor, and exports iOS, Android, "
+        "and web bundles without signing credentials or Mac-local state. See #1654."
+    ),
     ("warm-ci-cache.yml", "warm"): (
         "Must run on the same runner and architecture as the two jobs above, or its cache keys "
         "cannot match theirs (`runner.os`/`runner.arch` are baked into every key -- see R9). "

@@ -41,19 +41,20 @@ fail() { echo "  ❌ FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
+SANDBOX_WEB="$SANDBOX/apps/web"
 
 # Builds a sandbox that looks enough like apps/web for the script's `cd "$(dirname "$0")/.."` and
 # its relative ./node_modules/.bin/tsc to resolve.
 build_sandbox() {
   local mode="$1" listcount="${2:-400}"
-  rm -rf "$SANDBOX/web"
-  mkdir -p "$SANDBOX/web/scripts" "$SANDBOX/web/node_modules/.bin"
-  cp "$REAL_SCRIPT" "$SANDBOX/web/scripts/typecheck-tests.sh"
-  echo '{}' > "$SANDBOX/web/tsconfig.test.json"
+  rm -rf "$SANDBOX_WEB"
+  mkdir -p "$SANDBOX_WEB/scripts" "$SANDBOX_WEB/node_modules/.bin"
+  cp "$REAL_SCRIPT" "$SANDBOX_WEB/scripts/typecheck-tests.sh"
+  echo '{}' > "$SANDBOX_WEB/tsconfig.test.json"
   # The ratchet's ceiling. Defaults to the stub's own error count so the "healthy" case is a
   # no-change run; individual cases below rewrite it to construct an increase or a decrease.
-  printf '# sandbox baseline\n%s\n' "${3:-2000}" > "$SANDBOX/web/scripts/typecheck-tests-baseline.txt"
-  cat > "$SANDBOX/web/node_modules/.bin/tsc" <<STUB
+  printf '# sandbox baseline\n%s\n' "${3:-2000}" > "$SANDBOX_WEB/scripts/typecheck-tests-baseline.txt"
+  cat > "$SANDBOX_WEB/node_modules/.bin/tsc" <<STUB
 #!/usr/bin/env bash
 # Stub tsc. MODE decides what the diagnostics run does; the --listFiles run is always healthy
 # unless LISTCOUNT is lowered, because the file-count floor is a separate concern with its own case.
@@ -82,12 +83,12 @@ case "\$MODE" in
   clean)              sentinel; exit 0 ;;
 esac
 STUB
-  chmod +x "$SANDBOX/web/node_modules/.bin/tsc"
+  chmod +x "$SANDBOX_WEB/node_modules/.bin/tsc"
 }
 
 run_gate() {
   set +e
-  GATE_OUTPUT=$(cd "$SANDBOX/web" && bash scripts/typecheck-tests.sh 2>&1)
+  GATE_OUTPUT=$(cd "$SANDBOX_WEB" && bash scripts/typecheck-tests.sh 2>&1)
   GATE_STATUS=$?
   set -e
 }
@@ -142,7 +143,7 @@ mkdir -p "$SANDBOX/badbin"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$SANDBOX/badbin/mktemp"
 chmod +x "$SANDBOX/badbin/mktemp"
 set +e
-GATE_OUTPUT=$(cd "$SANDBOX/web" && PATH="$SANDBOX/badbin:$PATH" bash scripts/typecheck-tests.sh 2>&1)
+GATE_OUTPUT=$(cd "$SANDBOX_WEB" && PATH="$SANDBOX/badbin:$PATH" bash scripts/typecheck-tests.sh 2>&1)
 GATE_STATUS=$?
 set -e
 if [ "$GATE_STATUS" -eq 0 ]; then
@@ -154,7 +155,7 @@ fi
 # ── Case 5: a missing tsc binary must NOT pass ──
 echo "Case 5: a missing tsc binary is rejected"
 build_sandbox healthy
-rm -f "$SANDBOX/web/node_modules/.bin/tsc"
+rm -f "$SANDBOX_WEB/node_modules/.bin/tsc"
 run_gate
 if [ "$GATE_STATUS" -eq 0 ]; then
   fail "a missing compiler still produced a PASS — output: $GATE_OUTPUT"
@@ -229,7 +230,7 @@ fi
 # ── Case 11: a MISSING baseline must not mean "no ceiling" ──
 echo "Case 11: a missing baseline file is rejected"
 build_sandbox healthy
-rm -f "$SANDBOX/web/scripts/typecheck-tests-baseline.txt"
+rm -f "$SANDBOX_WEB/scripts/typecheck-tests-baseline.txt"
 run_gate
 if [ "$GATE_STATUS" -eq 0 ]; then
   fail "a missing baseline produced a PASS — the ceiling silently evaporated — output: $GATE_OUTPUT"
@@ -240,7 +241,7 @@ fi
 # ── Case 12: a non-numeric baseline must not be guessed at ──
 echo "Case 12: a non-numeric baseline is rejected"
 build_sandbox healthy
-printf '# nothing but a comment\n' > "$SANDBOX/web/scripts/typecheck-tests-baseline.txt"
+printf '# nothing but a comment\n' > "$SANDBOX_WEB/scripts/typecheck-tests-baseline.txt"
 run_gate
 if [ "$GATE_STATUS" -eq 0 ]; then
   fail "a baseline with no number produced a PASS — output: $GATE_OUTPUT"
@@ -253,10 +254,10 @@ fi
 # a writer that clobbers it turns the next failure into a bare number with no instructions.
 echo "Case 13: --update-baseline rewrites the number and preserves the header"
 build_sandbox healthy 400 1
-BL="$SANDBOX/web/scripts/typecheck-tests-baseline.txt"
+BL="$SANDBOX_WEB/scripts/typecheck-tests-baseline.txt"
 printf '# CONTRACT LINE\n1\n' > "$BL"
 set +e
-GATE_OUTPUT=$(cd "$SANDBOX/web" && bash scripts/typecheck-tests.sh --update-baseline 2>&1)
+GATE_OUTPUT=$(cd "$SANDBOX_WEB" && bash scripts/typecheck-tests.sh --update-baseline 2>&1)
 GATE_STATUS=$?
 set -e
 if [ "$GATE_STATUS" -ne 0 ]; then
@@ -283,13 +284,25 @@ fi
 echo "Case 15: an unknown argument is rejected"
 build_sandbox healthy
 set +e
-GATE_OUTPUT=$(cd "$SANDBOX/web" && bash scripts/typecheck-tests.sh --updatebaseline 2>&1)
+GATE_OUTPUT=$(cd "$SANDBOX_WEB" && bash scripts/typecheck-tests.sh --updatebaseline 2>&1)
 GATE_STATUS=$?
 set -e
 if [ "$GATE_STATUS" -eq 0 ]; then
   fail "an unknown flag was silently ignored — output: $GATE_OUTPUT"
 else
   pass "an unknown argument fails closed (exit $GATE_STATUS)"
+fi
+
+# ── Case 16: Bun's hoisted linker places the compiler at the repository root ──
+echo "Case 16: a repository-root compiler supports Bun's hoisted linker"
+build_sandbox healthy
+mkdir -p "$SANDBOX/node_modules/.bin"
+mv "$SANDBOX_WEB/node_modules/.bin/tsc" "$SANDBOX/node_modules/.bin/tsc"
+run_gate
+if [ "$GATE_STATUS" -ne 0 ]; then
+  fail "a healthy root compiler was rejected (exit $GATE_STATUS) — output: $GATE_OUTPUT"
+else
+  pass "the hoisted root compiler is used when no workspace-local compiler exists"
 fi
 
 echo ""
