@@ -31,7 +31,6 @@ export default defineConfig({
           CLERK_ISSUER_URL: 'http://clerk.test',
           MCP_OAUTH_AUDIENCE: 'test-oauth-audience',
           CLERK_OAUTH_CLIENT_SECRET: 'test-oauth-client-secret',
-          // POSTHOG_API_KEY intentionally omitted — keeps analytics no-op in tests
         },
         kvNamespaces: ['OAUTH_KV'],
       },

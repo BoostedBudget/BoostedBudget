@@ -2496,6 +2496,13 @@ func main() {
 		operations.RegisterMCPAuditRoutes(humaAPI, humaMCPAuditHandler)
 		appLogger.Info("MCP audit log route registered")
 
+		// Register bounded MCP completion telemetry. The Clerk middleware derives the internal user
+		// UUID from the Worker's verified OAuth bearer token; the gateway performs a fresh consent
+		// and active-user authority read before any PostHog enqueue.
+		humaMCPToolTelemetryHandler := operations.NewMCPToolTelemetryHandler(analyticsGateway, cfg.MCPWorkerSecret)
+		operations.RegisterMCPToolTelemetryRoutes(humaAPI, humaMCPToolTelemetryHandler)
+		appLogger.Info("MCP product telemetry route registered")
+
 		// Register Huma dashboard preferences routes (Issue #559: Huma migration)
 		humaDashboardPrefsHandler := operations.NewDashboardPreferencesHandler(dashboardPrefsService)
 		operations.RegisterDashboardPreferencesRoutes(humaAPI, humaDashboardPrefsHandler)

@@ -51,6 +51,23 @@ Capture is best effort and at most once from the application's perspective. Cons
 lookups and PostHog backpressure never change a business-operation result. The SDK queue is flushed
 with `Close` during graceful server shutdown; enqueue failures are logged without payloads.
 
+MCP tool analytics follows the same boundary. Every authenticated Worker tool callback schedules
+one `POST /api/v1/mcp/telemetry` after its result settles. The request carries only the bounded
+`tool_surface`, `tool_family`, `outcome`, and `duration_bucket` dimensions; its OAuth bearer token
+is authentication, never an event property. The backend derives the internal user UUID from that
+token and applies a fresh database authority check through `Gateway`. The Worker has no PostHog key,
+SDK, host, or direct capture path. Delivery uses `waitUntil` with a 750 ms request timeout, no retry
+or durable queue, so it is best effort and at most once and cannot delay or change the tool result.
+Failures produce only a bounded Worker log classification. Search is classified as `discovery`,
+recipe tools as `workflows`, single-family execute batches from the selected manifest entries, mixed
+batches as `cross_domain`, and unrecognized families as `other`. Manifest tags are grouped into the
+stable product families: account/user-account/household operations are `accounts`; dashboards and
+investments are `analytics`; category, auto-categorization, merchant, and tag operations are
+`transactions`; contributions, savings impact, and transfer suggestions are `savings`; MCP recipe
+API operations are `workflows`. Operation IDs, arguments, results, search text, raw errors, URLs,
+identifiers, and financial values are never included. MCP does not invoke a model, so this event
+creates no AI generation or span telemetry; tracing remains #1651.
+
 `financial_data_sync_completed` is produced only at the end of
 `transactionSyncService.SyncTransactions`, after transaction storage, full pagination, and an
 atomic durable completion/cursor write succeed. Partial progress is retained but never reported as

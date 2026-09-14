@@ -210,6 +210,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // ── MCP Audit (service-auth via X-Origin-Secret, not end-user Clerk JWT) ──
   // The audit endpoint is excluded from MCP tool calls; only the Worker service calls it directly.
   excludedWrite('recordMCPAuditEntry', 'Internal service endpoint; called by Worker service auth, not end-user MCP tools'),
+  excludedWrite('recordMCPToolTelemetry', 'Internal telemetry endpoint; the Worker completion wrapper calls it directly and agents cannot manufacture analytics events'),
 
   // ── MCP Recipes (read/write allowed; recipes exposed as MCP tools) ────────
   read('listMCPRecipes'),
@@ -561,6 +562,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // operation nobody has added to that list — see that module's doc comment.
   read('getPrivacySettings'),
   read('getUserProfile'),
+  excluded('getPostHogSupportIdentity', 'Server-signed Support identity is consumed only by the authenticated web application'),
   excludedWrite('updatePrivacySettings', REASON_PRIVACY_INAPP, 'household-sharing'),
   excludedWrite('updateUserProfile', 'Profile mutations deferred to follow-up'),
 

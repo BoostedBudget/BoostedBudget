@@ -80,6 +80,8 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #1087: MCP audit log
 	mcpAuditHandler := &MCPAuditHandler{}
+	// Issue #1650: consent-gated MCP product telemetry
+	mcpToolTelemetryHandler := &MCPToolTelemetryHandler{}
 
 	// Issue #138: Investment portfolio endpoints (8 ops: 4 core + 4 analytics)
 	investmentHandler := &InvestmentHandler{}
@@ -168,6 +170,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #1087: MCP audit log
 	RegisterMCPAuditRoutes(api, mcpAuditHandler)
+	RegisterMCPToolTelemetryRoutes(api, mcpToolTelemetryHandler)
 
 	// Issue #138: Investment portfolio (4 core + 4 analytics operations)
 	RegisterInvestmentRoutes(api, investmentHandler)

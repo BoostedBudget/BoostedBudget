@@ -688,10 +688,13 @@ describe('legacy migration inventory', () => {
         .flatMap((event) => event.symbols.typescript.map((symbol) => [symbol, event.name])),
     )
 
-    expect(legacy.map((event) => event.name).sort()).toEqual(fixture.legacy_events)
+    const retiredMCPEvents = new Set(Object.values(fixture.mcp))
+    expect(legacy.map((event) => event.name).sort()).toEqual(
+      fixture.legacy_events.filter((event) => !retiredMCPEvents.has(event)),
+    )
     expect(ts).toEqual(fixture.typescript)
     expect(go).toEqual(fixture.go)
-    expect(mcp).toEqual(fixture.mcp)
+    expect(mcp).toEqual({})
     expect(fixture.mcp).toEqual({
       OAUTH_AUTHORIZED: 'mcp_oauth_authorized',
       TOOL_CALLED: 'mcp_tool_called',
@@ -699,6 +702,13 @@ describe('legacy migration inventory', () => {
       EXECUTE_FAILED: 'mcp_execute_failed',
       SESSION_REVOKED: 'mcp_session_revoked',
     })
+    for (const eventName of retiredMCPEvents) {
+      const retired = catalog.events.find((event) => event.name === eventName)
+      expect(retired?.status).toBe('deprecated')
+      expect(retired?.deprecated).toContain('#1650')
+      expect(retired?.symbols.typescript).toEqual([])
+      expect(retired?.symbols.go).toEqual([])
+    }
     const metadata = Object.fromEntries(
       catalog.events
         .filter((event) => ['frontend_account_holdings_history_viewed', 'frontend_account_balance_history_viewed'].includes(event.contract_id))
