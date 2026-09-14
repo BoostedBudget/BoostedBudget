@@ -218,12 +218,12 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 	}
 
 	// Get queue metrics for all queues
-	queues := []string{"critical", "default", "notifications", "low"}
+	queues := []string{"critical", "default", "notifications", "low", "revenuecat"}
 	for _, queue := range queues {
 		metrics, err := s.getQueueMetrics(ctx, queue)
 		if err != nil {
 			// Log error but continue - partial data is better than none
-			response.JobQueues[queue] = domain.QueueMetrics{}
+			response.JobQueues[queue] = domain.QueueMetrics{Unavailable: true}
 			continue
 		}
 		response.JobQueues[queue] = *metrics
@@ -847,7 +847,7 @@ func (s *systemHealthService) calculateOverallStatus(response *domain.SystemHeal
 
 	// Degraded: High pending jobs or dead letter queue issues
 	for _, metrics := range response.JobQueues {
-		if metrics.Pending > 100 {
+		if metrics.Unavailable || metrics.Pending > 100 {
 			return "degraded"
 		}
 	}

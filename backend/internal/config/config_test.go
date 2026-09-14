@@ -196,6 +196,7 @@ func TestLoad_ProductionValidation_RejectsWildcardCORS(t *testing.T) {
 }
 
 func TestLoad_ProductionValidation_PassesWithAllRequiredFields(t *testing.T) {
+	setRevenueCatEnv(t, "production")
 	t.Setenv("ENVIRONMENT", "production")
 	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost/db")
 	t.Setenv("CLERK_SECRET_KEY", "sk_live_test")
@@ -484,6 +485,7 @@ func TestLoad_MCPWorkerSecretConfigurable(t *testing.T) {
 // checked field rather than relying on ambient shell state.
 func setProdRequiredEnv(t *testing.T) {
 	t.Helper()
+	setRevenueCatEnv(t, "production")
 	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost/db")
 	t.Setenv("CLERK_SECRET_KEY", "sk_live_test")
 	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")

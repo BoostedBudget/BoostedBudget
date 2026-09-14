@@ -18,6 +18,11 @@ import { toast } from 'sonner'
 import { getSubscriptionPresentation } from '@/features/subscription/lib/subscriptionPresentation'
 import type { GetCurrentSubscriptionOutputBody } from '@boostedbudget/api-client/models'
 import type { SubscriptionTier } from '../subscription/types'
+import { useGetCurrentSubscription } from '@boostedbudget/api-client/endpoints/subscription/subscription'
+import { SubscriptionAuthorityDetails } from './components/SubscriptionAuthorityDetails'
+import { RevenueCatCheckoutStatus } from './components/RevenueCatCheckoutStatus'
+import { useRevenueCatCheckout } from './hooks/useRevenueCatCheckout'
+import { useAuth } from '@clerk/react-router'
 
 /**
  * Issue #1413: complimentary-access view for admin-comped users. Reuses CurrentSubscriptionDisplay
@@ -85,6 +90,21 @@ function ComplimentaryView({
  * Issue #772: GAP 2 - Wire up subscription management components
  */
 export function SubscriptionManagementPage() {
+  const { userId } = useAuth()
+  const { data, refetch, error } = useGetCurrentSubscription({ query: { queryKey: ['/api/v1/subscription/current', userId], enabled: !!userId } })
+  const { retry, isLoading } = useRevenueCatCheckout()
+  return <>
+    <SubscriptionAuthorityDetails summary={data?.authority} />
+    <div className="max-w-[800px] mx-auto px-8 pt-4">
+      {data && error && <p role="status">Subscription details could not be refreshed. Showing the last observed details.</p>}
+      <RevenueCatCheckoutStatus />
+      <Button variant="outline" disabled={isLoading} onClick={async () => { await retry(); await refetch() }}>Refresh subscription status</Button>
+    </div>
+    <SubscriptionManagementContent />
+  </>
+}
+
+function SubscriptionManagementContent() {
   const navigate = useNavigate()
   const trackEvent = useTrackEvent()
   const {
@@ -125,7 +145,7 @@ export function SubscriptionManagementPage() {
     return <SubscriptionManagementSkeleton />
   }
 
-  if (subscriptionError) {
+  if (subscriptionError && !subscription) {
     return (
       <SubscriptionErrorState
         message={subscriptionError.message}
@@ -155,7 +175,7 @@ export function SubscriptionManagementPage() {
   // Issue #1413: admin-comped users get real access, even when the subscription endpoint 404s
   // (checked before hasNoSubscription/!subscription below — an isComped user should never see the
   // "No Active Subscription" empty state).
-  if (isComped) {
+  if (isComped && !subscription?.subscription_id) {
     const compedTierData = subscription
       ? tiers?.tiers[subscription.tier as keyof typeof tiers.tiers]
       : undefined
@@ -170,7 +190,11 @@ export function SubscriptionManagementPage() {
     )
   }
 
-  if (hasNoSubscription || !subscription) {
+  if (subscription?.status === 'unresolved') {
+    return <SubscriptionErrorState message="Subscription status could not be confirmed. Refresh subscription status to try again." onRetry={() => refetchSubscription()} />
+  }
+
+  if (hasNoSubscription || !subscription || (!subscription.subscription_id && subscription.status !== 'trial')) {
     return (
       <div className="max-w-[800px] mx-auto p-8">
         <EmptyState

@@ -30,6 +30,7 @@ type AdminSubscriptionTierInput struct {
 type AdminSubscriptionTierOutput struct {
 	Body struct {
 		Message string `json:"message"`
+		Stage string `json:"stage,omitempty"`
 	}
 }
 
@@ -45,6 +46,7 @@ type AdminRemoveTierOverrideInput struct {
 // AdminRemoveTierOverrideOutput is the response body for clearing a user's manual tier override.
 type AdminRemoveTierOverrideOutput struct {
 	Body struct {
+		Stage          string `json:"stage,omitempty"`
 		Message        string `json:"message"`
 		Removed        bool   `json:"removed"`
 		RevertedTier   string `json:"reverted_tier"`
@@ -55,9 +57,10 @@ type AdminRemoveTierOverrideOutput struct {
 // AdminSubscriptionDetailOutput represents the detailed subscription state for an admin to view
 type AdminSubscriptionDetailOutput struct {
 	Body struct {
-		BaseTier           string `json:"base_tier"`
-		SubscriptionStatus string `json:"subscription_status"`
-		EffectiveTier      string `json:"effective_tier"`
+		Authority          *services.RevenueCatSummary `json:"authority,omitempty"`
+		BaseTier           string                      `json:"base_tier"`
+		SubscriptionStatus string                      `json:"subscription_status"`
+		EffectiveTier      string                      `json:"effective_tier"`
 		// EffectiveStatus is the server-computed effective subscription status (Issue #1413) —
 		// admins need both raw (SubscriptionStatus) and effective, since a live manual tier
 		// override forces access to "active" regardless of the stale raw status.
@@ -125,6 +128,20 @@ type AdminSubscriptionDetailInput struct {
 //
 // PUT /api/v1/admin/users/{user_id}/subscription/tier
 func (h *AdminHandler) UpdateUserTier(ctx context.Context, input *AdminSubscriptionTierInput) (*AdminSubscriptionTierOutput, error) {
+	if h.revenueCat != nil {
+		grant := &AdminRevenueCatGrantInput{AdminAuthenticatedInput: input.AdminAuthenticatedInput, TargetUserID: input.UserID}
+		grant.Body.Class = "comp"
+		grant.Body.Tier = input.Body.Tier
+		grant.Body.ExpiresAt = input.Body.ExpiresAt
+		grant.Body.Reason = input.Body.Reason
+		if _, err := h.RequestRevenueCatGrant(ctx, grant); err != nil {
+			return nil, err
+		}
+		out := &AdminSubscriptionTierOutput{}
+		out.Body.Stage = "pending"
+		out.Body.Message = "Complimentary access change queued. Access changes only after RevenueCat confirms it."
+		return out, nil
+	}
 	result, err := h.adminUserService.UpdateUserTier(
 		ctx,
 		input.AdminAuthenticatedInput.UserID,
@@ -161,6 +178,21 @@ func (h *AdminHandler) UpdateUserTier(ctx context.Context, input *AdminSubscript
 //
 // POST /api/v1/admin/users/{user_id}/subscription/tier/clear
 func (h *AdminHandler) RemoveUserTierOverride(ctx context.Context, input *AdminRemoveTierOverrideInput) (*AdminRemoveTierOverrideOutput, error) {
+	if h.revenueCat != nil {
+		grant := &AdminRevenueCatGrantInput{AdminAuthenticatedInput: input.AdminAuthenticatedInput, TargetUserID: input.UserID}
+		grant.Body.Class = "comp"
+		grant.Body.Tier = "premium" // revocation is class-scoped, not key-scoped
+		grant.Body.Revoke = true
+		grant.Body.Reason = input.Body.Reason
+		operation, err := h.RequestRevenueCatGrant(ctx, grant)
+		if err != nil {
+			return nil, err
+		}
+		out := &AdminRemoveTierOverrideOutput{}
+		out.Body.Stage = operation.Body.Stage
+		out.Body.Message = "Complimentary access removal queued. Paid access and trials are unchanged."
+		return out, nil
+	}
 	// input.UserID is the struct's own path-bound field, which SHADOWS the field promoted from
 	// AdminAuthenticatedInput -> AuthenticatedInput at the top level. So:
 	//   input.UserID                          -> the TARGET user (path param)
@@ -191,6 +223,9 @@ func (h *AdminHandler) RemoveUserTierOverride(ctx context.Context, input *AdminR
 //
 // GET /api/v1/admin/users/{user_id}/subscription
 func (h *AdminHandler) GetUserSubscription(ctx context.Context, input *AdminSubscriptionDetailInput) (*AdminSubscriptionDetailOutput, error) {
+	if h.revenueCat != nil {
+		return h.getRevenueCatSubscriptionDetail(ctx, input.UserID)
+	}
 	// Issue #1462: captured before the rest of this handler's work so `as_of` reflects (at the
 	// latest) the instant EffectiveTier/EffectiveStatus below started being computed from.
 	asOf := time.Now()

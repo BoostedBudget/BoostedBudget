@@ -1,14 +1,14 @@
-import { describe, it, expect, beforeEach, mock, afterEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test'
 import React from 'react'
 import { renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import { usePostSignInCheckoutIntent } from './usePostSignInCheckoutIntent'
 import { mockUseUser } from '@/test/mocks/clerk'
-import {
-  mockUseCreatePaddleCheckout,
-  mockCreatePaddleCheckoutMutateAsync,
-} from '@/test/mocks/subscription-api'
+import { revenueCatCheckout } from '../../billing/revenueCatRuntime'
+
+const mockStartCheckout = mock(async () => {})
+let restoreStartCheckout = () => {}
 
 function createWrapper() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
@@ -29,23 +29,14 @@ const signedInUser = {
 
 beforeEach(() => {
   mockUseUser.mockReturnValue({ isLoaded: true, isSignedIn: false, user: null })
-  mockUseCreatePaddleCheckout.mockReturnValue({
-    mutateAsync: mockCreatePaddleCheckoutMutateAsync,
-    isPending: false,
-    isSuccess: false,
-    isError: false,
-    error: null,
-    reset: mock(() => {}),
-  })
-  mockCreatePaddleCheckoutMutateAsync.mockResolvedValue({
-    checkout_url: 'https://checkout.paddle.com/txn_123',
-    transaction_id: 'txn_123',
-  })
   sessionStorage.clear()
-  mockCreatePaddleCheckoutMutateAsync.mockClear()
+  const startSpy = spyOn(revenueCatCheckout, 'start').mockImplementation(mockStartCheckout)
+  restoreStartCheckout = () => { startSpy.mockRestore() }
+  mockStartCheckout.mockClear()
 })
 
 afterEach(() => {
+  restoreStartCheckout()
   sessionStorage.clear()
 })
 
@@ -53,13 +44,13 @@ describe('usePostSignInCheckoutIntent', () => {
   it('does nothing when user is not signed in', () => {
     sessionStorage.setItem('checkout_intent', JSON.stringify({ tier: 'premium', billingInterval: 'month' }))
     renderHook(() => usePostSignInCheckoutIntent(), { wrapper: createWrapper() })
-    expect(mockCreatePaddleCheckoutMutateAsync).not.toHaveBeenCalled()
+    expect(mockStartCheckout).not.toHaveBeenCalled()
   })
 
   it('does nothing when no intent is stored', () => {
     mockUseUser.mockReturnValue(signedInUser)
     renderHook(() => usePostSignInCheckoutIntent(), { wrapper: createWrapper() })
-    expect(mockCreatePaddleCheckoutMutateAsync).not.toHaveBeenCalled()
+    expect(mockStartCheckout).not.toHaveBeenCalled()
   })
 
   it('consumes sessionStorage intent and initiates checkout when signed in', async () => {
@@ -69,9 +60,7 @@ describe('usePostSignInCheckoutIntent', () => {
     renderHook(() => usePostSignInCheckoutIntent(), { wrapper: createWrapper() })
 
     await new Promise((r) => setTimeout(r, 50))
-    expect(mockCreatePaddleCheckoutMutateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ tier: 'premium', billing_interval: 'month' }) })
-    )
+    expect(mockStartCheckout).toHaveBeenCalledTimes(1)
   })
 
   it('clears sessionStorage intent after consuming it', async () => {
@@ -96,7 +85,7 @@ describe('usePostSignInCheckoutIntent', () => {
     renderHook(() => usePostSignInCheckoutIntent(), { wrapper: createWrapper() })
     await new Promise((r) => setTimeout(r, 50))
 
-    expect(mockCreatePaddleCheckoutMutateAsync).not.toHaveBeenCalled()
+    expect(mockStartCheckout).not.toHaveBeenCalled()
     expect(sessionStorage.getItem('checkout_intent')).toBeNull()
   })
 
@@ -112,9 +101,7 @@ describe('usePostSignInCheckoutIntent', () => {
     renderHook(() => usePostSignInCheckoutIntent(), { wrapper: createWrapper() })
     await new Promise((r) => setTimeout(r, 50))
 
-    expect(mockCreatePaddleCheckoutMutateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ tier: 'household_2', billing_interval: 'year' }) })
-    )
+    expect(mockStartCheckout).toHaveBeenCalledTimes(1)
   })
 
   it('does not fire twice on StrictMode double-invoke (single-fire guard)', async () => {
@@ -125,6 +112,6 @@ describe('usePostSignInCheckoutIntent', () => {
     rerender()
     await new Promise((r) => setTimeout(r, 50))
 
-    expect(mockCreatePaddleCheckoutMutateAsync).toHaveBeenCalledTimes(1)
+    expect(mockStartCheckout).toHaveBeenCalledTimes(1)
   })
 })

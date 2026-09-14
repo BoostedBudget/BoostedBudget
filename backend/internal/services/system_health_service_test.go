@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -136,7 +137,7 @@ func TestSystemHealthService_GetSystemHealth_Success(t *testing.T) {
 	})
 
 	// Mock queue stats for each queue
-	queues := []string{"critical", "default", "notifications", "low"}
+	queues := []string{"critical", "default", "notifications", "low", "revenuecat"}
 	for _, queue := range queues {
 		mockHealthRepo.On("GetRiverJobStats", mock.Anything, queue).Return(&domain.QueueMetrics{
 			Pending: 5,
@@ -191,7 +192,8 @@ func TestSystemHealthService_GetSystemHealth_Success(t *testing.T) {
 	assert.Equal(t, "sandbox", result.Services.Plaid.Environment)
 	assert.Equal(t, int64(3), result.SyncStatus.ActiveSyncs)
 	assert.Equal(t, int64(2), result.DeadLetterQueue.Count)
-	assert.Len(t, result.JobQueues, 4)
+	assert.Len(t, result.JobQueues, 5)
+	assert.Contains(t, result.JobQueues, "revenuecat")
 
 	mockHealthRepo.AssertExpectations(t)
 	mockDeadLetterRepo.AssertExpectations(t)
@@ -207,8 +209,12 @@ func TestSystemHealthService_GetSystemHealth_DatabaseDown(t *testing.T) {
 	mockPool.On("Ping", mock.Anything).Return(errors.New("connection refused"))
 
 	// Service still tries to gather other metrics
-	queues := []string{"critical", "default", "notifications", "low"}
+	queues := []string{"critical", "default", "notifications", "low", "revenuecat"}
 	for _, queue := range queues {
+		if queue == "revenuecat" {
+			mockHealthRepo.On("GetRiverJobStats", mock.Anything, queue).Return(nil, errors.New("queue metrics unavailable"))
+			continue
+		}
 		mockHealthRepo.On("GetRiverJobStats", mock.Anything, queue).Return(&domain.QueueMetrics{}, nil)
 		mockHealthRepo.On("GetRiverJobsCompletedLastHour", mock.Anything, queue).Return(int64(0), nil)
 	}
@@ -239,6 +245,9 @@ func TestSystemHealthService_GetSystemHealth_DatabaseDown(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Equal(t, "unhealthy", result.Status)
 	assert.Equal(t, "down", result.Services.Database.Status)
+	queueJSON, err := json.Marshal(result.JobQueues["revenuecat"])
+	require.NoError(t, err)
+	assert.Contains(t, string(queueJSON), `"unavailable":true`)
 
 	mockPool.AssertExpectations(t)
 	mockHealthRepo.AssertExpectations(t)
@@ -259,7 +268,7 @@ func TestSystemHealthService_GetSystemHealth_DegradedHighPendingJobs(t *testing.
 	})
 
 	// Mock high pending jobs
-	queues := []string{"critical", "default", "notifications", "low"}
+	queues := []string{"critical", "default", "notifications", "low", "revenuecat"}
 	for _, queue := range queues {
 		if queue == "default" {
 			mockHealthRepo.On("GetRiverJobStats", mock.Anything, queue).Return(&domain.QueueMetrics{
@@ -479,6 +488,16 @@ func TestSystemHealthService_CalculateOverallStatus(t *testing.T) {
 	}
 }
 
+func TestSystemHealthRevenueCatUnavailableIsDegraded(t *testing.T) {
+	var queue domain.QueueMetrics
+	require.NoError(t, json.Unmarshal([]byte(`{"unavailable":true}`), &queue))
+	response := &domain.SystemHealthResponse{
+		Services:  domain.ServiceHealthStatuses{Database: domain.DatabaseHealth{Status: "up"}},
+		JobQueues: map[string]domain.QueueMetrics{"revenuecat": queue},
+	}
+	assert.Equal(t, "degraded", (&systemHealthService{}).calculateOverallStatus(response))
+}
+
 func setupFullHealthMocks(
 	mockHealthRepo *MockSystemHealthRepository,
 	mockDeadLetterRepo *MockDeadLetterJobRepository,
@@ -490,7 +509,7 @@ func setupFullHealthMocks(
 	mockPool.On("Ping", mock.Anything).Return(nil)
 	mockPool.On("GetStats").Return(PoolStats{MaxConns: 100})
 
-	queues := []string{"critical", "default", "notifications", "low"}
+	queues := []string{"critical", "default", "notifications", "low", "revenuecat"}
 	for _, q := range queues {
 		mockHealthRepo.On("GetRiverJobStats", mock.Anything, q).Return(&domain.QueueMetrics{}, nil)
 		mockHealthRepo.On("GetRiverJobsCompletedLastHour", mock.Anything, q).Return(int64(0), nil)
@@ -559,7 +578,7 @@ func TestGetSystemHealth_PaddleMetricsError_UsesZeroValues(t *testing.T) {
 	mockPool.On("Ping", mock.Anything).Return(nil)
 	mockPool.On("GetStats").Return(PoolStats{MaxConns: 100})
 
-	queues := []string{"critical", "default", "notifications", "low"}
+	queues := []string{"critical", "default", "notifications", "low", "revenuecat"}
 	for _, q := range queues {
 		mockHealthRepo.On("GetRiverJobStats", mock.Anything, q).Return(&domain.QueueMetrics{}, nil)
 		mockHealthRepo.On("GetRiverJobsCompletedLastHour", mock.Anything, q).Return(int64(0), nil)

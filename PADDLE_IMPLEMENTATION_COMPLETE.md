@@ -261,8 +261,10 @@ These are **optional** enhancements, not required for MVP:
 - `backend/migrations/000044_create_paddle_transactions.{up,down}.sql` - DB migrations
 
 **New Frontend Files (3):**
-- `apps/web/src/features/billing/components/PaddleCheckoutButton.tsx`
-- `apps/web/src/features/billing/hooks/usePaddleCheckout.ts`
+- Historical `PaddleCheckoutButton` component (retired by #1652; checkout now uses
+  `apps/web/src/features/billing/components/RevenueCatCheckoutStatus.tsx`)
+- Historical `usePaddleCheckout` hook (retired by #1652; replaced by
+  `apps/web/src/features/billing/hooks/useRevenueCatCheckout.ts`)
 - 10+ generated TypeScript model files
 
 **Modified Files (6):**

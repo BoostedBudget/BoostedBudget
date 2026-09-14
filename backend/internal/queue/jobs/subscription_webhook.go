@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -116,6 +117,7 @@ const subscriptionCancelledCleanupClaimLease = 15 * time.Minute
 
 // SubscriptionWebhookWorker processes Paddle subscription webhook events from the queue.
 type SubscriptionWebhookWorker struct {
+	revenueCatAuthority bool
 	river.WorkerDefaults[SubscriptionWebhookArgs]
 
 	paddleWebhookRepo     PaddleWebhookRepository
@@ -144,6 +146,13 @@ type SubscriptionWebhookWorker struct {
 	// see processSubscriptionCanceled's ClaimOutcome switch below.
 	claimsRepo repository.WorkClaimsOutcomeRepository
 	logger     *slog.Logger
+}
+
+// SetRevenueCatAuthority retains verified Paddle receipts and transaction audits,
+// but prevents Paddle subscription events from independently changing access.
+// Configure before starting workers.
+func (w *SubscriptionWebhookWorker) SetRevenueCatAuthority() {
+	w.revenueCatAuthority = true
 }
 
 // SubscriptionWebhookWorkerDeps contains the dependencies for SubscriptionWebhookWorker.
@@ -291,6 +300,11 @@ func (w *SubscriptionWebhookWorker) effectiveTierName(owner *domain.User) string
 // neither the user's clerk_user_id nor their current effective tier/status, so there is nothing
 // safe to sync. The next webhook or sync opportunity retries.
 func (w *SubscriptionWebhookWorker) syncClerkMetadata(ctx context.Context, userID string) {
+	// Billing failures remain auditable, but legacy profile fields must not be
+	// published as an independent access projection once RevenueCat is authoritative.
+	if w.revenueCatAuthority {
+		return
+	}
 	if w.clerkService == nil {
 		return
 	}
@@ -602,6 +616,13 @@ func (w *SubscriptionWebhookWorker) Work(ctx context.Context, job *river.Job[Sub
 			return fmt.Errorf("failed to record invalid-signature refusal: %w", failErr)
 		}
 		return river.JobCancel(errInvalidWebhookSignature)
+	}
+
+	if w.revenueCatAuthority && strings.HasPrefix(webhook.EventType, "subscription.") {
+		if err := w.paddleWebhookRepo.MarkProcessed(ctx, args.WebhookID); err != nil {
+			return fmt.Errorf("record Paddle billing receipt: %w", err)
+		}
+		return nil
 	}
 
 	var processErr error

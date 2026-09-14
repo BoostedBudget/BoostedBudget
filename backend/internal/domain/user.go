@@ -32,6 +32,8 @@ type User struct {
 	// Effective status/comp fields (Issue #1413) — computed, not stored in DB.
 	// Populated by a later task (see EffectiveTier precedent above).
 	EffectiveStatus string     `json:"effective_status,omitempty"`
+	AccessResolved  *bool      `json:"access_resolved,omitempty"` // nil only for legacy/unconfigured readers
+	AccessSource    string     `json:"access_source,omitempty"`
 	IsComped        bool       `json:"is_comped"` // No omitempty: frontend must always see this key, never distinguish false from absent.
 	CompTier        string     `json:"comp_tier,omitempty"`
 	CompEndsAt      *time.Time `json:"comp_ends_at,omitempty"`

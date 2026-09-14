@@ -152,6 +152,13 @@ function SubscriptionOverrideForm({
             },
             {
                 onSuccess: (data) => {
+                    if (data?.stage === 'pending') {
+                        toast.info(data.message)
+                        trackEvent(ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_CHANGE_QUEUED, { action: 'grant', tier: selectedTier })
+                        setConfirmSeatWarning(false)
+                        onClose()
+                        return
+                    }
                     // Defect 5 / G4: the backend appends a seat/offboard warning to `message`
                     // when comping a household owner DOWN to a smaller tier risks LIFO-offboarding
                     // active members (admin_user_service.go:253-267) — a destructive side effect of
@@ -200,6 +207,13 @@ function SubscriptionOverrideForm({
                 // event is already gated on `row.Removed` (admin_user_service.go); this brings the
                 // two layers into agreement about when a removal actually happened.
                 onSuccess: (data) => {
+                    if (data?.stage === 'pending') {
+                        toast.info(data.message)
+                        trackEvent(ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_CHANGE_QUEUED, { action: 'revoke', tier: removedTier })
+                        setConfirmRemove(false)
+                        onClose()
+                        return
+                    }
                     // Round 9 follow-up (Codex, same review): the generated contract requires
                     // `removed: boolean` to ALWAYS be present on a 200 response — there is no
                     // "success but we don't know" shape on the wire. So a response that fails this

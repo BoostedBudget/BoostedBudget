@@ -25,6 +25,17 @@ type TrialExpirationCheckArgs struct {
 	TriggerSource string `json:"trigger_source,omitempty"`
 }
 
+// RetiredSubscriptionWorker drains jobs queued before RevenueCat became the access
+// authority. Keeping the original kinds registered avoids endless unknown-worker
+// retries; these jobs must never invoke their former access or cleanup services.
+type RetiredSubscriptionWorker[T river.JobArgs] struct {
+	river.WorkerDefaults[T]
+}
+
+func (*RetiredSubscriptionWorker[T]) Work(context.Context, *river.Job[T]) error {
+	return nil
+}
+
 // Kind returns the unique identifier for this job type.
 func (TrialExpirationCheckArgs) Kind() string { return "trial_expiration_check" }
 

@@ -17,6 +17,12 @@ type userLoader interface {
 	GetUserByID(ctx context.Context, id string) (*domain.User, error)
 }
 
+// OwnAccessResolver reads confirmed, freshness-bounded provider access, without
+// household inheritance. It is injected for both the member and their payer.
+type OwnAccessResolver interface {
+	ResolveOwnAccessAt(context.Context, string, time.Time) (domain.RevenueCatAccess, error)
+}
+
 // HouseholdEntitlementResolver resolves a user's effective tier+status, accounting for
 // household coverage. Injected into SubscriptionService as an optional, nil-safe
 // dependency (see SubscriptionService.SetEntitlementResolver).
@@ -54,6 +60,25 @@ type HouseholdEntitlementService struct {
 	householdRepo         repository.HouseholdRepository
 	tierConfig            *config.TierConfig
 	overrideTierValidator func(tierName string) bool
+	ownAccessResolver     OwnAccessResolver
+}
+
+func (s *HouseholdEntitlementService) SetOwnAccessResolver(resolver OwnAccessResolver) {
+	s.ownAccessResolver = resolver
+}
+
+// GetEffectiveSubscriptionStatusByUserID is the middleware's access reader.
+// Resolution errors must remain errors so protected writes receive an unavailable
+// response instead of falling back to stale users.subscription_status.
+func (s *HouseholdEntitlementService) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, userID string) (string, error) {
+	if s.ownAccessResolver == nil {
+		return "", domain.ErrRevenueCatUnresolved
+	}
+	eff, err := s.resolveConfirmedAccess(ctx, userID, time.Now())
+	if err != nil {
+		return "", err
+	}
+	return eff.Status, nil
 }
 
 // NewHouseholdEntitlementService creates a new HouseholdEntitlementService.
@@ -109,8 +134,8 @@ func (s *HouseholdEntitlementService) SetOverrideTierValidator(validator func(ti
 // has lost active coverage (past_due/cancelled/inactive) AND isn't currently comped via an
 // active manual_tier_override (#1413 — an admin comp must keep covering the owner's
 // members, not just the owner), in which case the member falls back to their own tier.
-// Real repository/lookup errors propagate; the caller (SubscriptionService) decides the
-// fail-open policy.
+// Real repository/lookup errors propagate. SubscriptionService does not substitute
+// a legacy tier for a failed authoritative resolution.
 //
 // Precedence (ratified decision — Gap Analysis Round 2, GT-2, #1367): while the owner is
 // active, household coverage ALWAYS wins over a covered member's own
@@ -153,6 +178,9 @@ func (s *HouseholdEntitlementService) ResolveEffectiveEntitlement(ctx context.Co
 // caller-supplied `asOf` straight through instead of this service reading a second, independent
 // clock.
 func (s *HouseholdEntitlementService) ResolveEffectiveEntitlementAt(ctx context.Context, user *domain.User, now time.Time) (domain.EffectiveEntitlement, error) {
+	if s.ownAccessResolver != nil {
+		return s.resolveConfirmedAccess(ctx, user.ID, now)
+	}
 	ownStatus, _, _ := user.EffectiveStatusWithActiveOverrideAt(now)
 	own := domain.EffectiveEntitlement{
 		Tier:   s.effectiveTierNameAt(ctx, user, now),
@@ -232,6 +260,39 @@ func (s *HouseholdEntitlementService) ResolveEffectiveEntitlementAt(ctx context.
 		PayerUserID: ent.PayerUserID,
 		HouseholdID: ent.HouseholdID,
 	}, nil
+}
+
+func (s *HouseholdEntitlementService) resolveConfirmedAccess(ctx context.Context, userID string, now time.Time) (domain.EffectiveEntitlement, error) {
+	ent, err := s.entitlementRepo.GetActiveEntitlement(ctx, userID, now)
+	if err != nil && !errors.Is(err, repository.ErrEntitlementNotFound) {
+		return domain.EffectiveEntitlement{}, err
+	}
+	if err == nil && ent.Source == domain.EntitlementSourceHousehold {
+		if ent.PayerUserID == nil || ent.HouseholdID == nil || *ent.PayerUserID == "" || *ent.HouseholdID == "" {
+			return domain.EffectiveEntitlement{}, domain.ErrRevenueCatUnresolved
+		}
+		owner, err := s.ownAccessResolver.ResolveOwnAccessAt(ctx, *ent.PayerUserID, now)
+		if err != nil {
+			return domain.EffectiveEntitlement{}, err
+		}
+		if domain.SubscriptionStatus(owner.Status).IsActiveSubscription() {
+			return domain.EffectiveEntitlement{
+				Tier: owner.Tier, Status: owner.Status, Source: domain.EntitlementSourceHousehold,
+				PayerUserID: ent.PayerUserID, HouseholdID: ent.HouseholdID,
+			}, nil
+		}
+		if !domain.SubscriptionStatus(owner.Status).IsReadOnlySubscription() {
+			return domain.EffectiveEntitlement{}, domain.ErrRevenueCatUnresolved
+		}
+	}
+	own, err := s.ownAccessResolver.ResolveOwnAccessAt(ctx, userID, now)
+	if err != nil {
+		return domain.EffectiveEntitlement{}, err
+	}
+	if !domain.SubscriptionStatus(own.Status).IsActiveSubscription() && !domain.SubscriptionStatus(own.Status).IsReadOnlySubscription() {
+		return domain.EffectiveEntitlement{}, domain.ErrRevenueCatUnresolved
+	}
+	return domain.EffectiveEntitlement{Tier: own.Tier, Status: own.Status, Source: domain.EntitlementSourceOwn}, nil
 }
 
 // effectiveTierNameAt returns user's effective tier name AS OF `now`, validating an active manual

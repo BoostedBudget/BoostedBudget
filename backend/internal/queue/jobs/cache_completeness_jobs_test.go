@@ -109,6 +109,7 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"never committed. Durable record: docs/architecture/cache-invalidation-dispositions.md."},
 
 	// --- NoCacheImpact: reviewed, touches no cached namespace. ---
+	"revenuecat.go": {dispositionNoCacheImpact, "refreshes confirmed RevenueCat access/billing and grant/webhook operational records; subscription authority is deliberately uncached by Redis. Repair only enqueues that same work."},
 	"idempotency_cleanup.go": {dispositionNoCacheImpact, "deletes expired rows from the idempotency " +
 		"key table only (IdempotencyRepository.DeleteExpired) — internal request-dedup bookkeeping, " +
 		"not user-visible financial or preference data."},

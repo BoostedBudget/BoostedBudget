@@ -32,11 +32,13 @@
  */
 
 export interface AdminUserListItem {
+  access_resolved?: boolean;
   boosts_count: number;
   created_at: string;
   deletion_requested_at?: string;
   deletion_scheduled_at?: string;
   effective_status: string;
+  effective_tier?: string;
   email: string;
   id: string;
   is_active: boolean;
@@ -47,6 +49,8 @@ export interface AdminUserListItem {
   manual_tier_override?: string;
   primary_region: string;
   referrals_count: number;
+  /** Observed own-access projection used for sorting; see effective_status and access_resolved for live authority */
   subscription_status: string;
+  /** Observed own-access projection used for tier filtering and sorting; see effective_tier for live aggregate access */
   subscription_tier: string;
 }

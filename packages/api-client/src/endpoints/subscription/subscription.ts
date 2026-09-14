@@ -58,6 +58,9 @@ import type {
   GetCurrentSubscriptionOutputBody,
   PreviewUpdateInputBody,
   PreviewUpdateOutputBody,
+  RevenueCatCheckoutIntent,
+  RevenueCatCheckoutReleaseOutputBody,
+  RevenueCatSummary,
   SubscriptionTiersResponse,
   UpdateSubscriptionInputBody,
   UpdateSubscriptionOutputBody
@@ -114,6 +117,160 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
 };
 
 /**
+ * @summary Get confirmed subscription access and separate billing details
+ */
+export const getRevenueCatSubscription = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RevenueCatSummary>(
+      {url: `/api/v1/subscription/authority`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetRevenueCatSubscriptionQueryKey = () => {
+    return [
+    `/api/v1/subscription/authority`
+    ] as const;
+    }
+
+
+export const getGetRevenueCatSubscriptionQueryOptions = <TData = Awaited<ReturnType<typeof getRevenueCatSubscription>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRevenueCatSubscription>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetRevenueCatSubscriptionQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getRevenueCatSubscription>>> = ({ signal }) => getRevenueCatSubscription(requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getRevenueCatSubscription>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetRevenueCatSubscriptionQueryResult = NonNullable<Awaited<ReturnType<typeof getRevenueCatSubscription>>>
+export type GetRevenueCatSubscriptionQueryError = ErrorType<ErrorModel>
+
+
+export function useGetRevenueCatSubscription<TData = Awaited<ReturnType<typeof getRevenueCatSubscription>>, TError = ErrorType<ErrorModel>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRevenueCatSubscription>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRevenueCatSubscription>>,
+          TError,
+          Awaited<ReturnType<typeof getRevenueCatSubscription>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetRevenueCatSubscription<TData = Awaited<ReturnType<typeof getRevenueCatSubscription>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRevenueCatSubscription>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRevenueCatSubscription>>,
+          TError,
+          Awaited<ReturnType<typeof getRevenueCatSubscription>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetRevenueCatSubscription<TData = Awaited<ReturnType<typeof getRevenueCatSubscription>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRevenueCatSubscription>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get confirmed subscription access and separate billing details
+ */
+
+export function useGetRevenueCatSubscription<TData = Awaited<ReturnType<typeof getRevenueCatSubscription>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getRevenueCatSubscription>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetRevenueCatSubscriptionQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * @summary Refresh subscription confirmation
+ */
+export const refreshRevenueCatSubscription = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RevenueCatSummary>(
+      {url: `/api/v1/subscription/authority/refresh`, method: 'POST', signal
+    },
+      options);
+    }
+
+
+
+
+export const getRefreshRevenueCatSubscriptionMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof refreshRevenueCatSubscription>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof refreshRevenueCatSubscription>>, TError,void, TContext> => {
+
+const mutationKey = ['refreshRevenueCatSubscription'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof refreshRevenueCatSubscription>>, void> = () => {
+
+
+          return  refreshRevenueCatSubscription(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RefreshRevenueCatSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof refreshRevenueCatSubscription>>>
+
+    export type RefreshRevenueCatSubscriptionMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Refresh subscription confirmation
+ */
+export const useRefreshRevenueCatSubscription = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof refreshRevenueCatSubscription>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof refreshRevenueCatSubscription>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getRefreshRevenueCatSubscriptionMutationOptions(options), queryClient);
+    }
+    /**
  * Returns URL to Paddle billing portal where users can manage payment methods and view billing history.
  * @summary Get billing portal URL
  */
@@ -333,6 +490,130 @@ export const useCreatePaddleCheckout = <TError = ErrorType<ErrorModel>,
         TContext
       > => {
       return useMutation(getCreatePaddleCheckoutMutationOptions(options), queryClient);
+    }
+    /**
+ * @summary Coordinate a RevenueCat checkout for the signed-in account
+ */
+export const beginRevenueCatCheckout = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RevenueCatCheckoutIntent>(
+      {url: `/api/v1/subscription/checkout-intents`, method: 'POST', signal
+    },
+      options);
+    }
+
+
+
+
+export const getBeginRevenueCatCheckoutMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof beginRevenueCatCheckout>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof beginRevenueCatCheckout>>, TError,void, TContext> => {
+
+const mutationKey = ['beginRevenueCatCheckout'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof beginRevenueCatCheckout>>, void> = () => {
+
+
+          return  beginRevenueCatCheckout(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type BeginRevenueCatCheckoutMutationResult = NonNullable<Awaited<ReturnType<typeof beginRevenueCatCheckout>>>
+
+    export type BeginRevenueCatCheckoutMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Coordinate a RevenueCat checkout for the signed-in account
+ */
+export const useBeginRevenueCatCheckout = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof beginRevenueCatCheckout>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof beginRevenueCatCheckout>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getBeginRevenueCatCheckoutMutationOptions(options), queryClient);
+    }
+    /**
+ * @summary Close this account's checkout coordination lease
+ */
+export const releaseRevenueCatCheckout = (
+    intentId: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RevenueCatCheckoutReleaseOutputBody>(
+      {url: `/api/v1/subscription/checkout-intents/${intentId}`, method: 'DELETE', signal
+    },
+      options);
+    }
+
+
+
+
+export const getReleaseRevenueCatCheckoutMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof releaseRevenueCatCheckout>>, TError,{intentId: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof releaseRevenueCatCheckout>>, TError,{intentId: string}, TContext> => {
+
+const mutationKey = ['releaseRevenueCatCheckout'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof releaseRevenueCatCheckout>>, {intentId: string}> = (props) => {
+          const {intentId} = props ?? {};
+
+          return  releaseRevenueCatCheckout(intentId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReleaseRevenueCatCheckoutMutationResult = NonNullable<Awaited<ReturnType<typeof releaseRevenueCatCheckout>>>
+
+    export type ReleaseRevenueCatCheckoutMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Close this account's checkout coordination lease
+ */
+export const useReleaseRevenueCatCheckout = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof releaseRevenueCatCheckout>>, TError,{intentId: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof releaseRevenueCatCheckout>>,
+        TError,
+        {intentId: string},
+        TContext
+      > => {
+      return useMutation(getReleaseRevenueCatCheckoutMutationOptions(options), queryClient);
     }
     /**
  * Fetches current subscription details from Paddle API with live status, billing info, and tier information.

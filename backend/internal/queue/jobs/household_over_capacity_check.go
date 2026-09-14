@@ -150,6 +150,7 @@ type HouseholdOverCapacityEmailService interface {
 // HouseholdOverCapacityCheckWorker processes household over-capacity check jobs. It is
 // the AUTHORITATIVE reconciler for the over-capacity grace lifecycle (see package doc).
 type HouseholdOverCapacityCheckWorker struct {
+	ownAccessResolver services.OwnAccessResolver
 	river.WorkerDefaults[HouseholdOverCapacityCheckArgs]
 
 	repo         HouseholdOverCapacityCheckRepository
@@ -202,6 +203,16 @@ func NewHouseholdOverCapacityCheckWorker(deps HouseholdOverCapacityCheckWorkerDe
 // is a safe no-op.
 func (w *HouseholdOverCapacityCheckWorker) SetCacheInvalidation(gens *cache.Generations) {
 	w.cacheGens = gens
+}
+
+func (w *HouseholdOverCapacityCheckWorker) SetOwnAccessResolver(resolver services.OwnAccessResolver) {
+	w.ownAccessResolver = resolver
+}
+func (w *HouseholdOverCapacityCheckWorker) ownerAccess(ctx context.Context, owner *domain.User) (domain.RevenueCatAccess, error) {
+	if w.ownAccessResolver != nil {
+		return w.ownAccessResolver.ResolveOwnAccessAt(ctx, owner.ID, time.Now())
+	}
+	return domain.RevenueCatAccess{Tier: w.effectiveTierName(owner), Status: owner.ComputeEffectiveStatus()}, nil
 }
 
 // bumpCacheForHousehold invalidates householdID's cached household-scoped analytics after a
@@ -338,7 +349,11 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 	// manual_tier_override (#1413) — grace is moot, members already fall back to their own
 	// tier via the entitlement resolver's owner-read-only branch, which reads the same
 	// effective status so the two can never disagree.
-	if domain.SubscriptionStatus(owner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
+	access, err := w.ownerAccess(ctx, owner)
+	if err != nil {
+		return err
+	}
+	if domain.SubscriptionStatus(access.Status).IsReadOnlySubscription() {
 		if h.OverCapacitySince != nil {
 			if err := w.repo.ClearOverCapacity(ctx, h.ID); err != nil {
 				return fmt.Errorf("failed to clear over-capacity for read-only-owner household %s: %w", h.ID, err)
@@ -347,7 +362,7 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		return nil
 	}
 
-	tier, err := w.tierConfig.GetTier(domain.TierName(w.effectiveTierName(owner)))
+	tier, err := w.tierConfig.GetTier(domain.TierName(access.Tier))
 	if err != nil {
 		return fmt.Errorf("failed to resolve tier for owner %s: %w", h.OwnerUserID, err)
 	}
@@ -385,7 +400,11 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 	if err != nil {
 		return fmt.Errorf("failed to re-fetch owner %s for fresh read-only check: %w", h.OwnerUserID, err)
 	}
-	if domain.SubscriptionStatus(freshOwner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
+	freshAccess, err := w.ownerAccess(ctx, freshOwner)
+	if err != nil {
+		return err
+	}
+	if domain.SubscriptionStatus(freshAccess.Status).IsReadOnlySubscription() {
 		if h.OverCapacitySince != nil {
 			if err := w.repo.ClearOverCapacity(ctx, h.ID); err != nil {
 				return fmt.Errorf("failed to clear over-capacity for read-only-owner household %s (fresh re-check): %w", h.ID, err)
@@ -393,7 +412,7 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		}
 		return nil
 	}
-	freshTier, err := w.tierConfig.GetTier(domain.TierName(w.effectiveTierName(freshOwner)))
+	freshTier, err := w.tierConfig.GetTier(domain.TierName(freshAccess.Tier))
 	if err != nil {
 		return fmt.Errorf("failed to resolve fresh tier for owner %s: %w", h.OwnerUserID, err)
 	}

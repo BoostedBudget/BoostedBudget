@@ -546,9 +546,10 @@ type ProfileRepository interface {
 
 // profileRepository implements ProfileRepository using PostgreSQL
 type profileRepository struct {
-	db                    DB
-	enc                   *appcrypto.FieldEncryptor
-	overrideTierValidator func(tierName string) bool
+	revenueCatRetentionGuard bool
+	db                       DB
+	enc                      *appcrypto.FieldEncryptor
+	overrideTierValidator    func(tierName string) bool
 	// auditLog writes DeleteUserCascade's terminal `user.deleted` entry inside the cascade's own
 	// transaction (Issue #1507). Held as the interface rather than reaching for a package-level
 	// helper so the write goes through the one documented entry point — LogInTx — whose doc comment
@@ -1432,6 +1433,12 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		return false, nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // rollback after a successful commit is a no-op; its error is not actionable
+	if r.revenueCatRetentionGuard && expectedDeletionRequestedAt == nil {
+		eligible, guardErr := r.lockRevenueCatRetentionEligibility(ctx, tx, userID)
+		if guardErr != nil || !eligible {
+			return false, nil, guardErr
+		}
+	}
 
 	// affectedOwnerIDs collects, deduplicated, every OTHER user whose row this transaction mutates
 	// below (currently: the dangling-cross-user-category-override clear). See that UPDATE's own
@@ -1497,6 +1504,17 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	err = tx.QueryRow(ctx, `SELECT id FROM households WHERE owner_user_id = $1 FOR NO KEY UPDATE`, userID).Scan(&lockedHouseholdID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return false, nil, fmt.Errorf("DeleteUserCascade: lock owned household: %w", err)
+	}
+	if r.revenueCatRetentionGuard && expectedDeletionRequestedAt != nil {
+		// Explicit GDPR bypasses retention eligibility, but still follows household
+		// -> customer -> user lock order. Fenced refreshes retain readback capability
+		// and Save locks users after the customer; reversing that order here would
+		// deadlock when the final user DELETE cascades into revenuecat_customers.
+		var lockedCustomerID string
+		err = tx.QueryRow(ctx, `SELECT user_id FROM revenuecat_customers WHERE user_id=$1 FOR UPDATE`, userID).Scan(&lockedCustomerID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return false, nil, fmt.Errorf("DeleteUserCascade: lock RevenueCat customer: %w", err)
+		}
 	}
 
 	// Issue #1413 round-4 Critical finding C1: re-verify eligibility INSIDE this transaction,
@@ -2293,6 +2311,9 @@ const DeletionResiduePaddleSubscriptionCancelledCascadeFailed DeletionResidueEff
 // migration: the vocabulary widened, the namespace did not. Verified, not assumed — see
 // TestRecordDeletionResidue_Integration_CustomerArchived_IsCountedByTheExistingNamespace.
 const DeletionResiduePaddleCustomerArchived DeletionResidueEffect = "paddle_customer_archived"
+
+// Shares the existing operator-visible residue namespace and final cascade cleanup.
+const DeletionResidueRevenueCatCustomerErased DeletionResidueEffect = "revenuecat_customer_erased"
 
 // DeletionResiduePaddleCustomerArchivedCascadeFailed is to DeletionResiduePaddleCustomerArchived
 // exactly what DeletionResiduePaddleSubscriptionCancelledCascadeFailed is to

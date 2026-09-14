@@ -1,4 +1,8 @@
 export const ANALYTICS_EVENTS = {
+  ADMIN_REVENUECAT_REPLAY_QUEUED: 'admin_revenuecat_replay_queued',
+  ADMIN_REVENUECAT_REFRESH_QUEUED: 'admin_revenuecat_refresh_queued',
+  ADMIN_REVENUECAT_RETRY_QUEUED: 'admin_revenuecat_retry_queued',
+  ADMIN_REVENUECAT_GRANT_QUEUED: 'admin_revenuecat_grant_queued',
   // Landing
   LANDING_CTA_CLICKED: 'landing_cta_clicked',
   PRICING_VIEWED: 'pricing_viewed',
@@ -146,6 +150,8 @@ export const ANALYTICS_EVENTS = {
   // Billing
   CHECKOUT_STARTED: 'checkout_started',
   CHECKOUT_COMPLETED: 'checkout_completed',
+  CHECKOUT_CANCELLED: 'checkout_cancelled',
+  CHECKOUT_CONFIRMATION_PENDING: 'checkout_confirmation_pending',
   SUBSCRIPTION_MANAGED: 'subscription_managed',
 
   // Profile
@@ -195,6 +201,7 @@ export const ANALYTICS_EVENTS = {
   ADMIN_ORPHANED_PLAID_ITEM_ATTESTED: 'admin_orphaned_plaid_item_attested',
   // Issue #1413: Admin subscription override (comp tier apply/remove)
   ADMIN_SUBSCRIPTION_OVERRIDE_APPLIED: 'admin_subscription_override_applied',
+  ADMIN_SUBSCRIPTION_CHANGE_QUEUED: 'admin_subscription_change_queued',
   ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED: 'admin_subscription_override_removed',
 
   // Notifications (#952)

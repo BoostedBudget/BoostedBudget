@@ -1,111 +1,54 @@
-/**
- * CheckoutSuccessPage Tests
- * Issue #772: GAP 4 - Checkout success page tests
- */
-
-import { describe, it, expect, beforeEach } from 'bun:test'
-import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Routes, Route, useLocation } from 'react-router'
+import { beforeEach, describe, expect, it } from 'bun:test'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { CheckoutSuccessPage } from './CheckoutSuccessPage'
+import { mockRefreshRevenueCatSubscription } from '@/test/mocks/subscription-api'
+import { mockUseAuth, createMockClerkAuth } from '@/test/mocks/clerk'
+import type { RevenueCatSummary } from '@boostedbudget/api-client/models'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-function LocationDisplay() {
-  const location = useLocation()
-  return <div data-testid="location-display">{location.pathname}</div>
-}
-
-function renderWithRouter(initialEntries: string[] = ['/billing/success']) {
-  return render(
-    <MemoryRouter initialEntries={initialEntries}>
-      <LocationDisplay />
-      <Routes>
-        <Route path="/billing/success" element={<CheckoutSuccessPage />} />
-        <Route path="/billing/manage" element={<div data-testid="manage-page">Manage Page</div>} />
-      </Routes>
-    </MemoryRouter>
-  )
-}
+const authority = (paid: unknown = null) => ({ access_resolved: true, paid }) as RevenueCatSummary
+let queryClient: QueryClient
+const page = () => <QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/billing/success?tier=Forged&success=true']}><CheckoutSuccessPage /></MemoryRouter></QueryClientProvider>
 
 describe('CheckoutSuccessPage', () => {
   beforeEach(() => {
-    // Mock window.scrollTo
-    window.scrollTo = () => {}
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } })
+    queryClient.setQueryData(['cached-profile'], { subscription_status: 'inactive' })
+    mockUseAuth.mockReturnValue(createMockClerkAuth({ userId: 'user_current', isSignedIn: true }))
+    mockRefreshRevenueCatSubscription.mockReset()
+    mockRefreshRevenueCatSubscription.mockResolvedValue(authority())
   })
-
-  describe('Rendering', () => {
-    it('should render success message', () => {
-      renderWithRouter()
-
-      expect(screen.getByText('Subscription Activated!')).toBeInTheDocument()
-    })
-
-    it('should show confirmation icon', () => {
-      const { container } = renderWithRouter()
-
-      const icon = container.querySelector('svg')
-      expect(icon).toBeInTheDocument()
-    })
-
-    it('should display default tier name when no tier param', () => {
-      renderWithRouter(['/billing/success'])
-
-      expect(screen.getByText(/Welcome to Premium/i)).toBeInTheDocument()
-    })
-
-    it('should display tier name from URL param', () => {
-      renderWithRouter(['/billing/success?tier=Household%20(5%20members)'])
-
-      expect(screen.getByText(/Welcome to Household \(5 members\)/i)).toBeInTheDocument()
-    })
-
-    it('should show next steps information', () => {
-      renderWithRouter()
-
-      expect(screen.getByText("What's Next?")).toBeInTheDocument()
-      expect(screen.getByText(/Connect your bank accounts/i)).toBeInTheDocument()
-      expect(screen.getByText(/Set up automation rules/i)).toBeInTheDocument()
-      expect(screen.getByText(/Explore your dashboard/i)).toBeInTheDocument()
-    })
-
-    it('should render view subscription button', () => {
-      renderWithRouter()
-
-      expect(screen.getByRole('button', { name: /View Subscription Details/i })).toBeInTheDocument()
-    })
+  it('does not claim activation from URL or complimentary access', async () => {
+    render(page())
+    await waitFor(() => expect(screen.getByText(/awaiting confirmation/i)).toBeInTheDocument())
+    expect(screen.queryByText(/activated/i)).toBeNull()
+    expect(screen.queryByText(/Forged/)).toBeNull()
   })
-
-  describe('Navigation', () => {
-    it('should have clickable button for viewing subscription', async () => {
-      const user = userEvent.setup()
-      renderWithRouter()
-
-      const button = screen.getByRole('button', { name: /View Subscription Details/i })
-      expect(button).toBeEnabled()
-
-      // Issue #1437: clicking now performs real navigation (previously a stubbed
-      // useNavigate no-op'd, so the button stayed mounted after the click). Assert
-      // the real navigation instead of the button's continued presence.
-      await user.click(button)
-      expect(screen.getByTestId('location-display')).toHaveTextContent('/billing/manage')
-    })
+  it('confirms paid access only after a backend refresh', async () => {
+    mockRefreshRevenueCatSubscription.mockResolvedValue(authority({ status: 'active', tier: 'household_2' }))
+    render(page())
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Subscription confirmed' })).toBeInTheDocument())
+    expect(mockRefreshRevenueCatSubscription).toHaveBeenCalledTimes(1)
+    expect(queryClient.getQueryState(['cached-profile'])?.isInvalidated).toBe(true)
   })
-
-  describe('Accessibility', () => {
-    it('should have proper heading hierarchy', () => {
-      renderWithRouter()
-
-      const h1 = screen.getByRole('heading', { level: 1, name: /Subscription Activated/i })
-      const h2 = screen.getByRole('heading', { level: 2, name: /What's Next/i })
-
-      expect(h1).toBeInTheDocument()
-      expect(h2).toBeInTheDocument()
-    })
-
-    it('should hide decorative icon from screen readers', () => {
-      const { container } = renderWithRouter()
-
-      const icon = container.querySelector('svg')
-      expect(icon).toHaveAttribute('aria-hidden', 'true')
-    })
+  it('offers retry during a provider outage', async () => {
+    mockRefreshRevenueCatSubscription.mockRejectedValueOnce(new Error('offline'))
+    render(page())
+    await waitFor(() => expect(screen.getByRole('button', { name: /check again/i })).toBeInTheDocument())
+    mockRefreshRevenueCatSubscription.mockResolvedValue(authority({ status: 'active', tier: 'premium' }))
+    fireEvent.click(screen.getByRole('button', { name: /check again/i }))
+    await waitFor(() => expect(screen.getByText('Subscription confirmed')).toBeInTheDocument())
+  })
+  it('ignores a previous account confirmation after an identity switch', async () => {
+    let resolve!: (value: RevenueCatSummary) => void
+    mockRefreshRevenueCatSubscription.mockImplementationOnce(() => new Promise(yes => { resolve = yes }))
+    const view = render(page())
+    mockUseAuth.mockReturnValue(createMockClerkAuth({ userId: 'user_other', isSignedIn: true }))
+    view.rerender(page())
+    resolve(authority({ status: 'active', tier: 'premium' }))
+    await waitFor(() => expect(screen.getByText(/awaiting confirmation/i)).toBeInTheDocument())
+    expect(screen.queryByText('Subscription confirmed')).toBeNull()
+    expect(queryClient.getQueryState(['cached-profile'])?.isInvalidated).toBe(false)
   })
 })

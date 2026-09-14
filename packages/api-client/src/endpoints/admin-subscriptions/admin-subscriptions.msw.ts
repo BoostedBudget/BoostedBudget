@@ -46,19 +46,122 @@ import type {
 import type {
   AdminCreateOverrideOutputBody,
   AdminRemoveTierOverrideOutputBody,
+  AdminRevenueCatHealthOutputBody,
+  AdminRevenueCatUserOutputBody,
   AdminSubscriptionDetailOutputBody,
-  AdminSubscriptionTierOutputBody
+  AdminSubscriptionTierOutputBody,
+  RevenueCatOperation,
+  RevenueCatWebhookOutputBody,
+  RevenueCatWebhookReceipt
 } from '../../models';
 
 
-export const getGetAdminUserSubscriptionResponseMock = (overrideResponse: Partial<Extract<AdminSubscriptionDetailOutputBody, object>> = {}): AdminSubscriptionDetailOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), active_overrides_count: faker.number.int(), as_of: faker.date.past().toISOString().slice(0, 19) + 'Z', base_tier: faker.string.alpha({length: {min: 10, max: 20}}), deletion_requested_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), deletion_scheduled_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), effective_status: faker.string.alpha({length: {min: 10, max: 20}}), effective_tier: faker.string.alpha({length: {min: 10, max: 20}}), features: {advanced_reports: faker.datatype.boolean(), api_access: faker.datatype.boolean(), custom_categories: faker.datatype.boolean(), custom_tags: faker.datatype.boolean(), priority_support: faker.datatype.boolean()}, household_active_member_count: faker.number.int(), limits: {transaction_history_days: faker.number.int()}, manual_tier_ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), manual_tier_override: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), resource_overrides: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), id: faker.number.int(), limit_value: faker.number.int(), reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), resource_type: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), subscription_status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getGetAdminRevenueCatHealthResponseMock = (overrideResponse: Partial<Extract<AdminRevenueCatHealthOutputBody, object>> = {}): AdminRevenueCatHealthOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), available: faker.datatype.boolean(), configured: faker.datatype.boolean(), metrics: faker.helpers.arrayElement([{access_failures: faker.number.int(), billing_failures: faker.number.int(), customers: faker.number.int(), deliveries: faker.number.int(), events: faker.number.int(), failed_operations: faker.number.int(), failed_webhooks: faker.number.int(), oldest_pending_received_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), pending_operations: faker.number.int(), processed_events: faker.number.int(), processing_attempts: faker.number.int(), stale_active_customers: faker.number.int(), unresolved_customers: faker.number.int()},null,]), ...overrideResponse})
+
+export const getListAdminRevenueCatWebhooksResponseMock = (): RevenueCatWebhookReceipt[] | null => (Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({attempts: faker.number.int(), deliveries: faker.number.int(), event_id: faker.string.alpha({length: {min: 10, max: 20}}), event_type: faker.string.alpha({length: {min: 10, max: 20}}), last_error: faker.string.alpha({length: {min: 10, max: 20}}), last_received_at: faker.date.past().toISOString().slice(0, 19) + 'Z', processed_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), received_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}})})))
+
+export const getReplayAdminRevenueCatWebhookResponseMock = (overrideResponse: Partial<Extract<RevenueCatWebhookOutputBody, object>> = {}): RevenueCatWebhookOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getGetAdminRevenueCatUserResponseMock = (overrideResponse: Partial<Extract<AdminRevenueCatUserOutputBody, object>> = {}): AdminRevenueCatUserOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), operations: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), actor_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), attempts: faker.number.int(), class: faker.string.alpha({length: {min: 10, max: 20}}), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), id: faker.string.alpha({length: {min: 10, max: 20}}), key: faker.string.alpha({length: {min: 10, max: 20}}), last_error: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), reason: faker.string.alpha({length: {min: 10, max: 20}}), revoke: faker.datatype.boolean(), stage: faker.string.alpha({length: {min: 10, max: 20}}), user_id: faker.string.alpha({length: {min: 10, max: 20}}), version: faker.number.int()})), null]), state: faker.helpers.arrayElement([{access_error: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), access_updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', billing: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({auto_renewal_status: faker.string.alpha({length: {min: 10, max: 20}}), current_period_ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), environment: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), product_id: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), store: faker.string.alpha({length: {min: 10, max: 20}}), store_subscription_identifier: faker.string.alpha({length: {min: 10, max: 20}})})), null]), billing_error: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), billing_updated_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), erasure_confirmed_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), erasure_started_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), grants: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), key: faker.string.alpha({length: {min: 10, max: 20}})})), null]), pending_operations: faker.number.int(), user_id: faker.string.alpha({length: {min: 10, max: 20}})},null,]), summary: {$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), access_resolved: faker.datatype.boolean(), as_of: faker.date.past().toISOString().slice(0, 19) + 'Z', billing: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({auto_renewal_status: faker.string.alpha({length: {min: 10, max: 20}}), current_period_ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), environment: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), product_id: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), store: faker.string.alpha({length: {min: 10, max: 20}}), store_subscription_identifier: faker.string.alpha({length: {min: 10, max: 20}})})), null]), billing_available: faker.datatype.boolean(), comp: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), effective: faker.helpers.arrayElement([{HouseholdID: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), PayerUserID: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), Source: faker.string.alpha({length: {min: 10, max: 20}}), Status: faker.string.alpha({length: {min: 10, max: 20}}), Tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), own: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), paid: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), pending_operations: faker.number.int(), trial: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,])}, ...overrideResponse})
+
+export const getRequestAdminRevenueCatGrantResponseMock = (overrideResponse: Partial<Extract<RevenueCatOperation, object>> = {}): RevenueCatOperation => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), actor_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), attempts: faker.number.int(), class: faker.string.alpha({length: {min: 10, max: 20}}), created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), id: faker.string.alpha({length: {min: 10, max: 20}}), key: faker.string.alpha({length: {min: 10, max: 20}}), last_error: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), reason: faker.string.alpha({length: {min: 10, max: 20}}), revoke: faker.datatype.boolean(), stage: faker.string.alpha({length: {min: 10, max: 20}}), user_id: faker.string.alpha({length: {min: 10, max: 20}}), version: faker.number.int(), ...overrideResponse})
+
+export const getRetryAdminRevenueCatOperationResponseMock = (overrideResponse: Partial<Extract<RevenueCatWebhookOutputBody, object>> = {}): RevenueCatWebhookOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getRefreshAdminRevenueCatUserResponseMock = (overrideResponse: Partial<Extract<RevenueCatWebhookOutputBody, object>> = {}): RevenueCatWebhookOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getGetAdminUserSubscriptionResponseMock = (overrideResponse: Partial<Extract<AdminSubscriptionDetailOutputBody, object>> = {}): AdminSubscriptionDetailOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), active_overrides_count: faker.number.int(), as_of: faker.date.past().toISOString().slice(0, 19) + 'Z', authority: faker.helpers.arrayElement([{$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), access_resolved: faker.datatype.boolean(), as_of: faker.date.past().toISOString().slice(0, 19) + 'Z', billing: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({auto_renewal_status: faker.string.alpha({length: {min: 10, max: 20}}), current_period_ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), environment: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), product_id: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), store: faker.string.alpha({length: {min: 10, max: 20}}), store_subscription_identifier: faker.string.alpha({length: {min: 10, max: 20}})})), null]), billing_available: faker.datatype.boolean(), comp: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), effective: faker.helpers.arrayElement([{HouseholdID: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), PayerUserID: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), Source: faker.string.alpha({length: {min: 10, max: 20}}), Status: faker.string.alpha({length: {min: 10, max: 20}}), Tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), own: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), paid: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), pending_operations: faker.number.int(), trial: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,])}, undefined]), base_tier: faker.string.alpha({length: {min: 10, max: 20}}), deletion_requested_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), deletion_scheduled_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), effective_status: faker.string.alpha({length: {min: 10, max: 20}}), effective_tier: faker.string.alpha({length: {min: 10, max: 20}}), features: {advanced_reports: faker.datatype.boolean(), api_access: faker.datatype.boolean(), custom_categories: faker.datatype.boolean(), custom_tags: faker.datatype.boolean(), priority_support: faker.datatype.boolean()}, household_active_member_count: faker.number.int(), limits: {transaction_history_days: faker.number.int()}, manual_tier_ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), manual_tier_override: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), resource_overrides: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({created_at: faker.date.past().toISOString().slice(0, 19) + 'Z', expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), id: faker.number.int(), limit_value: faker.number.int(), reason: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), resource_type: faker.string.alpha({length: {min: 10, max: 20}}), updated_at: faker.date.past().toISOString().slice(0, 19) + 'Z', user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), subscription_status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getCreateAdminSubscriptionOverrideResponseMock = (overrideResponse: Partial<Extract<AdminCreateOverrideOutputBody, object>> = {}): AdminCreateOverrideOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getUpdateAdminUserTierResponseMock = (overrideResponse: Partial<Extract<AdminSubscriptionTierOutputBody, object>> = {}): AdminSubscriptionTierOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getUpdateAdminUserTierResponseMock = (overrideResponse: Partial<Extract<AdminSubscriptionTierOutputBody, object>> = {}): AdminSubscriptionTierOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), stage: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), ...overrideResponse})
 
-export const getRemoveAdminUserTierOverrideResponseMock = (overrideResponse: Partial<Extract<AdminRemoveTierOverrideOutputBody, object>> = {}): AdminRemoveTierOverrideOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), removed: faker.datatype.boolean(), reverted_status: faker.string.alpha({length: {min: 10, max: 20}}), reverted_tier: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getRemoveAdminUserTierOverrideResponseMock = (overrideResponse: Partial<Extract<AdminRemoveTierOverrideOutputBody, object>> = {}): AdminRemoveTierOverrideOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), removed: faker.datatype.boolean(), reverted_status: faker.string.alpha({length: {min: 10, max: 20}}), reverted_tier: faker.string.alpha({length: {min: 10, max: 20}}), stage: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), ...overrideResponse})
 
+
+export const getGetAdminRevenueCatHealthMockHandler = (overrideResponse?: AdminRevenueCatHealthOutputBody | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<AdminRevenueCatHealthOutputBody> | AdminRevenueCatHealthOutputBody), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/admin/revenuecat/health', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetAdminRevenueCatHealthResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getListAdminRevenueCatWebhooksMockHandler = (overrideResponse?: RevenueCatWebhookReceipt[] | null | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<RevenueCatWebhookReceipt[] | null> | RevenueCatWebhookReceipt[] | null), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/admin/revenuecat/webhooks', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getListAdminRevenueCatWebhooksResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getReplayAdminRevenueCatWebhookMockHandler = (overrideResponse?: RevenueCatWebhookOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<RevenueCatWebhookOutputBody> | RevenueCatWebhookOutputBody), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/admin/revenuecat/webhooks/:eventId/replay', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getReplayAdminRevenueCatWebhookResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getGetAdminRevenueCatUserMockHandler = (overrideResponse?: AdminRevenueCatUserOutputBody | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<AdminRevenueCatUserOutputBody> | AdminRevenueCatUserOutputBody), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/admin/users/:userId/revenuecat', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetAdminRevenueCatUserResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getRequestAdminRevenueCatGrantMockHandler = (overrideResponse?: RevenueCatOperation | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<RevenueCatOperation> | RevenueCatOperation), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/admin/users/:userId/revenuecat/grants', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getRequestAdminRevenueCatGrantResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getRetryAdminRevenueCatOperationMockHandler = (overrideResponse?: RevenueCatWebhookOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<RevenueCatWebhookOutputBody> | RevenueCatWebhookOutputBody), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/admin/users/:userId/revenuecat/operations/:operationId/retry', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getRetryAdminRevenueCatOperationResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getRefreshAdminRevenueCatUserMockHandler = (overrideResponse?: RevenueCatWebhookOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<RevenueCatWebhookOutputBody> | RevenueCatWebhookOutputBody), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/admin/users/:userId/revenuecat/refresh', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getRefreshAdminRevenueCatUserResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
 
 export const getGetAdminUserSubscriptionMockHandler = (overrideResponse?: AdminSubscriptionDetailOutputBody | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<AdminSubscriptionDetailOutputBody> | AdminSubscriptionDetailOutputBody), options?: RequestHandlerOptions) => {
   return http.get('*/api/v1/admin/users/:userId/subscription', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
@@ -108,6 +211,13 @@ export const getRemoveAdminUserTierOverrideMockHandler = (overrideResponse?: Adm
   }, options)
 }
 export const getAdminSubscriptionsMock = () => [
+  getGetAdminRevenueCatHealthMockHandler(),
+  getListAdminRevenueCatWebhooksMockHandler(),
+  getReplayAdminRevenueCatWebhookMockHandler(),
+  getGetAdminRevenueCatUserMockHandler(),
+  getRequestAdminRevenueCatGrantMockHandler(),
+  getRetryAdminRevenueCatOperationMockHandler(),
+  getRefreshAdminRevenueCatUserMockHandler(),
   getGetAdminUserSubscriptionMockHandler(),
   getCreateAdminSubscriptionOverrideMockHandler(),
   getUpdateAdminUserTierMockHandler(),

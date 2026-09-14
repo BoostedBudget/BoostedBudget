@@ -8,6 +8,15 @@
 import { mock } from 'bun:test'
 import * as RealSubsModule from '@boostedbudget/api-client/endpoints/admin-subscriptions/admin-subscriptions'
 
+// SDK boundary doubles leave RevenueCat components' React Query behavior real.
+export const mockGetAdminRevenueCatHealth = mock<typeof RealSubsModule.getAdminRevenueCatHealth>(async () => ({ configured: false, available: false, metrics: {} as never }))
+export const mockListAdminRevenueCatWebhooks = mock<typeof RealSubsModule.listAdminRevenueCatWebhooks>(async () => [])
+export const mockGetAdminRevenueCatUser = mock<typeof RealSubsModule.getAdminRevenueCatUser>(async () => { throw new Error('Unavailable') })
+export const mockRequestAdminRevenueCatGrant = mock<typeof RealSubsModule.requestAdminRevenueCatGrant>()
+export const mockRetryAdminRevenueCatOperation = mock<typeof RealSubsModule.retryAdminRevenueCatOperation>()
+export const mockRefreshAdminRevenueCatUser = mock<typeof RealSubsModule.refreshAdminRevenueCatUser>()
+export const mockReplayAdminRevenueCatWebhook = mock<typeof RealSubsModule.replayAdminRevenueCatWebhook>()
+
 // === useGetAdminUserSubscription ===
 export const mockUseGetAdminUserSubscription = mock(() => ({
     data: undefined,
@@ -35,6 +44,13 @@ export const mockGetGetAdminUserSubscriptionQueryKey = mock((id: string) => [`/a
 // Single mock.module() call
 mock.module('@boostedbudget/api-client/endpoints/admin-subscriptions/admin-subscriptions', () => ({
     ...RealSubsModule,
+    getAdminRevenueCatHealth: mockGetAdminRevenueCatHealth,
+    listAdminRevenueCatWebhooks: mockListAdminRevenueCatWebhooks,
+    getAdminRevenueCatUser: mockGetAdminRevenueCatUser,
+    requestAdminRevenueCatGrant: mockRequestAdminRevenueCatGrant,
+    retryAdminRevenueCatOperation: mockRetryAdminRevenueCatOperation,
+    refreshAdminRevenueCatUser: mockRefreshAdminRevenueCatUser,
+    replayAdminRevenueCatWebhook: mockReplayAdminRevenueCatWebhook,
     useGetAdminUserSubscription: mockUseGetAdminUserSubscription,
     useUpdateAdminUserTier: mockUseUpdateAdminUserTier,
     useRemoveAdminUserTierOverride: mockUseRemoveAdminUserTierOverride,

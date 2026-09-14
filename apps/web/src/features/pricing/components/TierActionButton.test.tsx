@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, mock, afterEach } from 'bun:test'
+import { describe, it, expect, beforeEach, mock, afterEach, spyOn } from 'bun:test'
 import React from 'react'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
@@ -6,11 +6,11 @@ import { TierActionButton } from './TierActionButton'
 import type { PricingState } from '../hooks/usePricingContext'
 import type { SubscriptionTier } from '../../subscription/types'
 import type { TierName } from '../../subscription/types'
-import {
-  mockUseCreatePaddleCheckout,
-  mockCreatePaddleCheckoutMutateAsync,
-} from '@/test/mocks/subscription-api'
-import { mockUseClerk, createMockClerk } from '@/test/mocks/clerk'
+import { mockUseClerk, createMockClerk, mockUseAuth, createMockClerkAuth } from '@/test/mocks/clerk'
+import { revenueCatCheckout } from '../../billing/revenueCatRuntime'
+
+const mockStartCheckout = mock(async () => {})
+let restoreStartCheckout = () => {}
 
 function makeTier(priceMonthly: number): SubscriptionTier {
   return {
@@ -58,26 +58,25 @@ function renderButton(pricingState: PricingState, tierKey: TierName = 'household
   )
 }
 
+it('links unresolved subscription state to billing recovery', () => {
+  renderButton({status:'unresolved'})
+  expect(screen.getByRole('link',{name:'Check subscription status'}).getAttribute('href')).toBe('/billing/manage')
+})
+
 beforeEach(() => {
   mockOnChangePlan.mockClear()
   mockUseClerk.mockClear()
   mockUseClerk.mockReturnValue(createMockClerk())
-  mockUseCreatePaddleCheckout.mockReturnValue({
-    mutateAsync: mockCreatePaddleCheckoutMutateAsync,
-    isPending: false,
-    isSuccess: false,
-    isError: false,
-    error: null,
-    reset: mock(() => {}),
-  })
-  mockCreatePaddleCheckoutMutateAsync.mockResolvedValue({
-    checkout_url: 'https://checkout.paddle.com/txn_123',
-    transaction_id: 'txn_123',
-  })
+  mockUseAuth.mockReturnValue(createMockClerkAuth({ userId: 'user_button', isSignedIn: true }))
+  const startSpy = spyOn(revenueCatCheckout, 'start').mockImplementation(mockStartCheckout)
+  restoreStartCheckout = () => { startSpy.mockRestore() }
+  mockStartCheckout.mockClear()
+  revenueCatCheckout.setIdentity(null)
   sessionStorage.clear()
 })
 
 afterEach(() => {
+  restoreStartCheckout()
   sessionStorage.clear()
 })
 
@@ -325,12 +324,12 @@ describe('TierActionButton', () => {
   // Issue #1413: comped users keep full commerce functionality — they may legitimately want to
   // buy a paid plan (e.g. their comp has an end date), so only their own comped tier is disabled.
   describe('comped state', () => {
-    it("shows disabled Current Plan for the comped user's own tier", () => {
+    it("allows purchasing the comped user's own tier", () => {
       const compedState: PricingState = { status: 'comped', tier: 'household_2' }
       renderButton(compedState, 'household_2', 'month')
       const btn = screen.getByRole('button')
-      expect(btn).toBeDisabled()
-      expect(btn.textContent).toContain('Current Plan')
+      expect(btn).not.toBeDisabled()
+      expect(btn.textContent).toContain('Subscribe')
     })
 
     it('shows an enabled Subscribe CTA for tiers other than the comped tier', () => {
@@ -349,7 +348,7 @@ describe('TierActionButton', () => {
       }
       renderButton(compedState, 'household_2', 'month')
       fireEvent.click(screen.getByRole('button'))
-      expect(mockCreatePaddleCheckoutMutateAsync).toHaveBeenCalled()
+      expect(mockStartCheckout).toHaveBeenCalled()
     })
   })
 })

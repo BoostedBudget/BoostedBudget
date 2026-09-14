@@ -38,4 +38,5 @@ export interface AdminRemoveTierOverrideOutputBody {
   removed: boolean;
   reverted_status: string;
   reverted_tier: string;
+  stage?: string;
 }

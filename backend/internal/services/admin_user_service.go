@@ -92,6 +92,7 @@ type AdminUserService interface {
 	// Never called in some tests/environments (PostHog unconfigured in local dev/QA) — both
 	// UpdateUserTier and RemoveUserTierOverride must remain no-ops for analytics in that case.
 	SetGDPRAnalytics(a phclient.GDPRAnalytics)
+	SetRevenueCatSummary(RevenueCatSummaryReader)
 }
 
 // UpdateUserTierResult communicates the outcome of setting a user's manual tier override
@@ -116,12 +117,13 @@ type RemoveTierOverrideResult struct {
 
 // adminUserService implements AdminUserService
 type adminUserService struct {
-	repo            repository.AdminUserRepository
-	adminService    AdminService
-	clerkService    ClerkService
-	retentionMonths int
-	tierConfig      *config.TierConfig
-	gdprAnalytics   phclient.GDPRAnalytics // Optional GDPR-consent-gated analytics client (Issue #1413 Task NB)
+	repo              repository.AdminUserRepository
+	adminService      AdminService
+	clerkService      ClerkService
+	retentionMonths   int
+	tierConfig        *config.TierConfig
+	gdprAnalytics     phclient.GDPRAnalytics // Optional GDPR-consent-gated analytics client (Issue #1413 Task NB)
+	revenueCatSummary RevenueCatSummaryReader
 }
 
 // NewAdminUserService creates a new AdminUserService instance.
@@ -152,6 +154,10 @@ func (s *adminUserService) SetGDPRAnalytics(a phclient.GDPRAnalytics) {
 	s.gdprAnalytics = a
 }
 
+func (s *adminUserService) SetRevenueCatSummary(summary RevenueCatSummaryReader) {
+	s.revenueCatSummary = summary
+}
+
 // ListUsers returns a paginated list of users with optional filtering
 func (s *adminUserService) ListUsers(ctx context.Context, filters domain.AdminUserFilters, page, pageSize int, now time.Time) (*domain.AdminUserListResponse, error) {
 	// Validate page
@@ -180,7 +186,13 @@ func (s *adminUserService) ListUsers(ctx context.Context, filters domain.AdminUs
 
 	// Enrich users with admin status and override tier for admins, from the SAME instant the
 	// caller will report as `as_of` — never a fresh clock read here.
-	s.enrichUsersWithAdminStatus(users, now)
+	if s.revenueCatSummary != nil {
+		for i := range users {
+			s.enrichRevenueCatAdminUser(ctx, &users[i])
+		}
+	} else {
+		s.enrichUsersWithAdminStatus(users, now)
+	}
 
 	// Calculate pagination metadata
 	totalPages := 0
@@ -212,9 +224,38 @@ func (s *adminUserService) GetUserDetail(ctx context.Context, userID string, now
 
 	// Enrich with admin status and override tier for admins, from the SAME instant the caller
 	// will report as `as_of` — never a fresh clock read here.
-	s.enrichAdminUser(&detail.AdminUserListItem, now)
+	if s.revenueCatSummary != nil {
+		s.enrichRevenueCatAdminUser(ctx, &detail.AdminUserListItem)
+	} else {
+		s.enrichAdminUser(&detail.AdminUserListItem, now)
+	}
 
 	return detail, nil
+}
+
+func (s *adminUserService) enrichRevenueCatAdminUser(ctx context.Context, user *domain.AdminUserListItem) {
+	summary := s.revenueCatSummary.Summary(ctx, &domain.User{ID: user.ID})
+	user.AccessResolved = &summary.AccessResolved
+	user.EffectiveStatus = "unresolved"
+	user.EffectiveTier = "premium"
+	// Preserve the query's observed own-access projection for its filter/sort
+	// contract. It is maintained by RevenueCat Save, never an authorization input.
+	// Live aggregate access is reported separately in EffectiveTier/Status.
+	user.ManualTierOverride = nil
+	user.ManualTierEndsAt = nil
+	if summary.AccessResolved && summary.Effective != nil {
+		user.EffectiveStatus = summary.Effective.Status
+		user.EffectiveTier = summary.Effective.Tier
+	}
+	if s.adminService != nil && s.adminService.IsHardcodedAdmin(user.Email) {
+		user.IsAdmin = true
+	}
+	// These compatibility display fields represent a confirmed comp only. They
+	// are never persisted or used to authorize access.
+	if summary.Comp != nil {
+		user.ManualTierOverride = &summary.Comp.Tier
+		user.ManualTierEndsAt = summary.Comp.ExpiresAt
+	}
 }
 
 // GetOwnedHouseholdActiveMemberCount is a direct passthrough to

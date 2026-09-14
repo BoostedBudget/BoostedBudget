@@ -72,6 +72,8 @@ func (m *mockAdminUserService) RemoveUserTierOverride(ctx context.Context, actor
 // interface.
 func (m *mockAdminUserService) SetGDPRAnalytics(a phclient.GDPRAnalytics) {}
 
+func (m *mockAdminUserService) SetRevenueCatSummary(services.RevenueCatSummaryReader) {}
+
 // TestListUsers_Success tests successful user listing
 func TestListUsers_Success(t *testing.T) {
 	mockService := new(mockAdminUserService)
@@ -86,27 +88,27 @@ func TestListUsers_Success(t *testing.T) {
 	expectedResponse := &domain.AdminUserListResponse{
 		Users: []domain.AdminUserListItem{
 			{
-				ID:                   user1ID,
-				Email:                "user1@example.com",
-				SubscriptionTier:     "premium",
-				SubscriptionStatus:   "active",
-				PrimaryRegion:        "iad",
-				CreatedAt:            now,
-				LastLoginAt:          &now,
-				IsActive:             true,
-				LinkedAccountsCount:  3,
-				BoostsCount: 5,
+				ID:                  user1ID,
+				Email:               "user1@example.com",
+				SubscriptionTier:    "premium",
+				SubscriptionStatus:  "active",
+				PrimaryRegion:       "iad",
+				CreatedAt:           now,
+				LastLoginAt:         &now,
+				IsActive:            true,
+				LinkedAccountsCount: 3,
+				BoostsCount:         5,
 			},
 			{
-				ID:                   user2ID,
-				Email:                "user2@example.com",
-				SubscriptionTier:     "free",
-				SubscriptionStatus:   "trial",
-				PrimaryRegion:        "iad",
-				CreatedAt:            now,
-				IsActive:             true,
-				LinkedAccountsCount:  1,
-				BoostsCount: 2,
+				ID:                  user2ID,
+				Email:               "user2@example.com",
+				SubscriptionTier:    "free",
+				SubscriptionStatus:  "trial",
+				PrimaryRegion:       "iad",
+				CreatedAt:           now,
+				IsActive:            true,
+				LinkedAccountsCount: 1,
+				BoostsCount:         2,
 			},
 		},
 		TotalCount: 2,
@@ -297,16 +299,16 @@ func TestGetUserDetail_Success(t *testing.T) {
 
 	expectedDetail := &domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
-			ID:                   userID,
-			Email:                "user@example.com",
-			SubscriptionTier:     "premium",
-			SubscriptionStatus:   "active",
-			PrimaryRegion:        "iad",
-			CreatedAt:            now,
-			LastLoginAt:          &now,
-			IsActive:             true,
-			LinkedAccountsCount:  5,
-			BoostsCount: 10,
+			ID:                  userID,
+			Email:               "user@example.com",
+			SubscriptionTier:    "premium",
+			SubscriptionStatus:  "active",
+			PrimaryRegion:       "iad",
+			CreatedAt:           now,
+			LastLoginAt:         &now,
+			IsActive:            true,
+			LinkedAccountsCount: 5,
+			BoostsCount:         10,
 		},
 		TransactionsCount: 1500,
 		BudgetsCount:      4,

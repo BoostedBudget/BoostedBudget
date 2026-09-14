@@ -3,6 +3,12 @@
 
 import { mock } from 'bun:test'
 import * as RealSubscriptionModule from '@boostedbudget/api-client/endpoints/subscription/subscription'
+import type { RevenueCatSummary } from '@boostedbudget/api-client/models'
+
+export const mockRefreshRevenueCatSubscription = mock<() => Promise<RevenueCatSummary>>(() =>
+  Promise.resolve({ access_resolved: false, paid: null } as unknown as RevenueCatSummary))
+export const mockBeginRevenueCatCheckout = mock(() => Promise.resolve({ id: 'intent_test', offering: 'web', expires_at: '2026-10-01T00:00:00Z' }))
+export const mockReleaseRevenueCatCheckout = mock(() => Promise.resolve())
 
 // === useGetSubscriptionTiers ===
 export const mockRefetchSubscriptionTiers = mock(() => Promise.resolve())
@@ -97,6 +103,9 @@ export const mockUseGetBillingPortalUrl = mock(() => ({
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/subscription/subscription', () => ({
   ...RealSubscriptionModule,
+  refreshRevenueCatSubscription: mockRefreshRevenueCatSubscription,
+  beginRevenueCatCheckout: mockBeginRevenueCatCheckout,
+  releaseRevenueCatCheckout: mockReleaseRevenueCatCheckout,
   useGetSubscriptionTiers: mockUseGetSubscriptionTiers,
   useGetCurrentSubscription: mockUseGetCurrentSubscription,
   useCreatePaddleCheckout: mockUseCreatePaddleCheckout,

@@ -459,4 +459,12 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 // 69 -> 73 (#1637): added budget_plan_repository_test.go, budget_expense_rows_test.go,
 // budget_expense_snapshot_test.go, and savings_flow_provenance_test.go. They assert query shape,
 // transaction boundaries, and mapping, not driver NULL tolerance. No files removed.
-const pgxmockSweepFileCount = 73
+// #1652 adds services/registration_revenuecat_test.go: transaction-order tests,
+// no NULL-tolerance claims. Included in TestNoUndisclosedPgxmockNullToleranceClaim.
+// #1652 adds services/revenuecat_household_projection_test.go and
+// revenuecat_compatibility_test.go: SQL/session behavior and typed scan fixtures,
+// no claims about real PostgreSQL NULL tolerance. Both pass the claim sweep.
+// #1652 additionally adds revenuecat_retention_guard_test.go and
+// revenuecat_checkout_repository_test.go: lock/transaction and checkout admission
+// contracts only, with no driver NULL-tolerance claims.
+const pgxmockSweepFileCount = 78

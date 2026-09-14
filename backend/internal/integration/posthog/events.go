@@ -2,6 +2,9 @@ package posthog
 
 // Backend analytics event name constants.
 const (
+	EventRevenueCatOperationQueued  = "revenuecat_operation_queued"
+	EventRevenueCatOperationApplied = "revenuecat_operation_applied"
+	EventRevenueCatOperationFailed  = "revenuecat_operation_failed"
 	// Plaid sync events
 	EventAccountSynced   = "account_synced"
 	EventSyncCompleted   = "sync_completed"

@@ -132,6 +132,14 @@ const renderWithQueryClient = (component: React.ReactElement) => {
 }
 
 describe('HealthDashboardPage', () => {
+  it('shows RevenueCat operations and unavailable queue data without zeros', async () => {
+    mockUseGetSystemHealth.mockReturnValue({ data: {...mockHealthData, job_queues: {revenuecat: {unavailable: true, pending: 0, running: 0, failed: 0, completed_last_hour: 0}}}, isLoading: false, error: null, refetch: () => {} } as unknown as ReturnType<typeof mockUseGetSystemHealth>)
+    renderWithQueryClient(<HealthDashboardPage />)
+    expect(await screen.findByRole('link', {name: 'Open RevenueCat operations'})).toHaveAttribute('href', '/admin/revenuecat')
+    const queue = screen.getByRole('heading', {name: 'revenuecat'}).parentElement!
+    expect(queue.textContent).toContain('Unavailable')
+    expect(queue.textContent).not.toContain('Pending:0')
+  })
   beforeEach(() => {
     mockUseGetSystemHealth.mockClear()
   })

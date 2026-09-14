@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useLocation } from 'react-router'
+import { useAuth } from '@clerk/react-router'
 import { Award, Gem, Check, X, AlertTriangle, Gift } from 'lucide-react'
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
 import type { TierName, SubscriptionTier } from '../subscription/types'
-import { usePaddleEvents } from '../billing/hooks/usePaddleEvents'
+import { RevenueCatCheckoutStatus } from '../billing/components/RevenueCatCheckoutStatus'
 import {
   useGetBillingPortalUrl,
   useGetSubscriptionTiers,
@@ -120,18 +121,18 @@ function TierCard({
   const billingInterval = billingPeriod === 'monthly' ? 'month' : 'year'
 
   const isCurrentTier =
-    ['active', 'trialing', 'cancelled', 'past_due', 'comped'].includes(pricingState.status) &&
+    ['active', 'trialing', 'cancelled', 'past_due', 'paused', 'comped'].includes(pricingState.status) &&
     hasTier(pricingState) &&
     pricingState.tier === tierKey
 
   const shouldShowBillingPortal =
-    (pricingState.status === 'cancelled' || pricingState.status === 'past_due') &&
+    (pricingState.status === 'cancelled' || pricingState.status === 'past_due' || pricingState.status === 'paused') &&
     hasTier(pricingState) &&
     pricingState.tier === tierKey
 
   // #933: Pause/resume not supported. Label is explicit for each supported status.
   const billingPortalLabel =
-    pricingState.status === 'cancelled' ? 'Resubscribe' : 'Update Payment Method'
+    pricingState.status === 'cancelled' ? 'Resubscribe' : pricingState.status === 'paused' ? 'Manage Billing' : 'Update Payment Method'
 
   const currentPrice = billingPeriod === 'monthly'
     ? tierData.pricing.price_monthly
@@ -246,6 +247,7 @@ function TierCard({
 const TIER_ORDER: TierName[] = ['premium', 'household_2', 'household_3', 'household_4', 'household_5']
 
 export function PricingPage() {
+  const { userId } = useAuth()
   const location = useLocation()
   const { pricingState, tiers } = usePricingContext()
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly')
@@ -256,7 +258,6 @@ export function PricingPage() {
   }>({ open: false })
 
   usePostSignInCheckoutIntent()
-  usePaddleEvents()
 
   const trackEvent = useTrackEvent()
   useEffect(() => {
@@ -267,7 +268,8 @@ export function PricingPage() {
 
   const billingPortalQuery = useGetBillingPortalUrl({
     query: {
-      enabled: pricingState.status === 'cancelled' || pricingState.status === 'past_due',
+      queryKey: ['/api/v1/subscription/portal', userId],
+      enabled: pricingState.status === 'cancelled' || pricingState.status === 'past_due' || pricingState.status === 'paused',
     },
   })
 
@@ -336,6 +338,7 @@ export function PricingPage() {
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8">
+      <RevenueCatCheckoutStatus />
       {isFrozen && <FrozenAccountBanner />}
       {pricingState.status === 'comped' && (
         <ComplimentaryBanner compEndsAt={pricingState.compEndsAt} />

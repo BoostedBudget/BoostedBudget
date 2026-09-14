@@ -8,6 +8,7 @@ interface ImportMetaEnv {
   readonly VITE_POSTHOG_KEY?: string
   readonly VITE_POSTHOG_HOST?: string
   readonly VITE_MCP_URL?: string
+  readonly VITE_REVENUECAT_PUBLIC_API_KEY?: string
   readonly DEV: boolean
   readonly PROD: boolean
   readonly MODE: string
@@ -26,6 +27,7 @@ interface RuntimeEnv {
   POSTHOG_KEY?: string
   POSTHOG_HOST?: string
   MCP_URL?: string
+  REVENUECAT_PUBLIC_API_KEY?: string
 }
 
 interface Window {
