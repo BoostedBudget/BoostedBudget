@@ -671,6 +671,7 @@ func main() {
 		// columns are stored as ENC$ ciphertext and the user must receive the plaintext.
 		dataExportRepo := repository.NewDataExportRepository(db, fieldEncryptor)
 		linkedItemRepo := repository.NewLinkedItemRepository(db, fieldEncryptor)
+		linkedItemRepo.SetTransactionSyncCompletionCutover(cfg.PostHogSyncCompletionCutoverAt)
 		accountRepo := repository.NewAccountRepository(db, fieldEncryptor)
 		transactionRepo := repository.NewTransactionRepository(db, fieldEncryptor)
 		webhookRepo := repository.NewWebhookRepository(db, fieldEncryptor)

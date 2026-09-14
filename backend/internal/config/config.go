@@ -239,15 +239,16 @@ type Config struct {
 	FrontendURL string
 
 	// Observability
-	LogLevel              string  // from LOG_LEVEL — "debug"/"info"/"warn"/"error", default "info"
-	EnableMetrics         bool    // from ENABLE_METRICS, default true
-	SentryDSN             string  // from SENTRY_DSN — empty = disabled
-	OTELEndpoint          string  // from OTEL_EXPORTER_OTLP_ENDPOINT — empty = disabled
-	SentrySampleRate      float64 // from SENTRY_SAMPLE_RATE — default 1.0
-	OTELSampleRate        float64 // from OTEL_SAMPLE_RATE — default 1.0
-	PostHogAPIKey         string  // from POSTHOG_API_KEY — empty = disabled
-	PostHogHost           string  // from POSTHOG_HOST — default us.i.posthog.com
-	PostHogSecretAPIToken string  // from POSTHOG_SECRET_API_TOKEN — server-only Support identity HMAC key
+	LogLevel                       string     // from LOG_LEVEL — "debug"/"info"/"warn"/"error", default "info"
+	EnableMetrics                  bool       // from ENABLE_METRICS, default true
+	SentryDSN                      string     // from SENTRY_DSN — empty = disabled
+	OTELEndpoint                   string     // from OTEL_EXPORTER_OTLP_ENDPOINT — empty = disabled
+	SentrySampleRate               float64    // from SENTRY_SAMPLE_RATE — default 1.0
+	OTELSampleRate                 float64    // from OTEL_SAMPLE_RATE — default 1.0
+	PostHogAPIKey                  string     // from POSTHOG_API_KEY — empty = disabled
+	PostHogHost                    string     // from POSTHOG_HOST — default us.i.posthog.com
+	PostHogSecretAPIToken          string     // from POSTHOG_SECRET_API_TOKEN — server-only Support identity HMAC key
+	PostHogSyncCompletionCutoverAt *time.Time // from POSTHOG_SYNC_COMPLETION_CUTOVER_AT — unset suppresses first-sync telemetry
 
 	// Paddle Reconciliation
 	PaddleReconciliationEnabled bool // from PADDLE_RECONCILIATION_ENABLED, default true
@@ -372,6 +373,14 @@ func Load() (*Config, error) {
 
 		// MCP Worker Secret (fail-closed when empty — IsMCPOrigin returns false)
 		MCPWorkerSecret: getEnv("MCP_WORKER_SECRET", ""),
+	}
+
+	if rawCutover := os.Getenv("POSTHOG_SYNC_COMPLETION_CUTOVER_AT"); rawCutover != "" {
+		cutover, err := time.Parse(time.RFC3339, rawCutover)
+		if err != nil {
+			return nil, fmt.Errorf("POSTHOG_SYNC_COMPLETION_CUTOVER_AT must be RFC3339: %w", err)
+		}
+		cfg.PostHogSyncCompletionCutoverAt = &cutover
 	}
 
 	// RATE_LIMIT_BACKEND is validated unconditionally — in every environment, not just

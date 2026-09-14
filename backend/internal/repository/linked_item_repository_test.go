@@ -46,8 +46,8 @@ func TestLinkedItemRepository_Create(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO linked_items
-		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at, item_id_blind_idx, institution_id_blind_idx, status_changed_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at, item_id_blind_idx, institution_id_blind_idx, status_changed_at, transaction_sync_state)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'never_synced')
 	`)).WithArgs(
 		linkedItem.ID,
 		linkedItem.UserID,
@@ -226,9 +226,11 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletion(t *testing.T) {
 	mockDB, repo := setupLinkedItemMockDB(t)
 	defer mockDB.Close()
 
+	cutover := time.Date(2026, 9, 13, 20, 15, 0, 0, time.UTC)
+	repo.(*linkedItemRepository).SetTransactionSyncCompletionCutover(&cutover)
 	completedCursor := "cursor-after"
 	mockDB.ExpectQuery("UPDATE linked_items AS li").
-		WithArgs("item-1", "cursor-before", &completedCursor).
+		WithArgs("item-1", "cursor-before", &completedCursor, &cutover).
 		WillReturnRows(pgxmock.NewRows([]string{"completion_disposition"}).AddRow("initial"))
 
 	recorder := repo.(interface {
@@ -245,7 +247,7 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletionSuppressesAmbiguous
 	defer mockDB.Close()
 
 	mockDB.ExpectQuery("UPDATE linked_items AS li").
-		WithArgs("item-1", "cursor-before", (*string)(nil)).
+		WithArgs("item-1", "cursor-before", (*string)(nil), (*time.Time)(nil)).
 		WillReturnRows(pgxmock.NewRows([]string{"completion_disposition"}).AddRow("suppressed_rollout_ambiguous"))
 
 	recorder := repo.(interface {
@@ -308,7 +310,7 @@ func TestLinkedItemRepository_RecordTransactionSyncCompletionRejectsStaleOrTermi
 	defer mockDB.Close()
 
 	mockDB.ExpectQuery("UPDATE linked_items AS li").
-		WithArgs("item-1", "stale-cursor", (*string)(nil)).
+		WithArgs("item-1", "stale-cursor", (*string)(nil), (*time.Time)(nil)).
 		WillReturnError(pgx.ErrNoRows)
 
 	recorder := repo.(interface {
