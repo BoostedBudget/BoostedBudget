@@ -26,6 +26,7 @@ type stubPostHogErasureStore struct {
 	retryState    string
 	backlog       repository.PostHogErasureBacklog
 	checkpointErr error
+	clerkDeleted  bool
 }
 
 func (s *stubPostHogErasureStore) Backlog(context.Context, time.Time) (repository.PostHogErasureBacklog, error) {
@@ -34,6 +35,11 @@ func (s *stubPostHogErasureStore) Backlog(context.Context, time.Time) (repositor
 
 func (s *stubPostHogErasureStore) ClaimDue(context.Context, time.Time, time.Duration) (*repository.PostHogErasureRecord, error) {
 	return s.record, s.claimErr
+}
+func (s *stubPostHogErasureStore) MarkClerkDeleted(context.Context, string, string) (bool, error) {
+	s.clerkDeleted = true
+	s.record.Phase = "person_resolve"
+	return true, nil
 }
 func (s *stubPostHogErasureStore) MarkPersonUUIDsResolved(_ context.Context, _, _ string, uuids []string, unresolved bool, nextCursor, total int) (bool, error) {
 	s.record.PersonUUIDs = uuids
@@ -101,6 +107,46 @@ type stubPostHogErasureProvider struct {
 	noPerson          bool
 	zeroAfterAccepted bool
 	manualStatus      bool
+}
+
+type stubClerkUserDeleter struct {
+	err   error
+	calls []string
+}
+
+func (s *stubClerkUserDeleter) DeleteUser(_ context.Context, clerkUserID string) error {
+	s.calls = append(s.calls, clerkUserID)
+	return s.err
+}
+
+func TestPostHogErasureWorker_DurablyFencesClerkBeforePostHog(t *testing.T) {
+	store := &stubPostHogErasureStore{record: &repository.PostHogErasureRecord{
+		ID: "row", ClerkUserID: "clerk_subject", Phase: "clerk_delete", LeaseToken: "lease",
+	}}
+	clerk := &stubClerkUserDeleter{}
+	worker := NewPostHogErasureWorker(PostHogErasureWorkerDeps{
+		Store: store, Provider: stubPostHogErasureProvider{}, ClerkDeleter: clerk,
+	})
+	require.NoError(t, worker.Work(context.Background(), &river.Job[PostHogErasureArgs]{}))
+	assert.Equal(t, []string{"clerk_subject"}, clerk.calls)
+	assert.True(t, store.clerkDeleted)
+	assert.Equal(t, "person_resolve", store.record.Phase)
+}
+
+func TestPostHogErasureWorker_ClerkFailureCannotAdvanceToPostHog(t *testing.T) {
+	store := &stubPostHogErasureStore{record: &repository.PostHogErasureRecord{
+		ID: "row", ClerkUserID: "clerk_subject", Phase: "clerk_delete", LeaseToken: "lease",
+	}}
+	clerk := &stubClerkUserDeleter{err: errors.New("Clerk unavailable")}
+	provider := &progressiveResolutionProvider{}
+	worker := NewPostHogErasureWorker(PostHogErasureWorkerDeps{
+		Store: store, Provider: provider, ClerkDeleter: clerk,
+	})
+	require.NoError(t, worker.Work(context.Background(), &river.Job[PostHogErasureArgs]{}))
+	assert.False(t, store.clerkDeleted)
+	assert.Equal(t, "clerk_delete", store.record.Phase)
+	assert.Equal(t, "provider", store.retryClass)
+	assert.Empty(t, provider.distinctIDs)
 }
 
 func (s stubPostHogErasureProvider) ResolvePersonUUIDs(context.Context, string, string, []string) (phclient.ErasurePersonResolution, error) {

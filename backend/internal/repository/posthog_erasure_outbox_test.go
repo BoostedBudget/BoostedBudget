@@ -39,9 +39,9 @@ func TestClaimDueDeadLettersUndecryptableIdentityEnvelope(t *testing.T) {
 	repo := NewPostHogErasureOutboxRepository(mock, enc)
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	mock.ExpectQuery("WITH candidate AS").WithArgs(now, pgxmock.AnyArg(), "1m0s").WillReturnRows(pgxmock.NewRows([]string{
-		"id", "identities_encrypted", "provider_person_uuids_encrypted", "provider_deletion_baseline_encrypted", "project_id", "region", "phase", "attempt_count",
+		"id", "identities_encrypted", "clerk_user_id_encrypted", "provider_person_uuids_encrypted", "provider_deletion_baseline_encrypted", "project_id", "region", "phase", "attempt_count",
 		"resolution_cursor", "baseline_cursor", "poll_cursor", "requires_manual_event_verification", "provider_request_started_at", "accepted_at",
-	}).AddRow("row-id", "ENC$not-base64!", nil, nil, "42", "us", "person_resolve", 1, 0, 0, 0, false, nil, nil))
+	}).AddRow("row-id", "ENC$not-base64!", nil, nil, nil, "42", "us", "person_resolve", 1, 0, 0, 0, false, nil, nil))
 	mock.ExpectExec("SET state='dead_letter'").
 		WithArgs("row-id", pgxmock.AnyArg(), "identity_decryption").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -56,6 +56,7 @@ func TestCompleteErasureClearsAllRecoverableProviderIdentityCiphertext(t *testin
 	require.NoError(t, err)
 	source := string(raw)
 	assert.Contains(t, source, "identities_encrypted=NULL")
+	assert.Contains(t, source, "clerk_user_id_encrypted=NULL")
 	assert.Contains(t, source, "provider_person_uuids_encrypted=NULL")
 	assert.Contains(t, source, "provider_deletion_baseline_encrypted=NULL")
 }
@@ -176,12 +177,17 @@ func TestBuildPostHogErasureEnvelopeIncludesCurrentHistoricalAndLegacyInternalID
 	enc, err := appcrypto.NewFieldEncryptor(reversibleTestEncryption{}, []byte("12345678901234567890123456789012"))
 	require.NoError(t, err)
 
-	envelope, err := buildPostHogErasureEnvelope(enc, "internal-uuid", []string{
+	envelope, err := buildPostHogErasureEnvelope(enc, "internal-uuid", "ENC$Y2xlcmstY3VycmVudA", []string{
 		"ENC$Y2xlcmstY3VycmVudA", "ENC$Y2xlcmstaGlzdG9yaWNhbA", "ENC$Y2xlcmstY3VycmVudA",
 	})
 	require.NoError(t, err)
 	assert.NotContains(t, envelope.Ciphertext, "clerk-current")
+	assert.NotContains(t, envelope.ClerkCiphertext, "clerk-current")
 	assert.NotContains(t, envelope.IdempotencyKey, "internal-uuid")
+	assert.NotContains(t, envelope.ClerkFenceKey, "clerk-current")
+	clerkID, err := enc.DecryptString(envelope.ClerkCiphertext)
+	require.NoError(t, err)
+	assert.Equal(t, "clerk-current", clerkID)
 
 	raw, err := enc.DecryptJSON(envelope.Ciphertext)
 	require.NoError(t, err)

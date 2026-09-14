@@ -19,6 +19,7 @@ export interface EngagementDependencies {
     data: VerifiedPostHogIdentity | undefined
     isLoading: boolean
     isError: boolean
+    refetch?: () => Promise<unknown>
   }
   useAnalyticsSnapshot(): AnalyticsLifecycleSnapshot
 }
@@ -36,6 +37,8 @@ const defaultDependencies: EngagementDependencies = {
         retry: false,
         staleTime: 0,
         gcTime: 0,
+        refetchInterval: enabled ? 15_000 : false,
+        refetchIntervalInBackground: true,
       },
     })
   },
@@ -72,12 +75,15 @@ export function AuthenticatedPostHogExperiences({
     userId,
     configured && (supportRequested || surveyAuthorized),
   )
+  const refetchIdentity = identity.refetch
   const [supportReady, setSupportReady] = useState(false)
   const [supportUnavailable, setSupportUnavailable] = useState(false)
   const [handedOff, setHandedOff] = useState(false)
+  const [resumeValidationPending, setResumeValidationPending] = useState(false)
   const verifiedIdentity = hasRouteAuthority
     && !identity.isLoading
     && !identity.isError
+    && !resumeValidationPending
     && identity.data?.distinct_id === userId
     && identity.data.identity_hash.length > 0
     ? identity.data
@@ -156,12 +162,17 @@ export function AuthenticatedPostHogExperiences({
       if (document.visibilityState === 'hidden') {
         controller.getSupportClient()?.conversations.hide()
       } else {
-        controller.showSupport()
+        setResumeValidationPending(true)
+        controller.deactivateSupport()
+        const revalidation = refetchIdentity?.()
+        if (revalidation) {
+          void revalidation.finally(() => setResumeValidationPending(false))
+        }
       }
     }
     document.addEventListener('visibilitychange', handleVisibility)
     return () => document.removeEventListener('visibilitychange', handleVisibility)
-  }, [controller, handedOff])
+  }, [controller, handedOff, refetchIdentity])
 
   if (!hasRouteAuthority) return null
 

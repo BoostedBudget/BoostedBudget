@@ -1629,6 +1629,11 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// #1650: capture every PostHog distinct ID while the local identity rows still exist. The
 	// canonical users.clerk_user_id, historical user_identities Clerk IDs, and the internal UUID
 	// formerly used by backend producers are encrypted together below. No email is copied.
+	var canonicalEncryptedClerkID string
+	if err = tx.QueryRow(ctx, `SELECT clerk_user_id FROM users WHERE id = $1`, userID).
+		Scan(&canonicalEncryptedClerkID); err != nil {
+		return false, nil, fmt.Errorf("DeleteUserCascade: read canonical Clerk identity: %w", err)
+	}
 	identityRows, err := tx.Query(ctx, `
 		SELECT clerk_user_id FROM users WHERE id = $1
 		UNION ALL
@@ -1650,7 +1655,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		return false, nil, fmt.Errorf("DeleteUserCascade: read PostHog identities: %w", rowsErr)
 	}
 	identityRows.Close()
-	erasureEnvelope, err := buildPostHogErasureEnvelope(r.enc, userID, encryptedClerkIDs)
+	erasureEnvelope, err := buildPostHogErasureEnvelope(r.enc, userID, canonicalEncryptedClerkID, encryptedClerkIDs)
 	if err != nil {
 		return false, nil, fmt.Errorf("DeleteUserCascade: build PostHog erasure obligation: %w", err)
 	}
@@ -2049,11 +2054,12 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// the internal UUID in plaintext.
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO posthog_erasure_outbox
-			(idempotency_key, identities_encrypted, project_id, region, state, phase)
-		VALUES ($1, $2, $3, $4, 'pending', 'person_resolve')
+			(idempotency_key, identities_encrypted, clerk_user_id_encrypted,
+			 clerk_user_id_blind_idx, project_id, region, state, phase)
+		VALUES ($1, $2, $3, $4, $5, $6, 'pending', 'clerk_delete')
 		ON CONFLICT (idempotency_key) DO NOTHING`,
-		erasureEnvelope.IdempotencyKey, erasureEnvelope.Ciphertext,
-		r.postHogProjectID, r.postHogRegion); err != nil {
+		erasureEnvelope.IdempotencyKey, erasureEnvelope.Ciphertext, erasureEnvelope.ClerkCiphertext,
+		erasureEnvelope.ClerkFenceKey, r.postHogProjectID, r.postHogRegion); err != nil {
 		return false, nil, fmt.Errorf("DeleteUserCascade: persist PostHog erasure obligation: %w", err)
 	}
 

@@ -13,6 +13,12 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
+var ErrRegistrationErasureFenced = errors.New("registration refused for erased Clerk identity")
+
+type ClerkErasureFenceReader interface {
+	IsClerkIdentityErasureFenced(context.Context, string) (bool, error)
+}
+
 // TxBeginner is an interface for database connection pools that can begin transactions.
 // Both *pgxpool.Pool and pgxmock.PgxPoolIface satisfy this interface.
 type TxBeginner interface {
@@ -80,9 +86,10 @@ type registrationService struct {
 	identityRepo repository.UserIdentityRepository
 	privacyRepo  repository.PrivacyRepository
 	auditLogger  AuditLogger
-	db           TxBeginner       // Database connection pool for transaction management
-	trialGranter TrialGranter     // Issue #679: Optional trial granter for auto-grant on registration
+	db           TxBeginner         // Database connection pool for transaction management
+	trialGranter TrialGranter       // Issue #679: Optional trial granter for auto-grant on registration
 	analytics    phclient.Analytics // Optional PostHog analytics client
+	erasureFence ClerkErasureFenceReader
 }
 
 // NewRegistrationService creates a new RegistrationService
@@ -92,13 +99,19 @@ func NewRegistrationService(
 	privacyRepo repository.PrivacyRepository,
 	auditLogger AuditLogger,
 	db TxBeginner,
+	erasureFence ...ClerkErasureFenceReader,
 ) RegistrationService {
+	var fence ClerkErasureFenceReader
+	if len(erasureFence) > 0 {
+		fence = erasureFence[0]
+	}
 	return &registrationService{
 		profileRepo:  profileRepo,
 		identityRepo: identityRepo,
 		privacyRepo:  privacyRepo,
 		auditLogger:  auditLogger,
 		db:           db,
+		erasureFence: fence,
 	}
 }
 
@@ -146,6 +159,15 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 	// Validate required fields
 	if clerkUserID == "" {
 		return nil, errors.New("clerk_user_id is required")
+	}
+	if s.erasureFence != nil {
+		fenced, err := s.erasureFence.IsClerkIdentityErasureFenced(ctx, clerkUserID)
+		if err != nil {
+			return nil, fmt.Errorf("check Clerk erasure fence: %w", err)
+		}
+		if fenced {
+			return nil, ErrRegistrationErasureFenced
+		}
 	}
 
 	// Validate email format

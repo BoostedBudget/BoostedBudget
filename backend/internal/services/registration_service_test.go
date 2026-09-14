@@ -21,6 +21,27 @@ type MockUserIdentityRepository struct {
 	mock.Mock
 }
 
+type registrationErasureFenceStub struct {
+	fenced bool
+	err    error
+}
+
+func (s registrationErasureFenceStub) IsClerkIdentityErasureFenced(context.Context, string) (bool, error) {
+	return s.fenced, s.err
+}
+
+func TestRegisterUserRejectsSurvivingClerkSessionAfterLocalErasure(t *testing.T) {
+	identityRepo := new(MockUserIdentityRepository)
+	service := NewRegistrationService(
+		new(MockProfileRepository), identityRepo, new(MockPrivacyRepository), nil, nil,
+		registrationErasureFenceStub{fenced: true},
+	)
+	user, err := service.RegisterUser(context.Background(), "clerk_erased", "erased@example.com", true)
+	assert.Nil(t, user)
+	assert.ErrorIs(t, err, ErrRegistrationErasureFenced)
+	identityRepo.AssertNotCalled(t, "GetByClerkID", mock.Anything, mock.Anything)
+}
+
 func (m *MockUserIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID string) (*domain.UserIdentity, error) {
 	args := m.Called(ctx, clerkUserID)
 	if args.Get(0) == nil {
