@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useUser } from '@clerk/react-router'
 import { useGetPostHogSupportIdentity } from '@boostedbudget/api-client/endpoints/support/support'
 import {
@@ -83,7 +83,7 @@ export function AuthenticatedPostHogExperiences({
     ? identity.data
     : undefined
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setSupportReady(false)
     setSupportUnavailable(false)
     setHandedOff(false)
@@ -119,7 +119,7 @@ export function AuthenticatedPostHogExperiences({
     }
   }, [controller, supportRequested, verifiedIdentity])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!surveyConsentAuthorized) {
       controller.deactivateSurveys()
     } else if (!routeEligible) {
@@ -141,7 +141,7 @@ export function AuthenticatedPostHogExperiences({
     verifiedIdentity,
   ])
 
-  useEffect(() => () => {
+  useLayoutEffect(() => () => {
     controller.deactivateSupport()
     controller.deactivateSurveys()
   }, [controller])

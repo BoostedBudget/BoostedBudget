@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { useLayoutEffect } from 'react'
 import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { AnalyticsLifecycleSnapshot } from '../lib/posthog'
@@ -158,6 +159,34 @@ describe('AuthenticatedPostHogExperiences', () => {
     rerender(<AuthenticatedPostHogExperiences controller={c} dependencies={deps({ userId: null })} />)
     expect(c.deactivateSupport).toHaveBeenCalled()
     expect(c.deactivateSurveys).toHaveBeenCalled()
+  })
+
+  test('removes the vendor Support surface during the logout commit', () => {
+    const c = createPostHogEngagementController({
+      createSupportClient: () => { throw new Error('not needed') },
+      createSurveyClient: () => { throw new Error('not needed') },
+    })
+    document.body.classList.add('posthog-support-widget-active')
+    let visibleDuringLayout = true
+    function PaintObserver() {
+      useLayoutEffect(() => {
+        visibleDuringLayout = document.body.classList.contains('posthog-support-widget-active')
+      })
+      return null
+    }
+
+    render(
+      <>
+        <AuthenticatedPostHogExperiences
+        controller={c}
+        dependencies={deps({ userId: null })}
+        />
+        <PaintObserver />
+      </>,
+    )
+
+    expect(visibleDuringLayout).toBe(false)
+    expect(document.body).not.toHaveClass('posthog-support-widget-active')
   })
 
   test('clears surveys when consent is withdrawn after the client was suspended off-app', () => {
