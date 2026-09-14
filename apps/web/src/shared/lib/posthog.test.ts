@@ -4,8 +4,10 @@ import { resolve } from 'node:path';
 import type { CaptureResult, PostHogConfig } from 'posthog-js';
 import {
   capturePageView,
+  captureProductEvent,
   clearPostHogQueuedEvents,
   guardPostHogRetryQueue,
+  grantProductAnalytics,
   isAnonymousAnalyticsPath,
   isSensitiveAnalyticsPath,
   listenForAnalyticsWithdrawal,
@@ -21,6 +23,11 @@ import {
 } from './analyticsLifecycle';
 import * as posthogModule from './posthog';
 import { mockPosthogCapture } from '@/test/mocks/posthog';
+import {
+  ANALYTICS_EVENTS,
+  isValidAnalyticsEventPayload,
+  normalizeAnalyticsEventPayload,
+} from '../analytics/events.generated';
 
 const minimumPostHogVersion = [1, 430, 2] as const;
 
@@ -469,6 +476,55 @@ describe('posthog lifecycle', () => {
       getKey: () => key,
       isDoNotTrackEnabled: () => dnt,
     });
+  });
+
+  test('capture boundary rejects payloads outside the generated event contract', () => {
+    expect(isValidAnalyticsEventPayload(ANALYTICS_EVENTS.ACCOUNT_LINK_COMPLETED)).toBe(false);
+    expect(isValidAnalyticsEventPayload(ANALYTICS_EVENTS.ACCOUNT_LINK_COMPLETED, {})).toBe(false);
+    expect(isValidAnalyticsEventPayload(
+      ANALYTICS_EVENTS.ACCOUNT_LINK_COMPLETED,
+      { provider: 'other' },
+    )).toBe(false);
+    expect(isValidAnalyticsEventPayload(
+      ANALYTICS_EVENTS.ACCOUNT_LINK_COMPLETED,
+      { provider: 'plaid', extra: true },
+    )).toBe(false);
+    expect(isValidAnalyticsEventPayload(
+      ANALYTICS_EVENTS.REPORT_SANKEY_CATEGORY_FOCUSED,
+      { depth: -1 },
+    )).toBe(false);
+    expect(isValidAnalyticsEventPayload(
+      ANALYTICS_EVENTS.REPORT_SANKEY_CATEGORY_FOCUSED,
+      { depth: 1.5 },
+    )).toBe(false);
+    expect(isValidAnalyticsEventPayload('unknown_event', {})).toBe(false);
+    expect(isValidAnalyticsEventPayload(
+      ANALYTICS_EVENTS.SIGN_IN_COMPLETED,
+      new Date(),
+    )).toBe(false);
+  });
+
+  test('generated boundary strips unreviewed legacy properties before delivery', () => {
+    expect(normalizeAnalyticsEventPayload(
+      ANALYTICS_EVENTS.TRANSACTION_SEARCHED,
+      { query_length: 12 },
+    )).toEqual({});
+    expect(normalizeAnalyticsEventPayload(
+      ANALYTICS_EVENTS.ACCOUNT_LINK_COMPLETED,
+      { provider: 'plaid' },
+    )).toEqual({ provider: 'plaid' });
+  });
+
+  test('capture boundary forwards a payload accepted by the generated event contract', () => {
+    grantProductAnalytics('user-a');
+    mockPosthogCapture.mockClear();
+
+    captureProductEvent(ANALYTICS_EVENTS.ACCOUNT_LINK_COMPLETED, { provider: 'plaid' });
+
+    expect(mockPosthogCapture).toHaveBeenCalledWith(
+      ANALYTICS_EVENTS.ACCOUNT_LINK_COMPLETED,
+      { provider: 'plaid' },
+    );
   });
 
   test('does nothing while pending and initializes idempotently only after grant', () => {

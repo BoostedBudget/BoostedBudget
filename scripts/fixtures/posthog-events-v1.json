@@ -461,14 +461,14 @@
   "legacy_contract_metadata": {
     "frontend_account_balance_history_viewed": {
       "properties": {
-        "account_type": {"type": "string", "required": true, "cardinality": "high"},
+        "account_type": {"type": "string", "required": false, "cardinality": "high"},
         "retained_days": {"type": "integer", "required": true, "cardinality": "low", "minimum": 0}
       },
       "legacy_exceptions": ["unbounded_string"]
     },
     "frontend_account_holdings_history_viewed": {
       "properties": {
-        "account_type": {"type": "string", "required": true, "cardinality": "high"},
+        "account_type": {"type": "string", "required": false, "cardinality": "high"},
         "retained_days": {"type": "integer", "required": true, "cardinality": "low", "minimum": 0},
         "positions_shown": {"type": "integer", "required": true, "cardinality": "low", "minimum": 0}
       },
