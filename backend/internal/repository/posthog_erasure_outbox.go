@@ -60,6 +60,8 @@ type PostHogErasureRecord struct {
 	Phase                           string
 	AttemptCount                    int
 	ResolutionCursor                int
+	BaselineCursor                  int
+	PollCursor                      int
 	LeaseToken                      string
 	RequiresManualEventVerification bool
 	ProviderRequestStartedAt        *time.Time
@@ -139,9 +141,11 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 		RETURNING o.id, o.identities_encrypted, o.provider_person_uuids_encrypted,
 		          o.provider_deletion_baseline_encrypted,
 		          o.project_id, o.region, o.phase, o.attempt_count, o.resolution_cursor,
+		          o.baseline_cursor, o.poll_cursor,
 		          o.requires_manual_event_verification, o.provider_request_started_at, o.accepted_at`, now, leaseToken, lease.String()).Scan(
 		&record.ID, &encrypted, &encryptedPersonUUIDs, &encryptedBaseline, &record.ProjectID, &record.Region,
-		&record.Phase, &record.AttemptCount, &record.ResolutionCursor, &record.RequiresManualEventVerification,
+		&record.Phase, &record.AttemptCount, &record.ResolutionCursor, &record.BaselineCursor, &record.PollCursor,
+		&record.RequiresManualEventVerification,
 		&record.ProviderRequestStartedAt, &record.AcceptedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -172,6 +176,13 @@ func (r *PostHogErasureOutboxRepository) ClaimDue(ctx context.Context, now time.
 		return nil, fmt.Errorf("claim PostHog erasure failed: correlation_decryption")
 	}
 	if record.ResolutionCursor < 0 || record.ResolutionCursor > len(record.Identities) {
+		if deadLetterErr := r.deadLetterClaim(ctx, record.ID, leaseToken, "invalid_correlation"); deadLetterErr != nil {
+			return nil, deadLetterErr
+		}
+		return nil, fmt.Errorf("claim PostHog erasure failed: invalid_correlation")
+	}
+	if record.BaselineCursor < 0 || record.BaselineCursor > len(record.PersonUUIDs) ||
+		record.PollCursor < 0 || record.PollCursor > len(record.PersonUUIDs) {
 		if deadLetterErr := r.deadLetterClaim(ctx, record.ID, leaseToken, "invalid_correlation"); deadLetterErr != nil {
 			return nil, deadLetterErr
 		}
@@ -220,12 +231,46 @@ func (r *PostHogErasureOutboxRepository) MarkPersonUUIDsResolved(ctx context.Con
 		UPDATE posthog_erasure_outbox SET provider_person_uuids_encrypted=$3,
 		    requires_manual_event_verification=requires_manual_event_verification OR $4,
 		    resolution_cursor=$5,
-		    phase=CASE WHEN $5::integer=$6::integer THEN 'person_delete' ELSE 'person_resolve' END,
+		    phase=CASE WHEN $5::integer<$6::integer THEN 'person_resolve'
+		               WHEN $7::boolean THEN 'person_baseline'
+		               ELSE 'person_delete' END,
 		    state='retrying', next_attempt_at=clock_timestamp(), lease_token=NULL, lease_until=NULL,
 		    attempt_count=0, last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
-		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying')`, id, leaseToken, ciphertext, hasUnresolved, nextCursor, identityCount)
+		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying')`, id, leaseToken, ciphertext, hasUnresolved, nextCursor, identityCount, len(personUUIDs) > 0)
 	if err != nil {
 		return false, fmt.Errorf("record PostHog person UUID resolution: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func (r *PostHogErasureOutboxRepository) MarkDeletionBaselineCheckpoint(ctx context.Context, id, leaseToken string, baseline map[string]*time.Time, nextCursor, personCount int) (bool, error) {
+	if nextCursor < 1 || nextCursor > personCount {
+		return false, fmt.Errorf("invalid PostHog baseline cursor")
+	}
+	raw, err := json.Marshal(baseline)
+	if err != nil {
+		return false, fmt.Errorf("encode PostHog deletion baseline: %w", err)
+	}
+	ciphertext, err := r.enc.EncryptJSON(raw)
+	if err != nil {
+		return false, fmt.Errorf("encrypt PostHog deletion baseline: %w", err)
+	}
+	hasExisting := false
+	for _, createdAt := range baseline {
+		if createdAt != nil {
+			hasExisting = true
+			break
+		}
+	}
+	tag, err := r.db.Exec(ctx, `UPDATE posthog_erasure_outbox SET
+		provider_deletion_baseline_encrypted=$3, baseline_cursor=$4,
+		requires_manual_event_verification=requires_manual_event_verification OR $6,
+		phase=CASE WHEN $4::integer=$5::integer THEN 'person_delete' ELSE 'person_baseline' END,
+		state='retrying',next_attempt_at=clock_timestamp(),attempt_count=0,last_error_class=NULL,
+		lease_token=NULL,lease_until=NULL,updated_at=clock_timestamp(),version=version+1
+		WHERE id=$1 AND lease_token=$2 AND phase='person_baseline'`, id, leaseToken, ciphertext, nextCursor, personCount, hasExisting)
+	if err != nil {
+		return false, fmt.Errorf("checkpoint PostHog deletion baseline: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
 }
@@ -270,6 +315,7 @@ func (r *PostHogErasureOutboxRepository) MarkAccepted(ctx context.Context, id, l
 		    phase=CASE WHEN $3=0 THEN 'support_manual' ELSE 'person_poll' END,
 		    provider_status='accepted', accepted_at=clock_timestamp(), person_verified_at=clock_timestamp(),
 		    requires_manual_event_verification=requires_manual_event_verification OR $4,
+		    poll_cursor=0,
 		    next_attempt_at=clock_timestamp()+interval '5 minutes',
 		    lease_token=NULL, lease_until=NULL, last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
 		WHERE id=$1 AND lease_token=$2 AND state IN ('pending','retrying')`, id, leaseToken, resolvedPersons, requiresManualEvents)
@@ -301,13 +347,23 @@ func (r *PostHogErasureOutboxRepository) RecordPollPending(ctx context.Context, 
 	return tag.RowsAffected() == 1, err
 }
 
-func (r *PostHogErasureOutboxRepository) MarkPersonEventsVerified(ctx context.Context, id, leaseToken string, requiresManualEvents bool) (bool, error) {
-	tag, err := r.db.Exec(ctx, `UPDATE posthog_erasure_outbox SET state='manual_pending', phase='support_manual',
-		requires_manual_event_verification=requires_manual_event_verification OR $3,
-		events_verified_at=CASE WHEN requires_manual_event_verification OR $3 THEN NULL ELSE clock_timestamp() END,
-		lease_token=NULL, lease_until=NULL, last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
-		WHERE id=$1 AND lease_token=$2 AND phase='person_poll'`, id, leaseToken, requiresManualEvents)
-	return tag.RowsAffected() == 1, err
+func (r *PostHogErasureOutboxRepository) MarkPersonPollCheckpoint(ctx context.Context, id, leaseToken string, nextCursor, personCount int, requiresManualEvents bool) (bool, error) {
+	if nextCursor < 1 || nextCursor > personCount {
+		return false, fmt.Errorf("invalid PostHog poll cursor")
+	}
+	tag, err := r.db.Exec(ctx, `UPDATE posthog_erasure_outbox SET
+		poll_cursor=$3,requires_manual_event_verification=requires_manual_event_verification OR $5,
+		state=CASE WHEN $3::integer=$4::integer THEN 'manual_pending' ELSE 'retrying' END,
+		phase=CASE WHEN $3::integer=$4::integer THEN 'support_manual' ELSE 'person_poll' END,
+		events_verified_at=CASE WHEN $3::integer=$4::integer AND NOT (requires_manual_event_verification OR $5)
+		                        THEN clock_timestamp() ELSE events_verified_at END,
+		next_attempt_at=clock_timestamp(),attempt_count=0,last_error_class=NULL,
+		lease_token=NULL,lease_until=NULL,updated_at=clock_timestamp(),version=version+1
+		WHERE id=$1 AND lease_token=$2 AND phase='person_poll'`, id, leaseToken, nextCursor, personCount, requiresManualEvents)
+	if err != nil {
+		return false, fmt.Errorf("checkpoint PostHog deletion poll: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // RecordOperatorEvidence stores only bounded evidence, using the database clock for both the
@@ -395,7 +451,7 @@ func (r *PostHogErasureOutboxRepository) RetargetUnconfigured(ctx context.Contex
 	}
 	tag, err := tx.Exec(ctx, `UPDATE posthog_erasure_outbox SET project_id=$2, region=$3,
 		state='retrying', phase='person_resolve', next_attempt_at=clock_timestamp(),
-		resolution_cursor=0, provider_person_uuids_encrypted=NULL,
+		resolution_cursor=0, baseline_cursor=0, poll_cursor=0, provider_person_uuids_encrypted=NULL,
 		provider_deletion_baseline_encrypted=NULL, provider_request_started_at=NULL,
 		requires_manual_event_verification=FALSE,
 		last_error_class=NULL, lease_token=NULL, lease_until=NULL, updated_at=clock_timestamp(), version=version+1

@@ -14,6 +14,13 @@ func TestRecordPostHogErasureAttemptBoundsLabels(t *testing.T) {
 	assert.Equal(t, before+1, after)
 }
 
+func TestRecordPostHogErasureAttemptRecognizesBaselineCheckpointPhase(t *testing.T) {
+	before := testutil.ToFloat64(PostHogErasureAttempts.WithLabelValues("person_baseline", "accepted", "none"))
+	RecordPostHogErasureAttempt("person_baseline", "accepted", "none")
+	after := testutil.ToFloat64(PostHogErasureAttempts.WithLabelValues("person_baseline", "accepted", "none"))
+	assert.Equal(t, before+1, after)
+}
+
 func TestPublishPostHogErasureBacklogSetsEveryStateAndAge(t *testing.T) {
 	PublishPostHogErasureBacklog(map[string]int64{"pending": 2, "manual_pending": 1}, 75)
 	assert.Equal(t, float64(2), testutil.ToFloat64(PostHogErasureRows.WithLabelValues("pending")))

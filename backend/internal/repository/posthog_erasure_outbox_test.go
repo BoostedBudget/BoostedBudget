@@ -40,8 +40,8 @@ func TestClaimDueDeadLettersUndecryptableIdentityEnvelope(t *testing.T) {
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	mock.ExpectQuery("WITH candidate AS").WithArgs(now, pgxmock.AnyArg(), "1m0s").WillReturnRows(pgxmock.NewRows([]string{
 		"id", "identities_encrypted", "provider_person_uuids_encrypted", "provider_deletion_baseline_encrypted", "project_id", "region", "phase", "attempt_count",
-		"resolution_cursor", "requires_manual_event_verification", "provider_request_started_at", "accepted_at",
-	}).AddRow("row-id", "ENC$not-base64!", nil, nil, "42", "us", "person_resolve", 1, 0, false, nil, nil))
+		"resolution_cursor", "baseline_cursor", "poll_cursor", "requires_manual_event_verification", "provider_request_started_at", "accepted_at",
+	}).AddRow("row-id", "ENC$not-base64!", nil, nil, "42", "us", "person_resolve", 1, 0, 0, 0, false, nil, nil))
 	mock.ExpectExec("SET state='dead_letter'").
 		WithArgs("row-id", pgxmock.AnyArg(), "identity_decryption").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -143,7 +143,7 @@ func TestResolutionCheckpointResetsFailureBudgetForNextIdentity(t *testing.T) {
 	require.NoError(t, err)
 	repo := NewPostHogErasureOutboxRepository(mock, enc)
 	mock.ExpectExec("attempt_count=0").
-		WithArgs("row", "lease", pgxmock.AnyArg(), false, 1, 1000).
+		WithArgs("row", "lease", pgxmock.AnyArg(), false, 1, 1000, true).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	updated, err := repo.MarkPersonUUIDsResolved(context.Background(), "row", "lease", []string{"11111111-1111-4111-8111-111111111111"}, false, 1, 1000)
