@@ -109,8 +109,11 @@ jobs:
             posthog_contract:
               - 'config/posthog_events.yaml'
               - 'config/product_metrics.yaml'
+              - 'config/posthog_rollout.yaml'
               - 'scripts/generate-posthog-events.ts'
               - 'scripts/generate-posthog-events.test.ts'
+              - 'scripts/validate-posthog-rollout.ts'
+              - 'scripts/validate-posthog-rollout.test.ts'
               - 'scripts/fixtures/posthog-events-v1.json'
               # The static raw-capture guard scans these complete production surfaces.
               - 'apps/web/src/**'

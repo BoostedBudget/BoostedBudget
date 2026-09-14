@@ -461,4 +461,7 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 // transaction boundaries, and mapping, not driver NULL tolerance. No files removed.
 // 73 -> 74 (#1650): added analytics_authority_repository_test.go, which pins consent/identity
 // locking and fail-closed query behavior. It makes no driver NULL-tolerance claim. No files removed.
-const pgxmockSweepFileCount = 74
+// 74 -> 75 (#1650): added posthog_erasure_outbox_test.go, which asserts transactional statement
+// ordering, encrypted identity capture, and two separated operator confirmations. It makes no
+// driver NULL-tolerance claim. No files removed.
+const pgxmockSweepFileCount = 75

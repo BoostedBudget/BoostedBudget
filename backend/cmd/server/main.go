@@ -529,6 +529,7 @@ func main() {
 
 	// Issue #1087 R4-7: Declare idempotency cleanup worker (always active)
 	var idempotencyCleanupWorker *jobs.IdempotencyCleanupWorker
+	var postHogErasureWorker *jobs.PostHogErasureWorker
 
 	// Issue #1497: Declare the two orphaned-Plaid-Item sweeps. They are declared TOGETHER and
 	// gated DIFFERENTLY on purpose, and the difference is the compliance property:
@@ -653,6 +654,21 @@ func main() {
 
 		// Create repositories
 		profileRepo := repository.NewProfileRepository(db, fieldEncryptor)
+		profileRepo.SetPostHogErasureTarget(cfg.PostHogProjectID, phclient.ErasureRegionForHost(cfg.PostHogPrivateHost))
+		postHogErasureRepo := repository.NewPostHogErasureOutboxRepository(db, fieldEncryptor)
+		var postHogErasureProvider *phclient.ErasureClient
+		if cfg.PostHogPersonalAPIKey != "" && cfg.PostHogProjectID != "" {
+			postHogErasureProvider, err = phclient.NewErasureClient(phclient.ErasureClientConfig{
+				Host: cfg.PostHogPrivateHost, ProjectID: cfg.PostHogProjectID, PersonalAPIKey: cfg.PostHogPersonalAPIKey,
+			})
+			if err != nil {
+				appLogger.Error("PostHog erasure provider configuration rejected; obligations will remain pending", "error_class", "configuration")
+				postHogErasureProvider = nil
+			}
+		}
+		postHogErasureWorker = jobs.NewPostHogErasureWorker(jobs.PostHogErasureWorkerDeps{
+			Store: postHogErasureRepo, Provider: postHogErasureProvider, Logger: appLogger,
+		})
 		// Issue #1413 G2 / round-5: reject a manual_tier_override that names no configured tier
 		// — both on the access-granting path (GetEffectiveSubscriptionStatusByUserID) and on the
 		// profile response's representation path (humaProfileHandler.SetOverrideTierValidator,
@@ -1860,6 +1876,7 @@ func main() {
 				ruleQuarantineCensusWorker:          ruleQuarantineCensusWorker,
 				plaidOrphanRetryWorker:              plaidOrphanRetryWorker,
 				budgetHierarchyAuditWorker:          budgetHierarchyAuditWorker,
+				postHogErasureWorker:                postHogErasureWorker,
 			}, appLogger)
 
 			if len(periodicJobs) > 0 {
@@ -1903,6 +1920,10 @@ func main() {
 			cachePurgeRetryWorker := jobs.NewCachePurgeRetryWorker(cacheInstance.(cache.Purger), cacheInstance.Generations(), appLogger)
 			river.AddWorker(riverWorkers, cachePurgeRetryWorker)
 			appLogger.Info("Cache purge retry worker registered with River")
+			if postHogErasureWorker != nil {
+				river.AddWorker(riverWorkers, postHogErasureWorker)
+				appLogger.Info("PostHog erasure worker registered with River")
+			}
 			if accountDeletionWorker != nil {
 				river.AddWorker(riverWorkers, accountDeletionWorker)
 				appLogger.Info("Account deletion worker registered with River")

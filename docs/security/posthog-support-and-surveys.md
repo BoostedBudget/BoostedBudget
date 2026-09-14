@@ -76,3 +76,13 @@ Required PostHog project settings:
 
 References: [Support widget and identity verification](https://posthog.com/docs/support/widget) and
 [custom survey display APIs](https://posthog.com/docs/surveys/implementing-custom-surveys).
+
+## GDPR erasure
+
+Analytics-consent withdrawal stops future optional analytics capture; it is not an erasure request.
+Account erasure creates an encrypted PostHog obligation in the same database transaction as the
+local hard delete. The obligation includes the current Clerk subject, recorded historical Clerk
+identities, and the legacy internal user UUID, but never an email address. It survives the user-row
+cascade and retries independently of PostHog availability. See the
+[PostHog erasure runbook](../runbooks/posthog-gdpr-erasure.md) for provider capabilities and the
+mandatory manual Support/survey-response verification phase.

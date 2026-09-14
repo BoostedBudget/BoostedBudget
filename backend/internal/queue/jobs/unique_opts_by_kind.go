@@ -80,6 +80,7 @@ var uniqueOptsByKind = map[string]func() *queue.UniqueOpts{
 	"account_deletion":         AccountDeletionUniqueOpts,
 	"scheduled_deletion_check": ScheduledDeletionCheckUniqueOpts,
 	"retention_cleanup_check":  RetentionCleanupCheckUniqueOpts,
+	"posthog_erasure":          PostHogErasureUniqueOpts,
 
 	// Subscription / billing kinds
 	"trial_expiration_check":            TrialExpirationCheckUniqueOpts,
@@ -159,9 +160,9 @@ var uniqueOptsByKind = map[string]func() *queue.UniqueOpts{
 	// different pieces of work, exactly like the rename case above.
 	"budget_hierarchy_resync":  noUniqueness,
 	"email_change_propagation": noUniqueness,
-	"boost_evaluation":           noUniqueness,
-	"subscription_webhook":       noUniqueness,
-	"notification_email":         noUniqueness,
+	"boost_evaluation":         noUniqueness,
+	"subscription_webhook":     noUniqueness,
+	"notification_email":       noUniqueness,
 	// cache_purge_retry (Issue #1531 Task 10b): enqueued by deletion_service.go on a purge/bump
 	// failure via a locally-mirrored args struct (services cannot import jobs — see
 	// cache_purge_retry.go). No uniqueness: each failure should always enqueue its own retry, and a

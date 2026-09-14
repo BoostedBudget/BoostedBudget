@@ -49,6 +49,7 @@ func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 		// on purpose, so there is nothing to set and nothing that could omit it. That asymmetry is
 		// what TestBuildPeriodicJobSpecs_PurgeSpecSurvivesEveryNilWorker below asserts.
 		plaidOrphanRetryWorker: jobs.NewPlaidOrphanRetryWorker(jobs.PlaidOrphanRetryWorkerDeps{}),
+		postHogErasureWorker:   jobs.NewPostHogErasureWorker(jobs.PostHogErasureWorkerDeps{}),
 	}
 }
 
@@ -65,8 +66,8 @@ func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 func TestBuildPeriodicJobSpecs_Count(t *testing.T) {
 	specs := buildPeriodicJobSpecs(allNonNilPeriodicJobsDeps())
 
-	if len(specs) != 18 {
-		t.Fatalf("expected 18 periodic job specs when every worker is non-nil, got %d", len(specs))
+	if len(specs) != 19 {
+		t.Fatalf("expected 19 periodic job specs when every worker is non-nil, got %d", len(specs))
 	}
 }
 
@@ -105,8 +106,8 @@ func TestBuildPeriodicJobSpecs_NilWorkerOmitsItsSpec(t *testing.T) {
 
 	specs := buildPeriodicJobSpecs(deps)
 
-	if len(specs) != 17 {
-		t.Fatalf("expected 17 specs with itemCleanupCheckWorker nil, got %d", len(specs))
+	if len(specs) != 18 {
+		t.Fatalf("expected 18 specs with itemCleanupCheckWorker nil, got %d", len(specs))
 	}
 	for _, s := range specs {
 		if s.name == "item cleanup check" {

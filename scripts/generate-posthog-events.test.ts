@@ -688,11 +688,15 @@ describe('legacy migration inventory', () => {
         .flatMap((event) => event.symbols.typescript.map((symbol) => [symbol, event.name])),
     )
 
+    const retiredFrontendEvents = new Set(['first_account_linked', 'plaid_link_succeeded'])
     const retiredMCPEvents = new Set(Object.values(fixture.mcp))
+    const retiredEvents = new Set([...retiredFrontendEvents, ...retiredMCPEvents])
     expect(legacy.map((event) => event.name).sort()).toEqual(
-      fixture.legacy_events.filter((event) => !retiredMCPEvents.has(event)),
+      fixture.legacy_events.filter((event) => !retiredEvents.has(event)),
     )
-    expect(ts).toEqual(fixture.typescript)
+    expect(ts).toEqual(Object.fromEntries(
+      Object.entries(fixture.typescript).filter(([, event]) => !retiredFrontendEvents.has(event)),
+    ))
     expect(go).toEqual(fixture.go)
     expect(mcp).toEqual({})
     expect(fixture.mcp).toEqual({
@@ -708,6 +712,11 @@ describe('legacy migration inventory', () => {
       expect(retired?.deprecated).toContain('#1650')
       expect(retired?.symbols.typescript).toEqual([])
       expect(retired?.symbols.go).toEqual([])
+    }
+    for (const eventName of retiredFrontendEvents) {
+      const retired = catalog.events.find((event) => event.name === eventName)
+      expect(retired?.status).toBe('deprecated')
+      expect(retired?.deprecated).toContain('#1650')
     }
     const metadata = Object.fromEntries(
       catalog.events

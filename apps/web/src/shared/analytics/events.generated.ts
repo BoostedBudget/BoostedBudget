@@ -8,6 +8,7 @@ export const ANALYTICS_EVENTS = {
   // Measures whether users view retained closed-account positions; properties are counts and a fixed account-type discriminator only, never amounts, dates, security names, or account identity.
   ACCOUNT_HOLDINGS_HISTORY_VIEWED: 'account_holdings_history_viewed',
   ACCOUNT_INVESTMENT_ACTIVITY_CLICKED: 'account_investment_activity_clicked',
+  // Fires once after the backend successfully exchanges a Plaid public token; it is the canonical account-link cohort boundary and does not attempt cache-derived first-link classification.
   ACCOUNT_LINK_COMPLETED: 'account_link_completed',
   // Tracks explicit destructive account purges, never ordinary retaining disconnects.
   ACCOUNT_PURGED: 'account_purged',
