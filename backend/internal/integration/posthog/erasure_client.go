@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -27,13 +28,22 @@ var allowedPostHogPrivateHosts = map[string]bool{
 	"eu.posthog.com": true,
 }
 
-func (c *ErasureClient) ResolvePersonUUIDs(ctx context.Context, projectID, region string, distinctIDs []string) ([]string, error) {
+type ErasurePersonResolution struct {
+	PersonUUIDs             []string
+	HasUnresolvedIdentities bool
+}
+
+func (c *ErasureClient) ResolvePersonUUIDs(ctx context.Context, projectID, region string, distinctIDs []string) (ErasurePersonResolution, error) {
 	if err := c.checkTarget(projectID, region); err != nil {
-		return nil, err
+		return ErasurePersonResolution{}, err
 	}
 	seen := make(map[string]bool)
 	result := make([]string, 0, len(distinctIDs))
+	hasUnresolved := false
 	for _, distinctID := range distinctIDs {
+		if err := ctx.Err(); err != nil {
+			return ErasurePersonResolution{}, &ErasureProviderError{Class: "transport"}
+		}
 		query := url.Values{"distinct_id": []string{distinctID}}
 		var page struct {
 			Results []struct {
@@ -42,14 +52,17 @@ func (c *ErasureClient) ResolvePersonUUIDs(ctx context.Context, projectID, regio
 			Next *string `json:"next"`
 		}
 		if err := c.getJSON(ctx, "/persons/?"+query.Encode(), &page); err != nil {
-			return nil, err
+			return ErasurePersonResolution{}, err
 		}
 		if page.Next != nil || len(page.Results) > 1 {
-			return nil, &ErasureProviderError{Class: "invalid_response"}
+			return ErasurePersonResolution{}, &ErasureProviderError{Class: "invalid_response"}
+		}
+		if len(page.Results) == 0 {
+			hasUnresolved = true
 		}
 		for _, person := range page.Results {
 			if _, err := uuid.Parse(person.UUID); err != nil {
-				return nil, &ErasureProviderError{Class: "invalid_response"}
+				return ErasurePersonResolution{}, &ErasureProviderError{Class: "invalid_response"}
 			}
 			if !seen[person.UUID] {
 				seen[person.UUID] = true
@@ -57,44 +70,158 @@ func (c *ErasureClient) ResolvePersonUUIDs(ctx context.Context, projectID, regio
 			}
 		}
 	}
-	return result, nil
+	return ErasurePersonResolution{PersonUUIDs: result, HasUnresolvedIdentities: hasUnresolved}, nil
 }
 
-func (c *ErasureClient) PersonEventDeletionComplete(ctx context.Context, projectID, region string, personUUIDs []string) (bool, error) {
+type ErasureDeletionObservation struct {
+	Found    bool
+	Complete bool
+}
+
+type erasureDeletionRecord struct {
+	CreatedAt      time.Time
+	Status         string
+	DeleteVerified *string
+}
+
+func (c *ErasureClient) CapturePersonEventDeletionBaseline(ctx context.Context, projectID, region string, personUUIDs []string) (map[string]*time.Time, error) {
 	if err := c.checkTarget(projectID, region); err != nil {
-		return false, err
+		return nil, err
 	}
+	baseline := make(map[string]*time.Time, len(personUUIDs))
 	for _, personUUID := range personUUIDs {
-		if _, err := uuid.Parse(personUUID); err != nil {
-			return false, &ErasureProviderError{Class: "invalid_correlation"}
+		records, err := c.personDeletionRecords(ctx, personUUID)
+		if err != nil {
+			return nil, err
 		}
-		query := url.Values{"person_uuid": []string{personUUID}, "status": []string{"all"}}
+		if len(records) > 0 {
+			created := records[0].CreatedAt
+			baseline[personUUID] = &created
+		} else {
+			baseline[personUUID] = nil
+		}
+	}
+	return baseline, nil
+}
+
+func (c *ErasureClient) PersonEventDeletionStatus(ctx context.Context, projectID, region string, personUUIDs []string, baseline map[string]*time.Time, submittedAt, acceptedAt time.Time) (ErasureDeletionObservation, error) {
+	if err := c.checkTarget(projectID, region); err != nil {
+		return ErasureDeletionObservation{}, err
+	}
+	allComplete := true
+	for _, personUUID := range personUUIDs {
+		records, err := c.personDeletionRecords(ctx, personUUID)
+		if err != nil {
+			return ErasureDeletionObservation{}, err
+		}
+		relevant := relevantDeletionRecord(records, baseline[personUUID], submittedAt, acceptedAt)
+		if relevant == nil {
+			return ErasureDeletionObservation{Found: false}, nil
+		}
+		if relevant.Status != "completed" || relevant.DeleteVerified == nil {
+			if relevant.Status != "pending" && relevant.Status != "completed" {
+				return ErasureDeletionObservation{}, &ErasureProviderError{Class: "invalid_response"}
+			}
+			allComplete = false
+			continue
+		}
+		if _, err := time.Parse(time.RFC3339, *relevant.DeleteVerified); err != nil {
+			return ErasureDeletionObservation{}, &ErasureProviderError{Class: "invalid_response"}
+		}
+	}
+	return ErasureDeletionObservation{Found: true, Complete: allComplete}, nil
+}
+
+func relevantDeletionRecord(records []erasureDeletionRecord, baseline *time.Time, submittedAt, acceptedAt time.Time) *erasureDeletionRecord {
+	if baseline != nil {
+		for i := range records {
+			if records[i].CreatedAt.Equal(*baseline) {
+				return &records[i]
+			}
+		}
+		return nil
+	}
+
+	earliestCreatedAt := submittedAt.Add(-time.Minute)
+	latestCreatedAt := acceptedAt.Add(time.Minute)
+	for i := range records {
+		createdAt := records[i].CreatedAt
+		if !createdAt.Before(earliestCreatedAt) && !createdAt.After(latestCreatedAt) {
+			return &records[i]
+		}
+	}
+	return nil
+}
+
+func (c *ErasureClient) PersonEventDeletionComplete(ctx context.Context, projectID, region string, personUUIDs []string, submittedAt time.Time) (bool, error) {
+	status, err := c.PersonEventDeletionStatus(ctx, projectID, region, personUUIDs, map[string]*time.Time{}, submittedAt, submittedAt.Add(5*time.Minute))
+	return status.Found && status.Complete, err
+}
+
+func (c *ErasureClient) personDeletionRecords(ctx context.Context, personUUID string) ([]erasureDeletionRecord, error) {
+	if _, err := uuid.Parse(personUUID); err != nil {
+		return nil, &ErasureProviderError{Class: "invalid_correlation"}
+	}
+	query := url.Values{"person_uuid": []string{personUUID}, "status": []string{"all"}}
+	nextPath := "/persons/deletion_status/?" + query.Encode()
+	var records []erasureDeletionRecord
+	for nextPath != "" {
 		var page struct {
 			Next    *string `json:"next"`
 			Results []struct {
 				PersonUUID     string  `json:"person_uuid"`
 				Status         string  `json:"status"`
+				CreatedAt      string  `json:"created_at"`
 				DeleteVerified *string `json:"delete_verified_at"`
 			} `json:"results"`
 		}
-		if err := c.getJSON(ctx, "/persons/deletion_status/?"+query.Encode(), &page); err != nil {
-			return false, err
+		if err := c.getJSON(ctx, nextPath, &page); err != nil {
+			return nil, err
 		}
-		if page.Next != nil || len(page.Results) != 1 || page.Results[0].PersonUUID != personUUID {
-			return false, nil
-		}
-		status := page.Results[0]
-		if status.Status != "completed" || status.DeleteVerified == nil {
-			if status.Status != "pending" && status.Status != "completed" {
-				return false, &ErasureProviderError{Class: "invalid_response"}
+		for _, candidate := range page.Results {
+			if candidate.PersonUUID != personUUID {
+				return nil, &ErasureProviderError{Class: "invalid_response"}
 			}
-			return false, nil
+			created, err := time.Parse(time.RFC3339, candidate.CreatedAt)
+			if err != nil {
+				return nil, &ErasureProviderError{Class: "invalid_response"}
+			}
+			records = append(records, erasureDeletionRecord{
+				CreatedAt:      created,
+				Status:         candidate.Status,
+				DeleteVerified: candidate.DeleteVerified,
+			})
 		}
-		if _, err := time.Parse(time.RFC3339, *status.DeleteVerified); err != nil {
-			return false, &ErasureProviderError{Class: "invalid_response"}
+		nextPath = ""
+		if page.Next != nil {
+			var err error
+			nextPath, err = c.deletionStatusNextPath(*page.Next)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
-	return true, nil
+	slices.SortFunc(records, func(a, b erasureDeletionRecord) int { return b.CreatedAt.Compare(a.CreatedAt) })
+	return records, nil
+}
+
+func (c *ErasureClient) deletionStatusNextPath(next string) (string, error) {
+	parsed, err := url.Parse(next)
+	if err != nil {
+		return "", &ErasureProviderError{Class: "invalid_response"}
+	}
+	if parsed.IsAbs() && (parsed.Scheme != "https" || !strings.EqualFold(parsed.Hostname(), c.privateHost)) {
+		return "", &ErasureProviderError{Class: "invalid_response"}
+	}
+	prefix := "/api/projects/" + url.PathEscape(c.projectID)
+	if !strings.HasPrefix(parsed.Path, prefix+"/persons/deletion_status/") {
+		return "", &ErasureProviderError{Class: "invalid_response"}
+	}
+	nextPath := strings.TrimPrefix(parsed.EscapedPath(), prefix)
+	if parsed.RawQuery != "" {
+		nextPath += "?" + parsed.RawQuery
+	}
+	return nextPath, nil
 }
 
 func (c *ErasureClient) getJSON(ctx context.Context, path string, destination any) error {
@@ -169,11 +296,12 @@ type ErasureProviderError struct {
 func (e *ErasureProviderError) Error() string { return "PostHog erasure request failed: " + e.Class }
 
 type ErasureClient struct {
-	baseURL   string
-	projectID string
-	region    string
-	apiKey    string
-	http      *http.Client
+	baseURL     string
+	projectID   string
+	region      string
+	apiKey      string
+	http        *http.Client
+	privateHost string
 }
 
 func NewErasureClient(cfg ErasureClientConfig) (*ErasureClient, error) {
@@ -201,7 +329,14 @@ func NewErasureClient(cfg ErasureClientConfig) (*ErasureClient, error) {
 	httpClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
 		return errors.New("PostHog erasure redirect refused")
 	}
-	return &ErasureClient{baseURL: baseURL, projectID: cfg.ProjectID, region: ErasureRegionForHost(cfg.Host), apiKey: cfg.PersonalAPIKey, http: httpClient}, nil
+	return &ErasureClient{
+		baseURL:     baseURL,
+		projectID:   cfg.ProjectID,
+		region:      ErasureRegionForHost(cfg.Host),
+		apiKey:      cfg.PersonalAPIKey,
+		http:        httpClient,
+		privateHost: strings.ToLower(parsed.Hostname()),
+	}, nil
 }
 
 func (c *ErasureClient) RequestPersonDeletion(ctx context.Context, projectID, region string, distinctIDs []string) (ErasureDeleteResult, error) {
@@ -254,7 +389,13 @@ func (c *ErasureClient) RequestPersonDeletion(ctx context.Context, projectID, re
 		RecordingsQueued *bool             `json:"recordings_queued_for_deletion"`
 		DeletionErrors   []json.RawMessage `json:"deletion_errors"`
 	}
-	if err := json.Unmarshal(raw, &decoded); err != nil || decoded.EventsQueued == nil || decoded.RecordingsQueued == nil || !*decoded.EventsQueued || !*decoded.RecordingsQueued || len(decoded.DeletionErrors) != 0 {
+	err = json.Unmarshal(raw, &decoded)
+	hasQueueFlags := decoded.EventsQueued != nil && decoded.RecordingsQueued != nil
+	if err != nil || !hasQueueFlags || len(decoded.DeletionErrors) != 0 {
+		return ErasureDeleteResult{}, fmt.Errorf("invalid deletion response from PostHog")
+	}
+	zeroMatch := decoded.PersonsFound == 0 && decoded.PersonsDeleted == 0
+	if !zeroMatch && (!*decoded.EventsQueued || !*decoded.RecordingsQueued) {
 		return ErasureDeleteResult{}, fmt.Errorf("invalid deletion response from PostHog")
 	}
 	return ErasureDeleteResult{decoded.PersonsFound, decoded.PersonsDeleted, *decoded.EventsQueued, *decoded.RecordingsQueued}, nil

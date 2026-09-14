@@ -93,12 +93,14 @@ func TestPostHogErasureOperatorCompletion_IntegrationAtomicallyDestroysIdentity(
 	require.NoError(t, err)
 	personUUIDs, err := enc.EncryptJSON([]byte(`["11111111-1111-4111-8111-111111111111"]`))
 	require.NoError(t, err)
+	baseline, err := enc.EncryptJSON([]byte(`{"11111111-1111-4111-8111-111111111111":"2026-09-14T10:00:00Z"}`))
+	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `INSERT INTO posthog_erasure_outbox
-		(id,idempotency_key,identities_encrypted,provider_person_uuids_encrypted,project_id,region,state,phase,
+		(id,idempotency_key,identities_encrypted,provider_person_uuids_encrypted,provider_deletion_baseline_encrypted,project_id,region,state,phase,
 		 accepted_at,person_verified_at,events_verified_at,recordings_first_verified_at,surveys_first_verified_at,support_first_verified_at)
-		VALUES($1,$2,$3,$4,'42','us','manual_pending','support_manual',clock_timestamp(),clock_timestamp(),clock_timestamp(),
+		VALUES($1,$2,$3,$4,$5,'42','us','manual_pending','support_manual',clock_timestamp(),clock_timestamp(),clock_timestamp(),
 		 clock_timestamp()-interval '6 minutes',clock_timestamp()-interval '6 minutes',clock_timestamp()-interval '6 minutes')`,
-		id, "completion:"+id, identities, personUUIDs)
+		id, "completion:"+id, identities, personUUIDs, baseline)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_operator_audit WHERE erasure_id=$1", id)
@@ -109,9 +111,85 @@ func TestPostHogErasureOperatorCompletion_IntegrationAtomicallyDestroysIdentity(
 		require.NoError(t, err)
 	}
 	var state string
-	var remainingIdentities, remainingUUIDs *string
-	require.NoError(t, pool.QueryRow(ctx, `SELECT state,identities_encrypted,provider_person_uuids_encrypted FROM posthog_erasure_outbox WHERE id=$1`, id).Scan(&state, &remainingIdentities, &remainingUUIDs))
+	var remainingIdentities, remainingUUIDs, remainingBaseline *string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT state,identities_encrypted,provider_person_uuids_encrypted,provider_deletion_baseline_encrypted FROM posthog_erasure_outbox WHERE id=$1`, id).
+		Scan(&state, &remainingIdentities, &remainingUUIDs, &remainingBaseline))
 	assert.Equal(t, "completed", state)
 	assert.Nil(t, remainingIdentities)
 	assert.Nil(t, remainingUUIDs)
+	assert.Nil(t, remainingBaseline)
+}
+
+func TestPostHogErasureMixedIdentity_IntegrationRequiresManualEventEvidence(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewPostHogErasureOutboxRepository(pool, enc)
+	ctx := context.Background()
+	id := uuid.NewString()
+	identities, err := enc.EncryptJSON([]byte(`["person","event-only"]`))
+	require.NoError(t, err)
+	personUUIDs, err := enc.EncryptJSON([]byte(`["11111111-1111-4111-8111-111111111111"]`))
+	require.NoError(t, err)
+	leaseToken := uuid.NewString()
+	_, err = pool.Exec(ctx, `INSERT INTO posthog_erasure_outbox
+		(id,idempotency_key,identities_encrypted,provider_person_uuids_encrypted,project_id,region,state,phase,
+		 lease_token,lease_until,accepted_at,person_verified_at,requires_manual_event_verification)
+		VALUES($1,$2,$3,$4,'42','us','retrying','person_poll',$5,clock_timestamp()+interval '1 minute',
+		 clock_timestamp(),clock_timestamp(),TRUE)`, id, "mixed:"+id, identities, personUUIDs, leaseToken)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_outbox WHERE id=$1", id) })
+
+	updated, err := repo.MarkPersonEventsVerified(ctx, id, leaseToken)
+	require.NoError(t, err)
+	require.True(t, updated)
+	var state, phase string
+	var eventsVerifiedAt *time.Time
+	require.NoError(t, pool.QueryRow(ctx, `SELECT state,phase,events_verified_at FROM posthog_erasure_outbox WHERE id=$1`, id).
+		Scan(&state, &phase, &eventsVerifiedAt))
+	assert.Equal(t, "manual_pending", state)
+	assert.Equal(t, "support_manual", phase)
+	assert.Nil(t, eventsVerifiedAt)
+}
+
+func TestPostHogErasureRetarget_IntegrationAcceptsEitherMissingComponentAndAuditsPriorTarget(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewPostHogErasureOutboxRepository(pool, enc)
+	ctx := context.Background()
+	identities, err := enc.EncryptJSON([]byte(`["subject"]`))
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name, priorProject, priorRegion string
+	}{
+		{name: "missing project", priorProject: "unconfigured", priorRegion: "us"},
+		{name: "missing region", priorProject: "42", priorRegion: "unconfigured"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := uuid.NewString()
+			_, err := pool.Exec(ctx, `INSERT INTO posthog_erasure_outbox
+				(id,idempotency_key,identities_encrypted,project_id,region,state,phase)
+				VALUES($1,$2,$3,$4,$5,'dead_letter','person_resolve')`,
+				id, "retarget:"+id, identities, tc.priorProject, tc.priorRegion)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_operator_audit WHERE erasure_id=$1", id)
+				_, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_outbox WHERE id=$1", id)
+			})
+
+			updated, err := repo.RetargetUnconfigured(ctx, id, uuid.NewString(), "84", "eu")
+			require.NoError(t, err)
+			require.True(t, updated)
+			var project, region, state, priorProject, priorRegion string
+			require.NoError(t, pool.QueryRow(ctx, `SELECT project_id,region,state FROM posthog_erasure_outbox WHERE id=$1`, id).
+				Scan(&project, &region, &state))
+			require.NoError(t, pool.QueryRow(ctx, `SELECT from_project_id,from_region FROM posthog_erasure_operator_audit
+				WHERE erasure_id=$1 AND action='retarget'`, id).Scan(&priorProject, &priorRegion))
+			assert.Equal(t, "84", project)
+			assert.Equal(t, "eu", region)
+			assert.Equal(t, "retrying", state)
+			assert.Equal(t, tc.priorProject, priorProject)
+			assert.Equal(t, tc.priorRegion, priorRegion)
+		})
+	}
 }
