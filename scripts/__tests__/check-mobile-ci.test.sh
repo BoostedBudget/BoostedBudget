@@ -8,7 +8,7 @@ GUARD="$REPO_ROOT/scripts/check-mobile-ci.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-TOTAL=131
+TOTAL=160
 case_no=0
 pass=0
 fail=0
@@ -265,9 +265,36 @@ elif action == 'generic-overlap':
 elif action == 'remove-expo-major-ignore':
     bun['ignore'] = [i for i in bun['ignore'] if i.get('dependency-name') != 'expo*']
 elif action == 'remove-react-native-major-ignore':
-    bun['ignore'] = [i for i in bun['ignore'] if i.get('dependency-name') != 'react-native*']
+    for entry in bun['ignore']:
+        if entry.get('dependency-name') in ('react-native*', 'react-native'):
+            entry['update-types'] = [
+                value for value in entry.get('update-types', [])
+                if value != 'version-update:semver-major'
+            ]
 elif action == 'remove-nativewind-major-ignore':
     bun['ignore'] = [i for i in bun['ignore'] if i.get('dependency-name') != 'nativewind']
+elif action == 'narrow-expo-major-ignore':
+    next(i for i in bun['ignore'] if i.get('dependency-name') == 'expo*')['dependency-name'] = 'expo'
+elif action == 'remove-react-native-family-ignore':
+    bun['ignore'] = [i for i in bun['ignore'] if i.get('dependency-name') != 'react-native*']
+elif action == 'add-react-family-patch-ignore':
+    bun['ignore'].append({
+        'dependency-name': 'react*',
+        'update-types': ['version-update:semver-patch'],
+    })
+elif action == 'add-react-native-family-patch-ignore':
+    entry = next(i for i in bun['ignore'] if i.get('dependency-name') == 'react-native*')
+    entry['update-types'].append('version-update:semver-patch')
+elif action == 'add-react-patch-version-ignore':
+    entry = next(i for i in bun['ignore'] if i.get('dependency-name') == 'react')
+    entry['versions'] = ['19.2.4']
+elif action == 'add-unconditional-react-family-ignore':
+    bun['ignore'].append({'dependency-name': 'react*'})
+elif action.startswith('remove-ignore-type:'):
+    _, dependency, update_type = action.split(':', 2)
+    entry = next((i for i in bun['ignore'] if i.get('dependency-name') == dependency), None)
+    if entry is not None:
+        entry['update-types'] = [value for value in entry.get('update-types', []) if value != update_type]
 else:
     raise AssertionError(action)
 path.write_text(yaml.safe_dump(doc, sort_keys=False))
@@ -276,12 +303,26 @@ PY
 
 guard_passes() { python3 "$GUARD" "$1" >/dev/null 2>&1; }
 
+guard_rejects() {
+  local dir="$1" expected="$2" diagnostics="$TMP/guard-stderr"
+  if python3 "$GUARD" "$dir" >/dev/null 2>"$diagnostics"; then
+    return 1
+  fi
+  ! grep -q 'Traceback' "$diagnostics" &&
+    grep -q '^  - ' "$diagnostics" &&
+    grep -Eiq -- "$expected" "$diagnostics"
+}
+
 reject_workflow() {
   local label="$1" action="$2" value="$3" dir="$TMP/case-$((case_no + 1))"
   announce "$label"
   copy_fixture "$dir"
   mutate_workflow "$dir/.github/workflows/test.yml" "$action" "$value"
-  if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
+  if guard_rejects "$dir" 'mobile-test|mobile trigger|mobile filter|Playwright|e2e-test|paths-filter|detect-changes|action'; then
+    ok "rejected with intended diagnostic"
+  else
+    bad "accepted, crashed, or returned an unrelated diagnostic: $label"
+  fi
 }
 
 reject_dependabot() {
@@ -289,7 +330,7 @@ reject_dependabot() {
   announce "$label"
   copy_fixture "$dir"
   mutate_dependabot "$dir/.github/dependabot.yml" "$action"
-  if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
+  if guard_rejects "$dir" 'Dependabot|compatibility group'; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated diagnostic: $label"; fi
 }
 
 reject_mobile_package() {
@@ -297,7 +338,7 @@ reject_mobile_package() {
   announce "$label"
   copy_fixture "$dir"
   mutate_mobile_package "$dir/apps/mobile/package.json" "$action"
-  if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
+  if guard_rejects "$dir" 'expo-doctor'; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated diagnostic: $label"; fi
 }
 
 reject_workspace_lockfile() {
@@ -305,7 +346,7 @@ reject_workspace_lockfile() {
   announce "$label"
   copy_fixture "$dir"
   touch "$dir/$relative_path"
-  if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
+  if guard_rejects "$dir" "$relative_path"; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated diagnostic: $label"; fi
 }
 
 reject_workspace_config() {
@@ -313,15 +354,25 @@ reject_workspace_config() {
   announce "$label"
   copy_fixture "$dir"
   mutate_workspace_config "$dir" "$action"
-  if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
+  if guard_rejects "$dir" 'workspace'; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated diagnostic: $label"; fi
 }
 
 reject_dependency_policy() {
-  local label="$1" action="$2" dir="$TMP/case-$((case_no + 1))"
+  local label="$1" action="$2" dir="$TMP/case-$((case_no + 1))" expected='React|overrides'
   announce "$label"
   copy_fixture "$dir"
   mutate_dependency_policy "$dir" "$action"
-  if guard_passes "$dir"; then bad "accepted: $label"; else ok "rejected"; fi
+  case "$action" in
+    set:*)
+      local unused package section dependency value
+      IFS=: read -r unused package section dependency value <<EOF
+$action
+EOF
+      expected="$dependency"
+      ;;
+    override:*) expected="${action#override:}"; expected="${expected%%:*}" ;;
+  esac
+  if guard_rejects "$dir" "$expected"; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated diagnostic: $label"; fi
 }
 
 accept_dependency_policy() {
@@ -330,6 +381,22 @@ accept_dependency_policy() {
   copy_fixture "$dir"
   mutate_dependency_policy "$dir" "$action"
   if guard_passes "$dir"; then ok "accepted"; else bad "rejected: $label"; fi
+}
+
+reject_synthetic_react() {
+  local label="$1" section="$2" dependency="$3" version="$4" dir="$TMP/case-$((case_no + 1))"
+  announce "$label"
+  copy_fixture "$dir"
+  mkdir -p "$dir/apps/synthetic"
+  python3 - "$dir/apps/synthetic/package.json" "$section" "$dependency" "$version" <<'PY'
+import json, pathlib, sys
+pathlib.Path(sys.argv[1]).write_text(json.dumps({
+    'name': '@boostedbudget/synthetic',
+    'private': True,
+    sys.argv[2]: {sys.argv[3]: sys.argv[4]},
+}, indent=2) + '\n')
+PY
+  if guard_rejects "$dir" "$dependency"; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated diagnostic: $label"; fi
 }
 
 announce "the real repository configuration passes"
@@ -385,11 +452,7 @@ reject_playwright_resolution() {
   local fixture="$TMP/playwright-$case_no"
   copy_fixture "$fixture"
   mutate_playwright_resolution "$fixture/$2" "$3"
-  if guard_passes "$fixture"; then
-    bad "accepted workspace-layout-dependent Playwright resolution"
-  else
-    ok "rejected"
-  fi
+  if guard_rejects "$fixture" 'Playwright'; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated Playwright diagnostic"; fi
 }
 
 reject_playwright_resolution "E2E Playwright resolution assumes nested node_modules" ".github/workflows/test.yml" "broken"
@@ -426,7 +489,7 @@ announce "a workspace-local Bun lockfile violates single-lockfile policy"
 lock_dir="$TMP/case-$case_no"
 copy_fixture "$lock_dir"
 touch "$lock_dir/apps/mobile/bun.lock"
-if guard_passes "$lock_dir"; then bad "mobile lockfile accepted"; else ok "rejected"; fi
+if guard_rejects "$lock_dir" 'apps/mobile/bun.lock'; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated lockfile diagnostic"; fi
 
 reject_workspace_lockfile "apps/web cannot own a Bun lockfile" "apps/web/bun.lock"
 reject_workspace_lockfile "API-client cannot own a Bun lockfile" "packages/api-client/bun.lock"
@@ -436,6 +499,8 @@ reject_workspace_lockfile "workspace Yarn lockfiles are forbidden" "packages/api
 reject_workspace_lockfile "workspace pnpm lockfiles are forbidden" "packages/design-tokens/pnpm-lock.yaml"
 reject_workspace_lockfile "workspace binary Bun lockfiles are forbidden" "apps/mobile/bun.lockb"
 reject_workspace_lockfile "root lockfiles other than bun.lock are forbidden" "package-lock.json"
+reject_workspace_lockfile "workspace npm shrinkwrap files are forbidden" "apps/web/npm-shrinkwrap.json"
+reject_workspace_lockfile "root npm shrinkwrap files are forbidden" "npm-shrinkwrap.json"
 
 announce "a synthetic workspace discovered from apps/* cannot own a lockfile"
 synthetic_dir="$TMP/case-$case_no"
@@ -443,7 +508,7 @@ copy_fixture "$synthetic_dir"
 mkdir -p "$synthetic_dir/apps/synthetic"
 cp "$REPO_ROOT/packages/design-tokens/package.json" "$synthetic_dir/apps/synthetic/package.json"
 touch "$synthetic_dir/apps/synthetic/bun.lock"
-if guard_passes "$synthetic_dir"; then bad "synthetic workspace lockfile accepted"; else ok "rejected"; fi
+if guard_rejects "$synthetic_dir" 'apps/synthetic/bun.lock'; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated lockfile diagnostic"; fi
 
 announce "a dangling workspace lockfile symlink is still forbidden"
 dangling_lock_dir="$TMP/case-$case_no"
@@ -452,7 +517,7 @@ python3 - "$dangling_lock_dir/apps/web/bun.lock" <<'PY'
 import pathlib, sys
 pathlib.Path(sys.argv[1]).symlink_to('missing-lock-target')
 PY
-if guard_passes "$dangling_lock_dir"; then bad "dangling workspace lock symlink accepted"; else ok "rejected"; fi
+if guard_rejects "$dangling_lock_dir" 'apps/web/bun.lock'; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated lockfile diagnostic"; fi
 
 announce "root bun.lock must be a regular in-repository file"
 root_symlink_dir="$TMP/case-$case_no"
@@ -465,7 +530,7 @@ outside = root.parent / 'external-bun.lock'
 outside.touch()
 (root / 'bun.lock').symlink_to(outside)
 PY
-if guard_passes "$root_symlink_dir"; then bad "root bun.lock symlink accepted"; else ok "rejected"; fi
+if guard_rejects "$root_symlink_dir" 'root bun.lock'; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated root-lock diagnostic"; fi
 
 announce "nested node_modules lockfiles are not workspace lockfiles"
 vendored_lock_dir="$TMP/case-$case_no"
@@ -487,7 +552,7 @@ python3 - "$root_lock_dir/bun.lock" <<'PY'
 import pathlib, sys
 pathlib.Path(sys.argv[1]).unlink()
 PY
-if guard_passes "$root_lock_dir"; then bad "missing root bun.lock accepted"; else ok "rejected"; fi
+if guard_rejects "$root_lock_dir" 'root bun.lock'; then ok "rejected with intended diagnostic"; else bad "accepted, crashed, or returned an unrelated root-lock diagnostic"; fi
 
 reject_dependabot "Expo compatibility group is not first" "group-last"
 reject_dependabot "Expo compatibility group loses minor/patch update types" "group-major-only"
@@ -497,6 +562,18 @@ reject_dependabot "generic frontend group competes for React DOM" "generic-overl
 reject_dependabot "Expo major updates are no longer held" "remove-expo-major-ignore"
 reject_dependabot "React Native major updates are no longer held" "remove-react-native-major-ignore"
 reject_dependabot "NativeWind major updates are no longer held" "remove-nativewind-major-ignore"
+reject_dependabot "Expo family major updates require wildcard coverage" "narrow-expo-major-ignore"
+reject_dependabot "React Native family major updates require wildcard coverage" "remove-react-native-family-ignore"
+reject_dependabot "React patches cannot be held by a wildcard ignore" "add-react-family-patch-ignore"
+reject_dependabot "React Native family patches remain available" "add-react-native-family-patch-ignore"
+reject_dependabot "React patches cannot be held by a version-specific ignore" "add-react-patch-version-ignore"
+reject_dependabot "React patches cannot be held by an unconditional ignore" "add-unconditional-react-family-ignore"
+reject_dependabot "React minor updates must remain manual" "remove-ignore-type:react:version-update:semver-minor"
+reject_dependabot "React DOM minor updates must remain manual" "remove-ignore-type:react-dom:version-update:semver-minor"
+reject_dependabot "React Native minor updates must remain manual" "remove-ignore-type:react-native:version-update:semver-minor"
+reject_dependabot "React Native Web minor updates must remain manual" "remove-ignore-type:react-native-web:version-update:semver-minor"
+reject_dependabot "NativeWind release candidates must hold every update" "remove-ignore-type:nativewind:version-update:semver-patch"
+reject_dependabot "react-native-css release candidates must hold every update" "remove-ignore-type:react-native-css:version-update:semver-patch"
 
 accept_dependency_policy "React patch updates remain available to Dependabot" "allowed-react-patch"
 accept_dependency_policy "Expo 57 patch updates remain available to Dependabot" "set:mobile:dependencies:expo:~57.0.99"
@@ -505,6 +582,7 @@ accept_dependency_policy "React Native 0.86 patch updates remain available to De
 accept_dependency_policy "React Native Web 0.21 patch updates remain available to Dependabot" "set:mobile:dependencies:react-native-web:~0.21.99"
 accept_dependency_policy "TanStack Query 5 updates remain available to Dependabot" "set:mobile:dependencies:@tanstack/react-query:^5.102.0"
 accept_dependency_policy "React Router 7 updates remain available to Dependabot" "set:web:dependencies:react-router:^7.14.0"
+accept_dependency_policy "numeric prereleases are not mistaken for moving tags" "set:mobile:dependencies:react-native-reanimated:4.5.2-rc.0"
 
 reject_dependency_policy "React Router 8 is incompatible with React 19.2.3" "set:web:dependencies:react-router:^8.3.0"
 reject_dependency_policy "React Router requires a caret range" "set:web:dependencies:react-router:7.13.1"
@@ -518,6 +596,16 @@ reject_dependency_policy "moving preview tags are forbidden" "set:mobile:depende
 reject_dependency_policy "wildcard dependency versions are forbidden" "set:mobile:dependencies:react-native:*"
 reject_dependency_policy "empty dependency versions are forbidden" "set:mobile:dependencies:react-native-web:"
 reject_dependency_policy "other unconstrained tags are forbidden" "set:mobile:dependencies:@tanstack/react-query:next"
+reject_dependency_policy "Expo constants cannot use a moving tag" "set:mobile:dependencies:expo-constants:latest"
+reject_dependency_policy "Reanimated cannot use a wildcard" "set:mobile:dependencies:react-native-reanimated:*"
+reject_dependency_policy "Babel preset Expo cannot use a preview tag" "set:mobile:devDependencies:babel-preset-expo:preview"
+reject_dependency_policy "new Expo compatibility dependencies cannot use moving tags" "set:mobile:dependencies:expo-camera:latest"
+reject_dependency_policy "mobile compatibility dependencies cannot use git specs" "set:mobile:dependencies:@babel/runtime:git+https://example.com/runtime.git"
+reject_dependency_policy "mobile compatibility dependencies cannot use URL specs" "set:mobile:dependencies:expo-linking:https://example.com/expo-linking.tgz"
+reject_dependency_policy "mobile compatibility dependencies cannot use file specs" "set:mobile:dependencies:react-native-safe-area-context:file:../safe-area"
+reject_dependency_policy "mobile compatibility dependencies require full semver" "set:mobile:dependencies:react-native-worklets:0.10"
+reject_dependency_policy "numeric prerelease identifiers cannot have leading zeroes" "set:mobile:dependencies:react-native-reanimated:4.5.2-01"
+reject_dependency_policy "numeric prerelease components cannot have leading zeroes" "set:mobile:dependencies:react-native-reanimated:4.5.2-rc.01"
 reject_dependency_policy "React must be exact rather than ranged" "set:root:dependencies:react:^19.2.3"
 reject_dependency_policy "Expo requires a tilde range" "set:mobile:dependencies:expo:57.0.1"
 reject_dependency_policy "Expo Router requires a tilde range" "set:mobile:dependencies:expo-router:^57.0.1"
@@ -541,6 +629,11 @@ reject_dependency_policy "global React DOM overrides are forbidden" "override:re
 reject_dependency_policy "global lightningcss overrides are forbidden" "override:lightningcss:1.30.2"
 reject_dependency_policy "version-qualified global overrides are forbidden" "qualified-override"
 reject_dependency_policy "nested React overrides are forbidden" "nested-override"
+
+reject_synthetic_react "a dynamic runtime React cannot drift" "dependencies" "react" "19.2.4"
+reject_synthetic_react "a dynamic runtime React DOM cannot use a tag" "dependencies" "react-dom" "latest"
+reject_synthetic_react "a dynamic development React cannot drift" "devDependencies" "react" "19.2.4"
+reject_synthetic_react "a dynamic development React DOM cannot use a tag" "devDependencies" "react-dom" "latest"
 
 echo "check-mobile-ci.test.sh: $pass passed, $fail failed"
 if [ "$case_no" -ne "$TOTAL" ]; then
