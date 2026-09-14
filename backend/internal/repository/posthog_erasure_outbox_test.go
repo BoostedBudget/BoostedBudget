@@ -57,6 +57,7 @@ func TestCompleteErasureClearsAllRecoverableProviderIdentityCiphertext(t *testin
 	source := string(raw)
 	assert.Contains(t, source, "identities_encrypted=NULL")
 	assert.Contains(t, source, "clerk_user_id_encrypted=NULL")
+	assert.Contains(t, source, "clerk_user_id_blind_idx=NULL")
 	assert.Contains(t, source, "provider_person_uuids_encrypted=NULL")
 	assert.Contains(t, source, "provider_deletion_baseline_encrypted=NULL")
 }

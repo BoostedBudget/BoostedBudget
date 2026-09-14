@@ -15,7 +15,7 @@ import {
 
 export interface EngagementDependencies {
   useAuthState(): { isLoaded: boolean; userId: string | null }
-  useVerifiedIdentity(userId: string | null, enabled: boolean): {
+  useVerifiedIdentity(userId: string | null, enabled: boolean, pollContinuously: boolean): {
     data: VerifiedPostHogIdentity | undefined
     isLoading: boolean
     isError: boolean
@@ -29,7 +29,7 @@ const defaultDependencies: EngagementDependencies = {
     const { isLoaded, user } = useUser()
     return { isLoaded, userId: user?.id ?? null }
   },
-  useVerifiedIdentity(userId, enabled) {
+  useVerifiedIdentity(userId, enabled, pollContinuously) {
     return useGetPostHogSupportIdentity({
       query: {
         enabled,
@@ -37,7 +37,7 @@ const defaultDependencies: EngagementDependencies = {
         retry: false,
         staleTime: 0,
         gcTime: 0,
-        refetchInterval: enabled ? 15_000 : false,
+        refetchInterval: pollContinuously ? 15_000 : false,
         refetchIntervalInBackground: true,
       },
     })
@@ -74,6 +74,7 @@ export function AuthenticatedPostHogExperiences({
   const identity = dependencies.useVerifiedIdentity(
     userId,
     configured && (supportRequested || surveyAuthorized),
+    configured && supportRequested,
   )
   const refetchIdentity = identity.refetch
   const [supportReady, setSupportReady] = useState(false)

@@ -791,7 +791,11 @@ func main() {
 		transactionService := services.NewTransactionService(transactionRepo, customCategoryRepo)
 		transactionService.SetAnalytics(analyticsGateway)
 		transactionService.SetAccountRepository(accountRepo) // #1329: embed account in investment rows
-		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db, postHogErasureRepo)
+		registrationService := services.NewRegistrationService(profileRepo, identityRepo, privacyRepo, auditLogger, db,
+			services.RegistrationAuthority{
+				ErasureFence:    postHogErasureRepo,
+				ClerkUserGetter: services.NewDefaultClerkUserGetter(),
+			})
 		registrationService.SetAnalytics(analyticsGateway)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
 		subscriptionService := services.NewSubscriptionService(tierConfig, subscriptionOverrideRepo)

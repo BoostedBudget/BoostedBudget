@@ -7,13 +7,30 @@ missing, local erasure may commit, but the external obligation remains pending o
 Never tell a user that provider erasure is complete merely because PostHog returned HTTP 202.
 
 Each new obligation begins with durable Clerk deletion. The canonical Clerk subject is encrypted;
-only its keyed blind-index fence remains after completion. A failed best-effort deletion in the
-account service therefore cannot be lost: the erasure worker retries it, and neither PostHog work nor
-provider completion can pass the `clerk_deleted_at` fence. After Clerk confirms deletion, the worker
-waits 30 seconds on the database clock before PostHog processing—longer than the Support client's
-15-second authority revalidation interval. Background tabs revalidate too, and visibility return
-tears down the Support transport until a fresh check succeeds. PostHog's Support identity HMAC has
-no native expiry; do not describe this application/Clerk fence as HMAC revocation.
+its keyed blind-index fence remains only while Clerk deletion is outstanding. The Clerk checkpoint
+atomically clears both values. A failed best-effort deletion in the account service therefore cannot
+be lost: the erasure worker retries it, and neither PostHog work nor provider completion can pass the
+`clerk_deleted_at` fence. Registration of an unknown local identity performs a live Clerk existence
+check and fails closed when Clerk reports not-found or is unavailable, so no permanent identity
+fence is required after deletion. After Clerk confirms deletion, the worker waits 30 seconds on the
+database clock before PostHog processing—longer than the Support client's 15-second authority
+revalidation interval. That polling runs only while Support is requested; surveys revalidate their
+identity when displayed. Background Support tabs revalidate too, and visibility return tears down
+the Support transport until a fresh check succeeds.
+
+Migration 213 marks preexisting migration-211 rows `clerk_fence_required=false`. This is a narrow
+grandfather: Support identity issuance was not deployed before 213, so those obligations cannot
+have an issued Support credential from this feature and their already-deleted Clerk subject cannot
+be reconstructed. Outstanding legacy rows keep their existing PostHog phase; completed legacy rows
+remain valid audit history. Every post-213 obligation defaults to requiring the Clerk checkpoint.
+
+PostHog's Support identity HMAC has no native expiry or per-user revocation. Treat erasure as a
+point-in-time operation: the worker deletes after durable Clerk/client fencing, and completion needs
+two Support zero checks separated by at least five minutes. A provider request already in flight at
+the cutoff is covered by those checks. A person who later deliberately replays the public widget
+token and an old HMAC submits new data after the erasure boundary; that does not invalidate the
+earlier evidence. Preventing deliberate replay would require proxying every Support write through a
+BoostedBudget authorization service, which the direct PostHog widget integration does not do.
 
 The encrypted envelope captures every identity BoostedBudget legitimately records at deletion time:
 the canonical `users.clerk_user_id`, all `user_identities.clerk_user_id` rows, and the legacy internal
@@ -95,7 +112,8 @@ The official capability references are the [Persons API](https://posthog.com/doc
    `POST /api/v1/admin/posthog-erasure/{id}/evidence` with bounded evidence `provider_zero` or
    `provider_case_deleted`. Repeat each check after at least five minutes. Completion is automatic
    only after every required second confirmation plus person/event verification; that same atomic
-   update nulls the identity, person-UUID, and deletion-baseline ciphertext columns.
+   update nulls the identity, person-UUID, deletion-baseline, Clerk-subject, and temporary keyed-fence
+   columns.
 
 If resolution finds no person (including an event-only distinct ID), the worker still submits the
 documented bulk delete by distinct ID. Because PostHog exposes no deletion-status correlation for

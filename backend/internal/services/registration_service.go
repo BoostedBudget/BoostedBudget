@@ -19,6 +19,12 @@ type ClerkErasureFenceReader interface {
 	IsClerkIdentityErasureFenced(context.Context, string) (bool, error)
 }
 
+// RegistrationAuthority prevents a valid but stale Clerk token from recreating an erased account.
+type RegistrationAuthority struct {
+	ErasureFence    ClerkErasureFenceReader
+	ClerkUserGetter ClerkUserGetter
+}
+
 // TxBeginner is an interface for database connection pools that can begin transactions.
 // Both *pgxpool.Pool and pgxmock.PgxPoolIface satisfy this interface.
 type TxBeginner interface {
@@ -90,6 +96,7 @@ type registrationService struct {
 	trialGranter TrialGranter       // Issue #679: Optional trial granter for auto-grant on registration
 	analytics    phclient.Analytics // Optional PostHog analytics client
 	erasureFence ClerkErasureFenceReader
+	clerkGetter  ClerkUserGetter
 }
 
 // NewRegistrationService creates a new RegistrationService
@@ -99,11 +106,11 @@ func NewRegistrationService(
 	privacyRepo repository.PrivacyRepository,
 	auditLogger AuditLogger,
 	db TxBeginner,
-	erasureFence ...ClerkErasureFenceReader,
+	authorities ...RegistrationAuthority,
 ) RegistrationService {
-	var fence ClerkErasureFenceReader
-	if len(erasureFence) > 0 {
-		fence = erasureFence[0]
+	var authority RegistrationAuthority
+	if len(authorities) > 0 {
+		authority = authorities[0]
 	}
 	return &registrationService{
 		profileRepo:  profileRepo,
@@ -111,7 +118,8 @@ func NewRegistrationService(
 		privacyRepo:  privacyRepo,
 		auditLogger:  auditLogger,
 		db:           db,
-		erasureFence: fence,
+		erasureFence: authority.ErasureFence,
+		clerkGetter:  authority.ClerkUserGetter,
 	}
 }
 
@@ -189,6 +197,15 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 			return nil, fmt.Errorf("failed to get existing user: %w", err)
 		}
 		return user, nil
+	}
+	if s.clerkGetter != nil {
+		_, err = s.clerkGetter.GetUser(ctx, clerkUserID)
+		if errors.Is(err, ErrClerkUserNotFound) {
+			return nil, ErrRegistrationErasureFenced
+		}
+		if err != nil {
+			return nil, fmt.Errorf("verify Clerk user before registration: %w", err)
+		}
 	}
 
 	// #1001: Fallback — blind-index lookup misses rows that were created before encryption

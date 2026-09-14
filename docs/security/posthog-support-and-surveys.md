@@ -61,7 +61,9 @@ Required PostHog project settings:
 
 Surveys use another isolated instance and require the same authenticated-route and server-verified
 identity checks plus a `granted` analytics lifecycle scoped to that Clerk subject. Surveys do not
-require the user to open Support. Automatic survey display remains disabled.
+require the user to open Support. The identity is revalidated when surveys are displayed, but a
+survey-consented session does not run Support's 15-second authority poll. Automatic survey display
+remains disabled.
 The app fetches matching surveys and displays only surveys whose questions are all rating,
 single-choice, or multiple-choice. Open and link questions, and choices with an open-text option,
 are rejected as a whole before rendering. Withdrawal, logout, or account switch disposes the survey
@@ -81,7 +83,9 @@ Required PostHog project settings:
 - Target surveys to identified users as needed; the app will never load them for signed-out users.
 
 References: [Support widget and identity verification](https://posthog.com/docs/support/widget) and
-[custom survey display APIs](https://posthog.com/docs/surveys/implementing-custom-surveys).
+[custom survey display APIs](https://posthog.com/docs/surveys/implementing-custom-surveys). Clerk
+documents both its [live Backend API user reads](https://clerk.com/docs/reference/backend/overview)
+and [short-lived session tokens](https://clerk.com/docs/guides/sessions/session-tokens).
 
 ## GDPR erasure
 
@@ -93,11 +97,23 @@ cascade and retries independently of PostHog availability. See the
 [PostHog erasure runbook](../runbooks/posthog-gdpr-erasure.md) for provider capabilities and the
 mandatory manual Support/survey-response verification phase.
 
-The obligation first durably retries deletion of the canonical Clerk user. A keyed, non-recoverable
-Clerk-subject fence survives the local user cascade and permanently prevents middleware
-auto-registration or new Support identity issuance for that subject. PostHog deletion cannot begin
-until Clerk deletion is confirmed and a 30-second database-clock cutoff—twice the foreground
-revalidation interval—has elapsed. Provider completion additionally requires that Clerk checkpoint.
-This is the application revocation boundary; it does not misrepresent PostHog's deterministic HMAC
-as expiring. A request already accepted by PostHog before browser teardown is covered by the later
-PostHog deletion and manual Support zero verification.
+The obligation first durably retries deletion of the canonical Clerk user. A keyed Clerk-subject
+fence survives the local user cascade only until the worker confirms Clerk deletion, then the same
+checkpoint destroys both the encrypted Clerk subject and its keyed fence. After a local identity
+miss, registration verifies the subject against Clerk's live Backend API and fails closed on
+not-found or API failure; this prevents a stale signed session from recreating the local account
+without permanently retaining an identity-derived fence. Support identity issuance independently
+requires an active local user. PostHog deletion cannot begin until Clerk deletion is confirmed and a
+30-second database-clock cutoff—twice the foreground revalidation interval—has elapsed. Provider
+completion additionally requires that Clerk checkpoint. Rows created before migration 213 are
+explicitly exempt because the Support credential feature had not been deployed when those rows were
+created; they retain their existing PostHog phase and are not stranded by the new constraint.
+
+This is a point-in-time erasure boundary, not revocation of PostHog's deterministic HMAC. A request
+already accepted by PostHog before browser teardown is covered by the subsequent deletion and two
+Support zero checks separated by at least five minutes. PostHog provides no per-user expiry or
+revocation for the HMAC. Deliberately submitting a new Support message directly with the public
+widget token and a previously disclosed valid HMAC after the durable Clerk/client fence and final
+zero evidence creates new user-submitted provider data; it does not retroactively invalidate the
+completed erasure evidence. Proxying all Support writes would be required to prevent that deliberate
+replay, and is outside this integration because the official widget sends directly to PostHog.
