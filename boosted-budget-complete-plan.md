@@ -2668,7 +2668,7 @@ Each phase produces a deployable, valuable product increment. The architecture s
 - **Review workflow:** Implementation Tasks 1-4 used fresh subagents and obtained specification
   and quality approval. The final whole-diff remediation review remains pending; this entry does
   not claim its own approval.
-- **Validation so far:** Available local evidence includes 123 API-client tests, 32 mobile tests at
+- **Validation so far:** Available local evidence includes 126 API-client tests, 32 mobile tests at
   99.03% coverage, all 168 guard cases, Expo Doctor 21/21, package-export checks, and the complete
   web test/typecheck/lint checks. Two unauthenticated production smoke tests passed in Playwright;
   authenticated E2E setup was blocked because `CLERK_PUBLISHABLE_KEY` was absent, so this entry

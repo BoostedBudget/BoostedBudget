@@ -245,9 +245,14 @@ function destructuredBrowserMemberOnGlobalThis(
   aliases: Set<ts.Symbol>,
 ): string | undefined {
   if (!ts.isBindingElement(node) || !ts.isObjectBindingPattern(node.parent)) return undefined
-  const declaration = node.parent.parent
-  if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) return undefined
-  if (!isGlobalThisLike(declaration.initializer, checker, aliases)) return undefined
+  const owner = node.parent.parent
+  if (
+    (!ts.isVariableDeclaration(owner) && !ts.isParameter(owner))
+    || !owner.initializer
+  ) {
+    return undefined
+  }
+  if (!isGlobalThisLike(owner.initializer, checker, aliases)) return undefined
 
   const property = node.propertyName ?? node.name
   if (!ts.isIdentifier(property) && !ts.isStringLiteralLike(property)
@@ -583,6 +588,14 @@ describe('API client portability detector', () => {
       'function read(root: any = globalThis) { return root.window }',
     ],
     [
+      'destructured parameter default from globalThis',
+      'function read({ window }: any = globalThis) { return window.location }',
+    ],
+    [
+      'computed destructured parameter default from a wrapped alias',
+      "const root = globalThis; function read({ ['location']: current }: any = (root as any)) { return current.href }",
+    ],
+    [
       'chained assignment from globalThis',
       'let root: any, next: any; root = next = globalThis; root.location.href',
     ],
@@ -766,6 +779,20 @@ describe('API client portability detector', () => {
       void read()
       void root.location.href
       void next.window
+    `
+
+    expect(findPortabilityViolations(source, 'fixture.ts')).toEqual([])
+  })
+
+  test('ignores destructured parameter defaults sourced from local data', () => {
+    const source = `
+      const local = { window: { location: 'fixture' }, location: { href: 'fixture' } }
+      function read(
+        { window, ['location']: current }: typeof local = local,
+      ) {
+        return window.location + current.href
+      }
+      void read()
     `
 
     expect(findPortabilityViolations(source, 'fixture.ts')).toEqual([])
