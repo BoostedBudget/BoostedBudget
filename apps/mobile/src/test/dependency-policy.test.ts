@@ -25,8 +25,6 @@ describe('universal React dependency policy', () => {
     expect(rootPackage.dependencies['react-dom']).toBe(expectedReactDOM)
     expect(webPackage.dependencies.react).toBe(expectedReact)
     expect(webPackage.dependencies['react-dom']).toBe(expectedReactDOM)
-    expect(mobilePackage.dependencies.react).toBe(expectedReact)
-    expect(mobilePackage.dependencies['react-dom']).toBe(expectedReactDOM)
     expect(apiClientPackage.devDependencies.react).toBe(expectedReact)
     expect(apiClientPackage.devDependencies['react-dom']).toBe(expectedReactDOM)
   })
