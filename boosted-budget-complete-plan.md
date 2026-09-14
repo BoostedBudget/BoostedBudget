@@ -2651,7 +2651,7 @@ Each phase produces a deployable, valuable product increment. The architecture s
   adversarial review (retry once, then fresh-context fallback if unavailable); update PR #1649
   with evidence before marking it ready.
 
-## 2026-09-14 — #1654 Requirements-Gap Remediation
+## 2026-09-13 — #1654 Requirements-Gap Remediation
 
 - **Baseline and audit:** Work was staged remotely from base `9b22ed3c`. The initial requirements
   audit found 10/14 MET, 4 PARTIAL, and 0 NOT MET. The four partial gaps were package-ambient
@@ -2664,8 +2664,9 @@ Each phase produces a deployable, valuable product increment. The architecture s
   dependency compatibility, Dependabot policy, and the single-lockfile invariant.
 - **Scope:** Every named milestone #8 deferral remains separate; this remediation creates no new
   ticket. #1668 and CI-runner work are excluded, with no additional Ubicloud migration.
-- **Review workflow:** Fresh subagents handled implementation, specification review, and quality
-  review, and both specification and quality approvals were obtained.
+- **Review workflow:** Implementation Tasks 1-3 used fresh subagents and obtained specification
+  and quality approval. At the point recorded, documentation Task 4 quality review and the final
+  whole-diff review remain pending; this entry does not claim its own approval.
 - **Validation so far:** Available local evidence includes 97 API-client tests, 32 mobile tests at
   99.03% coverage, all 160 guard cases, Expo Doctor 21/21, package-export checks, and the complete
   web test/typecheck/lint/E2E checks. Final whole-repository validation and the mandatory
@@ -2673,6 +2674,6 @@ Each phase produces a deployable, valuable product increment. The architecture s
 
 *Document Version: 2.0.2*
 
-*Last Updated: 2026-09-14*
+*Last Updated: 2026-09-13*
 
 *Project: BoostedBudget - Global Financial Automation Platform*
