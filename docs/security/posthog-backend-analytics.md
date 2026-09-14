@@ -10,6 +10,8 @@ errors, inactive/deleted accounts, deletion-in-progress, and a missing Clerk sub
 closed. No permissive consent cache is used. PostgreSQL share locks are held through the SDK enqueue
 callback, so consent withdrawal and emission are serialized: a withdrawal that commits first blocks
 the event, while a withdrawal racing an already-authorized enqueue waits for that boundary.
+The authority transaction contains no writes and is rolled back only to release its locks after
+enqueue; cleanup failure cannot misreport an already-enqueued event as an authority drop.
 
 New producers use a generated `TypedEvent` payload from `config/posthog_events.yaml`. Its private
 marker method seals the interface to the PostHog package, so another backend package cannot forge
@@ -28,6 +30,7 @@ and their property contracts are unreviewed; moving them mechanically to typed p
 unknown semantics. The server injects the gateway—not the SDK client—into every adapter, and a
 guard prevents raw SDK imports or raw-client production wiring. A second exact path-and-call-count
 allowlist pins every grandfathered `.Capture` site, so adding even one raw producer fails tests.
+The six grandfathered `.CaptureIfConsented` sites are pinned by the same path-and-count rule.
 Each adapter must be converted to a generated payload when its event semantics are reviewed.
 
 Operational health does not belong in PostHog. Contract entries classified `operational` are

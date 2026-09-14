@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/testsupport/mockassert"
 	"github.com/plaid/plaid-go/v23/plaid"
@@ -2352,6 +2353,8 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 				nil, mockPlaidService, subscriptionService,
 				nil, nil, nil, nil, nil,
 			)
+			analytics := &recordingSyncProductAnalytics{}
+			SetTransactionSyncProductAnalytics(service, analytics)
 
 			linkedItem := &domain.LinkedItem{
 				ID:          "linked-item-first-sync",
@@ -2397,6 +2400,9 @@ func TestSyncTransactions_NilVsEmptyCursor(t *testing.T) {
 			assert.NoError(t, err)
 			assert.NotNil(t, result)
 			assert.Equal(t, firstCursor, result.NewCursor)
+			payload, ok := analytics.event.(phclient.FinancialDataSyncCompletedPayload)
+			require.True(t, ok)
+			assert.Equal(t, phclient.FinancialDataSyncCompletedSyncKindInitial, payload.SyncKind)
 
 			// Assert: TransactionsSync was called with empty cursor and 730 days historical
 			mockPlaidService.AssertCalled(t, "TransactionsSync", ctx, "access-token", "", 730)

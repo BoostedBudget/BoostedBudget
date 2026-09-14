@@ -19,13 +19,32 @@ func TestAnalyticsAuthorityHoldsConsentAndIdentityLockThroughEmission(t *testing
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta(analyticsAuthorityQuery)).WithArgs("internal-user").
 		WillReturnRows(pgxmock.NewRows([]string{"clerk_user_id"}).AddRow("user_clerk"))
-	mock.ExpectCommit()
+	mock.ExpectRollback()
 
 	called := false
 	granted, err := repo.WithConsentedSubject(context.Background(), "internal-user", func(subject string) {
 		called = true
 		assert.Equal(t, "user_clerk", subject)
 	})
+
+	require.NoError(t, err)
+	assert.True(t, granted)
+	assert.True(t, called)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAnalyticsAuthorityCleanupFailureDoesNotMisreportAnEmittedEvent(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := NewAnalyticsAuthorityRepository(mock, newTestFieldEncryptor(t))
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(analyticsAuthorityQuery)).WithArgs("internal-user").
+		WillReturnRows(pgxmock.NewRows([]string{"clerk_user_id"}).AddRow("user_clerk"))
+	mock.ExpectRollback().WillReturnError(errors.New("connection already closed"))
+
+	called := false
+	granted, err := repo.WithConsentedSubject(context.Background(), "internal-user", func(string) { called = true })
 
 	require.NoError(t, err)
 	assert.True(t, granted)

@@ -433,6 +433,7 @@ func (s *transactionSyncService) SyncTransactions(
 	if linkedItem.Cursor != nil {
 		cursor = *linkedItem.Cursor
 	}
+	syncKind := financialDataSyncKind(cursor)
 
 	// Step 2: Determine historical depth for first sync
 	// Only applies on FIRST sync (empty cursor). Re-syncs use cursor-based incremental sync.
@@ -883,7 +884,7 @@ func (s *transactionSyncService) SyncTransactions(
 
 	if s.analytics != nil {
 		s.analytics.CaptureEvent(ctx, linkedItem.UserID, phclient.FinancialDataSyncCompletedPayload{
-			SyncKind: financialDataSyncKind(cursor),
+			SyncKind: syncKind,
 		})
 	}
 
