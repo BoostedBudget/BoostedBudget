@@ -61,7 +61,7 @@ describe('AuthenticatedPostHogExperiences', () => {
     const dependencies = { ...deps({ userId: null }), useVerifiedIdentity }
     render(<AuthenticatedPostHogExperiences controller={c} dependencies={dependencies} />)
 
-    expect(useVerifiedIdentity).toHaveBeenCalledWith(null, false)
+    expect(useVerifiedIdentity).toHaveBeenCalledWith(null, false, false)
     expect(c.activateSupport).not.toHaveBeenCalled()
     expect(c.activateSurveys).not.toHaveBeenCalled()
     expect(screen.queryByRole('button', { name: /support/i })).toBeNull()
@@ -76,6 +76,22 @@ describe('AuthenticatedPostHogExperiences', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Support' }))
     expect(c.activateSupport).toHaveBeenCalledWith({ distinct_id: 'user_A', identity_hash: 'signed-A' })
     expect(c.showSupport).toHaveBeenCalled()
+  })
+
+  test('fetches survey identity without continuous polling until Support is requested', async () => {
+    const c = controller()
+    const useVerifiedIdentity = mock((_userId: string | null, enabled: boolean, _poll: boolean) => ({
+      data: enabled ? { distinct_id: 'user_A', identity_hash: 'signed-A' } : undefined,
+      isLoading: false,
+      isError: false,
+    }))
+    const dependencies = { ...deps(), useVerifiedIdentity }
+
+    render(<AuthenticatedPostHogExperiences controller={c} dependencies={dependencies} />)
+    expect(useVerifiedIdentity).toHaveBeenLastCalledWith('user_A', true, false)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Support' }))
+    expect(useVerifiedIdentity).toHaveBeenLastCalledWith('user_A', true, true)
   })
 
   test('does not construct the Support SDK client until the authenticated user clicks', async () => {

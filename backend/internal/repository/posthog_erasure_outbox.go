@@ -238,6 +238,7 @@ func (r *PostHogErasureOutboxRepository) MarkClerkDeleted(ctx context.Context, i
 	tag, err := r.db.Exec(ctx, `WITH fence AS (SELECT clock_timestamp() AS at)
 		UPDATE posthog_erasure_outbox
 		SET clerk_deleted_at = fence.at,
+		    clerk_user_id_blind_idx = NULL,
 		    phase = 'person_resolve', state = 'retrying',
 		    next_attempt_at = fence.at + $3::interval,
 		    attempt_count = 0, last_error_class = NULL,
@@ -489,10 +490,12 @@ func (r *PostHogErasureOutboxRepository) RecordOperatorEvidence(ctx context.Cont
 	}
 	if err = tx.QueryRow(ctx, `UPDATE posthog_erasure_outbox SET
 		state='completed', phase='complete', completed_at=clock_timestamp(),
-		identities_encrypted=NULL, clerk_user_id_encrypted=NULL, provider_person_uuids_encrypted=NULL,
+		identities_encrypted=NULL, clerk_user_id_encrypted=NULL, clerk_user_id_blind_idx=NULL,
+		provider_person_uuids_encrypted=NULL,
 		provider_deletion_baseline_encrypted=NULL,
 		last_error_class=NULL, updated_at=clock_timestamp(), version=version+1
-		WHERE id=$1 AND state='manual_pending' AND clerk_deleted_at IS NOT NULL
+		WHERE id=$1 AND state='manual_pending'
+		  AND (NOT clerk_fence_required OR clerk_deleted_at IS NOT NULL)
 		  AND person_verified_at IS NOT NULL
 		  AND events_verified_at IS NOT NULL AND recordings_verified_at IS NOT NULL
 		  AND surveys_verified_at IS NOT NULL AND support_verified_at IS NOT NULL

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/clerk/clerk-sdk-go/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -26,6 +27,15 @@ type registrationErasureFenceStub struct {
 	err    error
 }
 
+type registrationClerkGetterStub struct {
+	user *clerk.User
+	err  error
+}
+
+func (s registrationClerkGetterStub) GetUser(context.Context, string) (*clerk.User, error) {
+	return s.user, s.err
+}
+
 func (s registrationErasureFenceStub) IsClerkIdentityErasureFenced(context.Context, string) (bool, error) {
 	return s.fenced, s.err
 }
@@ -34,12 +44,48 @@ func TestRegisterUserRejectsSurvivingClerkSessionAfterLocalErasure(t *testing.T)
 	identityRepo := new(MockUserIdentityRepository)
 	service := NewRegistrationService(
 		new(MockProfileRepository), identityRepo, new(MockPrivacyRepository), nil, nil,
-		registrationErasureFenceStub{fenced: true},
+		RegistrationAuthority{ErasureFence: registrationErasureFenceStub{fenced: true}},
 	)
 	user, err := service.RegisterUser(context.Background(), "clerk_erased", "erased@example.com", true)
 	assert.Nil(t, user)
 	assert.ErrorIs(t, err, ErrRegistrationErasureFenced)
 	identityRepo.AssertNotCalled(t, "GetByClerkID", mock.Anything, mock.Anything)
+}
+
+func TestRegisterUserRejectsUnknownLocalIdentityWhenClerkNoLongerExists(t *testing.T) {
+	identityRepo := new(MockUserIdentityRepository)
+	identityRepo.On("GetByClerkID", mock.Anything, "clerk_deleted").
+		Return(nil, repository.ErrIdentityNotFound)
+	service := NewRegistrationService(
+		new(MockProfileRepository), identityRepo, new(MockPrivacyRepository), nil, nil,
+		RegistrationAuthority{
+			ErasureFence:    registrationErasureFenceStub{},
+			ClerkUserGetter: registrationClerkGetterStub{err: ErrClerkUserNotFound},
+		},
+	)
+
+	user, err := service.RegisterUser(context.Background(), "clerk_deleted", "deleted@example.com", true)
+
+	assert.Nil(t, user)
+	assert.ErrorIs(t, err, ErrRegistrationErasureFenced)
+}
+
+func TestRegisterUserFailsClosedWhenLiveClerkVerificationIsUnavailable(t *testing.T) {
+	identityRepo := new(MockUserIdentityRepository)
+	identityRepo.On("GetByClerkID", mock.Anything, "clerk_unknown").
+		Return(nil, repository.ErrIdentityNotFound)
+	service := NewRegistrationService(
+		new(MockProfileRepository), identityRepo, new(MockPrivacyRepository), nil, nil,
+		RegistrationAuthority{
+			ErasureFence:    registrationErasureFenceStub{},
+			ClerkUserGetter: registrationClerkGetterStub{err: ErrClerkAPIError},
+		},
+	)
+
+	user, err := service.RegisterUser(context.Background(), "clerk_unknown", "unknown@example.com", true)
+
+	assert.Nil(t, user)
+	assert.ErrorIs(t, err, ErrClerkAPIError)
 }
 
 func (m *MockUserIdentityRepository) GetByClerkID(ctx context.Context, clerkUserID string) (*domain.UserIdentity, error) {

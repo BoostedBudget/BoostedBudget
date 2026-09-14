@@ -12,7 +12,8 @@ ALTER TABLE posthog_erasure_outbox DROP CONSTRAINT IF EXISTS ck_posthog_erasure_
 ALTER TABLE posthog_erasure_outbox
     DROP COLUMN IF EXISTS clerk_deleted_at,
     DROP COLUMN IF EXISTS clerk_user_id_blind_idx,
-    DROP COLUMN IF EXISTS clerk_user_id_encrypted;
+    DROP COLUMN IF EXISTS clerk_user_id_encrypted,
+    DROP COLUMN IF EXISTS clerk_fence_required;
 
 ALTER TABLE posthog_erasure_outbox ADD CONSTRAINT ck_posthog_erasure_outbox_phase
     CHECK (phase IN ('person_resolve', 'person_baseline', 'person_delete', 'person_poll',

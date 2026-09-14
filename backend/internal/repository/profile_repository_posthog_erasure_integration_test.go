@@ -166,6 +166,32 @@ func TestPostHogErasureCompletionWaitsForDurableClerkDeletion_Integration(t *tes
 	assert.Equal(t, "completed", state)
 }
 
+func TestPostHogErasureLegacyObligationCompletesWithoutUnavailableClerkSubject_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewPostHogErasureOutboxRepository(pool, enc)
+	ctx := context.Background()
+	id := uuid.NewString()
+	identity, err := enc.EncryptString("legacy_identity")
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO posthog_erasure_outbox
+		(id,idempotency_key,identities_encrypted,clerk_fence_required,
+		 project_id,region,state,phase,person_verified_at,events_verified_at,
+		 recordings_verified_at,surveys_verified_at,support_first_verified_at)
+		VALUES($1,$2,$3,FALSE,'42','us','manual_pending','support_manual',clock_timestamp(),
+		 clock_timestamp(),clock_timestamp(),clock_timestamp(),clock_timestamp()-interval '6 minutes')`,
+		id, "legacy-clerk-exempt:"+id, identity)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_operator_audit WHERE erasure_id=$1", id)
+		_, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_outbox WHERE id=$1", id)
+	})
+
+	state, err := repo.RecordOperatorEvidence(ctx, id, uuid.NewString(), "support", "provider_zero")
+	require.NoError(t, err)
+	assert.Equal(t, "completed", state)
+}
+
 func TestPostHogErasureClerkCheckpointSchedulesBeyondClientRevalidationWindow_Integration(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
@@ -187,9 +213,12 @@ func TestPostHogErasureClerkCheckpointSchedulesBeyondClientRevalidationWindow_In
 	require.NoError(t, err)
 	require.True(t, updated)
 	var safelyDelayed bool
+	var retainedFence *string
 	require.NoError(t, pool.QueryRow(ctx, `SELECT next_attempt_at >= clerk_deleted_at + interval '30 seconds'
-		FROM posthog_erasure_outbox WHERE id=$1`, id).Scan(&safelyDelayed))
+		, clerk_user_id_blind_idx FROM posthog_erasure_outbox WHERE id=$1`, id).
+		Scan(&safelyDelayed, &retainedFence))
 	assert.True(t, safelyDelayed)
+	assert.Nil(t, retainedFence, "the temporary keyed fence must be destroyed after live Clerk deletion")
 }
 
 func TestPostHogErasureMixedIdentity_IntegrationRequiresManualEventEvidence(t *testing.T) {
