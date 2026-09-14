@@ -63,7 +63,10 @@ die() { echo "typecheck-tests: $1" >&2; exit 1; }
 # nothing at all. The same is true of a missing `grep` or a missing compiler: each would leave a
 # variable empty and a comparison trivially satisfied. So each is asserted, by name, up front.
 TSC=./node_modules/.bin/tsc
-[ -x "$TSC" ] || die "compiler not found or not executable at $TSC — run 'bun install'. Refusing to report a pass without a compiler."
+if [ ! -x "$TSC" ]; then
+  TSC=../../node_modules/.bin/tsc
+fi
+[ -x "$TSC" ] || die "compiler not found or not executable in the workspace or repository root — run 'bun install'. Refusing to report a pass without a compiler."
 for required in mktemp grep sed wc; do
   command -v "$required" > /dev/null 2>&1 || die "required command '$required' is not available; this gate cannot measure anything without it."
 done
