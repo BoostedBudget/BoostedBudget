@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -292,4 +293,60 @@ func TestPostHogErasureBaselineAndPollCheckpoints_IntegrationPersistIncrementall
 	assert.True(t, requiresManual)
 	assert.Nil(t, eventsVerifiedAt)
 	assert.True(t, immediatelyDue)
+}
+
+func TestPostHogErasureSuccessfulAcceptanceAndPendingPollResetRetryBudget_Integration(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewPostHogErasureOutboxRepository(pool, enc)
+	ctx := context.Background()
+	id := uuid.NewString()
+	personUUID := "33333333-3333-4333-8333-333333333333"
+	identities, err := enc.EncryptJSON([]byte(`["subject"]`))
+	require.NoError(t, err)
+	personUUIDs, err := enc.EncryptJSON([]byte(`["` + personUUID + `"]`))
+	require.NoError(t, err)
+	leaseToken := uuid.NewString()
+	_, err = pool.Exec(ctx, `INSERT INTO posthog_erasure_outbox
+		(id,idempotency_key,identities_encrypted,provider_person_uuids_encrypted,project_id,region,state,phase,
+		 attempt_count,last_error_class,lease_token,lease_until)
+		VALUES($1,$2,$3,$4,'42','us','retrying','person_delete',11,'provider',$5,
+		 clock_timestamp()+interval '1 minute')`, id, "retry-reset:"+id, identities, personUUIDs, leaseToken)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_outbox WHERE id=$1", id) })
+
+	updated, err := repo.MarkAccepted(ctx, id, leaseToken, 1, false)
+	require.NoError(t, err)
+	require.True(t, updated)
+	assertRetryAccountingCleared(t, ctx, pool, id)
+
+	claimed, err := repo.ClaimDue(ctx, time.Now().Add(6*time.Minute), time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	require.Equal(t, id, claimed.ID)
+	require.Equal(t, 1, claimed.AttemptCount)
+
+	updated, err = repo.RecordPollPending(ctx, id, claimed.LeaseToken)
+	require.NoError(t, err)
+	require.True(t, updated)
+	assertRetryAccountingCleared(t, ctx, pool, id)
+
+	claimed, err = repo.ClaimDue(ctx, time.Now().Add(7*time.Hour), time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	require.Equal(t, id, claimed.ID)
+	require.Equal(t, 1, claimed.AttemptCount)
+	state, err := repo.RecordRetry(ctx, id, claimed.LeaseToken, "provider", time.Now().Add(time.Minute), 12)
+	require.NoError(t, err)
+	assert.Equal(t, "retrying", state)
+}
+
+func assertRetryAccountingCleared(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id string) {
+	t.Helper()
+	var attempts int
+	var lastError *string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT attempt_count,last_error_class
+		FROM posthog_erasure_outbox WHERE id=$1`, id).Scan(&attempts, &lastError))
+	assert.Zero(t, attempts)
+	assert.Nil(t, lastError)
 }
