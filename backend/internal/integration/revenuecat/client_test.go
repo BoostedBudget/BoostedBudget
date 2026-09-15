@@ -263,6 +263,38 @@ func TestGrantRevokeDeleteWireRequests(t *testing.T) {
 	}
 }
 
+// TestFetchSnapshotRecognizesNonPaddleStoreEntitlement is the client half of the issue #1652 AC2
+// proof. RevenueCat's active_entitlements endpoint is store-agnostic: it returns the entitlement
+// lookup key for the customer regardless of whether the purchase came from Paddle, the App Store
+// or Google Play. The store is only provider-reported metadata on the separate subscriptions read.
+// This pins that a real client response carrying an APP_STORE subscription still yields the
+// paid_premium entitlement, so the web backend can resolve access for an Apple/Google subscriber.
+func TestFetchSnapshotRecognizesNonPaddleStoreEntitlement(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v2/projects/proj/entitlements":
+			_, _ = fmt.Fprint(w, `{"object":"list","items":[{"id":"ent_pro","lookup_key":"paid_premium"}],"next_page":null}`)
+		case "/v2/projects/proj/customers/user_1/active_entitlements":
+			_, _ = fmt.Fprint(w, `{"object":"list","items":[{"entitlement_id":"ent_pro","expires_at":null}],"next_page":null}`)
+		case "/v2/projects/proj/customers/user_1/subscriptions":
+			_, _ = fmt.Fprint(w, `{"object":"list","items":[{"id":"sub_apple","product_id":"prod_apple","store_subscription_identifier":"txn_apple","status":"active","store":"APP_STORE","environment":"production","auto_renewal_status":"will_renew","current_period_ends_at":1800000000123,"ends_at":null}],"next_page":null}`)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	})
+	snapshot, err := c.FetchSnapshot(context.Background(), "user_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Entitlements) != 1 || snapshot.Entitlements[0].LookupKey != "paid_premium" {
+		t.Fatalf("non-Paddle store must still yield the paid entitlement: %+v", snapshot.Entitlements)
+	}
+	if len(snapshot.Subscriptions) != 1 || snapshot.Subscriptions[0].Store != "APP_STORE" {
+		t.Fatalf("wrong subscription store: %+v", snapshot.Subscriptions)
+	}
+}
+
 func TestFetchSubscriptionsPreservesProviderReportedIdentifier(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, `{"object":"list","items":[{"id":"sub_rc","product_id":"prod_rc","store_subscription_identifier":"txn_paddle","status":"active","store":"paddle","environment":"production","auto_renewal_status":"will_not_renew","current_period_ends_at":1800000000123,"ends_at":null}],"next_page":null}`)

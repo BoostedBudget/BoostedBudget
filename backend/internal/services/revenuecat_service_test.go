@@ -321,6 +321,45 @@ func TestExpiredGrantCannotBlockInactiveProjection(t *testing.T) {
 	}
 }
 
+// TestRevenueCatService_NonPaddleStoreGrantYieldsWebAccess is the issue #1652 AC2 proof:
+// "A user subscribed through Apple or Google is recognized as paid on the web after signing
+// into the same Clerk account."
+//
+// The mechanism is that RevenueCat resolves the SAME entitlement lookup key (paid_premium) for a
+// customer regardless of which store produced the purchase, and the web backend derives access
+// from that entitlement — never from the store. The Clerk user ID is the RevenueCat App User ID,
+// so an Apple/Google subscriber's entitlement is read for the same Clerk identity the web session
+// authenticates as. The store is only provider-reported metadata on the separate billing read.
+//
+// Falsifiability: introducing a store gate anywhere on the access path (e.g. dropping a grant
+// whose subscription store is not "paddle") makes this FAIL — access would resolve inactive while
+// the non-Paddle billing record is present.
+func TestRevenueCatService_NonPaddleStoreGrantYieldsWebAccess(t *testing.T) {
+	for _, store := range []string{"APP_STORE", "PLAY_STORE"} {
+		t.Run(store, func(t *testing.T) {
+			end := time.Now().Add(30 * 24 * time.Hour)
+			r := &rcTestStore{}
+			p := &rcTestProvider{
+				grants: []rc.Entitlement{{LookupKey: "paid_premium", ExpiresAt: &end}},
+				billing: []rc.Subscription{{
+					ID: "sub_1", ProductID: "prod_1", Status: "active",
+					Store: store, Environment: "production", CurrentPeriodEndsAt: &end,
+				}},
+			}
+			s := NewRevenueCatService(r, p, rcTestProfile{})
+			state, err := s.Refresh(context.Background(), "local-uuid")
+			require.NoError(t, err)
+			require.Len(t, state.Billing, 1)
+			require.Equal(t, store, state.Billing[0].Store, "the grant must come from a non-Paddle store")
+			access, err := state.ResolveAccess(time.Now())
+			require.NoError(t, err)
+			require.Equal(t, "active", access.Status)
+			require.Equal(t, "paid", access.Source)
+			require.Equal(t, "premium", access.Tier)
+		})
+	}
+}
+
 func TestRevenueCatService_AdminValidationAndIntentOnly(t *testing.T) {
 	r := &rcTestStore{state: domain.RevenueCatState{AccessUpdatedAt: time.Now()}, ops: map[string]domain.RevenueCatOperation{}}
 	p := &rcTestProvider{}
