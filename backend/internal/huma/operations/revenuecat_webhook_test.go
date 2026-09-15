@@ -91,6 +91,23 @@ func TestRevenueCatWebhookVerifiesBeforeInboxAndDeduplicates(t *testing.T) {
 	require.Len(t, q.args, 1)
 }
 
+// TestRevenueCatWebhookAcceptsRefundCancellationAndQueuesRefresh is the issue #1652 AC6 proof
+// (webhook half). RevenueCat reports a refund as a CANCELLATION event with cancel_reason
+// "CUSTOMER_SUPPORT" (docs: integrations/webhooks/sample-events). The handler is deliberately
+// event-type agnostic: it authenticates, resolves the exact Clerk identity, records the receipt
+// and enqueues an authoritative refresh — it never applies the event payload. This pins that a
+// refund event is accepted and reaches that refresh path, so a refund cannot be silently dropped
+// by a type allowlist.
+func TestRevenueCatWebhookAcceptsRefundCancellationAndQueuesRefresh(t *testing.T) {
+	h, inbox, q := newRCWebhookTestHandler()
+	body := `{"event":{"id":"refund-event","type":"CANCELLATION","cancel_reason":"CUSTOMER_SUPPORT","store":"APP_STORE","price":-9.99,"app_user_id":"user_clerk"}}`
+	got, err := h.Handle(context.Background(), rcSignedWebhook(body))
+	require.NoError(t, err)
+	require.Equal(t, "queued", got.Body.Status)
+	require.Equal(t, 1, inbox.writes)
+	require.Equal(t, []jobs.RevenueCatSyncArgs{{UserID: "internal-user", EventID: "refund-event"}}, q.args)
+}
+
 func TestRevenueCatWebhookTestDeliveryDoesNotQueueAccess(t *testing.T) {
 	h, inbox, q := newRCWebhookTestHandler()
 	out, err := h.Handle(context.Background(), rcSignedWebhook(`{"event":{"id":"test-event","type":"TEST"}}`))
