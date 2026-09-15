@@ -6,15 +6,15 @@ package repository
 // falsification behind profile_repository_finding2_lock_contention_integration_test.go
 // reproducible from source.
 //
-// That file's own doc comment claims each of its four regression tests was verified RED against
+// That file's own doc comment claims each of its regression tests was verified RED against
 // (a) the ORIGINAL bare `COALESCE(plaid_cleanup_pending_at, NOW())` form (no CTE) and (b) the
 // NAIVE `COALESCE(plaid_cleanup_pending_at, clock_timestamp())` form (still no CTE) — 3 runs per
-// writer per variant, 24 runs total, every one a deterministic failure. Until this file, that
+// writer per variant, every one a deterministic failure. Until this file, that
 // claim existed ONLY as prose: there was no probe mode, no parameterisation, and no patch checked
 // in, so nobody could audit it — and per this round's own review, an unaudited count is exactly
 // the kind of thing that gets relayed onward as evidence when it shouldn't be trusted.
 //
-// This file is that audit trail. For each of the four writers it checks in the EXACT broken SQL —
+// This file is that audit trail. For each writer it checks in the EXACT broken SQL —
 // reconstructed here as raw strings executed directly via pool.Exec, NEVER by editing
 // profile_repository.go — and a test proving each one DOES backdate plaid_cleanup_pending_at to
 // before the lock's real release, using the identical real waitUntilBlockedBy barrier and
@@ -41,6 +41,8 @@ package repository
 // Issue #1442 deleted a fifth writer, CancelIfPastDueWithRetention (zero production callers), along
 // with its two dedicated probes here. #1652 deleted CancelIfPastDueOccurrenceWithRetention and its
 // two probes, which reconstructed the identical broken SQL shape for its occurrence-scoped successor.
+// #1652 (todo 9) then deleted UpdateTrialStatus and ExpireTrialIfNoOverride and their four probes
+// here, leaving only UpdateSubscriptionFromPaddle's two.
 
 import (
 	"context"
@@ -158,196 +160,3 @@ func TestFinding2Probe_UpdateSubscriptionFromPaddle_NaiveClockTimestamp_Backdate
 	assertMarkerWasBackdated(t, releaseFence, marker)
 }
 
-// TestFinding2Probe_UpdateTrialStatus_BareNOW_Backdates reconstructs UpdateTrialStatus's
-// pre-ROUND-23 bare form.
-func TestFinding2Probe_UpdateTrialStatus_BareNOW_Backdates(t *testing.T) {
-	skipUnlessFinding2ProbesEnabled(t)
-	pool := connectTestDB(t)
-	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
-	ctx := context.Background()
-
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	user := &domain.User{
-		ClerkUserID:        "clerk_f2p_trial_bnow_" + suffix,
-		Email:              "f2p-trial-bnow-" + suffix + "@example.com",
-		SubscriptionTier:   "premium",
-		SubscriptionStatus: "active",
-		PrimaryRegion:      "iad",
-		IsActive:           true,
-	}
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
-	require.NoError(t, tx.Commit(ctx))
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM users WHERE id = $1", user.ID) })
-
-	trialStarted := time.Now()
-	trialEnds := trialStarted.Add(30 * 24 * time.Hour)
-	brokenQuery := `
-		UPDATE users
-		SET subscription_status = $1,
-		    subscription_tier = 'premium',
-		    trial_started_at = $2,
-		    trial_ends_at = $3,
-		    had_trial = $4,
-		    updated_at = NOW(),
-		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, NOW())
-		WHERE id = $5 AND is_deleted = FALSE
-	`
-
-	_, releaseFence, callErr := runWriterUnderLockContention(t, pool, user.ID, finding2PostBlockHoldDuration, func() error {
-		ct, err := pool.Exec(ctx, brokenQuery, "cancelled", trialStarted, trialEnds, true, user.ID)
-		if err == nil && ct.RowsAffected() == 0 {
-			return fmt.Errorf("broken probe UPDATE matched zero rows")
-		}
-		return err
-	})
-	require.NoError(t, callErr)
-
-	var marker *time.Time
-	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
-	assertMarkerWasBackdated(t, releaseFence, marker)
-}
-
-// TestFinding2Probe_UpdateTrialStatus_NaiveClockTimestamp_Backdates is the naive
-// clock_timestamp()-without-CTE variant of the probe above.
-func TestFinding2Probe_UpdateTrialStatus_NaiveClockTimestamp_Backdates(t *testing.T) {
-	skipUnlessFinding2ProbesEnabled(t)
-	pool := connectTestDB(t)
-	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
-	ctx := context.Background()
-
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	user := &domain.User{
-		ClerkUserID:        "clerk_f2p_trial_nct_" + suffix,
-		Email:              "f2p-trial-nct-" + suffix + "@example.com",
-		SubscriptionTier:   "premium",
-		SubscriptionStatus: "active",
-		PrimaryRegion:      "iad",
-		IsActive:           true,
-	}
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
-	require.NoError(t, tx.Commit(ctx))
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM users WHERE id = $1", user.ID) })
-
-	trialStarted := time.Now()
-	trialEnds := trialStarted.Add(30 * 24 * time.Hour)
-	brokenQuery := `
-		UPDATE users
-		SET subscription_status = $1,
-		    subscription_tier = 'premium',
-		    trial_started_at = $2,
-		    trial_ends_at = $3,
-		    had_trial = $4,
-		    updated_at = NOW(),
-		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, clock_timestamp())
-		WHERE id = $5 AND is_deleted = FALSE
-	`
-
-	_, releaseFence, callErr := runWriterUnderLockContention(t, pool, user.ID, finding2PostBlockHoldDuration, func() error {
-		ct, err := pool.Exec(ctx, brokenQuery, "cancelled", trialStarted, trialEnds, true, user.ID)
-		if err == nil && ct.RowsAffected() == 0 {
-			return fmt.Errorf("broken probe UPDATE matched zero rows")
-		}
-		return err
-	})
-	require.NoError(t, callErr)
-
-	var marker *time.Time
-	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
-	assertMarkerWasBackdated(t, releaseFence, marker)
-}
-
-// TestFinding2Probe_ExpireTrialIfNoOverride_BareNOW_Backdates reconstructs
-// ExpireTrialIfNoOverride's pre-ROUND-23 bare form.
-func TestFinding2Probe_ExpireTrialIfNoOverride_BareNOW_Backdates(t *testing.T) {
-	skipUnlessFinding2ProbesEnabled(t)
-	pool := connectTestDB(t)
-	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
-	ctx := context.Background()
-
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	user := &domain.User{
-		ClerkUserID:        "clerk_f2p_te_bnow_" + suffix,
-		Email:              "f2p-te-bnow-" + suffix + "@example.com",
-		SubscriptionTier:   "premium",
-		SubscriptionStatus: "trial",
-		PrimaryRegion:      "iad",
-		IsActive:           true,
-	}
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
-	require.NoError(t, tx.Commit(ctx))
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM users WHERE id = $1", user.ID) })
-
-	brokenQuery := `
-		UPDATE users
-		SET subscription_status = 'inactive', updated_at = NOW(),
-		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, NOW())
-		WHERE id = $1 AND subscription_status = 'trial'
-		` + noActiveManualOverridePredicate
-
-	_, releaseFence, callErr := runWriterUnderLockContention(t, pool, user.ID, finding2PostBlockHoldDuration, func() error {
-		ct, err := pool.Exec(ctx, brokenQuery, user.ID)
-		if err == nil && ct.RowsAffected() == 0 {
-			return fmt.Errorf("broken probe UPDATE matched zero rows")
-		}
-		return err
-	})
-	require.NoError(t, callErr)
-
-	var marker *time.Time
-	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
-	assertMarkerWasBackdated(t, releaseFence, marker)
-}
-
-// TestFinding2Probe_ExpireTrialIfNoOverride_NaiveClockTimestamp_Backdates is the naive
-// clock_timestamp()-without-CTE variant of the probe above.
-func TestFinding2Probe_ExpireTrialIfNoOverride_NaiveClockTimestamp_Backdates(t *testing.T) {
-	skipUnlessFinding2ProbesEnabled(t)
-	pool := connectTestDB(t)
-	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
-	ctx := context.Background()
-
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	user := &domain.User{
-		ClerkUserID:        "clerk_f2p_te_nct_" + suffix,
-		Email:              "f2p-te-nct-" + suffix + "@example.com",
-		SubscriptionTier:   "premium",
-		SubscriptionStatus: "trial",
-		PrimaryRegion:      "iad",
-		IsActive:           true,
-	}
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
-	require.NoError(t, tx.Commit(ctx))
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM users WHERE id = $1", user.ID) })
-
-	brokenQuery := `
-		UPDATE users
-		SET subscription_status = 'inactive', updated_at = NOW(),
-		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, clock_timestamp())
-		WHERE id = $1 AND subscription_status = 'trial'
-		` + noActiveManualOverridePredicate
-
-	_, releaseFence, callErr := runWriterUnderLockContention(t, pool, user.ID, finding2PostBlockHoldDuration, func() error {
-		ct, err := pool.Exec(ctx, brokenQuery, user.ID)
-		if err == nil && ct.RowsAffected() == 0 {
-			return fmt.Errorf("broken probe UPDATE matched zero rows")
-		}
-		return err
-	})
-	require.NoError(t, callErr)
-
-	var marker *time.Time
-	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
-	assertMarkerWasBackdated(t, releaseFence, marker)
-}

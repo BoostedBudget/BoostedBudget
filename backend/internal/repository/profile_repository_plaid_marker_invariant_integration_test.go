@@ -59,7 +59,7 @@ package repository
 //
 // Run with:
 //
-//	DATABASE_URL=postgres://... go test ./internal/repository/... -run 'TestClearRetentionDates_Integration|TestUpdateTrialStatus_Integration|TestUpdateSubscriptionFromPaddle_Integration|TestClearPlaidCleanupPendingIfMatches_Integration|TestPlaidMarkerInvariant' -tags integration -v
+//	DATABASE_URL=postgres://... go test ./internal/repository/... -run 'TestClearRetentionDates_Integration|TestUpdateSubscriptionFromPaddle_Integration|TestClearPlaidCleanupPendingIfMatches_Integration|TestPlaidMarkerInvariant' -tags integration -v
 
 import (
 	"context"
@@ -443,50 +443,6 @@ func TestClearRetentionDates_Integration_GenuinelyActiveClearsMarker(t *testing.
 	assertPlaidMarkerInvariant(t, pool, user.ID, "after genuine resubscribe clear")
 }
 
-// ─── Fix 2 (High): granting a trial must clear a stale marker ──
-
-// TestUpdateTrialStatus_Integration_GrantTrialClearsStalePlaidMarker is the round-11 High RED test:
-// GrantTrial (via UpdateTrialStatus) moves a cancelled user with an outstanding marker to 'trial'
-// but, before the fix, never cleared plaid_cleanup_pending_at. Trial is Plaid-ELIGIBLE (never a
-// repair-pass target), so per the invariant the marker must go to NULL — otherwise
-// ExpireTrialIfNoOverride's COALESCE(existing, NOW()) later preserves the STALE timestamp instead
-// of starting a fresh grace window, disconnecting the user immediately on the old anchor when
-// their new trial eventually expires.
-//
-// Falsifiability: reverting UpdateTrialStatus to never touch plaid_cleanup_pending_at makes this
-// test fail — the stale marker survives the trial grant.
-func TestUpdateTrialStatus_Integration_GrantTrialClearsStalePlaidMarker(t *testing.T) {
-	pool := connectTestDB(t)
-	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
-	ctx := context.Background()
-
-	user := createPlaidMarkerTestUser(t, pool, repo, "granttrialstale", "cancelled")
-	staleMarker := time.Now().Add(-200 * time.Hour)
-	setPlaidCleanupPendingAt(t, pool, user.ID, staleMarker)
-	assertPlaidMarkerInvariant(t, pool, user.ID, "before trial grant")
-
-	now := time.Now()
-	trialEnds := now.Add(60 * 24 * time.Hour)
-	require.NoError(t, repo.UpdateTrialStatus(ctx, user.ID, "trial", &now, &trialEnds, true))
-
-	row := readPlaidMarkerRow(t, pool, user.ID)
-	assert.Nil(t, row.marker, "granting a trial must clear a stale plaid_cleanup_pending_at marker — trial is Plaid-eligible")
-	assertPlaidMarkerInvariant(t, pool, user.ID, "after trial grant")
-
-	// Downstream proof: when this NEW trial later expires, the grace window must be FRESH, not
-	// immediately expired against the old stale anchor.
-	flipped, err := repo.ExpireTrialIfNoOverride(ctx, user.ID)
-	require.NoError(t, err)
-	require.True(t, flipped)
-
-	afterExpiry := readPlaidMarkerRow(t, pool, user.ID)
-	require.NotNil(t, afterExpiry.marker, "trial expiry must set a fresh marker")
-	assert.False(t, afterExpiry.marker.Equal(staleMarker), "the marker after this trial's own expiry must NOT be the old stale timestamp from before the trial was granted")
-	assert.WithinDuration(t, time.Now(), *afterExpiry.marker, 5*time.Second, "the marker must be freshly stamped by THIS expiry, not resurrected from the earlier cancellation")
-	assertPlaidMarkerInvariant(t, pool, user.ID, "after trial expiry")
-}
-
 // ─── Fix 3 (High): the repair recheck must validate the marker's identity, not merely presence ──
 
 // TestClearPlaidCleanupPendingIfMatches_Integration_ClearsWhenMatches proves the CAS-guarded clear
@@ -814,14 +770,15 @@ func TestUpdateSubscriptionFromPaddle_Integration_GenuineNewEpisodeGetsFreshMark
 //
 // PR #1443 gap-analysis finding (requirements-gap-analysis follow-up): every user this test built
 // came from createPlaidMarkerTestUser, which never seeds a linked_items row — so four of these six
-// subtests (trial_to_expire, active_to_cancel, comp_grant_to_remove, past_due_to_grace) asserted
+// subtests (trial_to_expire — deleted in #1652 —, active_to_cancel, comp_grant_to_remove,
+// past_due_to_grace) asserted
 // NOTHING about the marker. With zero linked_items rows, assertPlaidMarkerInvariant's non-NULL
 // branch always lands in the #1453 zero-rows exception (assert.Equal(t, 0, total) trivially true)
 // and its NULL branch always lands in assert.Equal(t, 0, live) (also trivially true, 0 == 0) —
 // BOTH branches pass no matter what the marker actually held. cancel_to_resubscribe was the one
 // exception (its post-resubscribe check lands in the item-independent `!ineligible` branch, a real
 // assert.Nil), and comp_grant_then_lapse_never_removed asserts its own repair-query membership
-// directly rather than going through the marker invariant a second time. The fix: each of the four
+// directly rather than going through the marker invariant a second time. The fix: each of them
 // now seeds one live linked item (seedLinkedItem) before its first assertion, so every
 // assertPlaidMarkerInvariant call in this test actually exercises the invariant's real branches
 // instead of the zero-rows escape hatch. Seeded per-subtest, not inside createPlaidMarkerTestUser
@@ -835,29 +792,10 @@ func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 	adminRepo := NewAdminUserRepository(pool, enc)
 	ctx := context.Background()
 
-	t.Run("trial_to_expire", func(t *testing.T) {
-		user := createPlaidMarkerTestUser(t, pool, repo, "sweeptrial", "trial")
-		// A live linked item is required for the invariant checks below to mean anything: with
-		// zero linked_items rows, assertPlaidMarkerInvariant's non-NULL branch always falls into
-		// the #1453 zero-rows exception (assert.Equal(t, 0, total) trivially holds) and its NULL
-		// branch always falls into assert.Equal(t, 0, live) trivially holding too — BOTH branches
-		// pass regardless of what the marker actually contains. Seeding here (not in
-		// createPlaidMarkerTestUser) is deliberate: TestPlaidMarkerInvariant_Integration_
-		// ActiveOverrideAndLiveItem_NullMarkerIsLegal (below) depends on that helper producing a
-		// user with NO linked_items rows at all for its own "no items" precondition check, so the
-		// seed has to live per-subtest instead of in the shared fixture.
-		seedLinkedItem(t, pool, user.ID, "item-"+user.ID, "active")
-		assertPlaidMarkerInvariant(t, pool, user.ID, "trial: initial")
-
-		flipped, err := repo.ExpireTrialIfNoOverride(ctx, user.ID)
-		require.NoError(t, err)
-		require.True(t, flipped)
-		assertPlaidMarkerInvariant(t, pool, user.ID, "trial: after expiry")
-	})
 
 	t.Run("active_to_cancel", func(t *testing.T) {
 		user := createPlaidMarkerTestUser(t, pool, repo, "sweepactive", "active")
-		// See trial_to_expire's comment above for why this seed is required (not optional) for the
+		// See this test's doc comment above for why this seed is required (not optional) for the
 		// invariant check after cancellation to be anything other than a tautology.
 		seedLinkedItem(t, pool, user.ID, "item-"+user.ID, "active")
 		assertPlaidMarkerInvariant(t, pool, user.ID, "active: initial")
@@ -881,7 +819,7 @@ func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 
 	t.Run("comp_grant_to_remove", func(t *testing.T) {
 		user := createPlaidMarkerTestUser(t, pool, repo, "sweepcomp", "cancelled")
-		// See trial_to_expire's comment above: without a live linked item, every check below is a
+		// See this test's doc comment above: without a live linked item, every check below is a
 		// tautology — including, worst of all, the one after RemoveUserTierOverride, which
 		// exercises removeUserTierOverrideUpdate (admin_user_repository.go), the single
 		// most-revised writer on this branch. should_mark_plaid_cleanup_pending itself is gated on
@@ -992,7 +930,7 @@ func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 		linkedItemRepo := NewLinkedItemRepository(pool, enc)
 
 		// Seed a LIVE linked_items row BEFORE the cancellation — non-negotiable (see
-		// trial_to_expire's comment above). With zero linked_items rows,
+		// this test's doc comment above). With zero linked_items rows,
 		// assertPlaidMarkerInvariant's non-NULL branch always lands in the #1453 zero-rows
 		// exception (assert.Equal(t, 0, total) trivially true) and its NULL branch always lands in
 		// assert.Equal(t, 0, live) (also trivially true) — BOTH branches would pass no matter what

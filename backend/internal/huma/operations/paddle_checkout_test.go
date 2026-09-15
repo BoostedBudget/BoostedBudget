@@ -132,9 +132,6 @@ func (m *mockProfileRepo) GetUserByEmail(ctx context.Context, email string) (*do
 }
 func (m *mockProfileRepo) CreateUser(ctx context.Context, user *domain.User) error  { return nil }
 func (m *mockProfileRepo) UpdateLastLogin(ctx context.Context, userID string) error { return nil }
-func (m *mockProfileRepo) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
-	return nil
-}
 func (m *mockProfileRepo) GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
 }
@@ -233,10 +230,6 @@ func (m *mockProfileRepo) GetUsersNeedingPlaidDisconnectRepair(ctx context.Conte
 }
 
 func (m *mockProfileRepo) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
-
-func (m *mockProfileRepo) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
 

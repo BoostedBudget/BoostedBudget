@@ -39,13 +39,13 @@ var (
 // the subscription_status the row must STILL carry, evaluated against committed state inside the
 // write's own statement, not in an earlier (and therefore non-atomic) read.
 //
-// It exists because SetRetentionDates's two production callers do NOT share one authorising
-// condition — the cancellation webhook may arm the clock only while the user is still 'cancelled',
-// while the legacy trial-expiry flow (deleted in #1652) armed it only for the user its own CAS
-// (ExpireTrialIfNoOverride) just moved to 'inactive'. Hardcoding either condition inside the
-// repository would be wrong for the other caller, so the condition is passed by the caller that
-// knows it — the same way the deleted (#1652) past-due grace-cancel CAS took its expected
-// past_due occurrence value rather than inventing one.
+// It exists because SetRetentionDates's authorising condition is not intrinsic to the write: the
+// cancellation webhook may arm the clock only while the user is still 'cancelled'. (The legacy
+// trial-expiry flow, which armed it only for the user its own CAS had just moved to 'inactive',
+// was deleted in #1652 along with that CAS.) Hardcoding the condition inside the repository would
+// be wrong for any future caller, so the condition is passed by the caller that knows it — the
+// same way the deleted (#1652) past-due grace-cancel CAS took its expected past_due occurrence
+// value rather than inventing one.
 //
 // The zero value is INVALID (ErrRetentionClockGuardUnspecified), so the unguarded write can only
 // be reached by naming it.
@@ -99,11 +99,6 @@ type ProfileRepository interface {
 
 	// UpdateSubscriptionFromPaddle updates subscription details from Paddle webhooks
 	UpdateSubscriptionFromPaddle(ctx context.Context, userID, tier, status string, startedAt, endsAt *time.Time, subscriptionID *string) error
-
-	// Trial-related methods (Issue #679)
-
-	// UpdateTrialStatus updates trial-related fields for a user
-	UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error
 
 	// GetEffectiveSubscriptionStatusByUserID retrieves the user's EFFECTIVE subscription
 	// status — "active" when a non-expired manual tier override (admin comp) is in effect,
@@ -410,14 +405,6 @@ type ProfileRepository interface {
 	// GetUsersInPastDue returns users with subscription_status='past_due' and non-nil past_due_started_at.
 	// Used by the dunning cron job to find candidates for grace-expiry processing (Issue #898).
 	GetUsersInPastDue(ctx context.Context) ([]domain.User, error)
-
-	// ExpireTrialIfNoOverride atomically flips subscription_status to 'inactive' only if the
-	// user is still 'trial' AND carries no currently-active manual tier override. Returns
-	// (true, nil) if the flip happened, (false, nil) if an admin granted/extended a comp between
-	// the caller's earlier HasActiveManualOverride() read and this call, or the user's status has
-	// otherwise already moved on (Issue #1413 High finding H5, Codex review round 3 — the earlier
-	// read-only check cannot, by itself, protect the write against a comp granted in that window).
-	ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error)
 
 	// ClaimForDeletion atomically verifies, at the moment of the claim, that a user is still
 	// eligible for ExecuteDeletion's irreversible external cleanup (Paddle cancel, Plaid
@@ -1088,8 +1075,7 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	// CI-observed clock-skew fix: through the fix below, `updated_at` AND the
 	// plaid_cleanup_pending_at COALESCE both used a single Go-computed `now := time.Now()` passed as
 	// a query parameter — the ONE writer of this column that did not use a Postgres-native clock,
-	// unlike every sibling writer (ExpireTrialIfNoOverride, UpdateTrialStatus below,
-	// removeUserTierOverrideUpdate). That inconsistency is exactly what
+	// unlike every sibling writer (removeUserTierOverrideUpdate). That inconsistency is exactly what
 	// failed TestUpdateSubscriptionFromPaddle_Integration_GenuineNewEpisodeGetsFreshMarker in CI: the
 	// test fences a "before" bound via `SELECT NOW()` (correctly, per this file's own established
 	// convention) and then asserts this method's freshly-stamped marker is not before that bound — but
@@ -1167,9 +1153,6 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	// a genuine transition) leaves plaid_cleanup_pending_at completely untouched — whatever it
 	// currently is (NULL after a completed repair, or still running) is exactly what the invariant
 	// says it should be, and only a real transition is licensed to change it.
-	// ExpireTrialIfNoOverride needs no equivalent guard: its own WHERE clause already requires the
-	// OLD status to be 'trial' (never already repair-eligible), so every successful write there is a
-	// transition into ineligibility by construction.
 	//
 	// Issue #1413 round-13: this eligible branch NO LONGER gates on whether the row currently
 	// carries a live manual tier override — round-11 Fix 4 added exactly that gate (checking
@@ -2747,97 +2730,6 @@ func (r *profileRepository) DeletionStillAuthorised(ctx context.Context, userID 
 	return authorised, nil
 }
 
-// UpdateTrialStatus updates trial-related fields for a user
-// Issue #679: Trial service and auto-grant logic
-//
-// Issue #1413 round-11 Fix 2 (High): also clears plaid_cleanup_pending_at when status makes the
-// user Plaid-eligible — this method's only production caller (the legacy trial-grant flow, deleted in #1652) always
-// passes SubscriptionStatusTrial, which is never repair-eligible, so this always clears in
-// practice. Deriving the CASE from the `status` parameter (mirroring
-// UpdateSubscriptionFromPaddle's own status-driven clearing), rather than hardcoding NULL, keeps
-// this method honest against the invariant (domain.User.PlaidCleanupPendingAt's doc comment) even
-// if a future caller ever passes a different status.
-//
-// The bug this closes: granting a trial to a cancelled user with an outstanding marker used to
-// leave the STALE marker in place — trial is Plaid-eligible, so the invariant requires NULL here.
-// The stale marker then survived until this NEW trial itself later expired, at which point
-// ExpireTrialIfNoOverride's COALESCE(plaid_cleanup_pending_at, NOW()) preserved the OLD
-// timestamp instead of starting a fresh grace window — the user could be disconnected immediately
-// against an anchor from before this trial ever existed, rather than getting the grace period a
-// fresh ineligibility episode is entitled to.
-//
-// CI-observed clock-skew fix, same defect and same fix as UpdateSubscriptionFromPaddle's own doc
-// comment describes in full: `updated_at` and the plaid_cleanup_pending_at COALESCE both used to
-// share a single Go-computed `now := time.Now()` query parameter instead of a Postgres-native
-// clock — this method's own sibling instance of the identical bug, caught by the same audit, fixed
-// the same way, for the same reason (every fence a test builds via `SELECT NOW()` must share
-// Postgres's clock with whatever this method actually stamps, never the Go runner's).
-//
-// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up) audited this method's own marker
-// COALESCE for the same transaction-start-vs-statement-execution risk as every sibling writer of
-// this column; a bare substitution does not actually fix anything for a single, non-CTE UPDATE
-// (verified empirically, see StampMissingPlaidCleanupMarkers's doc comment), and the real fix
-// (restructuring into a locked CTE) was scoped out as a documented follow-up at the time.
-//
-// ROUND 23 (Issue #1413 Finding 2, High, Codex review, PR #1443 follow-up) is that follow-up.
-// Fixed "for consistency," per that finding: this method is latent in production (its only caller,
-// the legacy trial-grant flow (deleted in #1652), always passed SubscriptionStatusTrial, which takes the ELSE/clearing
-// branch below, never this COALESCE branch — see this method's own round-11 note above), but a
-// future caller could reach it, and leaving one documented-but-unfixed sibling next to four other
-// now-fixed ones is exactly the kind of trap this branch has already had to clean up once. Same
-// shape, same FOR NO KEY UPDATE lock mode (never FOR UPDATE — see StampMissingPlaidCleanupMarkers's
-// Finding 1 correction for the cross-user deadlock that mode would risk), same verified-fresh
-// target-table column read for the COALESCE, as UpdateSubscriptionFromPaddle's own ROUND 23 fix —
-// see that method's doc comment for the full mechanism. This method's WHERE clause (id = $5 AND
-// is_deleted = FALSE) moves into the CTE unchanged, so RowsAffected() still reports 0 in exactly
-// the same circumstance (missing/soft-deleted target) this method's own ErrUserNotFound check
-// depends on.
-func (r *profileRepository) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
-	plaidMarkerEligible := domain.SubscriptionStatus(status).IsEligibleForPlaidDisconnectRepair()
-
-	var query string
-	if plaidMarkerEligible {
-		query = `
-			WITH candidate AS (
-				SELECT id FROM users WHERE id = $5 AND is_deleted = FALSE FOR NO KEY UPDATE
-			)
-			UPDATE users
-			SET subscription_status = $1,
-			    subscription_tier = 'premium',
-			    trial_started_at = $2,
-			    trial_ends_at = $3,
-			    had_trial = $4,
-			    updated_at = NOW(),
-			    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, clock_timestamp())
-			FROM candidate
-			WHERE users.id = candidate.id
-		`
-	} else {
-		query = `
-			UPDATE users
-			SET subscription_status = $1,
-			    subscription_tier = 'premium',
-			    trial_started_at = $2,
-			    trial_ends_at = $3,
-			    had_trial = $4,
-			    updated_at = NOW(),
-			    plaid_cleanup_pending_at = NULL
-			WHERE id = $5 AND is_deleted = FALSE
-		`
-	}
-
-	ct, err := r.db.Exec(ctx, query, status, trialStartedAt, trialEndsAt, hadTrial, userID)
-	if err != nil {
-		return err
-	}
-
-	if ct.RowsAffected() == 0 {
-		return ErrUserNotFound
-	}
-
-	return nil
-}
-
 // GetEffectiveSubscriptionStatusByUserID retrieves the EFFECTIVE subscription status for a
 // user — "active" when a non-expired manual tier override (admin comp) is in effect,
 // otherwise the raw subscription_status (Issue #1413). Used by the read-only middleware
@@ -2963,8 +2855,7 @@ func (r *profileRepository) GetUsersWithActivePaddleSubscriptions(ctx context.Co
 // The condition comes from the caller (guard), because the two production callers do not share one
 // — see RetentionClockGuard's doc comment.
 //
-// The candidate CTE takes `FOR NO KEY UPDATE` before the status is compared, matching
-// ExpireTrialIfNoOverride's own ROUND 23 shape: a locked
+// The candidate CTE takes `FOR NO KEY UPDATE` before the status is compared: a locked
 // SELECT follows the row's update chain, so the status compared here is the row version that exists
 // once any concurrent writer's lock is RELEASED, not the pre-wait one this statement first scanned.
 // (Never `FOR UPDATE` — see StampMissingPlaidCleanupMarkers's Finding 1 correction for the
@@ -3369,14 +3260,14 @@ const manualTierOverrideNonEmptyClause = `manual_tier_override IS NOT NULL AND m
 // queries below use noManualOverrideAtAllPredicate instead (see that constant's comment for why),
 // and TestNoActiveManualOverridePredicate_Integration_ParityWithGo /
 // TestNoActiveManualOverridePredicate_Integration_ExactExpiryBoundary kept exercising it purely
-// so the exact production string wouldn't silently drift from a hand-copied restatement. As of
-// the Issue #1413 Codex review round 3 fix (High findings H5/H6), it now has real production
-// callers too — ExpireTrialIfNoOverride splices this constant into a conditional UPDATE's WHERE
-// clause, per the claim-then-act pattern (a former caller, ClaimPlaidDisconnectIfPastDue, was
-// deleted in round 4 — see the deleted past_due_service.go's H6a fix, which replaced its
+// so the exact production string wouldn't silently drift from a hand-copied restatement. It now
+// has real production callers again — GetUsersNeedingPlaidDisconnectRepair and
+// StampMissingPlaidCleanupMarkers splice this constant into their WHERE clauses. (A former
+// caller, ExpireTrialIfNoOverride, was deleted by #1652; before that, ClaimPlaidDisconnectIfPastDue
+// was deleted in round 4 — see the deleted past_due_service.go's H6a fix, which replaced its
 // self-assigning-update "claim" with a real work_claims claim; CancelIfPastDueWithRetention was
 // deleted by Issue #1442 for having zero production callers; and the occurrence-scoped
-// CancelIfPastDueOccurrenceWithRetention was deleted by #1652): this is the one place the
+// CancelIfPastDueOccurrenceWithRetention was deleted by #1652.) This is the one place the
 // "still live right now" rule (as opposed to noManualOverrideAtAllPredicate's "not even a lapsed
 // one") is actually the correct rule to enforce, because these are point-in-time transitions
 // guarded against a comp granted in a race window, not the retention-notice/hard-delete queries'
@@ -3700,8 +3591,7 @@ const liveLinkedItemExistsClause = `EXISTS (
 //     age. plaid_cleanup_pending_at cannot suffer this: it means exactly "a raw-status
 //     ineligibility episode began at this instant, cleanup outstanding" — a durable,
 //     override-independent fact (see domain.User.PlaidCleanupPendingAt's doc comment) — and is
-//     NULL whenever nothing is pending (see ExpireTrialIfNoOverride/
-//     UpdateSubscriptionFromPaddle/UpdateTrialStatus for where it's set/cleared). A NULL marker is explicitly excluded — this pass must never
+//     NULL whenever nothing is pending (see UpdateSubscriptionFromPaddle for where it's set/cleared). A NULL marker is explicitly excluded — this pass must never
 //     invent work from a derived signal.
 //   - an EXISTS check for at least one linked item that is still "live" — not 'disconnected' or
 //     'replaced', the same definition LinkedItemRepository.GetActiveItemsByUserID uses, EXCEPT a
@@ -4069,8 +3959,7 @@ func (r *profileRepository) StampMissingPlaidCleanupMarkers(ctx context.Context)
 	// B proceeds immediately even while this statement still holds B, breaking the cycle at its root
 	// rather than papering over one specific interleaving of it. Every CTE added for Issue #1413
 	// Finding 2 (the four sibling COALESCE(plaid_cleanup_pending_at, ...) writers restructured in this
-	// same round — UpdateSubscriptionFromPaddle, UpdateTrialStatus,
-	// ExpireTrialIfNoOverride) uses `FOR NO KEY UPDATE` for
+	// same round — UpdateSubscriptionFromPaddle) uses `FOR NO KEY UPDATE` for
 	// this identical reason: any of those four rows could equally be an audit actor, so `FOR UPDATE`
 	// there would reproduce this exact cycle four more times over.
 	//
@@ -5049,56 +4938,3 @@ func (r *profileRepository) GetUsersInPastDue(ctx context.Context) ([]domain.Use
 	return users, nil
 }
 
-// ExpireTrialIfNoOverride atomically flips subscription_status to 'inactive' only if the user is
-// still 'trial' and carries no currently-active manual tier override. Returns (true, nil) if the
-// flip happened, (false, nil) if an admin granted/extended a comp between the caller's earlier
-// HasActiveManualOverride() read and this call, or the user's status has otherwise already moved
-// on. Issue #1413 High finding H5, Codex review round 3: follows the deleted (#1652) past-due
-// grace-cancel CAS's shape — the predicate that authorises the transition lives in the UPDATE's WHERE clause,
-// evaluated against committed state at the moment of the write, not in an earlier, non-atomic
-// read-then-check.
-func (r *profileRepository) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
-	// Issue #1413 round-10: plaid_cleanup_pending_at starts atomically with this SAME CAS write —
-	// see GetUsersNeedingPlaidDisconnectRepair's doc comment. COALESCE guards against a retried
-	// call re-pushing an already-running marker forward (defensive; the WHERE clause already
-	// makes this a one-shot transition per trial).
-	//
-	// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up) audited this marker COALESCE
-	// too, for the same reason as UpdateSubscriptionFromPaddle's own doc comment (this file)
-	// explains in full: a bare substitution would not actually fix anything here, and the real fix
-	// was scoped into the same follow-up at the time.
-	//
-	// ROUND 23 (Issue #1413 Finding 2, High, Codex review, PR #1443 follow-up) is that follow-up.
-	// This method's WHERE clause (`subscription_status = 'trial'` plus noActiveManualOverridePredicate)
-	// is its own CAS/correctness mechanism — see this method's own H5 doc comment above: it authorises
-	// the transition against committed state at write time, closing the race a caller's earlier,
-	// non-atomic HasActiveManualOverride() read cannot. Both conditions move into the locked CTE's
-	// SELECT unchanged, nothing added, nothing removed. Same `FOR NO KEY UPDATE` lock mode (never
-	// `FOR UPDATE` — see StampMissingPlaidCleanupMarkers's Finding 1 correction for the cross-user
-	// deadlock that mode would risk) and same verified-fresh target-table COALESCE read as the
-	// deleted (#1652) past-due grace-cancel CAS's own ROUND 23 fix.
-	//
-	// RowsAffected() semantics are unchanged: this method's own callers use the returned bool exactly
-	// as the deleted past-due grace-cancel CAS's callers did — the join with the CTE still produces zero rows
-	// in EXACTLY the circumstances (id not found, status no longer 'trial', or a currently-active
-	// override — i.e. an admin granted/extended a comp between the caller's HasActiveManualOverride()
-	// read and this call) the bare UPDATE's WHERE clause used to.
-	ct, err := r.db.Exec(ctx, `
-		WITH candidate AS (
-			SELECT id FROM users
-			WHERE id = $1 AND subscription_status = 'trial'
-		`+noActiveManualOverridePredicate+`
-			FOR NO KEY UPDATE
-		)
-		UPDATE users
-		SET subscription_status = 'inactive', updated_at = NOW(),
-		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, clock_timestamp())
-		FROM candidate
-		WHERE users.id = candidate.id
-	`,
-		userID)
-	if err != nil {
-		return false, fmt.Errorf("ExpireTrialIfNoOverride: %w", err)
-	}
-	return ct.RowsAffected() > 0, nil
-}
