@@ -169,15 +169,13 @@ jobs:
         # Note: .github/workflows/** is intentionally excluded — workflow-only MCP deploy changes
         # do not retrigger an MCP deploy; use force_rebuild=true for those.
         #
-        # Issue #1484: 'packages/**', 'package.json' and 'bun.lock' are here because
+        # Issue #1484: 'packages/api-client/**', 'package.json' and 'bun.lock' are here because
         # apps/mcp-server/package.json depends on @boostedbudget/api-client ("workspace:*"), and
         # the workspace shares ONE root lockfile. Without them an api-client-only (or root
         # dependency) change redeployed the frontend and left the deployed MCP worker on a stale
         # api-client. The `frontend` filter above already carried all three, which is what makes
-        # their absence here an omission rather than a decision. 'packages/**' rather than
-        # 'packages/api-client/**' is the same accepted over-trigger the test.yml `mcp` filter
-        # makes: there are exactly two packages, so the cost is one redeploy on shared-types
-        # changes, and the broad form stays correct if mcp-server ever adds that dependency.
+        # their absence here an omission rather than a decision. Keep the package path exact:
+        # unrelated workspace packages do not affect the MCP worker and must not redeploy it.
         # Enforced by scripts/check-mcp-job-triggers.py --deploy.
         if: steps.resolve-tags.outputs.bootstrap_mcp == 'false'
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
@@ -185,7 +183,7 @@ jobs:
           base: ${{ steps.resolve-tags.outputs.mcp_prior_sha }}
           ref:  ${{ steps.resolve-sha.outputs.deploy_sha }}
           filters: |
-            mcp: ['apps/mcp-server/**', 'packages/**', 'package.json', 'bun.lock', 'api/openapi.yaml']
+            mcp: ['apps/mcp-server/**', 'packages/api-client/**', 'package.json', 'bun.lock', 'api/openapi.yaml']
 
       - id: filter-fly-config
         if: steps.resolve-tags.outputs.bootstrap_backend == 'false'
