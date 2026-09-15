@@ -42,7 +42,7 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 **Claude Code pre-push hook:** The Claude Code hook at `.claude/hooks/pre-push-checks.sh` invokes `make check-bundle-size` on every push that touches frontend files, enforcing both size-limit budgets AND the orphan-chunk guard automatically.
 
 **Current footprints** — baseline established post-#1225 (Vite 8 / Rolldown `codeSplitting.groups` migration).
-**Measured on `feature/1650-posthog-product-observability` (2026-09-15, HEAD `e91543423` + the lazy-SDK change) via `make check-bundle-size` — every value re-measured in one run.** This table is a point-in-time snapshot, not a live check — if it's older than the last budget or dependency change, re-run `make check-bundle-size` and update every value (and this stamp) before trusting it. Do not hand-edit individual numbers without re-measuring the whole table in one run.
+**Measured on `feature/1650-posthog-product-observability` (2026-09-15, HEAD `645407180` + the lazy-SDK change) via `make check-bundle-size` — every value re-measured in one run.** This table is a point-in-time snapshot, not a live check — if it's older than the last budget or dependency change, re-run `make check-bundle-size` and update every value (and this stamp) before trusting it. Do not hand-edit individual numbers without re-measuring the whole table in one run.
 
 | Chunk | Budget | Actual (gzip) | Headroom |
 |-------|--------|---------------|----------|
