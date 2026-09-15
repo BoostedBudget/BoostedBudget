@@ -1525,7 +1525,7 @@ const cleanupCandidateSelectQuery = `
 	       li.replaced_at, li.replaced_by_id,
 	       li.cleanup_notified_at, li.cleanup_scheduled_at,
 	       li.created_at, li.updated_at, li.investments_last_synced_date, li.liabilities_last_synced_at,
-	       li.status_changed_at
+	       li.status_changed_at, li.transaction_sync_completion_generation
 	FROM linked_items li
 	WHERE li.cleanup_scheduled_at IS NULL
 	  AND li.plaid_removed_at IS NULL
@@ -1825,7 +1825,7 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 		       replaced_at, replaced_by_id,
 		       cleanup_notified_at, cleanup_scheduled_at,
 		       created_at, updated_at, investments_last_synced_date, liabilities_last_synced_at,
-		       status_changed_at
+		       status_changed_at, transaction_sync_completion_generation
 		FROM linked_items
 		WHERE cleanup_scheduled_at IS NOT NULL
 		  AND cleanup_scheduled_at < NOW()
