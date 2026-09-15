@@ -338,9 +338,9 @@ type RetentionProfileRepository interface {
 	// GetUsersWithMalformedTierOverride is Issue #1453's monitoring query: returns every user whose
 	// manual_tier_override is non-empty but does not name a currently-configured tier. Migration
 	// 000127 backfilled the known population to NULL as a one-time cleanup; this monitoring pass
-	// (monitorMalformedTierOverrides below) catches a FUTURE writer reintroducing the class — one
-	// that bypasses admin_user_service.go's write-time validation entirely (a legacy row, a direct
-	// SQL write, or a write made while tierConfig was nil). See its full doc comment on
+	// (monitorMalformedTierOverrides below) catches a FUTURE writer reintroducing the class — a
+	// legacy row or a direct SQL write (the admin override service path that used to validate
+	// every write was deleted in #1652). See its full doc comment on
 	// profileRepository (profile_repository.go) for why it reuses the SAME injected
 	// overrideTierValidator every other validation seam already uses, rather than a hand-copied SQL
 	// tier list, and why it returns (nil, nil) rather than an empty slice when no validator has been
@@ -1669,11 +1669,11 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 // constraint — Issue #1453 deliberately did NOT add one, because the tier set lives in
 // config/subscription_tiers.yaml, not the database, and inlining it into schema would duplicate
 // application config and drift the next time a tier is added or renamed. Migration 000127
-// backfilled every row that was ALREADY malformed at the time it ran to NULL, and
-// admin_user_service.go's UpdateUserTier validates every NEW write against tierConfig — but neither
-// of those closes the class permanently the way a CHECK constraint would have: a legacy migration, a
-// direct SQL write, or a write made while tierConfig was nil can all still reintroduce a malformed
-// value, invisibly, with no write-time gate to catch it. This pass is the compensating control:
+// backfilled every row that was ALREADY malformed at the time it ran to NULL, and #1652 deleted
+// admin_user_service.go's UpdateUserTier, which used to validate every NEW write against tierConfig
+// — but neither of those closes the class permanently the way a CHECK constraint would have: a
+// legacy row or a direct SQL write can still reintroduce a malformed value, invisibly, with no
+// write-time gate to catch it. This pass is the compensating control:
 // unlike a one-time backfill, it runs on every scheduled pass, so a reintroduced malformed value is
 // visible (MalformedManualTierOverrideCount gauge, plus an Error log line naming the affected user
 // IDs) within one repair-pass interval, not left to be discovered whenever someone happens to query

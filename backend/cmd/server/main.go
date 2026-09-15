@@ -2169,15 +2169,8 @@ func main() {
 		}
 
 		// Issue #639: Admin user management - needs adminService for admin status checks
-		// Issue #1414: clerkService re-syncs Clerk metadata on tier-override removal;
-		// RetentionPeriodMonths sizes the retention-clock re-arm.
-		// Issue #1413: tierConfig validates manual tier overrides and sizes the household seat-capacity warning.
-		adminUserService := services.NewAdminUserService(adminUserRepo, adminService, clerkService, cfg.RetentionPeriodMonths, tierConfig)
-		// Issue #1413 Task NB (Codex High finding): these events land on the TARGET user's
-		// PostHog profile (their UUID is distinct_id), so consent is gated the same way
-		// transfer_suggestion_service's user-initiated events are — via gdprClient, not the raw
-		// phClient other admin-triggered-but-operational events use.
-		adminUserService.SetGDPRAnalytics(gdprClient)
+		// Issue #1413: tierConfig rejects a malformed manual_tier_override name at read time.
+		adminUserService := services.NewAdminUserService(adminUserRepo, adminService, tierConfig)
 		adminUserService.SetRevenueCatSummary(revenueCatSummaryService)
 
 		// Issue #640: System health monitoring service

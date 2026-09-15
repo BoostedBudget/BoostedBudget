@@ -62,7 +62,6 @@ var noMatcherBaseline = map[string]int{
 	// call. Removing it would remove the evidence for this whole file.
 	"backend/internal/testsupport/mockassert/no_matcher_guard_test.go":                     1,
 	"backend/internal/huma/middleware/admin_test.go":                                       8,
-	"backend/internal/huma/operations/admin_subscriptions_test.go":                         1,
 	"backend/internal/huma/operations/savings_goal_contribution_test.go":                   8,
 	"backend/internal/queue/jobs/budget_period_close_check_test.go":                        8,
 	"backend/internal/queue/jobs/email_change_propagation_test.go":                         1,
@@ -79,7 +78,6 @@ var noMatcherBaseline = map[string]int{
 	"backend/internal/queue/jobs/scheduled_deletion_check_test.go":                         2,
 	"backend/internal/queue/jobs/subscription_webhook_test.go":                             42,
 	"backend/internal/queue/jobs/webhook_processing_test.go":                               19,
-	"backend/internal/services/admin_user_service_test.go":                                 2,
 	"backend/internal/services/budget_category_matching_service_test.go":                   1,
 	"backend/internal/services/budget_income_service_test.go":                              1,
 	"backend/internal/services/budget_service_test.go":                                     4,

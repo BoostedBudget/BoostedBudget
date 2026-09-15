@@ -2850,8 +2850,8 @@ func (r *profileRepository) UpdateTrialStatus(ctx context.Context, userID string
 // Issue #1413 G2 — malformed override fails closed on THIS access path only: manual_tier_override
 // is an unconstrained VARCHAR(50) with no CHECK constraint (a migration adding one would fail on
 // any existing bad row, and tolerating such rows safely at read time is the whole point here), so
-// its value can be garbage — a legacy row, a direct SQL write, or a write made while the tier
-// config was nil (write-time validation in admin_user_service.go can be bypassed by all three).
+// its value can be garbage — a legacy row or a direct SQL write (#1652 deleted the admin
+// override service path's write-time validation, so nothing on the write side checks this).
 // When an active override is in effect, its value is checked against the injected
 // overrideTierValidator (see SetOverrideTierValidator) before "active" is trusted; a rejected
 // override falls back to the RAW subscription_status and is logged at warn (a silent denial here
@@ -4558,9 +4558,9 @@ const malformedTierOverrideWhereClause = ` WHERE manual_tier_override IS NOT NUL
 
 // GetUsersWithMalformedTierOverride is Issue #1453's monitoring query: it returns every user whose
 // manual_tier_override is non-empty but does NOT name a currently-configured tier — the population
-// migration 000127's one-time backfill cleared, and the population any FUTURE writer that bypasses
-// admin_user_service.go's write-time validation (SetOverrideTierValidator / tierConfig.GetTier)
-// could still reintroduce.
+// migration 000127's one-time backfill cleared, and the population a FUTURE writer could still
+// reintroduce (the write-time validation that used to live in admin_user_service.go was deleted
+// in #1652, so only the read-time validator below remains).
 //
 // Deliberately reuses r.overrideTierValidator — the SAME injected validator
 // GetEffectiveSubscriptionStatusByUserID already uses on the read-access path (see

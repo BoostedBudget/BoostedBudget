@@ -527,9 +527,9 @@ var (
 	// the MOST RECENT RetentionCleanupCheckWorker pass, whose manual_tier_override is non-empty but
 	// does not name a currently-configured tier (config/subscription_tiers.yaml). Migration 000127
 	// backfilled every such row to NULL as a one-time cleanup; this gauge exists to catch a FUTURE
-	// writer reintroducing the class — a legacy row, a direct SQL write, or a write made while
-	// tierConfig was nil, all of which admin_user_service.go's write-time validation
-	// (SetOverrideTierValidator / tierConfig.GetTier) cannot see, since none of them go through it.
+	// writer reintroducing the class — a legacy row or a direct SQL write — since #1652 deleted
+	// the admin override service path that used to validate every writer against tierConfig, and
+	// neither of these goes through a validated writer.
 	//
 	// A gauge, not a counter: this reports the CURRENT outstanding count each pass observes (via
 	// profileRepository.GetUsersWithMalformedTierOverride), not a cumulative total of every row ever

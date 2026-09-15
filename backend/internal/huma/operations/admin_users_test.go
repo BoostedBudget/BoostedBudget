@@ -10,7 +10,6 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
-	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -45,32 +44,6 @@ func (m *mockAdminUserService) GetOwnedHouseholdActiveMemberCount(ctx context.Co
 	args := m.Called(ctx, userID)
 	return args.Int(0), args.Error(1)
 }
-
-// UpdateUserTier satisfies services.AdminUserService for tests in this file that don't
-// exercise tier-override updates (Issue #1413 — see admin_subscriptions_test.go for coverage).
-func (m *mockAdminUserService) UpdateUserTier(ctx context.Context, actorUserID string, targetUserID string, tier string, reason string, expiresAt *time.Time) (services.UpdateUserTierResult, error) {
-	args := m.Called(ctx, actorUserID, targetUserID, tier, reason, expiresAt)
-	if args.Get(0) == nil {
-		return services.UpdateUserTierResult{}, args.Error(1)
-	}
-	return args.Get(0).(services.UpdateUserTierResult), args.Error(1)
-}
-
-// RemoveUserTierOverride satisfies services.AdminUserService for tests in this file that don't
-// exercise tier-override removal (Issue #1414 — see admin_subscriptions_test.go for coverage).
-func (m *mockAdminUserService) RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string) (services.RemoveTierOverrideResult, error) {
-	args := m.Called(ctx, actorUserID, targetUserID, reason)
-	if args.Get(0) == nil {
-		return services.RemoveTierOverrideResult{}, args.Error(1)
-	}
-	return args.Get(0).(services.RemoveTierOverrideResult), args.Error(1)
-}
-
-// SetGDPRAnalytics (Issue #1413 Task NB, replacing Task MB's raw SetAnalytics) is not exercised
-// by these handler-level tests — analytics wiring is tested at the service layer
-// (admin_user_service_test.go); stubbed here only to satisfy the services.AdminUserService
-// interface.
-func (m *mockAdminUserService) SetGDPRAnalytics(a phclient.GDPRAnalytics) {}
 
 func (m *mockAdminUserService) SetRevenueCatSummary(services.RevenueCatSummaryReader) {}
 
