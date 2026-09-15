@@ -267,6 +267,60 @@ func TestRevenueCatService_SupersededReplayDoesNotMutate(t *testing.T) {
 	require.Zero(t, p.fetches)
 	require.Zero(t, p.granted)
 }
+func rcTimePtr(t time.Time) *time.Time { return &t }
+
+// TestExpiredGrantCannotBlockInactiveProjection is the todo-3 hazard test. Failure path (i) in the
+// plan: applyRevenueCatGrants used to return ErrRevenueCatUnresolved on ANY expired/invalid grant
+// BEFORE persisting, so a fresh provider read that still returns a lapsed grant aborted the whole
+// refresh — and the inactive projection (retention arming + plaid_cleanup_pending_at) was never
+// written. Failure path (ii) then compounds it: refreshLocked's Save projects the PRIOR grants if
+// they still resolve, else early-returns without projecting, so a persistently-returned expired
+// grant leaves the user indefinitely ACTIVE.
+//
+// The fix is single-mechanism: a FRESH provider read DROPS unusable grants (expired, unknown key,
+// duplicate) instead of erroring, then persists whatever remains — here, nothing, so access
+// resolves inactive. domain.RevenueCatState.ResolveAccess is deliberately untouched: an expired
+// CACHED grant must still require a refresh, and this test is that refresh.
+//
+// Falsifiability: restoring the `return domain.ErrRevenueCatUnresolved` guard in
+// applyRevenueCatGrants (removing either drop) makes this FAIL — Refresh returns an error and the
+// persisted state keeps resolving the stale prior grant.
+func TestExpiredGrantCannotBlockInactiveProjection(t *testing.T) {
+	expired := time.Now().Add(-time.Hour)
+	for _, tc := range []struct {
+		name  string
+		grant rc.Entitlement
+	}{
+		{"expired-grant", rc.Entitlement{LookupKey: "trial_premium", ExpiresAt: rcTimePtr(expired)}},
+		{"unknown-key-grant", rc.Entitlement{LookupKey: "paid_not_a_real_tier"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			priorEnd := time.Now().Add(24 * time.Hour)
+			// The last CONFIRMED projection: an active paid grant. It must be replaced by the
+			// unusable fresh read, not preserved because the refresh aborted.
+			r := &rcTestStore{state: domain.RevenueCatState{
+				UserID:          "local-uuid",
+				AccessUpdatedAt: time.Now().Add(-time.Hour),
+				Grants:          []domain.RevenueCatGrant{{Key: "paid_premium", ExpiresAt: &priorEnd}},
+			}}
+			p := &rcTestProvider{grants: []rc.Entitlement{tc.grant}}
+			s := NewRevenueCatService(r, p, rcTestProfile{})
+
+			state, err := s.Refresh(context.Background(), "local-uuid")
+			require.NoError(t, err,
+				"a fresh provider read containing only an unusable grant must not abort the refresh and strand the prior projection")
+			require.Empty(t, state.Grants, "the unusable grant must be dropped, not projected")
+			require.Empty(t, state.AccessError, "a dropped grant is not a provider error")
+
+			// The projection that reached Save is what a subsequent read resolves.
+			access, resolveErr := r.state.ResolveAccess(time.Now())
+			require.NoError(t, resolveErr)
+			require.Equal(t, "inactive", access.Status,
+				"the persisted projection must be inactive so retention/Plaid arming is driven by Save")
+		})
+	}
+}
+
 func TestRevenueCatService_AdminValidationAndIntentOnly(t *testing.T) {
 	r := &rcTestStore{state: domain.RevenueCatState{AccessUpdatedAt: time.Now()}, ops: map[string]domain.RevenueCatOperation{}}
 	p := &rcTestProvider{}
