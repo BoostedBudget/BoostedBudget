@@ -2280,11 +2280,10 @@ func TestRetentionCleanupCheck_PlaidRepairNilCleanup_SkipsRepairPass_JobStillSuc
 	err := worker.Work(ctx, job)
 	require.NoError(t, err, "a nil Plaid cleanup collaborator must only skip the Plaid-disconnect repair pass, not fail the whole job — see RunOnStart's QA/E2E implications")
 
-	// Mirrors TestManualTierOverrideExpiryCheck_Success_RecordsHeartbeat's own established idiom
-	// (manual_tier_override_expiry_check_test.go): JobLastSuccessTimestamp is second-resolution
-	// (float64(time.Now().Unix())), so a fast unit test can legitimately record the SAME second as
-	// `before` — GreaterOrEqual against a wall-clock snapshot taken before Work() runs, not a strict
-	// Greater against a snapshot of the gauge itself, is what actually proves the heartbeat advanced.
+	// JobLastSuccessTimestamp is second-resolution (float64(time.Now().Unix())), so a fast unit
+	// test can legitimately record the SAME second as `before` — GreaterOrEqual against a
+	// wall-clock snapshot taken before Work() runs, not a strict Greater against a snapshot of the
+	// gauge itself, is what actually proves the heartbeat advanced.
 	got := testutil.ToFloat64(observability.JobLastSuccessTimestamp.WithLabelValues(job.Kind))
 	assert.GreaterOrEqual(t, got, float64(before), "the last-success heartbeat MUST advance when the job succeeds, even though the Plaid-disconnect repair pass itself was skipped")
 
@@ -2810,14 +2809,11 @@ func TestRetentionCleanupCheckUniqueOpts(t *testing.T) {
 // RetentionCleanupCheckUniqueOpts() (tested above) at all, so the round that added Completed to
 // that function was a no-op in production: a completed retention job still failed to block a
 // RunOnStart insertion after every restart/leader election, silently re-running the 30-day/7-day
-// GDPR pre-deletion notices and deleteExpiredAccounts on every deploy. This is the third "defined,
-// tested, never wired" instance on this branch — ManualTierOverrideExpiryCheckInsertOpts (Issue
-// #1413 G3) fixed the identical failure mode for the sibling job one registration below this one.
+// GDPR pre-deletion notices and deleteExpiredAccounts on every deploy.
 //
 // RetentionCleanupCheckInsertOpts extracts the FULL *river.InsertOpts construction (not just the
-// UniqueOpts) into this package, mirroring ManualTierOverrideExpiryCheckInsertOpts exactly, so
-// main.go can call a single function instead of hand-writing a literal — main.go is not
-// unit-testable itself, so this extraction is what turns
+// UniqueOpts) into this package, so main.go can call a single function instead of hand-writing a
+// literal — main.go is not unit-testable itself, so this extraction is what turns
 // TestRetentionCleanupCheckInsertOpts_CarriesUniqueOpts below from an assertion about an unconsumed
 // struct into a real guarantee about what main.go's periodic-job registration ships, once main.go
 // calls this function directly (no more separate hand-copied literal to drift from it).

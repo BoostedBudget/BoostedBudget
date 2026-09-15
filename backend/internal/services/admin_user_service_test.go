@@ -1289,9 +1289,8 @@ func TestAdminUserService_RemoveUserTierOverride_Success(t *testing.T) {
 		ClerkUserID:             "clerk_target_123",
 	}, nil)
 	// #1413 AC-15: assert the Clerk payload key-by-key (mirroring the grant path's matcher
-	// above and manual_tier_override_expiry_check_test.go's expiry-path matcher) — mock.Anything
-	// here would let a regression that re-emits a stale premium claim, or drops the "tier": nil
-	// poisoned-user cleanup, pass silently.
+	// above) — mock.Anything here would let a regression that re-emits a stale premium claim, or
+	// drops the "tier": nil poisoned-user cleanup, pass silently.
 	//
 	// Task X (L3, Codex review round on PR #1443): also assert the exact key COUNT, not just
 	// these three keys' values — otherwise a regression that ADDS a key (e.g. reintroducing a

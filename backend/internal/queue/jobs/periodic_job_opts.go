@@ -10,10 +10,9 @@ import (
 // riverUniqueOpts converts this package's queue-runner-agnostic queue.UniqueOpts to the
 // river.UniqueOpts type river.InsertOpts.UniqueOpts actually requires — the same conversion
 // internal/queue/river/client.go's toRiverUniqueOpts performs for the general-purpose enqueue
-// path. RetentionCleanupCheckInsertOpts and ManualTierOverrideExpiryCheckInsertOpts
-// (Issue #1413) each hand-copied this loop independently; this shared helper is what every
-// other periodic job's own *InsertOpts() function (Issue #1448) calls instead of hand-copying
-// it a further ~10 times.
+// path. RetentionCleanupCheckInsertOpts (Issue #1413) hand-copied this loop; this shared helper is
+// what every other periodic job's own *InsertOpts() function (Issue #1448) calls instead of
+// hand-copying it a further ~10 times.
 //
 // ByState is only allocated when unique.ByState is non-empty — mirroring
 // internal/queue/river/client.go's toRiverUniqueOpts guard exactly. Without this guard,
