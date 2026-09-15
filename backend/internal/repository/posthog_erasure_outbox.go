@@ -41,6 +41,15 @@ func buildPostHogErasureEnvelope(enc *appcrypto.FieldEncryptor, internalUserID, 
 	if err != nil {
 		return postHogErasureEnvelope{}, fmt.Errorf("decrypt canonical Clerk identity: %w", err)
 	}
+	// users.clerk_user_id can still hold a plaintext value (pre-encryption rows; DecryptString
+	// passes plaintext through), but the outbox CHECK requires ciphertext. Re-encrypt only when
+	// the stored value is not already ENC$-prefixed, so an encrypted value is never double-wrapped.
+	if !appcrypto.IsEncrypted(canonicalEncryptedClerkID) {
+		canonicalEncryptedClerkID, err = enc.EncryptString(canonicalClerkID)
+		if err != nil {
+			return postHogErasureEnvelope{}, fmt.Errorf("encrypt canonical Clerk identity: %w", err)
+		}
+	}
 	for _, encrypted := range encryptedClerkIDs {
 		plain, err := enc.DecryptString(encrypted)
 		if err != nil {

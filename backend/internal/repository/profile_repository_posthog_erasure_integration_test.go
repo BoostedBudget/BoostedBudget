@@ -67,6 +67,48 @@ func TestDeleteUserCascade_Integration_PostHogOutboxSurvivesWithEncryptedHistori
 	assert.ElementsMatch(t, []string{user.ID, user.ClerkUserID, historical}, identities)
 }
 
+// TestDeleteUserCascade_Integration_PlaintextClerkIdentityIsEncryptedInOutbox is the #1650
+// regression for migration 213's ck_posthog_erasure_outbox_clerk_ciphertext CHECK. users.clerk_user_id
+// can still hold a pre-encryption plaintext value (DecryptString passes it through, and
+// BackfillEncryption exists precisely because such rows remain), so the outbox must encrypt it
+// rather than copy it verbatim. Seeded with raw SQL — CreateUserTx encrypts, which would make this
+// test pass without exercising the plaintext path at all.
+func TestDeleteUserCascade_Integration_PlaintextClerkIdentityIsEncryptedInOutbox(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewProfileRepository(pool, enc)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	project := "posthog-erasure-plaintext-" + suffix
+	repo.SetPostHogErasureTarget(project, "us")
+
+	userID := uuid.NewString()
+	clerkUserID := "test|" + userID
+	requestedAt := time.Now().Add(-31 * 24 * time.Hour).UTC().Truncate(time.Microsecond)
+	_, err := pool.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region,
+		                   deletion_requested_at, deletion_scheduled_at)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad', $4, $4)`,
+		userID, clerkUserID, "plaintext-clerk-"+suffix+"@example.com", requestedAt)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", userID) })
+
+	deleted, _, err := repo.DeleteUserCascade(ctx, userID, &requestedAt)
+	require.NoError(t, err)
+	require.True(t, deleted)
+	assertUserRowGone(t, ctx, pool, userID)
+
+	var outboxID, clerkCiphertext string
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT id, clerk_user_id_encrypted FROM posthog_erasure_outbox
+		WHERE project_id=$1 AND clerk_user_id_encrypted LIKE 'ENC$%'`, project).
+		Scan(&outboxID, &clerkCiphertext))
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_outbox WHERE id=$1", outboxID) })
+	canonical, err := enc.DecryptString(clerkCiphertext)
+	require.NoError(t, err)
+	assert.Equal(t, clerkUserID, canonical)
+}
+
 func TestDeleteUserCascade_Integration_OutboxInsertFailureRollsBackLocalErasure(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)
