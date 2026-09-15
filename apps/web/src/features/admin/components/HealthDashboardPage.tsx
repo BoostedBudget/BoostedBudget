@@ -327,10 +327,10 @@ export function HealthDashboardPage() {
             status={!jobBacklogAvailable ? 'warning' : (data.job_backlog.plaid_cleanup_oldest_outstanding_seconds > 0 ? 'warning' : 'success')}
           />
           <SummaryCard
-            title="Manual Override Oldest Uncleared Expired"
-            value={jobBacklogAvailable ? formatBacklogAge(data.job_backlog.manual_tier_override_oldest_uncleared_expired_seconds) : 'Unavailable'}
+            title="RevenueCat Oldest Expired Comp Grant"
+            value={jobBacklogAvailable ? formatBacklogAge(data.job_backlog.revenuecat_oldest_expired_comp_grant_seconds) : 'Unavailable'}
             icon={<Timer size={24} />}
-            status={!jobBacklogAvailable ? 'warning' : (data.job_backlog.manual_tier_override_oldest_uncleared_expired_seconds > 0 ? 'warning' : 'success')}
+            status={!jobBacklogAvailable ? 'warning' : (data.job_backlog.revenuecat_oldest_expired_comp_grant_seconds > 0 ? 'warning' : 'success')}
           />
         </div>
       </section>

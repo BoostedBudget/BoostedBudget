@@ -90,7 +90,7 @@ type MockJobHealthRepository struct {
 	mock.Mock
 }
 
-func (m *MockJobHealthRepository) GetOldestUnclearedExpiredManualTierOverrideAge(ctx context.Context) (time.Duration, error) {
+func (m *MockJobHealthRepository) GetOldestExpiredCompGrantAge(ctx context.Context) (time.Duration, error) {
 	args := m.Called(ctx)
 	return args.Get(0).(time.Duration), args.Error(1)
 }
@@ -625,7 +625,7 @@ func TestGetSystemHealth_JobBacklogMetricsPopulated(t *testing.T) {
 
 	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
 	mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(3, 2*time.Hour, nil)
-	mockJobHealthRepo.On("GetOldestUnclearedExpiredManualTierOverrideAge", mock.Anything).Return(90*time.Minute, nil)
+	mockJobHealthRepo.On("GetOldestExpiredCompGrantAge", mock.Anything).Return(90*time.Minute, nil)
 
 	service := &systemHealthService{
 		healthRepo:     mockHealthRepo,
@@ -639,7 +639,7 @@ func TestGetSystemHealth_JobBacklogMetricsPopulated(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), result.JobBacklog.PlaidCleanupOutstandingUsers)
 	assert.Equal(t, int64(2*60*60), result.JobBacklog.PlaidCleanupOldestOutstandingSeconds)
-	assert.Equal(t, int64(90*60), result.JobBacklog.ManualTierOverrideOldestUnclearedExpiredSeconds)
+	assert.Equal(t, int64(90*60), result.JobBacklog.RevenueCatOldestExpiredCompGrantSeconds)
 	assert.True(t, result.JobBacklog.Available, "a successful query must be marked available (Issue #1458 follow-up G16)")
 
 	mockJobHealthRepo.AssertExpectations(t)
@@ -711,7 +711,7 @@ func TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues(t *testing.T) {
 // coverage gap Codex flagged for Issue #1458 (batch R4 Task 4): every existing error test above
 // stubs ONLY the FIRST query (GetOutstandingPlaidCleanupStats) to fail. Nothing pinned what
 // happens when that first query SUCCEEDS with real, non-zero data and the SECOND query
-// (GetOldestUnclearedExpiredManualTierOverrideAge) is the one that fails — a genuinely different
+// (GetOldestExpiredCompGrantAge) is the one that fails — a genuinely different
 // code path through getJobBacklogMetrics's two sequential, independently-failable calls.
 //
 // Codex verified the implementation is already correct here (a coverage gap, not a behaviour
@@ -734,7 +734,7 @@ func TestGetSystemHealth_JobBacklogMetrics_SecondQueryError_DiscardsFirstQuerysG
 	// First query succeeds with real, non-zero data.
 	mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(5, 3*time.Hour, nil)
 	// Second query fails.
-	mockJobHealthRepo.On("GetOldestUnclearedExpiredManualTierOverrideAge", mock.Anything).Return(time.Duration(0), errors.New("db error"))
+	mockJobHealthRepo.On("GetOldestExpiredCompGrantAge", mock.Anything).Return(time.Duration(0), errors.New("db error"))
 
 	service := &systemHealthService{
 		healthRepo:     mockHealthRepo,
@@ -783,7 +783,7 @@ func TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguisha
 
 		setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
 		mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), nil)
-		mockJobHealthRepo.On("GetOldestUnclearedExpiredManualTierOverrideAge", mock.Anything).Return(time.Duration(0), nil)
+		mockJobHealthRepo.On("GetOldestExpiredCompGrantAge", mock.Anything).Return(time.Duration(0), nil)
 
 		service := &systemHealthService{
 			healthRepo:     mockHealthRepo,

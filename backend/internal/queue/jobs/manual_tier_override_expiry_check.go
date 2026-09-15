@@ -275,9 +275,11 @@ func (w *ManualTierOverrideExpiryCheckWorker) Work(ctx context.Context, job *riv
 		// replay) — that silent-stop case is what Task P4's two additions cover instead:
 		// observability.JobLastSuccessTimestamp (the deferred func's success branch calls
 		// RecordJobSuccess) lets an alert fire on "hasn't succeeded in > 48h", and
-		// repository.JobHealthRepository.GetOldestUnclearedExpiredManualTierOverrideAge (wired to
-		// a gauge in main.go) is the direct measure of the resulting hazard, independent of
-		// whether this job's OWN metrics are even being scraped.
+		// repository.JobHealthRepository.GetOldestExpiredCompGrantAge (wired to
+		// a gauge in main.go) is the RevenueCat-side measure of the same class of hazard,
+		// independent of whether this job's OWN metrics are even being scraped. (#1652 todo 4
+		// retired the legacy-column gauge this comment used to name, because no production path
+		// writes manual_tier_override any more.)
 		w.logger.Error("manual tier override expiry check completed with failures",
 			"job_id", job.ID, "errors", errorCount, "total", len(users))
 	}

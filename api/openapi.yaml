@@ -4923,19 +4923,19 @@ components:
       properties:
         available:
           type: boolean
-        manual_tier_override_oldest_uncleared_expired_seconds:
-          format: int64
-          type: integer
         plaid_cleanup_oldest_outstanding_seconds:
           format: int64
           type: integer
         plaid_cleanup_outstanding_users:
           format: int64
           type: integer
+        revenuecat_oldest_expired_comp_grant_seconds:
+          format: int64
+          type: integer
       required:
         - plaid_cleanup_outstanding_users
         - plaid_cleanup_oldest_outstanding_seconds
-        - manual_tier_override_oldest_uncleared_expired_seconds
+        - revenuecat_oldest_expired_comp_grant_seconds
         - available
       type: object
     LargestTransactionItem:

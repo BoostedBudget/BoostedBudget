@@ -631,7 +631,7 @@ func (s *systemHealthService) getJobBacklogMetrics(ctx context.Context) (*domain
 	// keeps that single signal simple and matches every other getX() helper in this service
 	// (getPaddleMetrics, getDeadLetterMetrics): one query error zero-values the whole metrics
 	// struct for that section, never a partially-populated one.
-	oldestUnclearedExpired, err := s.jobHealthRepo.GetOldestUnclearedExpiredManualTierOverrideAge(ctx)
+	compGrantAge, err := s.jobHealthRepo.GetOldestExpiredCompGrantAge(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -639,7 +639,7 @@ func (s *systemHealthService) getJobBacklogMetrics(ctx context.Context) (*domain
 	return &domain.JobBacklogMetrics{
 		PlaidCleanupOutstandingUsers:                    int64(outstandingUsers),
 		PlaidCleanupOldestOutstandingSeconds:            int64(oldestOutstanding.Seconds()),
-		ManualTierOverrideOldestUnclearedExpiredSeconds: int64(oldestUnclearedExpired.Seconds()),
+		RevenueCatOldestExpiredCompGrantSeconds:         int64(compGrantAge.Seconds()),
 		// Both queries above succeeded — this is a VERIFIED backlog snapshot (possibly a real
 		// zero), not an unknown. Issue #1458 follow-up G16.
 		Available: true,

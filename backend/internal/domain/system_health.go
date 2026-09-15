@@ -280,10 +280,12 @@ type JobBacklogMetrics struct {
 	// PlaidCleanupOldestOutstandingSeconds is how long the OLDEST such marker has been sitting
 	// uncleared, in seconds (0 when there are none).
 	PlaidCleanupOldestOutstandingSeconds int64 `json:"plaid_cleanup_oldest_outstanding_seconds"`
-	// ManualTierOverrideOldestUnclearedExpiredSeconds is how long the OLDEST currently
-	// expired-but-uncleared manual_tier_override has been sitting uncleared, in seconds (0 when
-	// there are none) — repository.JobHealthRepository.GetOldestUnclearedExpiredManualTierOverrideAge.
-	ManualTierOverrideOldestUnclearedExpiredSeconds int64 `json:"manual_tier_override_oldest_uncleared_expired_seconds"`
+	// RevenueCatOldestExpiredCompGrantSeconds is how long the OLDEST expired comp_* grant still
+	// present in RevenueCat's stored projection has been sitting there, in seconds (0 when there
+	// are none) — repository.JobHealthRepository.GetOldestExpiredCompGrantAge. #1652 todo 4: this
+	// replaced the retired legacy-column field, which was fed only by manual_tier_override — a
+	// column no production path writes any more.
+	RevenueCatOldestExpiredCompGrantSeconds int64 `json:"revenuecat_oldest_expired_comp_grant_seconds"`
 	// Available distinguishes "queried successfully and found a real (possibly zero) backlog"
 	// from "the underlying query failed/is unwired" (Issue #1458 follow-up G16). Before this
 	// field existed, SystemHealthService.getJobBacklogMetrics collapsed a query ERROR into the

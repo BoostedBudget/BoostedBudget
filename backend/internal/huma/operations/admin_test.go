@@ -568,7 +568,7 @@ func TestGetSystemHealth_IncludesJobBacklogMetrics(t *testing.T) {
 			JobBacklog: domain.JobBacklogMetrics{
 				PlaidCleanupOutstandingUsers:                    3,
 				PlaidCleanupOldestOutstandingSeconds:            7200,
-				ManualTierOverrideOldestUnclearedExpiredSeconds: 3600,
+				RevenueCatOldestExpiredCompGrantSeconds: 3600,
 				Available: true,
 			},
 		},
@@ -589,7 +589,7 @@ func TestGetSystemHealth_IncludesJobBacklogMetrics(t *testing.T) {
 	require.NotNil(t, output)
 	assert.Equal(t, int64(3), output.Body.JobBacklog.PlaidCleanupOutstandingUsers)
 	assert.Equal(t, int64(7200), output.Body.JobBacklog.PlaidCleanupOldestOutstandingSeconds)
-	assert.Equal(t, int64(3600), output.Body.JobBacklog.ManualTierOverrideOldestUnclearedExpiredSeconds)
+	assert.Equal(t, int64(3600), output.Body.JobBacklog.RevenueCatOldestExpiredCompGrantSeconds)
 	assert.True(t, output.Body.JobBacklog.Available)
 }
 
