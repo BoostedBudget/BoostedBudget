@@ -191,7 +191,6 @@ describe('excluded operations', () => {
       'getSystemHealth',
       'listAdminDeadLetterJobs',
       'bulkDeleteAdminDeadLetterJobs',
-      'grantTrial',
       'get-admin-user-subscription',
       'update-admin-user-tier'
     ]
@@ -413,7 +412,7 @@ describe('completeness', () => {
     // +1 from #1630 B7: listAdminBudgetHierarchyAudits, the hierarchy audit's operator surface.
     // +1 from #1637: frontend-only budget plan report, explicitly excluded.
     // +12 from #1652: RevenueCat admin, subscription and webhook surfaces, all excluded.
-    expect(ALL_OPERATION_IDS.length).toBe(225)
+    expect(ALL_OPERATION_IDS.length).toBe(224)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified

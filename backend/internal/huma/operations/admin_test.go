@@ -211,16 +211,6 @@ func (m *mockLinkedItemRepo) MarkPlaidRemovalFailed(ctx context.Context, ids []s
 	return nil
 }
 
-// mockTrialService is a mock implementation of TrialGranter for admin tests
-// Issue #698: Used to test trial grant endpoint
-type mockTrialService struct {
-	grantTrialErr error
-}
-
-func (m *mockTrialService) GrantTrial(ctx context.Context, userID string) error {
-	return m.grantTrialErr
-}
-
 // Helper function to create test linked item
 func createTestLinkedItem() *domain.LinkedItem {
 	return &domain.LinkedItem{
@@ -246,7 +236,7 @@ func TestFireWebhook_Success(t *testing.T) {
 		item: createTestLinkedItem(),
 	}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, nil, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -276,7 +266,7 @@ func TestFireWebhook_ItemNotFound(t *testing.T) {
 		getErr: repository.ErrLinkedItemNotFound,
 	}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, nil, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -305,7 +295,7 @@ func TestFireWebhook_PlaidAPIError(t *testing.T) {
 		item: createTestLinkedItem(),
 	}
 
-	handler := NewAdminHandler(mockPlaid, mockRepo, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, nil, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -334,11 +324,11 @@ func TestFireWebhook_PlaidAPIError(t *testing.T) {
 // the orphaned-items view — none of which is Plaid-specific. The registration is now
 // unconditional, which makes this handler the only one that can be reached with a nil
 // plaidService, so it has to refuse the way every other under-configured admin handler in
-// this file does (GrantTrial, GetSystemHealth: 503) instead of dereferencing nil.
+// this file does (GetSystemHealth: 503) instead of dereferencing nil.
 func TestFireWebhook_PlaidServiceNotConfigured(t *testing.T) {
 	// GIVEN: a handler built with no Plaid service (Plaid credentials absent at startup)
 	mockRepo := &mockLinkedItemRepo{item: createTestLinkedItem()}
-	handler := NewAdminHandler(nil, mockRepo, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(nil, mockRepo, nil, nil, nil, nil, nil)
 
 	input := &FireWebhookInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -368,7 +358,7 @@ func TestFireWebhook_PlaidServiceNotConfigured(t *testing.T) {
 func TestAdminRouteRegistration_NoPlaidDependencies(t *testing.T) {
 	_, api := humatest.New(t)
 	// nil plaidService AND nil linkedItemRepo — both are Plaid-only dependencies.
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil)
 	RegisterAdminRoutes(api, handler)
 
 	for _, path := range []string{
@@ -388,7 +378,7 @@ func TestAdminRouteRegistration(t *testing.T) {
 	mockRepo := &mockLinkedItemRepo{}
 
 	_, api := humatest.New(t)
-	handler := NewAdminHandler(mockPlaid, mockRepo, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(mockPlaid, mockRepo, nil, nil, nil, nil, nil)
 	RegisterAdminRoutes(api, handler)
 
 	// Test POST /api/v1/admin/plaid/fire-webhook (without auth, should fail with 401)
@@ -397,90 +387,6 @@ func TestAdminRouteRegistration(t *testing.T) {
 		"webhook_code": "DEFAULT_UPDATE",
 	})
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
-}
-
-// --- GrantTrial Tests (Issue #698) ---
-
-// TestGrantTrial_Success tests successful trial grant.
-func TestGrantTrial_Success(t *testing.T) {
-	mockTrial := &mockTrialService{}
-	handler := NewAdminHandler(nil, nil, mockTrial, nil, nil, nil, nil, nil)
-
-	input := &GrantTrialInput{
-		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
-			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
-			ClerkUserID:        "clerk_user_123",
-		},
-	}
-
-	output, err := handler.GrantTrial(context.Background(), input)
-
-	require.NoError(t, err)
-	require.NotNil(t, output)
-	assert.True(t, output.Body.Success)
-	assert.Equal(t, "Trial granted successfully", output.Body.Message)
-}
-
-// TestGrantTrial_UserAlreadyHadTrial tests graceful handling when user already had trial.
-func TestGrantTrial_UserAlreadyHadTrial(t *testing.T) {
-	mockTrial := &mockTrialService{
-		grantTrialErr: errors.New("user has already had a trial"),
-	}
-	handler := NewAdminHandler(nil, nil, mockTrial, nil, nil, nil, nil, nil)
-
-	input := &GrantTrialInput{
-		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
-			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
-			ClerkUserID:        "clerk_user_123",
-		},
-	}
-
-	output, err := handler.GrantTrial(context.Background(), input)
-
-	// Should return success (not error) for E2E test purposes
-	require.NoError(t, err)
-	require.NotNil(t, output)
-	assert.True(t, output.Body.Success)
-	assert.Contains(t, output.Body.Message, "already has or had a trial")
-}
-
-// TestGrantTrial_ServiceNotConfigured tests 503 when trial service is nil.
-func TestGrantTrial_ServiceNotConfigured(t *testing.T) {
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil)
-
-	input := &GrantTrialInput{
-		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
-			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
-			ClerkUserID:        "clerk_user_123",
-		},
-	}
-
-	output, err := handler.GrantTrial(context.Background(), input)
-
-	assert.Nil(t, output)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Trial service not configured")
-}
-
-// TestGrantTrial_ServiceError tests 500 when trial service returns unexpected error.
-func TestGrantTrial_ServiceError(t *testing.T) {
-	mockTrial := &mockTrialService{
-		grantTrialErr: errors.New("database connection error"),
-	}
-	handler := NewAdminHandler(nil, nil, mockTrial, nil, nil, nil, nil, nil)
-
-	input := &GrantTrialInput{
-		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
-			AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
-			ClerkUserID:        "clerk_user_123",
-		},
-	}
-
-	output, err := handler.GrantTrial(context.Background(), input)
-
-	assert.Nil(t, output)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Internal server error")
 }
 
 // --- System Health Tests (Issue #640) ---
@@ -533,7 +439,7 @@ func TestGetSystemHealth_Success(t *testing.T) {
 		},
 	}
 
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, mockHealth, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockHealth, nil, nil)
 
 	input := &GetSystemHealthInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -574,7 +480,7 @@ func TestGetSystemHealth_IncludesJobBacklogMetrics(t *testing.T) {
 		},
 	}
 
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, mockHealth, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockHealth, nil, nil)
 
 	input := &GetSystemHealthInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -595,7 +501,7 @@ func TestGetSystemHealth_IncludesJobBacklogMetrics(t *testing.T) {
 
 // TestGetSystemHealth_ServiceNotConfigured tests 503 when service is nil.
 func TestGetSystemHealth_ServiceNotConfigured(t *testing.T) {
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil)
 
 	input := &GetSystemHealthInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{
@@ -617,7 +523,7 @@ func TestGetSystemHealth_ServiceError(t *testing.T) {
 		healthErr: errors.New("database connection error"),
 	}
 
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, mockHealth, nil, nil)
+	handler := NewAdminHandler(nil, nil, nil, nil, mockHealth, nil, nil)
 
 	input := &GetSystemHealthInput{
 		AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{

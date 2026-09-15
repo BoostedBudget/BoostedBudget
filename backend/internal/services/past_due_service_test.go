@@ -1071,7 +1071,7 @@ func TestPastDueService_ProcessUser_GraceExpiry_ExpiredOverride_Proceeds(t *test
 	plaid.AssertCalled(t, "DisconnectAllUserItems", mock.Anything, userID)
 }
 
-// Test 14: household-covered user is skipped entirely (the new hook, mirroring TrialService).
+// Test 14: household-covered user is skipped entirely (the new hook, mirroring the deleted TrialService).
 func TestPastDueService_ProcessUser_CoveredByHousehold_Skipped(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}
@@ -1132,8 +1132,8 @@ func TestPastDueService_ProcessUser_NotCoveredByHousehold_Proceeds(t *testing.T)
 }
 
 // Test 16: household checker fails — fail closed (skip destructive action) but propagate the
-// error, mirroring TrialService.ExpireTrial's fail-closed-with-error-propagation semantics
-// (see trial_service.go:197-204 for why swallowing would hide an operational failure).
+// error, mirroring the legacy trial-expiry flow's (deleted in #1652) fail-closed-with-error-propagation semantics
+// (see the legacy trial service (deleted in #1652) for why swallowing would hide an operational failure).
 func TestPastDueService_ProcessUser_HouseholdCheckFails_SkipsDefensivelyButPropagatesError(t *testing.T) {
 	repo := &mockPastDueProfileRepo{}
 	plaid := &mockPastDuePlaidCleanup{}

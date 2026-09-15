@@ -86,7 +86,6 @@ var brokenCitationBaseline = map[string]bool{
 	"TestRiver_ClientRegistration":                                                           true,
 	"TestSavingsProgress_StickyCompletion_NotClearedOnDrop":                                  true,
 	"TestSystemHealth_RedisDownDoesNotChangeOverallStatus":                                   true,
-	"TestTrialService_ExpireTrial_DisconnectFailsAfterFlip_":                                 true,
 	"TestUpdateUserTier_Integration_ClearsPlaidCleanupPending":                               true,
 	"TestUserAccountService_MatchOrCreate_NullMask_CreatesNew":                               true,
 	"TestWorkClaims_Claim_EligibleResourceIsProcessedEndToEnd":                               true,
