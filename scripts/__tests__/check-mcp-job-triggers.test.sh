@@ -7,7 +7,8 @@
 # CI runs against that copy, and asserts it fails naming the specific row that should go red:
 #
 #   * restoring the `backend` OR              -> scripts/**-only PR wrongly launches both MCP jobs
-#   * dropping 'packages/**' from `mcp`       -> packages/api-client change wrongly skips both
+#   * dropping 'packages/api-client/**'       -> packages/api-client change wrongly skips both
+#   * broadening it back to 'packages/**'     -> unrelated package changes wrongly run both
 #   * dropping the `api` OR                   -> an api/**-only change wrongly skips both
 #   * an unmodelled `if:` construct           -> guard must error, never assume a default
 #   * an output name the filters don't define -> same
@@ -19,7 +20,7 @@
 # .github/workflows/deploy-production.yml and deploy-to-staging.yaml — the filters that decide
 # whether the Cloudflare Workers MCP deploy runs at all:
 #
-#   * dropping 'packages/**' from either deploy filter -> the api-client row goes red; this is
+#   * dropping 'packages/api-client/**' from either deploy filter -> the api-client row goes red;
 #     literally the pre-#1484 content of both files
 #   * misspelling the MCP_CHANGED env wiring, deleting the mcp_changed export, or ungating the
 #     deploy job -> guard errors (each is silent at runtime: the deploy just stops running)
@@ -122,11 +123,28 @@ mutate 2 "      (needs.detect-changes.outputs.mcp == 'true' ||
 assert_rejected "backend-or-restored" "scripts/foo.sh"
 echo ""
 
-echo "Case 3: dropping 'packages/**' from the mcp filter must make the api-client row go red"
+echo "Case 3: dropping 'packages/api-client/**' from the mcp filter must make the api-client row go red"
 mutate 1 "              - 'api/openapi.yaml'
-              - 'packages/**'" \
+              - 'packages/api-client/**'" \
        "              - 'api/openapi.yaml'"
 assert_rejected "packages-glob-removed" "packages/api-client/src/x.ts"
+echo ""
+
+echo "Case 3b: broadening the mcp filter to packages/** must make an unrelated-package row go red"
+mutate 1 "              - 'api/openapi.yaml'
+              - 'packages/api-client/**'" \
+         "              - 'api/openapi.yaml'
+              - 'packages/**'"
+assert_rejected "packages-glob-broadened" "packages/design-tokens/src/x.ts"
+echo ""
+
+echo "Case 3c: adding root tsconfig.json to the mcp filter must make its negative row go red"
+mutate 1 "              - 'api/openapi.yaml'
+              - 'packages/api-client/**'" \
+         "              - 'api/openapi.yaml'
+              - 'packages/api-client/**'
+              - 'tsconfig.json'"
+assert_rejected "root-tsconfig-added" "tsconfig.json"
 echo ""
 
 echo "Case 4: an if: construct the guard does not model must be an error, not a default"
@@ -232,14 +250,32 @@ for wf in "$PROD" "$STAGING"; do
 done
 echo ""
 
-echo "Case 10: dropping 'packages/**' from each deploy filter-mcp must make the api-client row go red"
+echo "Case 10: dropping 'packages/api-client/**' from each deploy filter-mcp must make the api-client row go red"
 # This is the exact pre-#1484 state of both files, and the row it reddens is the exact defect: an
 # api-client-only change left the deployed MCP worker on a stale api-client.
 for wf in "$PROD" "$STAGING"; do
   mutate_file "$wf" 1 \
-    "            mcp: ['apps/mcp-server/**', 'packages/**', 'package.json', 'bun.lock', 'api/openapi.yaml']" \
+    "            mcp: ['apps/mcp-server/**', 'packages/api-client/**', 'package.json', 'bun.lock', 'api/openapi.yaml']" \
     "            mcp: ['apps/mcp-server/**', 'api/openapi.yaml']"
   assert_deploy_rejected "packages-glob-removed-$(basename "$wf")" "packages/api-client/src/x.ts"
+done
+echo ""
+
+echo "Case 10b: broadening either deploy filter to packages/** must trigger unrelated-package rows"
+for wf in "$PROD" "$STAGING"; do
+  mutate_file "$wf" 1 \
+    "            mcp: ['apps/mcp-server/**', 'packages/api-client/**', 'package.json', 'bun.lock', 'api/openapi.yaml']" \
+    "            mcp: ['apps/mcp-server/**', 'packages/**', 'package.json', 'bun.lock', 'api/openapi.yaml']"
+  assert_deploy_rejected "packages-glob-broadened-$(basename "$wf")" "packages/design-tokens/src/x.ts"
+done
+echo ""
+
+echo "Case 10c: adding root tsconfig.json to either deploy filter must trigger its negative row"
+for wf in "$PROD" "$STAGING"; do
+  mutate_file "$wf" 1 \
+    "            mcp: ['apps/mcp-server/**', 'packages/api-client/**', 'package.json', 'bun.lock', 'api/openapi.yaml']" \
+    "            mcp: ['apps/mcp-server/**', 'packages/api-client/**', 'package.json', 'bun.lock', 'api/openapi.yaml', 'tsconfig.json']"
+  assert_deploy_rejected "root-tsconfig-added-$(basename "$wf")" "tsconfig.json"
 done
 echo ""
 

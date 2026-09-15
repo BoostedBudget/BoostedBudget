@@ -38,6 +38,7 @@ Runs on pull requests only.
 **Jobs:**
 - Backend tests (Go, race detection, ≥60% coverage)
 - Frontend unit tests (Bun, coverage)
+- Universal Expo lint, typecheck, Jest coverage, Expo Doctor, and iOS/Android/web exports
 - ESLint
 - E2E tests (Playwright)
 
@@ -135,7 +136,8 @@ documenting which stay self-hosted and why.
 |---|---|---|
 | `test.yml` → `e2e-test` | `ubicloud-standard-2` | The heaviest job in the matrix, on a host whose memory is permanently saturated (`infra/runners/README.md:101-122`). Its last eleven runs on the Mac pool took 11–46 minutes and **every one ended `cancelled`**. Moving it is direct relief for #1489. |
 | `test.yml` → `lighthouse-audit` | `ubicloud-standard-2` | Cannot run on macOS at all: Chrome headless under LHCI shared a process group with the Mac Mini's own browser session, which LHCI SIGKILLs after an audit. Disabled 2026-04-07, re-enabled by #1598. See #996. |
-| `warm-ci-cache.yml` → `warm` | `ubicloud-standard-2` | Manual-only re-warm of the shared cache pool the two jobs above use, so it must run on the same runner *and architecture* or its cache keys cannot match. Runs no tests; **must never be a required check**; `push:` trigger removed in #1598 U2 so merges never re-kick it. |
+| `test.yml` → `mobile-test` | `ubicloud-standard-2` | Build-only Expo validation is Linux-portable: it uses pinned Node/Bun, Expo Doctor, Jest, and static iOS/Android/web exports without signing credentials or Mac-local state. Its exact path filter is enforced by `scripts/check-mobile-ci.py`. See #1654. |
+| `warm-ci-cache.yml` → `warm` | `ubicloud-standard-2` | Manual-only re-warm of the shared cache pool used by `e2e-test` and `lighthouse-audit`, so it must run on the same runner *and architecture* or its cache keys cannot match. Runs no tests; **must never be a required check**; `push:` trigger removed in #1598 U2 so merges never re-kick it. |
 | Everything else (38 jobs) | `[self-hosted, macOS, mac-mini]` | Not yet migrated. Tracked in #614. |
 | `deploy-qa.yml` → `deploy-to-mac-mini` | `[self-hosted, macOS, mac-mini]` | **Never migrates.** It deploys to the QA environment hosted *on* that machine; there is nothing to deploy to from a cloud VM. |
 

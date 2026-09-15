@@ -13,8 +13,10 @@ import { initSentry } from './shared/lib/sentry'
 import { posthog } from './shared/lib/posthog'
 import { PostHogProvider } from 'posthog-js/react'
 import { ThemeProvider } from './shared/theme'
+import { configureWebApiClient } from './shared/lib/apiClient'
 import './index.css'
 
+configureWebApiClient()
 initSentry()
 
 // Create React Query client with sensible defaults
