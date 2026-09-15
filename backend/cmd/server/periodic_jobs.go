@@ -24,19 +24,17 @@ import (
 // package's existing nil-guard convention for optional subsystems (e.g. Plaid-specific
 // workers that are nil when Plaid isn't configured).
 type periodicJobsDeps struct {
-	revenueCatRepairWorker              *jobs.RevenueCatRepairWorker
-	scheduledDeletionCheckWorker        *jobs.ScheduledDeletionCheckWorker
-	itemCleanupCheckWorker              *jobs.ItemCleanupCheckWorker
-	paddleReconciliationWorker          *jobs.PaddleReconciliationWorker
-	retentionCleanupCheckWorker         *jobs.RetentionCleanupCheckWorker
-	manualTierOverrideExpiryCheckWorker *jobs.ManualTierOverrideExpiryCheckWorker
-	householdMemberCleanupCheckWorker   *jobs.HouseholdMemberCleanupCheckWorker
-	householdOverCapacityCheckWorker    *jobs.HouseholdOverCapacityCheckWorker
-	dlqCleanupCheckWorker               *jobs.DLQCleanupCheckWorker
-	budgetPeriodCloseCheckWorker        *jobs.BudgetPeriodCloseCheckWorker
-	savingsStatsWorker                  *jobs.SavingsStatsWorker
-	portfolioSnapshotWorker             *jobs.PortfolioSnapshotWorker
-	ruleQuarantineCensusWorker          *jobs.RuleQuarantineCensusWorker
+	revenueCatRepairWorker            *jobs.RevenueCatRepairWorker
+	scheduledDeletionCheckWorker      *jobs.ScheduledDeletionCheckWorker
+	itemCleanupCheckWorker            *jobs.ItemCleanupCheckWorker
+	retentionCleanupCheckWorker       *jobs.RetentionCleanupCheckWorker
+	householdMemberCleanupCheckWorker *jobs.HouseholdMemberCleanupCheckWorker
+	householdOverCapacityCheckWorker  *jobs.HouseholdOverCapacityCheckWorker
+	dlqCleanupCheckWorker             *jobs.DLQCleanupCheckWorker
+	budgetPeriodCloseCheckWorker      *jobs.BudgetPeriodCloseCheckWorker
+	savingsStatsWorker                *jobs.SavingsStatsWorker
+	portfolioSnapshotWorker           *jobs.PortfolioSnapshotWorker
+	ruleQuarantineCensusWorker        *jobs.RuleQuarantineCensusWorker
 	// budgetHierarchyAuditWorker is the Issue #1630 Task B7 periodic sweep over budgets the
 	// write-time guards (domain.DuplicateParentIdentity, domain.EscapedNestedChild) would refuse
 	// if created today, but which predate them. No Plaid dependency.
@@ -67,7 +65,7 @@ type periodicJobSpec struct {
 	// schedule OVERRIDES interval when set, for a job whose cadence is a wall-clock time rather
 	// than a gap since the last run (#1626 Phase 3, Defect 3).
 	//
-	// ⚠ WHY THIS FIELD EXISTS AT ALL, since 16 of the 17 specs do not use it. River ships only
+	// ⚠ WHY THIS FIELD EXISTS AT ALL, since 13 of the 14 specs do not use it. River ships only
 	// PeriodicInterval, which schedules "N after the last run" — and with RunOnStart: true (which
 	// every spec here carries, by Issue #1448's invariant) that anchors a daily job to whenever the
 	// process last started. For a cleanup sweep that is irrelevant. For the balance snapshot
@@ -140,19 +138,6 @@ func buildPeriodicJobSpecs(deps periodicJobsDeps) []periodicJobSpec {
 		})
 	}
 
-	// Issue #762: Paddle reconciliation check (daily).
-	if deps.paddleReconciliationWorker != nil {
-		specs = append(specs, periodicJobSpec{
-			name:       "paddle reconciliation",
-			logMessage: "Paddle reconciliation periodic job configured (daily)",
-			interval:   24 * time.Hour,
-			build: func() (river.JobArgs, *river.InsertOpts) {
-				return jobs.PaddleReconciliationArgs{TriggerSource: "periodic"}, jobs.PaddleReconciliationInsertOpts()
-			},
-			opts: jobs.PaddleReconciliationPeriodicOpts(),
-		})
-	}
-
 	// Issue #930 / #1413: Retention cleanup check (daily) — the only place that runs
 	// retention-clock repair, the 30-day/7-day GDPR pre-deletion notices,
 	// deleteExpiredAccounts, and the Plaid-disconnect repair pass.
@@ -165,19 +150,6 @@ func buildPeriodicJobSpecs(deps periodicJobsDeps) []periodicJobSpec {
 				return jobs.RetentionCleanupCheckArgs{TriggerSource: "periodic"}, jobs.RetentionCleanupCheckInsertOpts()
 			},
 			opts: jobs.RetentionCleanupCheckPeriodicOpts(),
-		})
-	}
-
-	// Issue #1413 (Task 9): Manual tier override expiry check (daily).
-	if deps.manualTierOverrideExpiryCheckWorker != nil {
-		specs = append(specs, periodicJobSpec{
-			name:       "manual tier override expiry check",
-			logMessage: "Manual tier override expiry check periodic job configured (daily)",
-			interval:   24 * time.Hour,
-			build: func() (river.JobArgs, *river.InsertOpts) {
-				return jobs.ManualTierOverrideExpiryCheckArgs{TriggerSource: "periodic"}, jobs.ManualTierOverrideExpiryCheckInsertOpts()
-			},
-			opts: jobs.ManualTierOverrideExpiryCheckPeriodicOpts(),
 		})
 	}
 

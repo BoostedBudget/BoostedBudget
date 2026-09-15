@@ -136,9 +136,13 @@ var jobFileDispositions = map[string]jobFileDisposition{
 	"email_change_propagation.go": {dispositionNoCacheImpact, "propagates a changed email to Clerk " +
 		"and Paddle (metadata on external services); the identity cache namespace keys on clerkID, " +
 		"which does not change here, so no cached mapping is invalidated by this write."},
-	"paddle_reconciliation.go": {dispositionNoCacheImpact, "writes ProfileRepository." +
-		"UpdateSubscriptionFromPaddle only — subscription status is deliberately NOT a cached " +
-		"namespace: NamespaceEntitlement is HardDisabled in cache/namespace.go and can never be enabled, and `users` is not one of the 12 tables any cache.GetOrLoad-backed read observes (see docs/architecture/cache-invalidation-dispositions.md)."},
+	"paddle_reconciliation.go": {dispositionNoCacheImpact, "retains only the retired job's " +
+		"Args/Kind and UniqueOpts (#1652 deleted the worker and its periodic registration); it " +
+		"performs no write at all, so no cached mapping is invalidated. The legacy worker wrote " +
+		"ProfileRepository.UpdateSubscriptionFromPaddle only — subscription status is deliberately " +
+		"NOT a cached namespace: NamespaceEntitlement is HardDisabled in cache/namespace.go and can " +
+		"never be enabled, and `users` is not one of the 12 tables any cache.GetOrLoad-backed read " +
+		"observes (see docs/architecture/cache-invalidation-dispositions.md)."},
 	"trial_expiration_check.go": {dispositionNoCacheImpact, "retains only the retired job's Args/Kind " +
 		"and UniqueOpts (#1652 deleted the worker and TrialService); it performs no write at all, so " +
 		"no cached mapping is invalidated. The legacy ExpireTrial it used to drive wrote only " +
@@ -150,9 +154,12 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"past-due/subscription status fields on `users`, which no cached read observes; see the " +
 		"corresponding ProfileRepository entries in repository/cache_completeness_repo_test.go and " +
 		"docs/architecture/cache-invalidation-dispositions.md."},
-	"manual_tier_override_expiry_check.go": {dispositionNoCacheImpact, "clears an expired manual " +
-		"tier override on the user's profile (a subscription-tier field) — the same deliberately- " +
-		"uncached bucket; see the corresponding ProfileRepository entries in repository/cache_completeness_repo_test.go and docs/architecture/cache-invalidation-dispositions.md."},
+	"manual_tier_override_expiry_check.go": {dispositionNoCacheImpact, "retains only the retired " +
+		"job's Args/Kind and UniqueOpts (#1652 deleted the worker and its periodic registration); " +
+		"it performs no write at all, so no cached mapping is invalidated. The legacy worker cleared " +
+		"an expired manual tier override on the user's profile (a subscription-tier field) — the " +
+		"same deliberately-uncached bucket; see the corresponding ProfileRepository entries in " +
+		"repository/cache_completeness_repo_test.go and docs/architecture/cache-invalidation-dispositions.md."},
 
 	// --- Bumps (Task 10b-2a-iii; that report was never committed — see the docs file above
 	// on each). ---

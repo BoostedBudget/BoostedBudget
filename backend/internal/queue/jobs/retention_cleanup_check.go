@@ -2233,19 +2233,16 @@ func RetentionCleanupCheckUniqueOpts() *queue.UniqueOpts {
 // RetentionCleanupCheckUniqueOpts(), converted from this package's queue-runner-agnostic
 // queue.UniqueOpts to the river.UniqueOpts type river.InsertOpts.UniqueOpts actually requires (the
 // same conversion internal/queue/river/client.go's toRiverUniqueOpts performs for the
-// general-purpose enqueue path). Mirrors ManualTierOverrideExpiryCheckInsertOpts exactly.
+// general-purpose enqueue path).
 //
 // Issue #1413 Finding 2 (Codex review, PR #1443): main.go's periodic-job registration previously
 // hand-wrote its own &river.InsertOpts{...} literal — never calling RetentionCleanupCheckUniqueOpts()
 // at all — so the round that added Completed to that function's ByState was a no-op in production:
 // a completed retention job still failed to block a RunOnStart insertion after every process
 // restart or leader election, silently re-running the 30-day/7-day GDPR pre-deletion notices and
-// deleteExpiredAccounts on every deploy of a repo that ships several times a day. This is the third
-// "defined, tested, never wired" instance on this branch; ManualTierOverrideExpiryCheckInsertOpts
-// (Issue #1413 G3) fixed the identical failure mode for the sibling job's own periodic
-// registration one entry below this one in main.go. main.go now calls THIS function directly
-// instead of hand-writing the InsertOpts literal, so main.go is no longer a second,
-// independently-maintained expression of the same shape — a future change to
+// deleteExpiredAccounts on every deploy of a repo that ships several times a day. main.go now calls
+// THIS function directly instead of hand-writing the InsertOpts literal, so main.go is no longer a
+// second, independently-maintained expression of the same shape — a future change to
 // RetentionCleanupCheckUniqueOpts() automatically propagates to what actually ships.
 func RetentionCleanupCheckInsertOpts() *river.InsertOpts {
 	unique := RetentionCleanupCheckUniqueOpts()

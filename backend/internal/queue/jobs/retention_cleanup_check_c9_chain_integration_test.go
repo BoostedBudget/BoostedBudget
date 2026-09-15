@@ -15,7 +15,7 @@ package jobs
 //  4. the real RetentionCleanupCheckWorker disconnect pass runs;
 //  5. no live linked_items row remains.
 //
-// It reuses the existing connectJobsTestDB harness (manual_tier_override_expiry_check_integration_test.go)
+// It reuses the existing connectJobsTestDB harness (jobs_integration_helpers_test.go)
 // rather than building a new one; only the Plaid HTTP boundary is doubled, and even that double uses
 // the production LinkedItemRepository writes.
 //

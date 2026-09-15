@@ -182,11 +182,6 @@ type ProfileRepository interface {
 	// and whose 7-day notice has not yet been sent.
 	GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error)
 
-	// GetUsersWithExpiredManualTierOverride returns users whose manual_tier_override is set and
-	// whose manual_tier_ends_at has strictly passed (Issue #1413 Task 9 — backs the daily job
-	// that expires lapsed admin comps).
-	GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error)
-
 	// GetUsersWithExpiredTrials returns users with trial status but past trial_ends_at
 	GetUsersWithExpiredTrials(ctx context.Context) ([]*domain.User, error)
 
@@ -3407,33 +3402,27 @@ const noActiveManualOverridePredicate = `
 // finding C1, Codex review).
 //
 // Why this must differ from noActiveManualOverridePredicate above: a comp *pauses* the
-// retention clock while live, and is re-armed by the separate, independently-scheduled
-// manual_tier_override_expiry_check daily job the moment the comp lapses. That job has NO
-// ordering guarantee relative to the retention_cleanup_check job that runs these queries. If
-// retention selection used the "only exclude while still live" rule
-// (noActiveManualOverridePredicate), a user whose comp lapsed moments before the expiry job
+// retention clock while live, and is re-armed when the comp lapses. Since #1652 the clearing and
+// re-arming are owned by RevenueCat's projection path (revenueCatSession.Save,
+// revenuecat_repository.go): when a fresh provider read no longer resolves an active grant, Save
+// clears manual_tier_override/manual_tier_ends_at and arms retention on the inactive transition.
+// That projection has NO ordering guarantee relative to the retention_cleanup_check job that runs
+// these queries. If retention selection used the "only exclude while still live" rule
+// (noActiveManualOverridePredicate), a user whose comp lapsed moments before the projection
 // re-arms their clock would be selected here using a stale retention_expires_at from BEFORE the
 // comp even started — hard-deleted with no 30-day/7-day warning ever sent, in the race window
-// between the two jobs.
+// between the two.
 //
 // Excluding on ANY non-empty override, live or lapsed, never causes a wrongful deletion — but the
-// delay this buys is bounded ONLY by manual_tier_override_expiry_check actually running
-// successfully every day, not by anything in this predicate. That job is registered with
-// PeriodicJobOpts{RunOnStart: true} (Issue #1413 P0 fix — see
-// ManualTierOverrideExpiryCheckPeriodicOpts's own doc comment, manual_tier_override_expiry_check.go,
-// for why RunOnStart:false left this job possibly UNENQUEUED for arbitrarily long on a repo that
-// deploys several times a day, and why RunOnStart:true is only safe paired with its InsertOpts'
-// dedup). So a process restart or leader election now triggers an immediate, deduplicated
-// catch-up run rather than silently deferring to the next daily schedule — the "runs zero times
-// ever" failure mode this comment used to warn about is closed. The residual bound this comment
-// still describes is narrower: a failed run's retries eventually land in the dead-letter queue
-// with NO automatic replay (Issue #1413 Critical finding C1's "unbounded exclusion" follow-up). If
-// the job's retries are exhausted and it dead-letters, this predicate keeps excluding the user
-// indefinitely — "never deleted", not "delayed by a day" or "one job cycle" — until someone
-// notices the dead-lettered job and replays it. See manual_tier_override_expiry_check.go's Work()
-// for the failure metric/log this honesty depends on staying observable. See
+// delay this buys is bounded ONLY by RevenueCat's refresh actually running and persisting the
+// inactive projection, not by anything in this predicate. The refresh is scheduled at the grant's
+// ExpiresAt (revenuecat_repository.go's next_refresh_at), so a lapsed comp is cleared at the next
+// refresh at or after its expiry; a refresh that errors sets next_refresh_at = now+1min and
+// retries. The residual bound this comment still describes is narrower: if RevenueCat's refresh
+// stops succeeding entirely, this predicate keeps excluding the user indefinitely — "never
+// deleted", not "delayed by a day" or "one job cycle". See
 // TestRetentionQueries_Integration_ExpiredOverride_ExcludedUntilCleared for proof this is a delay
-// WHILE THE EXPIRY JOB KEEPS RUNNING, not a permanent exemption by itself, and
+// WHILE THE OVERRIDE IS EVENTUALLY CLEARED, not a permanent exemption by itself, and
 // TestGetUsersNeedingRetention30dNotice_Integration_ExcludesActiveComp (and its 7d/expired
 // siblings) for proof an ordinary never-comped user is unaffected.
 //
@@ -4559,75 +4548,6 @@ func (r *profileRepository) ClearMarkersOnEligibleStatus(ctx context.Context) (i
 		return 0, fmt.Errorf("ClearMarkersOnEligibleStatus: %w", err)
 	}
 	return int(ct.RowsAffected()), nil
-}
-
-// expiredManualTierOverridePredicate selects users with a manual tier override that has
-// strictly passed (Issue #1413 Task 9 — the daily job that expires lapsed admin comps,
-// performing the exact same clear-override/re-arm-retention/audit transition
-// AdminUserRepository.RemoveUserTierOverride (Issue #1414 / Task 7) performs for
-// admin-initiated removal, rather than duplicating that logic here).
-//
-// Boundary note: strictly past (`<`, not `<=`) to agree with
-// domain.User.HasActiveManualOverride()'s `!ends_at.Before(now)` semantics — an override ending
-// exactly now is still ACTIVE per the read path, so this predicate must not select it (see
-// TestGetUsersWithExpiredManualTierOverride_Integration_ExactExpiryBoundary).
-//
-// manual_tier_ends_at IS NOT NULL additionally excludes PERMANENT overrides (no expiry date
-// set) — those never lapse on their own and must only ever be cleared by an explicit admin
-// removal.
-//
-// Issue #1413 round-5 gap G7 (PR #1443 gap analysis) — deliberately NOT a strict complement of
-// domain.User.HasActiveManualOverride() / hasActiveManualOverrideAt(), unlike
-// noActiveManualOverridePredicate's genuine parity with that same Go method. They agree on the
-// override-value checks (`IS NOT NULL AND <> ''` mirrors the Go method's nil/empty guard) and on
-// the expiry boundary (SQL `< NOW()` and Go `Before(now)` are both strict, so an exact tie is
-// "not expired" on both sides). They diverge on TWO independent cases:
-//
-//  1. A NULL manual_tier_ends_at. This predicate's `manual_tier_ends_at IS NOT NULL` excludes
-//     such a row outright (a permanent override never lapses, so it is never a candidate here),
-//     while HasActiveManualOverride() treats a NULL end date as an indefinite, still-live comp —
-//     i.e. "active", not "expired".
-//  2. `is_deleted = FALSE`, which has NO counterpart in the Go method at all — that method never
-//     looks at is_deleted. So a soft-deleted user with a lapsed override is "expired" to Go but
-//     is simply not selected here.
-//
-// Both are correct for what each asks: this predicate answers "has this override's clock run out
-// on a row this job should act on", the Go method answers "is this override in effect right now".
-//
-// Do NOT write a naive SQL/Go parity test asserting "predicate selects <=> Go reports expired"
-// for this pair (of the kind that correctly exists for noActiveManualOverridePredicate, see
-// TestNoActiveManualOverridePredicate_Integration_ParityWithGo) — it would fail on both of the
-// correct, intentional divergences above, and the failure would look exactly like a real bug,
-// tempting a "fix" that breaks permanent overrides instead. An honest parity test is possible
-// only when scoped to BOTH non-NULL manual_tier_ends_at AND is_deleted = FALSE; scoping to the
-// expiry column alone is NOT sufficient and still fails on soft-deleted rows. (The two-divergence
-// correction is Codex's round-6 Medium finding on the round-5 gap analysis; the original wording
-// here claimed a single divergence and understated the required scope.) See
-// ManualTierOverrideExpiryCheckWorker.Work's doc comment (manual_tier_override_expiry_check.go)
-// for the Go-side half of this note.
-const expiredManualTierOverridePredicate = `
-	  manual_tier_override IS NOT NULL
-	  AND manual_tier_override <> ''
-	  AND manual_tier_ends_at IS NOT NULL
-	  AND manual_tier_ends_at < NOW()
-	  AND is_deleted = FALSE
-`
-
-// GetUsersWithExpiredManualTierOverride returns users whose manual_tier_override is set and
-// whose manual_tier_ends_at has strictly passed (Issue #1413 Task 9).
-func (r *profileRepository) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {
-	query := userSelectQuery + `
-		WHERE ` + expiredManualTierOverridePredicate + `
-		ORDER BY manual_tier_ends_at ASC
-	`
-	users, err := r.queryUsers(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	if users == nil {
-		return []*domain.User{}, nil
-	}
-	return users, nil
 }
 
 // malformedTierOverrideWhereClause is GetUsersWithMalformedTierOverride's candidate scope: every

@@ -2104,9 +2104,6 @@ func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention30dNotice(ctx co
 func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
 }
-func (m *mockProfileRepoForCursorTests) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {
-	return nil, nil
-}
 func (m *mockProfileRepoForCursorTests) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
 	return nil
 }
