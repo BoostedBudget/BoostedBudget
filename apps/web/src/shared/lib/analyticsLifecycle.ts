@@ -15,6 +15,7 @@ export interface AnalyticsClient {
   clearQueuedEvents?(): void
   identify(distinctId: string, properties?: Properties): void
   init(key: string, config: Partial<PostHogConfig>): unknown
+  ready?(): Promise<void>
   reset(resetDeviceId: boolean): void
   setPersistenceEnabled(enabled: boolean): void
   setPersonProperties(properties: Properties): void
@@ -54,9 +55,9 @@ export interface ProductAnalyticsLifecycle {
   deny(): void
   getSnapshot(): AnalyticsLifecycleSnapshot
   getState(): AnalyticsLifecycleState
-  grant(distinctId?: string, personProperties?: Properties): void
-  grantExplicitly(scope: string, distinctId?: string, personProperties?: Properties): void
-  grantFromAuthority(scope: string, distinctId?: string, personProperties?: Properties): void
+  grant(distinctId?: string, personProperties?: Properties): Promise<void>
+  grantExplicitly(scope: string, distinctId?: string, personProperties?: Properties): Promise<void>
+  grantFromAuthority(scope: string, distinctId?: string, personProperties?: Properties): Promise<void>
   init(): boolean
   resetForTests(preserveInitialization?: boolean): void
   setPersonProperties(properties: Properties): void
@@ -83,6 +84,10 @@ export function createProductAnalyticsLifecycle({
 
   function getSnapshot(): AnalyticsLifecycleSnapshot {
     return { generation: scopeGeneration, state, scope: currentScope }
+  }
+
+  function isGrantedState(): boolean {
+    return state === 'granted'
   }
 
   function notifyState(): void {
@@ -125,17 +130,31 @@ export function createProductAnalyticsLifecycle({
     client.reset(true)
   }
 
-  function grantForScope(
+  async function grantForScope(
     scope: string,
     isExplicitGrant: boolean,
     distinctId?: string,
     personProperties?: Properties,
-  ): void {
+  ): Promise<void> {
     if (scope !== currentScope) return
     if (!isExplicitGrant && withdrawnScope === scope) return
     if (isExplicitGrant) withdrawnScope = null
     if (state === 'granted') return
     captureGate.setGranted(true)
+    if (client.ready) {
+      const generation = scopeGeneration
+      try {
+        await client.ready()
+      } catch {
+        deny()
+        return
+      }
+      // The SDK is loaded lazily, so authority can change while the import is in
+      // flight. A withdrawal, a scope change or a completed grant must win over
+      // this stale continuation — otherwise the SDK initializes after withdrawal.
+      if (generation !== scopeGeneration || scope !== currentScope) return
+      if (withdrawnScope === scope || isGrantedState()) return
+    }
     if (isDoNotTrackEnabled() || !init()) {
       deny()
       return
@@ -157,13 +176,13 @@ export function createProductAnalyticsLifecycle({
     getState: () => state,
     grant(distinctId, personProperties) {
       if (currentScope === null) currentScope = 'legacy'
-      grantForScope(currentScope, true, distinctId, personProperties)
+      return grantForScope(currentScope, true, distinctId, personProperties)
     },
     grantExplicitly(scope, distinctId, personProperties) {
-      grantForScope(scope, true, distinctId, personProperties)
+      return grantForScope(scope, true, distinctId, personProperties)
     },
     grantFromAuthority(scope, distinctId, personProperties) {
-      grantForScope(scope, false, distinctId, personProperties)
+      return grantForScope(scope, false, distinctId, personProperties)
     },
     init,
     resetForTests(preserveInitialization = false) {

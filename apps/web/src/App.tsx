@@ -66,6 +66,17 @@ const Header = lazy(() =>
   import('./components/layout/Header').then((m) => ({ default: m.Header }))
 )
 
+// #1650 — lazy for the same reason as Header, plus one more: this component's
+// static import graph reaches posthog-js through shared/posthog/engagement, and
+// the SDK is consent-gated and not needed for first paint. It renders null for
+// anonymous users, so gating the render on isAuthenticated below is
+// behavior-preserving while keeping the SDK off the landing route.
+const AuthenticatedPostHogExperiences = lazy(() =>
+  import('./shared/posthog/AuthenticatedPostHogExperiences').then((m) => ({
+    default: m.AuthenticatedPostHogExperiences,
+  }))
+)
+
 // Reserves the header's exact box so the lazy boundary cannot cause layout shift: Header's root
 // is `sticky top-0 z-50 ... border-b border-border ... h-16`, and this mirrors it. Deliberately
 // empty rather than a shimmer — the chrome is not content, and a pulsing bar reads as an error.
@@ -92,11 +103,10 @@ import {
 } from './shared/lib/posthog'
 import { devLog } from './shared/lib/devLog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
-import { AuthenticatedPostHogExperiences } from './shared/posthog/AuthenticatedPostHogExperiences'
 import {
   isPostHogEngagementRoute,
   POSTHOG_ENGAGEMENT_ROUTES,
-} from './shared/posthog/engagement'
+} from './shared/posthog/routes'
 import {
   useConsentAwarePageViews,
   type PageViewDependencies,
@@ -640,7 +650,11 @@ function App({ analyticsPageViews }: AppProps = {}) {
       <AppFooter />
 
       {!isAuthenticated && <CookieConsent onConsentChange={handleConsentChange} />}
-      <AuthenticatedPostHogExperiences routeEligible={isPostHogEngagementRoute(location.pathname)} />
+      {isAuthenticated && (
+        <Suspense fallback={null}>
+          <AuthenticatedPostHogExperiences routeEligible={isPostHogEngagementRoute(location.pathname)} />
+        </Suspense>
+      )}
       <Toaster position="bottom-right" richColors theme={resolvedTheme} />
     </div>
   )

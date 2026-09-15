@@ -1,7 +1,8 @@
-import posthog, {
-  type CapturedNetworkRequest,
-  type PostHogConfig,
-  type Properties,
+import type {
+  CapturedNetworkRequest,
+  PostHog,
+  PostHogConfig,
+  Properties,
 } from 'posthog-js'
 import { redactCapabilityUrlPath } from '@boostedbudget/api-client/client'
 import {
@@ -58,6 +59,26 @@ const CAMPAIGN_CLICK_ID_PROPERTIES = new Set([
 const WITHDRAWAL_STORAGE_KEY = 'boostedbudget:analytics-withdrawal'
 const YES_LIKE_PRIVACY_SIGNAL_VALUES = new Set<unknown>([true, 'true', 1, '1', 'yes'])
 
+let posthogSdk: PostHog | null = null
+let posthogSdkLoad: Promise<void> | null = null
+
+/**
+ * Loads the consent-gated posthog-js SDK on demand. The SDK is ~92 kB gzip and
+ * nothing on the landing route needs it, so it must stay off the eager path;
+ * every analyticsClient method below is a no-op until this resolves.
+ */
+function loadPostHogSdk(): Promise<void> {
+  if (posthogSdk) return Promise.resolve()
+  posthogSdkLoad ??= import('posthog-js').then(
+    module => { posthogSdk = module.default },
+    error => {
+      posthogSdkLoad = null
+      throw error
+    },
+  )
+  return posthogSdkLoad
+}
+
 export interface ClearablePostHogQueue {
   // Pinned 1.430.2 ESM names: enqueue Ls, interval ca, polling ha, queue ia, timeout ma.
   Ls?: (request: unknown) => unknown
@@ -109,7 +130,7 @@ export function setPostHogPersistenceEnabled(
 }
 
 export function clearPostHogQueuedEvents(
-  sdk: PostHogWithQueues = posthog as unknown as PostHogWithQueues,
+  sdk: PostHogWithQueues = (posthogSdk ?? {}) as unknown as PostHogWithQueues,
 ): void {
   // posthog-js 1.430.2 has no public queue-discard API. Clear both pinned SDK
   // queues so withdrawal cannot later transmit an event accepted beforehand.
@@ -373,16 +394,16 @@ export function grantProductAnalytics(
   scope: string,
   distinctId?: string,
   personProperties?: Properties,
-): void {
-  analyticsLifecycle.grantExplicitly(scope, distinctId, personProperties)
+): Promise<void> {
+  return analyticsLifecycle.grantExplicitly(scope, distinctId, personProperties)
 }
 
 export function applyProductAnalyticsAuthority(
   scope: string,
   distinctId?: string,
   personProperties?: Properties,
-): void {
-  analyticsLifecycle.grantFromAuthority(scope, distinctId, personProperties)
+): Promise<void> {
+  return analyticsLifecycle.grantFromAuthority(scope, distinctId, personProperties)
 }
 
 export function denyProductAnalytics(): void {
@@ -425,7 +446,7 @@ export function subscribeToAnalyticsLifecycle(
 export function capturePageView(url: string): void {
   if (getAnalyticsLifecycleState() !== 'granted') return
   if (isSensitiveAnalyticsPath(url)) {
-    posthog.stopSessionRecording()
+    analyticsClient.stopSessionRecording()
     return
   }
   const safeUrl = sanitizeAnalyticsUrl(url)
@@ -456,31 +477,35 @@ export function resetAnalyticsLifecycleForTests(): void {
 const analyticsCaptureGate = createAnalyticsCaptureGate()
 
 const analyticsClient = {
-  capture: (event: string, properties?: Properties) => posthog.capture(event, properties),
-  clearLegacyConsent: () => posthog.clear_opt_in_out_capturing(),
+  capture: (event: string, properties?: Properties) => posthogSdk?.capture(event, properties),
+  clearLegacyConsent: () => posthogSdk?.clear_opt_in_out_capturing(),
   clearPersistence: () => {
-    const persistenceName = posthog.config.persistence_name
-      || posthog.config.token
+    const persistenceName = posthogSdk?.config.persistence_name
+      || posthogSdk?.config.token
       || window.ENV?.POSTHOG_KEY
       || import.meta.env.VITE_POSTHOG_KEY
     if (persistenceName) clearPostHogSessionPersistence(persistenceName)
   },
   clearQueuedEvents: clearPostHogQueuedEvents,
-  identify: (distinctId: string, properties?: Properties) => posthog.identify(distinctId, properties),
+  identify: (distinctId: string, properties?: Properties) => posthogSdk?.identify(distinctId, properties),
   init: (key: string, config: Partial<PostHogConfig>) => {
+    if (!posthogSdk) return false
     clearPostHogSessionPersistence(config.persistence_name || key)
-    const initialized = posthog.init(key, config)
+    const initialized = posthogSdk.init(key, config)
     guardPostHogRetryQueue(
-      posthog as unknown as PostHogWithQueues,
+      posthogSdk as unknown as PostHogWithQueues,
       analyticsCaptureGate.getGeneration,
       analyticsCaptureGate.isGranted,
     )
     return initialized
   },
-  reset: (resetDeviceId: boolean) => posthog.reset(resetDeviceId),
-  setPersistenceEnabled: (enabled: boolean) => setPostHogPersistenceEnabled(posthog, enabled),
-  setPersonProperties: (properties: Properties) => posthog.setPersonProperties(properties),
-  stopSessionRecording: () => posthog.stopSessionRecording(),
+  ready: loadPostHogSdk,
+  reset: (resetDeviceId: boolean) => posthogSdk?.reset(resetDeviceId),
+  setPersistenceEnabled: (enabled: boolean) => {
+    if (posthogSdk) setPostHogPersistenceEnabled(posthogSdk, enabled)
+  },
+  setPersonProperties: (properties: Properties) => posthogSdk?.setPersonProperties(properties),
+  stopSessionRecording: () => posthogSdk?.stopSessionRecording(),
 }
 
 const analyticsLifecycle = createProductAnalyticsLifecycle({
@@ -493,5 +518,3 @@ const analyticsLifecycle = createProductAnalyticsLifecycle({
   getKey: () => window.ENV?.POSTHOG_KEY || import.meta.env.VITE_POSTHOG_KEY,
   isDoNotTrackEnabled,
 })
-
-export { posthog }

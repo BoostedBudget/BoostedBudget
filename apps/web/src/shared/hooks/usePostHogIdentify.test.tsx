@@ -125,7 +125,10 @@ describe('usePostHogIdentify consent authority', () => {
     const calls: string[] = []
     mockDenyProductAnalytics.mockImplementation(() => { calls.push('deny') })
     mockSetProductAnalyticsScope.mockImplementation(scope => { calls.push(`scope:${scope}`) })
-    mockApplyProductAnalyticsAuthority.mockImplementation((_scope, id) => { calls.push(`grant:${id}`) })
+    mockApplyProductAnalyticsAuthority.mockImplementation((_scope, id) => {
+      calls.push(`grant:${id}`)
+      return Promise.resolve()
+    })
     setSignedIn('user-a')
     setPrivacy({ data: { gdpr_analytics_consent: true } })
     const { rerender } = renderHook(() => usePostHogIdentify(false, lifecycle))
@@ -146,7 +149,10 @@ describe('usePostHogIdentify consent authority', () => {
     const calls: string[] = []
     mockDenyProductAnalytics.mockImplementation(() => { calls.push('deny') })
     mockSetProductAnalyticsScope.mockImplementation(scope => { calls.push(`scope:${scope}`) })
-    mockApplyProductAnalyticsAuthority.mockImplementation((_scope, id) => { calls.push(`grant:${id ?? 'anonymous'}`) })
+    mockApplyProductAnalyticsAuthority.mockImplementation((_scope, id) => {
+      calls.push(`grant:${id ?? 'anonymous'}`)
+      return Promise.resolve()
+    })
     setSignedIn('user-a')
     setPrivacy({ data: { gdpr_analytics_consent: true } })
     const { rerender } = renderHook(() => usePostHogIdentify(true, lifecycle))
