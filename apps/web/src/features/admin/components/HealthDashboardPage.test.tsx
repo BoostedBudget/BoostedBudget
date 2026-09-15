@@ -76,7 +76,7 @@ const mockHealthData = {
   job_backlog: {
     plaid_cleanup_outstanding_users: 0,
     plaid_cleanup_oldest_outstanding_seconds: 0,
-    manual_tier_override_oldest_uncleared_expired_seconds: 0,
+    revenuecat_oldest_expired_comp_grant_seconds: 0,
     available: true,
   },
   // Issue #1497 item 5: the orphaned-Plaid-Item state counts. `available: true` with all-zero
@@ -325,7 +325,7 @@ describe('HealthDashboardPage', () => {
           job_backlog: {
             plaid_cleanup_outstanding_users: 42,
             plaid_cleanup_oldest_outstanding_seconds: 7500,
-            manual_tier_override_oldest_uncleared_expired_seconds: 5400,
+            revenuecat_oldest_expired_comp_grant_seconds: 5400,
             available: true,
           },
         },
@@ -340,12 +340,12 @@ describe('HealthDashboardPage', () => {
         expect(screen.getByText(/Job Backlog/i)).toBeInTheDocument()
         expect(screen.getByText('Plaid Cleanup Outstanding Users')).toBeInTheDocument()
         expect(screen.getByText('Plaid Cleanup Oldest Outstanding')).toBeInTheDocument()
-        expect(screen.getByText('Manual Override Oldest Uncleared Expired')).toBeInTheDocument()
+        expect(screen.getByText('RevenueCat Oldest Expired Comp Grant')).toBeInTheDocument()
       })
 
       expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('42')
       expect(backlogCardValue('Plaid Cleanup Oldest Outstanding')).toBe('2h 5m')
-      expect(backlogCardValue('Manual Override Oldest Uncleared Expired')).toBe('1h 30m')
+      expect(backlogCardValue('RevenueCat Oldest Expired Comp Grant')).toBe('1h 30m')
     })
 
     it('should render zero-state values without crashing when there is no backlog', async () => {
@@ -364,7 +364,7 @@ describe('HealthDashboardPage', () => {
 
       expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('0')
       expect(backlogCardValue('Plaid Cleanup Oldest Outstanding')).toBe('0s')
-      expect(backlogCardValue('Manual Override Oldest Uncleared Expired')).toBe('0s')
+      expect(backlogCardValue('RevenueCat Oldest Expired Comp Grant')).toBe('0s')
     })
 
     // Issue #1458 follow-up G16: before this fix, a FAILED backlog query and a genuinely EMPTY
@@ -378,7 +378,7 @@ describe('HealthDashboardPage', () => {
           job_backlog: {
             plaid_cleanup_outstanding_users: 0,
             plaid_cleanup_oldest_outstanding_seconds: 0,
-            manual_tier_override_oldest_uncleared_expired_seconds: 0,
+            revenuecat_oldest_expired_comp_grant_seconds: 0,
             available: false,
           },
         },
@@ -397,7 +397,7 @@ describe('HealthDashboardPage', () => {
       // backlog would show, and not a green success accent).
       expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('Unavailable')
       expect(backlogCardValue('Plaid Cleanup Oldest Outstanding')).toBe('Unavailable')
-      expect(backlogCardValue('Manual Override Oldest Uncleared Expired')).toBe('Unavailable')
+      expect(backlogCardValue('RevenueCat Oldest Expired Comp Grant')).toBe('Unavailable')
 
       // Confirms the cards are NOT rendered with the 'success' (green) accent StatCard maps
       // status='success' to — the whole point being fixed here is that "unavailable" must never
@@ -417,7 +417,7 @@ describe('HealthDashboardPage', () => {
           job_backlog: {
             plaid_cleanup_outstanding_users: 0,
             plaid_cleanup_oldest_outstanding_seconds: 0,
-            manual_tier_override_oldest_uncleared_expired_seconds: 0,
+            revenuecat_oldest_expired_comp_grant_seconds: 0,
           },
         },
         isLoading: false,
@@ -462,7 +462,7 @@ describe('HealthDashboardPage', () => {
 
       expect(backlogCardValue('Plaid Cleanup Outstanding Users')).toBe('Unavailable')
       expect(backlogCardValue('Plaid Cleanup Oldest Outstanding')).toBe('Unavailable')
-      expect(backlogCardValue('Manual Override Oldest Uncleared Expired')).toBe('Unavailable')
+      expect(backlogCardValue('RevenueCat Oldest Expired Comp Grant')).toBe('Unavailable')
     })
   })
 

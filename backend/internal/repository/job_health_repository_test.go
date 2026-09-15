@@ -25,7 +25,7 @@ func setupJobHealthMockDB(t *testing.T) (pgxmock.PgxPoolIface, JobHealthReposito
 	return mock, repo
 }
 
-func TestJobHealthRepository_GetOldestUnclearedExpiredManualTierOverrideAge_Success(t *testing.T) {
+func TestJobHealthRepository_GetOldestExpiredCompGrantAge_Success(t *testing.T) {
 	mock, repo := setupJobHealthMockDB(t)
 	defer mock.Close()
 
@@ -33,42 +33,55 @@ func TestJobHealthRepository_GetOldestUnclearedExpiredManualTierOverrideAge_Succ
 	fiveDaysSeconds := float64(5 * 24 * 60 * 60)
 	rows := pgxmock.NewRows([]string{"age_seconds"}).AddRow(fiveDaysSeconds)
 
-	mock.ExpectQuery(regexp.QuoteMeta("manual_tier_override IS NOT NULL")).
+	mock.ExpectQuery(regexp.QuoteMeta("FROM revenuecat_customers rc")).
 		WillReturnRows(rows)
 
-	age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(context.Background())
+	age, err := repo.GetOldestExpiredCompGrantAge(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, 5*24*time.Hour, age)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestJobHealthRepository_GetOldestUnclearedExpiredManualTierOverrideAge_NoRows_ReturnsZero(t *testing.T) {
+func TestJobHealthRepository_GetOldestExpiredCompGrantAge_NoRows_ReturnsZero(t *testing.T) {
 	mock, repo := setupJobHealthMockDB(t)
 	defer mock.Close()
 
 	rows := pgxmock.NewRows([]string{"age_seconds"}).AddRow(float64(0))
-	mock.ExpectQuery(regexp.QuoteMeta("manual_tier_override IS NOT NULL")).
+	mock.ExpectQuery(regexp.QuoteMeta("FROM revenuecat_customers rc")).
 		WillReturnRows(rows)
 
-	age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(context.Background())
+	age, err := repo.GetOldestExpiredCompGrantAge(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, time.Duration(0), age)
 }
 
-func TestJobHealthRepository_GetOldestUnclearedExpiredManualTierOverrideAge_QueryError(t *testing.T) {
+func TestJobHealthRepository_GetOldestExpiredCompGrantAge_QueryError(t *testing.T) {
 	mock, repo := setupJobHealthMockDB(t)
 	defer mock.Close()
 
-	mock.ExpectQuery(regexp.QuoteMeta("manual_tier_override IS NOT NULL")).
+	mock.ExpectQuery(regexp.QuoteMeta("FROM revenuecat_customers rc")).
 		WillReturnError(errors.New("db unavailable"))
 
-	age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(context.Background())
+	age, err := repo.GetOldestExpiredCompGrantAge(context.Background())
 
 	assert.Error(t, err)
 	assert.Equal(t, time.Duration(0), age)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestJobHealthRepository_OldestExpiredCompGrantAgeQuery_ScopesToCompGrants is the drift guard, and
+// it runs without a database so it cannot be skipped. The gauge must count ONLY comp_* grants (a
+// paid_* or trial_* grant lapsing is a normal subscription event, not this hazard), and it must
+// read RC's stored projection rather than the retired legacy column.
+func TestJobHealthRepository_OldestExpiredCompGrantAgeQuery_ScopesToCompGrants(t *testing.T) {
+	assert.Contains(t, oldestExpiredCompGrantAgeQuery, "revenuecat_customers",
+		"the gauge must read RevenueCat's stored projection, not the retired legacy column")
+	assert.Contains(t, oldestExpiredCompGrantAgeQuery, `LIKE 'comp\_%'`,
+		"only comp_* grants count; the underscore must be escaped so it is not a LIKE wildcard")
+	assert.NotContains(t, oldestExpiredCompGrantAgeQuery, "manual_tier_override",
+		"the retired legacy column must not reappear in this query")
 }
 
 // --- GetOutstandingPlaidCleanupStats (Issue #1413 — Plaid-disconnect-repair backlog gauge) ---

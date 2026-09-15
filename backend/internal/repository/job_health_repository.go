@@ -11,29 +11,31 @@ import (
 // internal/observability.RecordJobSuccess, the complementary generic last-success heartbeat every
 // periodic worker's Work() reports to on its success path).
 type JobHealthRepository interface {
-	// GetOldestUnclearedExpiredManualTierOverrideAge returns how long the OLDEST currently
-	// expired-but-uncleared manual_tier_override has been sitting uncleared: zero when there are
+	// GetOldestExpiredCompGrantAge returns how long the OLDEST expired comp_* grant has been
+	// sitting in RevenueCat's stored projection (revenuecat_customers.grants): zero when there are
 	// none.
 	//
-	// This is the direct measure of the Issue #1413 Critical finding C1 hazard:
-	// noManualOverrideAtAllPredicate (profile_repository.go) excludes a user from the retention-
-	// notice/hard-delete queries for as long as ANY manual_tier_override survives on their row —
-	// live or lapsed — and clearing a LAPSED one is exclusively manual_tier_override_expiry_check's
-	// job. Healthy is ~0 and stays there; it climbs monotonically, in lockstep with wall-clock
-	// time, the moment that job stops actually clearing overrides — whether it's crashing,
-	// discarded into the dead-letter queue, or simply not scheduled anymore.
+	// This is the RevenueCat analogue of the retired legacy-column gauge (#1652 todo 4). The
+	// legacy manual_tier_override column is no longer written by any production path — the admin
+	// comp path records a revenuecat_operations intent instead — so a gauge fed by that column was
+	// a dead alert. The live hazard is the RC projection: revenueCatSession.Save drops expired
+	// grants before persisting, so a comp_* grant that has lapsed but is STILL in the stored
+	// grants means the refresh path has stopped projecting. While it lingers, ResolveAccess refuses
+	// the cached state (an expired grant requires refresh), so the inactive projection (retention
+	// arming + plaid_cleanup_pending_at) is never persisted and the user is stuck out of the
+	// retention pipeline. Healthy is ~0 and stays there; it climbs monotonically, in lockstep with
+	// wall-clock time, the moment the refresh path stops.
 	//
-	// Uses the exact same expiredManualTierOverridePredicate (profile_repository.go) that
-	// GetUsersWithExpiredManualTierOverride's own candidate query uses, so this gauge and that job
-	// can never disagree about which rows count.
-	GetOldestUnclearedExpiredManualTierOverrideAge(ctx context.Context) (time.Duration, error)
+	// Only comp_* grants count: a paid_* or trial_* grant lapsing is a normal subscription event,
+	// not this hazard.
+	GetOldestExpiredCompGrantAge(ctx context.Context) (time.Duration, error)
 
 	// GetOutstandingPlaidCleanupStats returns the number of users with outstanding Plaid-disconnect
 	// cleanup, and how long the OLDEST such marker has been sitting uncleared — (0, 0) when there
 	// are none.
 	//
 	// This is the direct measure of the Issue #1413 sibling hazard to
-	// GetOldestUnclearedExpiredManualTierOverrideAge above:
+	// GetOldestExpiredCompGrantAge above:
 	// RetentionCleanupCheckWorker.repairPlaidDisconnects (queue/jobs/retention_cleanup_check.go) is
 	// the ONLY place a lapsed user's Plaid bank connections are ever disconnected, and its per-user
 	// error isolation (deliberate — one user's Plaid failure must never block the GDPR notice/
@@ -134,20 +136,29 @@ func NewJobHealthRepository(db DB) JobHealthRepository {
 	return &jobHealthRepository{db: db}
 }
 
-func (r *jobHealthRepository) GetOldestUnclearedExpiredManualTierOverrideAge(ctx context.Context) (time.Duration, error) {
-	query := `
-		SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(manual_tier_ends_at))), 0)
-		FROM users
-		WHERE ` + expiredManualTierOverridePredicate
+// oldestExpiredCompGrantAgeQuery is GetOldestExpiredCompGrantAge's SQL, hoisted to a package-level
+// constant so a plain unit test can assert its shape without a database.
+//
+// The key prefix is matched with LIKE 'comp\_%' (the backslash escapes the underscore, which is a
+// single-character wildcard in LIKE) so only comp_* grants count.
+const oldestExpiredCompGrantAgeQuery = `
+	SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN((g->>'expires_at')::timestamptz))), 0)
+	FROM revenuecat_customers rc
+	CROSS JOIN LATERAL jsonb_array_elements(rc.grants) AS g
+	WHERE g->>'key' LIKE 'comp\_%'
+	  AND g->>'expires_at' IS NOT NULL
+	  AND (g->>'expires_at')::timestamptz < NOW()
+`
 
+func (r *jobHealthRepository) GetOldestExpiredCompGrantAge(ctx context.Context) (time.Duration, error) {
 	var ageSeconds float64
-	if err := r.db.QueryRow(ctx, query).Scan(&ageSeconds); err != nil {
-		return 0, fmt.Errorf("failed to query oldest uncleared expired manual tier override age: %w", err)
+	if err := r.db.QueryRow(ctx, oldestExpiredCompGrantAgeQuery).Scan(&ageSeconds); err != nil {
+		return 0, fmt.Errorf("failed to query oldest expired comp grant age: %w", err)
 	}
 	if ageSeconds < 0 {
-		// Defensive only: expiredManualTierOverridePredicate's manual_tier_ends_at < NOW() clause
-		// means every row this aggregate considers is already in the past, so NOW() - MIN(...)
-		// should never go negative — but never let a clock-skew edge case report a negative "age".
+		// Defensive only: the `expires_at < NOW()` clause means every grant this aggregate
+		// considers is already in the past, so NOW() - MIN(...) should never go negative — but
+		// never let a clock-skew edge case report a negative "age".
 		ageSeconds = 0
 	}
 	return time.Duration(ageSeconds * float64(time.Second)), nil
@@ -186,7 +197,7 @@ func (r *jobHealthRepository) GetOutstandingPlaidCleanupStats(ctx context.Contex
 		return 0, 0, fmt.Errorf("failed to query outstanding Plaid cleanup stats: %w", err)
 	}
 	if ageSeconds < 0 {
-		// Defensive only, mirroring GetOldestUnclearedExpiredManualTierOverrideAge's clamp above —
+		// Defensive only, mirroring GetOldestExpiredCompGrantAge's clamp above —
 		// the `plaid_cleanup_pending_at IS NOT NULL` clause means every row this aggregate
 		// considers already has a real timestamp in the past, so NOW() - MIN(...) should never go
 		// negative, but never let a clock-skew edge case report a negative "age".

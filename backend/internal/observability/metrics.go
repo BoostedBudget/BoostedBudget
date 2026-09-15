@@ -268,33 +268,39 @@ var (
 		Help: "Current number of jobs in the dead letter queue.",
 	})
 
-	// ManualTierOverrideOldestUnclearedExpiredSeconds tracks the age (in seconds) of the OLDEST
-	// manual_tier_override that has expired (manual_tier_ends_at in the past) but has not yet been
-	// cleared. Issue #1413 Task P4: the direct measure of the Critical finding C1 hazard —
-	// noManualOverrideAtAllPredicate (profile_repository.go) excludes a user from retention notice/
-	// hard-delete for as long as ANY override survives on their row, live or lapsed, and clearing a
-	// LAPSED one is exclusively manual_tier_override_expiry_check's job. Healthy is ~0; it climbs
-	// monotonically, in lockstep with wall-clock time, the moment that job stops clearing overrides
-	// — independent of whether that job's own jobs_completed_total/JobLastSuccessTimestamp metrics
-	// are even being scraped. Refreshed periodically from repository.JobHealthRepository (see
-	// cmd/server/main.go's startJobHealthMetricsCollector — lives there, not here, because
+	// RevenueCatOldestExpiredCompGrantSeconds tracks the age (in seconds) of the OLDEST expired
+	// comp_* grant still present in RevenueCat's stored projection
+	// (revenuecat_customers.grants). #1652 todo 4: this replaced the retired legacy-column gauge,
+	// which was fed only by manual_tier_override — a column no production path writes any more (the
+	// admin comp path records a revenuecat_operations intent instead), so that alert could never
+	// fire.
+	//
+	// The live hazard: revenueCatSession.Save drops expired grants before persisting, so a comp_*
+	// grant that has lapsed but is STILL in the stored grants means the refresh path has stopped
+	// projecting. While it lingers, ResolveAccess refuses the cached state (an expired grant
+	// requires refresh), so the inactive projection (retention arming + plaid_cleanup_pending_at)
+	// is never persisted and the user is stuck out of the retention pipeline. Healthy is ~0; it
+	// climbs monotonically, in lockstep with wall-clock time, the moment the refresh path stops —
+	// independent of whether the refresh worker's own jobs_completed_total/JobLastSuccessTimestamp
+	// metrics are even being scraped. Refreshed periodically from repository.JobHealthRepository
+	// (see cmd/server/main.go's startJobHealthMetricsCollector — lives there, not here, because
 	// internal/repository already imports internal/observability, so the reverse dependency this
 	// collector needs would be an import cycle if placed in this package).
 	//
 	// ⚠ AN UnmeasuredGauge (see above): absent until startJobHealthMetricsCollector's first successful
 	// read, rather than publishing a reassuring 0 from process start. Rules:
 	//
-	//	manual_tier_override_oldest_uncleared_expired_seconds > 86400
+	//	revenuecat_oldest_expired_comp_grant_seconds > 86400
 	//	  for: 1h
-	//	absent(manual_tier_override_oldest_uncleared_expired_seconds)
+	//	absent(revenuecat_oldest_expired_comp_grant_seconds)
 	//	  for: 1h
-	ManualTierOverrideOldestUnclearedExpiredSeconds = UnmeasuredGauge(prometheus.GaugeOpts{
-		Name: "manual_tier_override_oldest_uncleared_expired_seconds",
-		Help: "Age in seconds of the oldest expired-but-uncleared manual_tier_override; 0 when none exist. Absent until the collector has actually read the database, so alert on absence too.",
+	RevenueCatOldestExpiredCompGrantSeconds = UnmeasuredGauge(prometheus.GaugeOpts{
+		Name: "revenuecat_oldest_expired_comp_grant_seconds",
+		Help: "Age in seconds of the oldest expired comp_* grant still present in RevenueCat's stored projection; 0 when none exist. Absent until the collector has actually read the database, so alert on absence too.",
 	})
 
 	// PlaidCleanupOutstandingUsers and PlaidCleanupOldestOutstandingSeconds are the Issue #1413
-	// direct measure of the sibling hazard to the manual-tier-override one above:
+	// direct measure of the sibling hazard to the RevenueCat comp-grant one above:
 	// RetentionCleanupCheckWorker.repairPlaidDisconnects (backend/internal/queue/jobs/retention_cleanup_check.go)
 	// is the ONLY place a lapsed user's Plaid bank connections are ever disconnected, and its
 	// per-user error isolation (`errorCount++; continue` — deliberate: one user's Plaid failure
@@ -306,7 +312,7 @@ var (
 	//
 	// Both are refreshed together from repository.JobHealthRepository.GetOutstandingPlaidCleanupStats
 	// (see cmd/server/main.go's startJobHealthMetricsCollector — lives there, not here, for the
-	// same import-cycle reason ManualTierOverrideOldestUnclearedExpiredSeconds's collector does).
+	// same import-cycle reason RevenueCatOldestExpiredCompGrantSeconds's collector does).
 	//
 	// Healthy is 0 for both. CRITICAL: "plaid_cleanup_pending_at IS NOT NULL" alone is NOT a valid
 	// proxy for "cleanup outstanding" — migration 000119 stamped that marker on EVERY inactive/

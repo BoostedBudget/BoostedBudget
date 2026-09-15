@@ -2604,7 +2604,7 @@ describe('PII coverage — Round 16: HealthDashboardPage', () => {
         job_backlog: {
           plaid_cleanup_outstanding_users: 0,
           plaid_cleanup_oldest_outstanding_seconds: 0,
-          manual_tier_override_oldest_uncleared_expired_seconds: 0,
+          revenuecat_oldest_expired_comp_grant_seconds: 0,
           available: true,
         },
         plaid_orphaned_items: {

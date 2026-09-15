@@ -31,7 +31,7 @@ import (
 // stubJobHealthRepo is repository.JobHealthRepository with canned answers. errAll makes every read
 // fail, which is the only way to exercise the "a failed read must publish nothing" half.
 type stubJobHealthRepo struct {
-	overrideAge  time.Duration
+	compGrantAge time.Duration
 	plaidCount   int
 	plaidOldest  time.Duration
 	residueCount int
@@ -39,8 +39,8 @@ type stubJobHealthRepo struct {
 	errAll       error
 }
 
-func (s *stubJobHealthRepo) GetOldestUnclearedExpiredManualTierOverrideAge(context.Context) (time.Duration, error) {
-	return s.overrideAge, s.errAll
+func (s *stubJobHealthRepo) GetOldestExpiredCompGrantAge(context.Context) (time.Duration, error) {
+	return s.compGrantAge, s.errAll
 }
 
 func (s *stubJobHealthRepo) GetOutstandingPlaidCleanupStats(context.Context) (int, time.Duration, error) {
@@ -57,7 +57,7 @@ func (s *stubJobHealthRepo) GetDeletionResidueStats(context.Context) (int, time.
 func resetJobHealthGauges(t *testing.T) {
 	t.Helper()
 	reset := func() {
-		observability.ManualTierOverrideOldestUnclearedExpiredSeconds.DeleteLabelValues()
+		observability.RevenueCatOldestExpiredCompGrantSeconds.DeleteLabelValues()
 		observability.PlaidCleanupOutstandingUsers.DeleteLabelValues()
 		observability.PlaidCleanupOldestOutstandingSeconds.DeleteLabelValues()
 		observability.DeletionResidueRecords.DeleteLabelValues()
@@ -75,7 +75,7 @@ func TestStartJobHealthMetricsCollector_PublishesAMeasurementBeforeTheFirstTick(
 	resetJobHealthGauges(t)
 
 	repo := &stubJobHealthRepo{
-		overrideAge:  90 * time.Minute,
+		compGrantAge: 90 * time.Minute,
 		plaidCount:   2,
 		plaidOldest:  3 * time.Hour,
 		residueCount: 3,
@@ -99,7 +99,7 @@ func TestStartJobHealthMetricsCollector_PublishesAMeasurementBeforeTheFirstTick(
 	// exactly the same defect on the other three.
 	assert.Equal(t, float64(2), testutil.ToFloat64(observability.PlaidCleanupOutstandingUsers))
 	assert.Equal(t, float64(3*60*60), testutil.ToFloat64(observability.PlaidCleanupOldestOutstandingSeconds))
-	assert.Equal(t, float64(90*60), testutil.ToFloat64(observability.ManualTierOverrideOldestUnclearedExpiredSeconds))
+	assert.Equal(t, float64(90*60), testutil.ToFloat64(observability.RevenueCatOldestExpiredCompGrantSeconds))
 }
 
 // ⚠ THE SIBLING THAT MAKES THE TEST ABOVE FAIL IN BOTH DIRECTIONS. A genuinely clean database must
@@ -153,7 +153,7 @@ func TestStartJobHealthMetricsCollector_AFailedStartupReadPublishesNothing(t *te
 		"a failed read must leave the series absent; publishing 0 would assert that no GDPR deletion has ever been left with a cancelled subscription, which nothing checked")
 	assert.Equal(t, 0, testutil.CollectAndCount(observability.DeletionResidueNewestSeconds))
 	assert.Equal(t, 0, testutil.CollectAndCount(observability.PlaidCleanupOutstandingUsers))
-	assert.Equal(t, 0, testutil.CollectAndCount(observability.ManualTierOverrideOldestUnclearedExpiredSeconds))
+	assert.Equal(t, 0, testutil.CollectAndCount(observability.RevenueCatOldestExpiredCompGrantSeconds))
 }
 
 // writerFunc adapts a function to io.Writer so the test can observe slog output without a buffer and

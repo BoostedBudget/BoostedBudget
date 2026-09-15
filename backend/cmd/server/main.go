@@ -3185,7 +3185,7 @@ func (a *dbPoolAdapter) GetStats() services.PoolStats {
 }
 
 // startJobHealthMetricsCollector runs a goroutine that periodically refreshes
-// observability.ManualTierOverrideOldestUnclearedExpiredSeconds and, since Issue #1413's
+// observability.RevenueCatOldestExpiredCompGrantSeconds and, since Issue #1413's
 // Plaid-cleanup-backlog follow-up, observability.PlaidCleanupOutstandingUsers/
 // PlaidCleanupOldestOutstandingSeconds and, since Issue #1504, observability.DeletionResidueRecords/
 // DeletionResidueNewestSeconds from the database. Lives here — not in the observability
@@ -3239,11 +3239,11 @@ func startJobHealthMetricsCollector(ctx context.Context, repo repository.JobHeal
 // Per-metric error isolation throughout: one failing query must not suppress the others, and none of
 // them is fatal.
 func refreshJobHealthMetrics(ctx context.Context, repo repository.JobHealthRepository, logger *slog.Logger) {
-	age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(ctx)
+	compGrantAge, err := repo.GetOldestExpiredCompGrantAge(ctx)
 	if err != nil {
-		logger.Warn("failed to refresh manual tier override job-health gauge", "error", err)
+		logger.Warn("failed to refresh RevenueCat comp-grant job-health gauge", "error", err)
 	} else {
-		observability.ManualTierOverrideOldestUnclearedExpiredSeconds.WithLabelValues().Set(age.Seconds())
+		observability.RevenueCatOldestExpiredCompGrantSeconds.WithLabelValues().Set(compGrantAge.Seconds())
 	}
 
 	plaidCount, plaidOldestAge, err := repo.GetOutstandingPlaidCleanupStats(ctx)
