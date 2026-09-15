@@ -1,25 +1,16 @@
-import { describe, it, expect, beforeEach, mock } from 'bun:test'
-import React from 'react'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect } from 'bun:test'
+import { render, screen } from '@testing-library/react'
 import { BillingPortalButton } from './BillingPortalButton'
 
-const mockWindowOpen = mock(() => null)
-
-beforeEach(() => {
-  mockWindowOpen.mockClear()
-  Object.defineProperty(window, 'open', { value: mockWindowOpen, writable: true })
-})
-
 describe('BillingPortalButton', () => {
-  it('renders the label prop as button text', () => {
+  it('defaults to the single Manage subscription action', () => {
     render(
       <BillingPortalButton
         billingPortalUrl="https://portal.paddle.com/123"
         isLoadingPortal={false}
-        label="Resubscribe"
       />
     )
-    expect(screen.getByRole('button', { name: /Resubscribe/i })).toBeDefined()
+    expect(screen.getByRole('link', { name: /Manage subscription/i })).toBeDefined()
   })
 
   it('renders a different label when provided', () => {
@@ -30,23 +21,20 @@ describe('BillingPortalButton', () => {
         label="Update Payment Method"
       />
     )
-    expect(screen.getByRole('button', { name: /Update Payment Method/i })).toBeDefined()
+    expect(screen.getByRole('link', { name: /Update Payment Method/i })).toBeDefined()
   })
 
-  it('opens billing portal in new tab on click', () => {
+  it('opens the resolved billing portal in a new tab', () => {
     render(
       <BillingPortalButton
         billingPortalUrl="https://portal.paddle.com/123"
         isLoadingPortal={false}
-        label="Resubscribe"
       />
     )
-    fireEvent.click(screen.getByRole('button', { name: /Resubscribe/i }))
-    expect(mockWindowOpen).toHaveBeenCalledWith(
-      'https://portal.paddle.com/123',
-      '_blank',
-      'noopener,noreferrer'
-    )
+    const link = screen.getByRole('link', { name: /Manage subscription/i })
+    expect(link).toHaveAttribute('href', 'https://portal.paddle.com/123')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
   })
 
   it('shows loading state and is disabled when portal is loading', () => {
@@ -54,7 +42,6 @@ describe('BillingPortalButton', () => {
       <BillingPortalButton
         billingPortalUrl={undefined}
         isLoadingPortal={true}
-        label="Resubscribe"
       />
     )
     expect(screen.getByRole('button')).toBeDisabled()
@@ -66,21 +53,21 @@ describe('BillingPortalButton', () => {
       <BillingPortalButton
         billingPortalUrl={undefined}
         isLoadingPortal={false}
-        label="Resubscribe"
       />
     )
     expect(screen.getByRole('button')).toBeDisabled()
   })
 
-  it('does not open portal when URL is absent', () => {
+  it('shows an error state instead of a dead button when the portal URL fails to resolve', () => {
     render(
       <BillingPortalButton
         billingPortalUrl={undefined}
         isLoadingPortal={false}
-        label="Resubscribe"
+        error={{ status: 503, message: 'Service Unavailable' }}
       />
     )
-    fireEvent.click(screen.getByRole('button'))
-    expect(mockWindowOpen).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent(/couldn't load the billing portal/i)
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.queryByRole('link')).toBeNull()
   })
 })

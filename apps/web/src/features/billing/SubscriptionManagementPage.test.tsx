@@ -10,22 +10,10 @@ import { SubscriptionManagementPage } from './SubscriptionManagementPage'
 import {
   mockUseGetCurrentSubscription,
   mockUseGetSubscriptionTiers,
-  mockUseUpdatePaddleSubscription,
-  mockUseCancelPaddleSubscription,
   mockUseGetBillingPortalUrl,
-  mockUpdateSubscriptionMutateAsync,
-  mockCancelSubscriptionMutateAsync,
 } from '@/test/mocks/subscription-api'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
-
-const defaultMutationState = {
-  isPending: false,
-  isSuccess: false,
-  isError: false,
-  error: null,
-  reset: () => {},
-}
 
 function renderPage() {
   return render(
@@ -53,22 +41,12 @@ describe('SubscriptionManagementPage', () => {
       error: null,
       refetch: () => Promise.resolve(),
     })
-    mockUseUpdatePaddleSubscription.mockReturnValue({
-      mutateAsync: mockUpdateSubscriptionMutateAsync,
-      ...defaultMutationState,
-    })
-    mockUseCancelPaddleSubscription.mockReturnValue({
-      mutateAsync: mockCancelSubscriptionMutateAsync,
-      ...defaultMutationState,
-    })
     mockUseGetBillingPortalUrl.mockReturnValue({
       data: undefined,
       isLoading: false,
       error: null,
       refetch: () => Promise.resolve(),
     })
-    mockUpdateSubscriptionMutateAsync.mockClear()
-    mockCancelSubscriptionMutateAsync.mockClear()
     // Non-comped by default (the page's hook also consults the profile-derived presentation as a
     // resilience fallback for comped users, Issue #1413).
     mockUseGetUserProfile.mockClear()
@@ -272,6 +250,63 @@ describe('SubscriptionManagementPage', () => {
       expect(screen.queryByRole('alert')).toBeNull()
       expect(screen.getByText('Manage Subscription')).toBeDefined()
     })
+
+    it('opens the resolved management portal as the single self-service action', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: {
+          subscription_id: 'sub_paid',
+          status: 'active',
+          tier: 'premium',
+          amount: '8.99',
+          currency: 'USD',
+          billing_interval: 'month',
+          next_billing_date: '2026-04-09',
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve({ data: undefined, error: null }),
+      })
+      mockUseGetBillingPortalUrl.mockReturnValue({
+        data: { portal_url: 'https://portal.paddle.com/active' },
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve(),
+      })
+
+      renderPage()
+
+      const manage = screen.getByRole('link', { name: /manage subscription/i })
+      expect(manage).toHaveAttribute('href', 'https://portal.paddle.com/active')
+      expect(screen.queryByRole('button', { name: /change plan/i })).toBeNull()
+      expect(screen.queryByRole('button', { name: /cancel subscription/i })).toBeNull()
+    })
+
+    it('shows an error state (not a dead button) when the portal URL fails to resolve', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        data: {
+          subscription_id: 'sub_paid',
+          status: 'active',
+          tier: 'premium',
+          amount: '8.99',
+          currency: 'USD',
+          billing_interval: 'month',
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => Promise.resolve({ data: undefined, error: null }),
+      })
+      mockUseGetBillingPortalUrl.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: { status: 503, message: 'Service Unavailable' },
+        refetch: () => Promise.resolve(),
+      })
+
+      renderPage()
+
+      expect(screen.getByRole('alert')).toHaveTextContent(/couldn't load the billing portal/i)
+      expect(screen.queryByRole('link', { name: /manage subscription/i })).toBeNull()
+    })
   })
 
   // Issue #1413: admin-comped users get real access with no Paddle subscription behind it.
@@ -285,14 +320,19 @@ describe('SubscriptionManagementPage', () => {
       expect(screen.getByRole('heading', { name: 'Current Subscription' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Refresh subscription status' })).toBeInTheDocument()
     })
-    it('retains Change Plan and cancellation for paid plus complimentary access', () => {
+    it('offers the single Manage subscription action for paid plus complimentary access', () => {
       mockUseGetCurrentSubscription.mockReturnValue({
         data: { status: 'active', tier: 'premium', subscription_id: 'sub_paid', is_comped: true, amount: '8.99', currency: 'USD', billing_interval: 'month' },
         isLoading: false, error: null, refetch: () => Promise.resolve(),
       } as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+      mockUseGetBillingPortalUrl.mockReturnValue({
+        data: { portal_url: 'https://portal.paddle.com/paid' },
+        isLoading: false, error: null, refetch: () => Promise.resolve(),
+      })
       renderPage()
-      expect(screen.getByRole('button', { name: /change plan/i })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /cancel subscription/i })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /manage subscription/i })).toHaveAttribute('href', 'https://portal.paddle.com/paid')
+      expect(screen.queryByRole('button', { name: /change plan/i })).toBeNull()
+      expect(screen.queryByRole('button', { name: /cancel subscription/i })).toBeNull()
     })
     it('renders a complimentary view instead of the empty state when the subscription 404s', () => {
       mockUseGetCurrentSubscription.mockReturnValue({

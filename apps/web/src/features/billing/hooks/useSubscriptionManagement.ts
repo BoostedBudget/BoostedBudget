@@ -1,23 +1,13 @@
 import {
   useGetCurrentSubscription,
-  useUpdatePaddleSubscription,
-  useCancelPaddleSubscription,
   useGetBillingPortalUrl,
 } from '@boostedbudget/api-client/endpoints/subscription/subscription'
 import type {
-  UpdateSubscriptionInputBody,
   GetCurrentSubscriptionOutputBody,
 } from '@boostedbudget/api-client/models'
 import { useSubscriptionPresentation } from '../../subscription/hooks/useSubscriptionPresentation'
 import { presentationFromSubscription } from '../../subscription/lib/subscriptionPresentation'
 import { useAuth } from '@clerk/react-router'
-
-interface UpdateOptions {
-  newTier: string
-  billingInterval: 'month' | 'year'
-  currentBillingInterval?: 'month' | 'year'
-  prorationBillingMode?: 'prorated_immediately' | 'full_immediately' | 'full_next_billing_period'
-}
 
 interface SubscriptionError {
   status?: number
@@ -31,6 +21,14 @@ function getErrorStatus(error: unknown): number | undefined {
   return err.status ?? err.response?.status
 }
 
+/**
+ * Billing self-service is a single action: open the provider's own management portal.
+ *
+ * #1652 removed the in-app Paddle update/cancel/preview mutations — Paddle stays merchant of
+ * record, so plan changes, cancellation and payment-method updates all happen in its portal. The
+ * portal URL is resolved by the backend from RevenueCat's `management_url` (see
+ * `GET /api/v1/subscription/billing-portal`), so this hook only reads it.
+ */
 export function useSubscriptionManagement() {
   const { userId } = useAuth()
   // Issue #1413: admin-comped users get real access with no Paddle subscription behind it —
@@ -38,7 +36,6 @@ export function useSubscriptionManagement() {
   // subscription endpoint hasn't been redeployed with the is_comped field yet (or 404s outright).
   const profilePresentation = useSubscriptionPresentation()
 
-  // Query hooks
   const subscriptionQuery = useGetCurrentSubscription({
     query: {
       queryKey: ['/api/v1/subscription/current', userId],
@@ -64,24 +61,6 @@ export function useSubscriptionManagement() {
     },
   })
 
-  // Mutation hooks
-  const updateMutation = useUpdatePaddleSubscription()
-  const cancelMutation = useCancelPaddleSubscription()
-
-  // Update subscription
-  const updateSubscription = (options: UpdateOptions) =>
-    updateMutation.mutateAsync({
-      data: {
-        new_tier: options.newTier,
-        billing_interval: options.billingInterval,
-        current_billing_interval: options.currentBillingInterval,
-        proration_billing_mode: options.prorationBillingMode,
-      } as UpdateSubscriptionInputBody,
-    })
-
-  // Cancel subscription
-  const cancelSubscription = () => cancelMutation.mutateAsync()
-
   const normalizeError = (error: unknown): SubscriptionError | null => {
     if (!error) return null
 
@@ -106,7 +85,7 @@ export function useSubscriptionManagement() {
       return { message: 'Network error. Please check your connection.' }
     }
 
-    return { status, message: err.message || 'Failed to update subscription. Please try again.' }
+    return { status, message: err.message || 'Failed to load the billing portal. Please try again.' }
   }
 
   const noSubscription404 = getErrorStatus(subscriptionQuery.error) === 404
@@ -124,22 +103,9 @@ export function useSubscriptionManagement() {
     compEndsAt,
     refetchSubscription: subscriptionQuery.refetch,
 
-    // Billing portal URL
+    // The single self-service action: the provider's resolved management portal.
     billingPortalUrl: billingPortalQuery.data?.portal_url,
     isLoadingBillingPortal: billingPortalQuery.isLoading,
-
-    // Update subscription
-    updateSubscription,
-    isUpdating: updateMutation.isPending,
-    isUpdateSuccess: updateMutation.isSuccess,
-    updateError: normalizeError(updateMutation.error),
-    resetUpdate: updateMutation.reset,
-
-    // Cancel subscription
-    cancelSubscription,
-    isCanceling: cancelMutation.isPending,
-    isCancelSuccess: cancelMutation.isSuccess,
-    cancelError: normalizeError(cancelMutation.error),
-    resetCancel: cancelMutation.reset,
+    billingPortalError: normalizeError(billingPortalQuery.error),
   }
 }

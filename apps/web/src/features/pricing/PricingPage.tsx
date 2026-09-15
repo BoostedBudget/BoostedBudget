@@ -8,11 +8,8 @@ import { RevenueCatCheckoutStatus } from '../billing/components/RevenueCatChecko
 import {
   useGetBillingPortalUrl,
   useGetSubscriptionTiers,
-  useUpdatePaddleSubscription,
 } from '@boostedbudget/api-client/endpoints/subscription/subscription'
-import { PlanChangeModal } from '../billing/components/PlanChangeModal'
 import { TierActionButton } from './components/TierActionButton'
-import { BillingPortalButton } from './components/BillingPortalButton'
 import { usePricingContext } from './hooks/usePricingContext'
 import type { PricingState } from './hooks/usePricingContext'
 import { usePostSignInCheckoutIntent } from './hooks/usePostSignInCheckoutIntent'
@@ -99,22 +96,20 @@ interface TierCardProps {
   tierKey: TierName
   tierData: SubscriptionTier
   pricingState: PricingState
-  tiers: Record<TierName, SubscriptionTier> | null
   billingPeriod: BillingPeriod
   billingPortalUrl: string | undefined
   isLoadingPortal: boolean
-  onChangePlan: (tier: TierName, interval: 'month' | 'year') => void
+  portalError: unknown
 }
 
 function TierCard({
   tierKey,
   tierData,
   pricingState,
-  tiers,
   billingPeriod,
   billingPortalUrl,
   isLoadingPortal,
-  onChangePlan,
+  portalError,
 }: TierCardProps) {
   const features = buildFeatureList(tierData)
   const isHousehold5 = tierKey === 'household_5'
@@ -124,15 +119,6 @@ function TierCard({
     ['active', 'trialing', 'cancelled', 'past_due', 'paused', 'comped'].includes(pricingState.status) &&
     hasTier(pricingState) &&
     pricingState.tier === tierKey
-
-  const shouldShowBillingPortal =
-    (pricingState.status === 'cancelled' || pricingState.status === 'past_due' || pricingState.status === 'paused') &&
-    hasTier(pricingState) &&
-    pricingState.tier === tierKey
-
-  // #933: Pause/resume not supported. Label is explicit for each supported status.
-  const billingPortalLabel =
-    pricingState.status === 'cancelled' ? 'Resubscribe' : pricingState.status === 'paused' ? 'Manage Billing' : 'Update Payment Method'
 
   const currentPrice = billingPeriod === 'monthly'
     ? tierData.pricing.price_monthly
@@ -224,21 +210,14 @@ function TierCard({
             Cancels on {cancelDateLabel}
           </p>
         )}
-        {shouldShowBillingPortal ? (
-          <BillingPortalButton
-            billingPortalUrl={billingPortalUrl}
-            isLoadingPortal={isLoadingPortal}
-            label={billingPortalLabel}
-          />
-        ) : (
-          <TierActionButton
-            tierKey={tierKey}
-            billingInterval={billingInterval}
-            pricingState={pricingState}
-            tiers={tiers}
-            onChangePlan={onChangePlan}
-          />
-        )}
+        <TierActionButton
+          tierKey={tierKey}
+          billingInterval={billingInterval}
+          pricingState={pricingState}
+          billingPortalUrl={billingPortalUrl}
+          isLoadingPortal={isLoadingPortal}
+          portalError={portalError}
+        />
       </div>
     </div>
   )
@@ -251,11 +230,6 @@ export function PricingPage() {
   const location = useLocation()
   const { pricingState, tiers } = usePricingContext()
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly')
-  const [planChangeModal, setPlanChangeModal] = useState<{
-    open: boolean
-    initialTier?: TierName
-    initialInterval?: 'month' | 'year'
-  }>({ open: false })
 
   usePostSignInCheckoutIntent()
 
@@ -264,12 +238,10 @@ export function PricingPage() {
     trackEvent(ANALYTICS_EVENTS.PRICING_VIEWED)
   }, [trackEvent])
 
-  const updateMutation = useUpdatePaddleSubscription()
-
   const billingPortalQuery = useGetBillingPortalUrl({
     query: {
       queryKey: ['/api/v1/subscription/portal', userId],
-      enabled: pricingState.status === 'cancelled' || pricingState.status === 'past_due' || pricingState.status === 'paused',
+      enabled: ['active', 'trialing', 'cancelled', 'past_due', 'paused'].includes(pricingState.status),
     },
   })
 
@@ -308,33 +280,6 @@ export function PricingPage() {
       </div>
     )
   }
-
-  const handleChangePlan = (tier: TierName, interval: 'month' | 'year') => {
-    setPlanChangeModal({ open: true, initialTier: tier, initialInterval: interval })
-  }
-
-  const handleUpdateSubscription = (
-    tier: string,
-    interval: 'month' | 'year',
-    prorationMode: 'prorated_immediately' | 'full_next_billing_period',
-  ) => {
-    updateMutation.mutateAsync({
-      data: {
-        new_tier: tier,
-        billing_interval: interval,
-        current_billing_interval: currentIntervalForModal,
-        proration_billing_mode: prorationMode,
-      },
-    }).then(() => {
-      setPlanChangeModal({ open: false })
-    }).catch(() => {
-      // Error state visible via updateMutation.error
-    })
-  }
-
-  const showPlanChangeModal = ['active', 'trialing', 'cancelled'].includes(pricingState.status)
-  const currentTierForModal = hasTier(pricingState) ? pricingState.tier : 'premium'
-  const currentIntervalForModal = (pricingState as { billingInterval?: 'month' | 'year' }).billingInterval ?? 'month'
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8">
@@ -395,29 +340,14 @@ export function PricingPage() {
               tierKey={tierKey}
               tierData={tierData}
               pricingState={pricingState}
-              tiers={tiers}
               billingPeriod={billingPeriod}
               billingPortalUrl={billingPortalQuery.data?.portal_url}
               isLoadingPortal={billingPortalQuery.isLoading}
-              onChangePlan={handleChangePlan}
+              portalError={billingPortalQuery.error}
             />
           )
         })}
       </div>
-
-      {showPlanChangeModal && (
-        <PlanChangeModal
-          open={planChangeModal.open}
-          currentTier={currentTierForModal}
-          currentBillingInterval={currentIntervalForModal}
-          tiers={tiers as Record<string, SubscriptionTier>}
-          isUpdating={updateMutation.isPending}
-          onChangePlan={handleUpdateSubscription}
-          onClose={() => setPlanChangeModal({ open: false })}
-          initialTier={planChangeModal.initialTier}
-          initialInterval={planChangeModal.initialInterval}
-        />
-      )}
 
       <div className="mt-16 pt-12 border-t border-border">
         <h2 className="text-center text-3xl font-bold text-foreground mb-8">Frequently Asked Questions</h2>
