@@ -54,7 +54,7 @@ RUN find dist -type f -name '*.map' -delete && \
     echo "Confirmed: no .map files remain in dist/."
 
 # Stage 2: Runtime with Nginx (Debian-based)
-FROM nginx:stable@sha256:46ccc48fbb1f5a43167f2ee2c279c122b96eec5d976e7f4e1e0780f59a51b4d6
+FROM nginx:stable@sha256:d5792f71a9496b833bc08ea834a758c46e2b6a6306c10f4be926f38a656cdc1c
 
 # Install runtime dependencies
 RUN for i in 1 2 3; do \
