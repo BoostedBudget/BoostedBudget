@@ -123,11 +123,14 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
     // deliberately unchanged, which is what distinguishes an excluded addition from an allowed one.
     // #1637 adds one excluded frontend-only report; exposed capabilities stay unchanged.
     // #1652 adds 12 excluded RevenueCat operations; allowed capabilities stay unchanged.
-    expect(fresh.totalOperations).toBe(225)
+    // #1652 also removes 4 excluded operations: the deleted admin trial-grant operation (todo 5)
+    // and the three deleted Paddle self-service routes preview-update / update / cancel (todo 10).
+    // total 225 -> 221, excluded 83 -> 79; allowed/read/write/destructive are untouched.
+    expect(fresh.totalOperations).toBe(221)
     expect(fresh.allowedOperations).toBe(142)
     expect(fresh.readOperations).toBe(97)
     expect(fresh.writeOperations).toBe(45)
-    expect(fresh.excludedOperations).toBe(83)
+    expect(fresh.excludedOperations).toBe(79)
     expect(fresh.destructiveWriteOperations).toBe(4)
     expect(fresh.allowedOperations).toBe(fresh.readOperations + fresh.writeOperations)
     expect(fresh.totalOperations).toBe(fresh.allowedOperations + fresh.excludedOperations)

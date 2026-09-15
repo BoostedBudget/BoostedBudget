@@ -50,20 +50,15 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
-  CancelSubscriptionOutputBody,
   CheckoutOutputBody,
   CreateCheckoutInputBody,
   ErrorModel,
   GetBillingPortalURLOutputBody,
   GetCurrentSubscriptionOutputBody,
-  PreviewUpdateInputBody,
-  PreviewUpdateOutputBody,
   RevenueCatCheckoutIntent,
   RevenueCatCheckoutReleaseOutputBody,
   RevenueCatSummary,
-  SubscriptionTiersResponse,
-  UpdateSubscriptionInputBody,
-  UpdateSubscriptionOutputBody
+  SubscriptionTiersResponse
 } from '../../models';
 
 import { customInstance } from '../../client';
@@ -364,69 +359,6 @@ export function useGetBillingPortalUrl<TData = Awaited<ReturnType<typeof getBill
 
 
 /**
- * Cancels subscription at end of current billing period. User retains access until period ends.
- * @summary Cancel subscription
- */
-export const cancelPaddleSubscription = (
-
- options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
-) => {
-
-
-      return customInstance<CancelSubscriptionOutputBody>(
-      {url: `/api/v1/subscription/cancel`, method: 'POST', signal
-    },
-      options);
-    }
-
-
-
-
-export const getCancelPaddleSubscriptionMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelPaddleSubscription>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof cancelPaddleSubscription>>, TError,void, TContext> => {
-
-const mutationKey = ['cancelPaddleSubscription'];
-const {mutation: mutationOptions, request: requestOptions} = options ?
-      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
-      options
-      : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }, request: undefined};
-
-
-
-
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof cancelPaddleSubscription>>, void> = () => {
-
-
-          return  cancelPaddleSubscription(requestOptions)
-        }
-
-
-
-
-
-
-  return  { mutationFn, ...mutationOptions }}
-
-    export type CancelPaddleSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof cancelPaddleSubscription>>>
-
-    export type CancelPaddleSubscriptionMutationError = ErrorType<ErrorModel>
-
-    /**
- * @summary Cancel subscription
- */
-export const useCancelPaddleSubscription = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelPaddleSubscription>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
- , queryClient?: QueryClient): UseMutationResult<
-        Awaited<ReturnType<typeof cancelPaddleSubscription>>,
-        TError,
-        void,
-        TContext
-      > => {
-      return useMutation(getCancelPaddleSubscriptionMutationOptions(options), queryClient);
-    }
-    /**
  * Creates a Paddle checkout session for purchasing a subscription. Returns checkout URL to open in Paddle.js Overlay or as redirect.
  * @summary Create Paddle checkout session
  */
@@ -709,71 +641,6 @@ export function useGetCurrentSubscription<TData = Awaited<ReturnType<typeof getC
 
 
 /**
- * Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details.
- * @summary Preview subscription tier change
- */
-export const previewPaddleSubscriptionUpdate = (
-    previewUpdateInputBody: BodyType<NonReadonly<PreviewUpdateInputBody>>,
- options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
-) => {
-
-
-      return customInstance<PreviewUpdateOutputBody>(
-      {url: `/api/v1/subscription/preview-update`, method: 'POST',
-      headers: {'Content-Type': 'application/json', },
-      data: previewUpdateInputBody, signal
-    },
-      options);
-    }
-
-
-
-
-export const getPreviewPaddleSubscriptionUpdateMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof previewPaddleSubscriptionUpdate>>, TError,{data: BodyType<NonReadonly<PreviewUpdateInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof previewPaddleSubscriptionUpdate>>, TError,{data: BodyType<NonReadonly<PreviewUpdateInputBody>>}, TContext> => {
-
-const mutationKey = ['previewPaddleSubscriptionUpdate'];
-const {mutation: mutationOptions, request: requestOptions} = options ?
-      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
-      options
-      : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }, request: undefined};
-
-
-
-
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof previewPaddleSubscriptionUpdate>>, {data: BodyType<NonReadonly<PreviewUpdateInputBody>>}> = (props) => {
-          const {data} = props ?? {};
-
-          return  previewPaddleSubscriptionUpdate(data,requestOptions)
-        }
-
-
-
-
-
-
-  return  { mutationFn, ...mutationOptions }}
-
-    export type PreviewPaddleSubscriptionUpdateMutationResult = NonNullable<Awaited<ReturnType<typeof previewPaddleSubscriptionUpdate>>>
-    export type PreviewPaddleSubscriptionUpdateMutationBody = BodyType<NonReadonly<PreviewUpdateInputBody>>
-    export type PreviewPaddleSubscriptionUpdateMutationError = ErrorType<ErrorModel>
-
-    /**
- * @summary Preview subscription tier change
- */
-export const usePreviewPaddleSubscriptionUpdate = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof previewPaddleSubscriptionUpdate>>, TError,{data: BodyType<NonReadonly<PreviewUpdateInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
- , queryClient?: QueryClient): UseMutationResult<
-        Awaited<ReturnType<typeof previewPaddleSubscriptionUpdate>>,
-        TError,
-        {data: BodyType<NonReadonly<PreviewUpdateInputBody>>},
-        TContext
-      > => {
-      return useMutation(getPreviewPaddleSubscriptionUpdateMutationOptions(options), queryClient);
-    }
-    /**
  * Returns all available subscription tiers with their limits, features, and pricing. This is a public endpoint for displaying pricing information.
  * @summary Get subscription tiers
  */
@@ -866,68 +733,3 @@ export function useGetSubscriptionTiers<TData = Awaited<ReturnType<typeof getSub
 
 
 
-/**
- * Updates subscription to a different tier or billing interval. Handles proration automatically.
- * @summary Update subscription tier
- */
-export const updatePaddleSubscription = (
-    updateSubscriptionInputBody: BodyType<NonReadonly<UpdateSubscriptionInputBody>>,
- options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
-) => {
-
-
-      return customInstance<UpdateSubscriptionOutputBody>(
-      {url: `/api/v1/subscription/update`, method: 'POST',
-      headers: {'Content-Type': 'application/json', },
-      data: updateSubscriptionInputBody, signal
-    },
-      options);
-    }
-
-
-
-
-export const getUpdatePaddleSubscriptionMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updatePaddleSubscription>>, TError,{data: BodyType<NonReadonly<UpdateSubscriptionInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof updatePaddleSubscription>>, TError,{data: BodyType<NonReadonly<UpdateSubscriptionInputBody>>}, TContext> => {
-
-const mutationKey = ['updatePaddleSubscription'];
-const {mutation: mutationOptions, request: requestOptions} = options ?
-      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
-      options
-      : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }, request: undefined};
-
-
-
-
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updatePaddleSubscription>>, {data: BodyType<NonReadonly<UpdateSubscriptionInputBody>>}> = (props) => {
-          const {data} = props ?? {};
-
-          return  updatePaddleSubscription(data,requestOptions)
-        }
-
-
-
-
-
-
-  return  { mutationFn, ...mutationOptions }}
-
-    export type UpdatePaddleSubscriptionMutationResult = NonNullable<Awaited<ReturnType<typeof updatePaddleSubscription>>>
-    export type UpdatePaddleSubscriptionMutationBody = BodyType<NonReadonly<UpdateSubscriptionInputBody>>
-    export type UpdatePaddleSubscriptionMutationError = ErrorType<ErrorModel>
-
-    /**
- * @summary Update subscription tier
- */
-export const useUpdatePaddleSubscription = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updatePaddleSubscription>>, TError,{data: BodyType<NonReadonly<UpdateSubscriptionInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
- , queryClient?: QueryClient): UseMutationResult<
-        Awaited<ReturnType<typeof updatePaddleSubscription>>,
-        TError,
-        {data: BodyType<NonReadonly<UpdateSubscriptionInputBody>>},
-        TContext
-      > => {
-      return useMutation(getUpdatePaddleSubscriptionMutationOptions(options), queryClient);
-    }

@@ -55,7 +55,6 @@ import type {
   FireWebhookResponseBody,
   GetAdminDeadLetterJobArgs200,
   GetPaymentFailuresOutputBody,
-  GrantTrialResponseBody,
   ListAdminBudgetHierarchyAuditsOutputBody,
   ListAdminRetentionWithheldOutputBody,
   ListPlaidOrphanedItemsOutputBody,
@@ -97,8 +96,6 @@ export const getListAdminPlaidOrphanedItemsResponseMock = (overrideResponse: Par
 export const getRecordAdminPlaidOrphanedItemOperatorResolutionResponseMock = (overrideResponse: Partial<Extract<RecordPlaidOrphanedItemOperatorResolutionOutputBody, object>> = {}): RecordPlaidOrphanedItemOperatorResolutionOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), note: faker.string.alpha({length: {min: 10, max: 20}}), operator_resolved_at: faker.string.alpha({length: {min: 10, max: 20}}), operator_resolved_by: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getListAdminRetentionWithheldResponseMock = (overrideResponse: Partial<Extract<ListAdminRetentionWithheldOutputBody, object>> = {}): ListAdminRetentionWithheldOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), accounts: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({days_withheld: faker.number.int(), has_email_on_file: faker.datatype.boolean(), notice_30d_sent_at: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), notice_7d_sent_at: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), retention_expires_at: faker.string.alpha({length: {min: 10, max: 20}}), subscription_status: faker.string.alpha({length: {min: 10, max: 20}}), user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), as_of: faker.string.alpha({length: {min: 10, max: 20}}), limit: faker.number.int(), next_cursor: faker.helpers.arrayElement([{cursor_expires_at: faker.string.alpha({length: {min: 10, max: 20}}), cursor_user_id: faker.string.alpha({length: {min: 10, max: 20}})}, undefined]), notice_pending: faker.number.int(), withheld_total: faker.number.int(), ...overrideResponse})
-
-export const getGrantTrialResponseMock = (overrideResponse: Partial<Extract<GrantTrialResponseBody, object>> = {}): GrantTrialResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), success: faker.datatype.boolean(), ...overrideResponse})
 
 export const getGetSystemHealthResponseMock = (overrideResponse: Partial<Extract<SystemHealthResponse, object>> = {}): SystemHealthResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), cache_enabled: faker.datatype.boolean(), dead_letter_queue: {count: faker.number.int(), oldest_job_age_hours: faker.number.int()}, deletion_residue: {available: faker.datatype.boolean(), newest_record_seconds: faker.number.int(), records: faker.number.int()}, forked_security_identities: {available: faker.datatype.boolean(), group_count: faker.number.int(), groups: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({institution_security_id: faker.string.alpha({length: {min: 10, max: 20}}), members: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({name: faker.string.alpha({length: {min: 10, max: 20}}), plaid_security_id: faker.string.alpha({length: {min: 10, max: 20}}), security_id: faker.string.alpha({length: {min: 10, max: 20}}), ticker_symbol: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined])})), null])})), null])}, job_backlog: {available: faker.datatype.boolean(), plaid_cleanup_oldest_outstanding_seconds: faker.number.int(), plaid_cleanup_outstanding_users: faker.number.int(), revenuecat_oldest_expired_comp_grant_seconds: faker.number.int()}, job_queues: {
         [faker.string.alphanumeric(5)]: {completed_last_hour: faker.number.int(), failed: faker.number.int(), pending: faker.number.int(), running: faker.number.int(), unavailable: faker.helpers.arrayElement([faker.datatype.boolean(), undefined])}
@@ -295,18 +292,6 @@ export const getListAdminRetentionWithheldMockHandler = (overrideResponse?: List
   }, options)
 }
 
-export const getGrantTrialMockHandler = (overrideResponse?: GrantTrialResponseBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<GrantTrialResponseBody> | GrantTrialResponseBody), options?: RequestHandlerOptions) => {
-  return http.post('*/api/v1/admin/subscription/grant-trial', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getGrantTrialResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
-
 export const getGetSystemHealthMockHandler = (overrideResponse?: SystemHealthResponse | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<SystemHealthResponse> | SystemHealthResponse), options?: RequestHandlerOptions) => {
   return http.get('*/api/v1/admin/system/health', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
 
@@ -406,7 +391,6 @@ export const getAdminMock = () => [
   getListAdminPlaidOrphanedItemsMockHandler(),
   getRecordAdminPlaidOrphanedItemOperatorResolutionMockHandler(),
   getListAdminRetentionWithheldMockHandler(),
-  getGrantTrialMockHandler(),
   getGetSystemHealthMockHandler(),
   getListAdminUsersMockHandler(),
   getGetAdminUserDetailMockHandler(),

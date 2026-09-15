@@ -39,6 +39,7 @@ export interface RevenueCatBilling {
   ends_at: string | null;
   environment: string;
   id: string;
+  management_url: string;
   product_id: string;
   status: string;
   store: string;
