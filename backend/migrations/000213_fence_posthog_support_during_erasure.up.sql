@@ -13,6 +13,14 @@ UPDATE posthog_erasure_outbox SET clerk_fence_required = FALSE
 WHERE clerk_fence_required IS NULL;
 ALTER TABLE posthog_erasure_outbox
     ALTER COLUMN clerk_fence_required SET DEFAULT TRUE,
+    -- The NOT NULL validation scan is bounded: this outbox holds at most one row per in-flight
+    -- erasure obligation, the UPDATE above has filled every existing row, and the new DEFAULT
+    -- covers concurrent inserts, so the scan cannot block reads for a meaningful window.
+    --
+    -- Placement is load-bearing: squawk binds this directive to the ALTER action it precedes,
+    -- so above the ALTER TABLE (the convention elsewhere in this directory, e.g. 000172) it
+    -- does not suppress this rule.
+    -- squawk-ignore adding-not-nullable-field
     ALTER COLUMN clerk_fence_required SET NOT NULL;
 
 DO $$ BEGIN
