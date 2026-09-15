@@ -1160,8 +1160,13 @@ jobs:
 
       - name: Generate TypeScript client
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/packages/api-client
-        # Use npx orval (not bunx) - Bun's AJV version has compatibility issues
-        run: npx orval
+        # Use npx orval (not bunx) - Bun's AJV version has compatibility issues.
+        # Then normalize output exactly as `make generate-api-client` does: orval appends
+        # trailing blank lines and the committed client is the normalized form, so checking
+        # the raw output here fails against a correctly generated tree.
+        run: |
+          npx orval
+          node scripts/normalize-generated-output.mjs
 
       - name: Check if generated client is up to date
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
