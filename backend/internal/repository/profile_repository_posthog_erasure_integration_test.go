@@ -503,3 +503,51 @@ func prioritizePostHogErasureFixture(t *testing.T, ctx context.Context, pool *pg
 	require.NoError(t, err)
 	require.EqualValues(t, 1, tag.RowsAffected())
 }
+
+// TestPostHogErasureOperatorEvidence_IntegrationRequiresFiveMinuteSeparation pins the
+// clock_timestamp()-interval '5 minutes' guard behaviorally: a second Support zero-check inside
+// five minutes must not set support_verified_at or complete the row, while a check after the
+// separation window must. The separation clock is seeded explicitly — no sleeps.
+func TestPostHogErasureOperatorEvidence_IntegrationRequiresFiveMinuteSeparation(t *testing.T) {
+	pool := connectTestDB(t)
+	enc := newTestFieldEncryptor(t)
+	repo := NewPostHogErasureOutboxRepository(pool, enc)
+	ctx := context.Background()
+	id := uuid.NewString()
+	identity, err := enc.EncryptString("clerk_fenced_subject")
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO posthog_erasure_outbox
+		(id,idempotency_key,identities_encrypted,clerk_user_id_encrypted,clerk_user_id_blind_idx,clerk_deleted_at,
+		 project_id,region,state,phase,person_verified_at,events_verified_at,
+		 recordings_verified_at,surveys_verified_at)
+		VALUES($1,$2,$3,$3,$4,clock_timestamp(),'42','us','manual_pending','support_manual',
+		 clock_timestamp(),clock_timestamp(),clock_timestamp(),clock_timestamp())`,
+		id, "five-minute-separation:"+id, identity, "fence:"+id)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_operator_audit WHERE erasure_id=$1", id)
+		_, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_outbox WHERE id=$1", id)
+	})
+
+	state, err := repo.RecordOperatorEvidence(ctx, id, uuid.NewString(), "support", "provider_zero")
+	require.NoError(t, err)
+	assert.Equal(t, "manual_pending", state)
+
+	state, err = repo.RecordOperatorEvidence(ctx, id, uuid.NewString(), "support", "provider_zero")
+	require.NoError(t, err)
+	assert.Equal(t, "manual_pending", state)
+	var supportVerifiedAt *time.Time
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT support_verified_at FROM posthog_erasure_outbox WHERE id=$1`, id).Scan(&supportVerifiedAt))
+	assert.Nil(t, supportVerifiedAt, "a second zero-check inside five minutes must not verify Support")
+
+	_, err = pool.Exec(ctx, `UPDATE posthog_erasure_outbox
+		SET support_first_verified_at=clock_timestamp()-interval '6 minutes' WHERE id=$1`, id)
+	require.NoError(t, err)
+	state, err = repo.RecordOperatorEvidence(ctx, id, uuid.NewString(), "support", "provider_zero")
+	require.NoError(t, err)
+	assert.Equal(t, "completed", state)
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT support_verified_at FROM posthog_erasure_outbox WHERE id=$1`, id).Scan(&supportVerifiedAt))
+	assert.NotNil(t, supportVerifiedAt)
+}

@@ -24,7 +24,8 @@ export interface EngagementDependencies {
   useAnalyticsSnapshot(): AnalyticsLifecycleSnapshot
 }
 
-const defaultDependencies: EngagementDependencies = {
+// eslint-disable-next-line react-refresh/only-export-components
+export const defaultDependencies: EngagementDependencies = {
   useAuthState() {
     const { isLoaded, user } = useUser()
     return { isLoaded, userId: user?.id ?? null }
