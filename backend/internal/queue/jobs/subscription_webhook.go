@@ -110,7 +110,7 @@ type HouseholdOverCapacityRepository interface {
 
 // subscriptionCancelledCleanupClaimLease is the lease duration requested for
 // ActionSubscriptionCancelledCleanup — matches ExecuteDeletion's accountDeletionClaimLease and
-// PastDueService's pastDueClaimLease (Issue #1413): this path also makes a Plaid call, and a
+// the deleted PastDueService's pastDueClaimLease (Issue #1413, #1652): this path also makes a Plaid call, and a
 // generous lease means an over-run is detectable (via the fencing token) rather than silently
 // re-granted to a second worker.
 const subscriptionCancelledCleanupClaimLease = 15 * time.Minute
@@ -209,7 +209,7 @@ func (w *SubscriptionWebhookWorker) SetAnalytics(a phclient.Analytics) {
 // SetWorkClaimsRepo wires the durable work-claims mechanism processSubscriptionCanceled requires
 // for EXCLUSIVITY on ActionSubscriptionCancelledCleanup before its Plaid disconnect / retention-
 // clock side effects (Issue #1413 High finding H7, Codex review round 4). Mirrors
-// DeletionService.SetWorkClaimsRepo / PastDueService.SetWorkClaimsRepo — a nil claims repo makes
+// DeletionService.SetWorkClaimsRepo / the deleted PastDueService.SetWorkClaimsRepo — a nil claims repo makes
 // that destructive path fail loudly rather than silently falling back to guard-only behavior.
 //
 // Takes the wider WorkClaimsOutcomeRepository (issue #1413 round-3 finding H3) — see the
@@ -950,7 +950,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 		return fmt.Errorf("failed to update subscription status: %w", err)
 	}
 
-	// Re-read AFTER the write commits (mirrors PastDueService.reReadStillPastDue's established
+	// Re-read AFTER the write commits (mirrors the deleted PastDueService.reReadStillPastDue's established
 	// re-read-before-act convention) so the destructive-side-effect decision below is based on
 	// fresh state, not the stale snapshot from before the write. A failed re-read fails the whole
 	// webhook (River retries) rather than silently falling back to the stale `user`.
@@ -1036,7 +1036,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	// inside a Plaid call cannot be recalled. Unlike C1's residual (irreversible account
 	// deletion), this one is acceptable: a Plaid disconnect is recoverable (the user relinks),
 	// and the retention clock this run is about to start is cleared the moment the comp is
-	// applied — inconvenience, not data loss. See past_due_service.go's processGraceExpiry for
+	// applied — inconvenience, not data loss. See the deleted past_due_service.go's processGraceExpiry for
 	// the matching rationale on that flow's own equivalent re-check.
 	reVerified, err := w.profileRepo.GetUserByID(ctx, userID)
 	if err != nil {
@@ -1087,7 +1087,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 	//     still walking the user's Items. Asking only conjunct 1 let that stale job keep
 	//     disconnecting the remaining Items of a now-active, paying customer, and then write
 	//     six-month retention/deletion dates over the top. Compare
-	//     PastDueService.reReadStillPastDue, which likewise re-asks status AND override AND the
+	//     the deleted PastDueService.reReadStillPastDue, which likewise re-asks status AND override AND the
 	//     exact occurrence.
 	//
 	// Occurrence identity is NOT re-asked here, unlike reReadStillPastDue: this flow's occurrence is
@@ -1116,7 +1116,7 @@ func (w *SubscriptionWebhookWorker) processSubscriptionCanceled(ctx context.Cont
 			// new linked item having appeared mid-pass (genuinely incomplete work — falls through to
 			// the error path, so River retries the whole webhook). An error from the recheck itself
 			// falls through too, which is the fail-closed direction. Same shape as
-			// PastDueService.processGraceExpiry and DeletionService.ExecuteDeletion.
+			// the deleted PastDueService.processGraceExpiry and DeletionService.ExecuteDeletion.
 			if errors.Is(err, services.ErrCleanupAborted) {
 				if eligible, checkErr := stillEligible(ctx); checkErr == nil && !eligible {
 					w.releaseClaimOnFailure(ctx, userID, resourceID, repository.ActionSubscriptionCancelledCleanup, token, "cancellation cleanup no longer authorised mid Plaid disconnect (comp granted, or subscription no longer cancelled) — remaining items left connected")

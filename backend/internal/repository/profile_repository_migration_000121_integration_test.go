@@ -22,7 +22,7 @@ package repository
 // in this package, which already establishes this exact construction as this file's convention for
 // "no marker" fixtures). That is NOT, however, how such a row could arise via a REALISTIC
 // active/trial -> cancelled TRANSITION under TODAY's code: ExpireTrialIfNoOverride,
-// CancelIfPastDueOccurrenceWithRetention, and UpdateSubscriptionFromPaddle all now stamp
+// the deleted CancelIfPastDueOccurrenceWithRetention (#1652), and UpdateSubscriptionFromPaddle all now stamp
 // plaid_cleanup_pending_at atomically with the SAME statement that flips subscription_status into
 // the repair-eligible set (round 13), regardless of any override, live or lapsed — see each
 // method's doc comment in profile_repository.go. So a fresh signup run through any of today's real

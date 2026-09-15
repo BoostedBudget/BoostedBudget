@@ -11,7 +11,7 @@ package repository
 // the gate's read and this UPDATE used to leave six-month cancellation retention/deletion dates
 // stamped on a now-active, paying customer. The write is now its OWN guard — the authorising
 // condition the caller knows (`subscription_status = <expected>`) travels into the statement's
-// locked candidate CTE, exactly the shape CancelIfPastDueOccurrenceWithRetention documents as
+// locked candidate CTE, exactly the shape the deleted CancelIfPastDueOccurrenceWithRetention (#1652) documents as
 // "this method's WHERE clause is its OWN correctness mechanism".
 //
 // Both mechanisms are load-bearing and neither replaces the other: the Go gate short-circuits the
@@ -129,7 +129,7 @@ func TestRetentionClockGuard_Integration_StillCancelled_WritesClock(t *testing.T
 // candidate CTE's `FOR NO KEY UPDATE` makes the status comparison happen against the row version
 // that exists once the wait RESOLVES (Postgres follows the row's update chain for a locked SELECT),
 // not the pre-wait version this statement first scanned. This is the same property
-// CancelIfPastDueOccurrenceWithRetention's ROUND 23 restructure rests on — see
+// the deleted CancelIfPastDueOccurrenceWithRetention's ROUND 23 restructure rests on — see
 // profile_repository_finding2_lock_contention_integration_test.go's header for the empirical
 // write-up.
 func TestRetentionClockGuard_Integration_ActivationCommitsDuringLockWait_WritesNothing(t *testing.T) {

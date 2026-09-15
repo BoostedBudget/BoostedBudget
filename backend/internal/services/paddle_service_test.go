@@ -544,12 +544,12 @@ func TestCancelSubscription_RequiredParameters(t *testing.T) {
 }
 
 // TestCancelSubscription_AlreadyCancelled_MapsToErrPaddleAlreadyCancelled proves the H2
-// idempotency fix for the OTHER Paddle cancel path (PastDueService's grace-cancel step calls
-// CancelSubscription, not CancelSubscriptionImmediately). PastDuePaddleClient's own doc comment
+// idempotency fix for the OTHER Paddle cancel path (the deleted PastDueService's grace-cancel step called
+// CancelSubscription, not CancelSubscriptionImmediately). The deleted PastDuePaddleClient's own doc comment
 // already promised "the implementation must tolerate
 // paddle.ErrSubscriptionIsCanceledActionInvalid by mapping it to ErrPaddleAlreadyCancelled" —
 // this was a documented contract with no implementation behind it: CancelSubscription used to
-// wrap and return the raw Paddle error unchanged, which past_due_service.go's
+// wrap and return the raw Paddle error unchanged, which the deleted past_due_service.go's
 // `!errors.Is(err, ErrPaddleAlreadyCancelled)` check could never match, so a retried grace-cancel
 // against an already-cancelled subscription would hard-fail instead of tolerating it and
 // continuing the cancellation flow. Verified against
@@ -569,7 +569,7 @@ func TestCancelSubscription_AlreadyCancelled_MapsToErrPaddleAlreadyCancelled(t *
 	err := svc.CancelSubscription(ctx, subscriptionID)
 
 	require.Error(t, err, "already-cancelled must still be a distinguishable outcome for CancelSubscription (unlike CancelSubscriptionImmediately, which is full success)")
-	assert.ErrorIs(t, err, ErrPaddleAlreadyCancelled, "must map to the sentinel PastDuePaddleClient callers already check for")
+	assert.ErrorIs(t, err, ErrPaddleAlreadyCancelled, "must map to the sentinel the deleted PastDuePaddleClient callers checked for")
 	mockSDK.AssertExpectations(t)
 }
 

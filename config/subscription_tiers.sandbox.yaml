@@ -137,7 +137,3 @@ trial:
   duration_days: 60
   tier: "premium"
 
-# Past Due configuration (Issue #898)
-past_due:
-  plaid_disconnect_days: 14
-  grace_days: 21

@@ -21,7 +21,7 @@ package repository
 // user from becoming active again. The fix defers instead of ordering: this query is the ONLY
 // place a read-only user's Plaid items are ever disconnected, and it only selects a user once
 // gracePeriod has elapsed since plaid_cleanup_pending_at was set (atomically alongside the status
-// flip to read-only by ExpireTrialIfNoOverride/CancelIfPastDueOccurrenceWithRetention/
+// flip to read-only by ExpireTrialIfNoOverride/the deleted CancelIfPastDueOccurrenceWithRetention (#1652)/
 // UpdateSubscriptionFromPaddle — see profile_repository.go) — giving a genuine resubscriber a
 // window to become active again before Plaid is ever touched. pgxmock cannot validate the
 // EXISTS-subquery/WHERE predicates or the grace-window arithmetic here — a real DB is required.

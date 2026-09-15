@@ -388,7 +388,7 @@ func TestRemoveUserTierOverride_Integration_RearmsRetention_WhenReadOnly(t *test
 			// Issue #1413 round-10: plaid_cleanup_pending_at must (re-)start on comp removal ONLY
 			// for the narrower set the Plaid-disconnect repair pass actually targets
 			// (inactive/cancelled) — NOT past_due, which has its own dunning timeline
-			// (past_due_service.go) and must never be immediately Plaid-disconnected by this pass.
+			// (the deleted past_due_service.go, #1652) and must never be immediately Plaid-disconnected by this pass.
 			if status == "past_due" {
 				assert.Nil(t, snap.PlaidCleanupPendingAt,
 					"plaid_cleanup_pending_at must NOT be set when the reverted status is past_due — that has its own dunning timeline")

@@ -39,8 +39,8 @@ package repository
 // in exactly the same way (i.e. PASS, since the assertion IS "the bug reproduced").
 //
 // Issue #1442 deleted a fifth writer, CancelIfPastDueWithRetention (zero production callers), along
-// with its two dedicated probes here — CancelIfPastDueOccurrenceWithRetention's own probes below
-// already reconstruct the identical broken SQL shape for its occurrence-scoped successor.
+// with its two dedicated probes here. #1652 deleted CancelIfPastDueOccurrenceWithRetention and its
+// two probes, which reconstructed the identical broken SQL shape for its occurrence-scoped successor.
 
 import (
 	"context"
@@ -250,112 +250,6 @@ func TestFinding2Probe_UpdateTrialStatus_NaiveClockTimestamp_Backdates(t *testin
 
 	_, releaseFence, callErr := runWriterUnderLockContention(t, pool, user.ID, finding2PostBlockHoldDuration, func() error {
 		ct, err := pool.Exec(ctx, brokenQuery, "cancelled", trialStarted, trialEnds, true, user.ID)
-		if err == nil && ct.RowsAffected() == 0 {
-			return fmt.Errorf("broken probe UPDATE matched zero rows")
-		}
-		return err
-	})
-	require.NoError(t, callErr)
-
-	var marker *time.Time
-	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
-	assertMarkerWasBackdated(t, releaseFence, marker)
-}
-
-// TestFinding2Probe_CancelIfPastDueOccurrenceWithRetention_BareNOW_Backdates reconstructs
-// CancelIfPastDueOccurrenceWithRetention's pre-ROUND-23 bare form.
-func TestFinding2Probe_CancelIfPastDueOccurrenceWithRetention_BareNOW_Backdates(t *testing.T) {
-	skipUnlessFinding2ProbesEnabled(t)
-	pool := connectTestDB(t)
-	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
-	ctx := context.Background()
-
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	user := &domain.User{
-		ClerkUserID:        "clerk_f2p_pdo_bnow_" + suffix,
-		Email:              "f2p-pdo-bnow-" + suffix + "@example.com",
-		SubscriptionTier:   "premium",
-		SubscriptionStatus: "past_due",
-		PrimaryRegion:      "iad",
-		IsActive:           true,
-	}
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
-	require.NoError(t, tx.Commit(ctx))
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM users WHERE id = $1", user.ID) })
-
-	pastDueStarted := time.Now().Add(-30 * 24 * time.Hour).Truncate(time.Microsecond)
-	require.NoError(t, repo.SetPastDueStartedAt(ctx, user.ID, pastDueStarted))
-
-	started := time.Now()
-	expires := started.AddDate(0, 6, 0)
-	brokenQuery := `
-		UPDATE users
-		SET subscription_status = 'cancelled',
-		    retention_started_at = $2,
-		    retention_expires_at = $3,
-		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, NOW()),
-		    updated_at = NOW()
-		WHERE id = $1 AND subscription_status = 'past_due' AND past_due_started_at = $4
-		` + noActiveManualOverridePredicate
-
-	_, releaseFence, callErr := runWriterUnderLockContention(t, pool, user.ID, finding2PostBlockHoldDuration, func() error {
-		ct, err := pool.Exec(ctx, brokenQuery, user.ID, started, expires, pastDueStarted)
-		if err == nil && ct.RowsAffected() == 0 {
-			return fmt.Errorf("broken probe UPDATE matched zero rows")
-		}
-		return err
-	})
-	require.NoError(t, callErr)
-
-	var marker *time.Time
-	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
-	assertMarkerWasBackdated(t, releaseFence, marker)
-}
-
-// TestFinding2Probe_CancelIfPastDueOccurrenceWithRetention_NaiveClockTimestamp_Backdates is the
-// naive clock_timestamp()-without-CTE variant of the probe above.
-func TestFinding2Probe_CancelIfPastDueOccurrenceWithRetention_NaiveClockTimestamp_Backdates(t *testing.T) {
-	skipUnlessFinding2ProbesEnabled(t)
-	pool := connectTestDB(t)
-	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
-	ctx := context.Background()
-
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	user := &domain.User{
-		ClerkUserID:        "clerk_f2p_pdo_nct_" + suffix,
-		Email:              "f2p-pdo-nct-" + suffix + "@example.com",
-		SubscriptionTier:   "premium",
-		SubscriptionStatus: "past_due",
-		PrimaryRegion:      "iad",
-		IsActive:           true,
-	}
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
-	require.NoError(t, tx.Commit(ctx))
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM users WHERE id = $1", user.ID) })
-
-	pastDueStarted := time.Now().Add(-30 * 24 * time.Hour).Truncate(time.Microsecond)
-	require.NoError(t, repo.SetPastDueStartedAt(ctx, user.ID, pastDueStarted))
-
-	started := time.Now()
-	expires := started.AddDate(0, 6, 0)
-	brokenQuery := `
-		UPDATE users
-		SET subscription_status = 'cancelled',
-		    retention_started_at = $2,
-		    retention_expires_at = $3,
-		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, clock_timestamp()),
-		    updated_at = NOW()
-		WHERE id = $1 AND subscription_status = 'past_due' AND past_due_started_at = $4
-		` + noActiveManualOverridePredicate
-
-	_, releaseFence, callErr := runWriterUnderLockContention(t, pool, user.ID, finding2PostBlockHoldDuration, func() error {
-		ct, err := pool.Exec(ctx, brokenQuery, user.ID, started, expires, pastDueStarted)
 		if err == nil && ct.RowsAffected() == 0 {
 			return fmt.Errorf("broken probe UPDATE matched zero rows")
 		}
