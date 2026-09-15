@@ -20,7 +20,7 @@ func TestAdminUserRevenueCatReadsCannotAdvertiseLegacyOverrides(t *testing.T) {
 	tier := "household_5"
 	for _, detail := range []bool{false, true} {
 		repo := new(MockAdminUserRepository)
-		svc := NewAdminUserService(repo, nil, nil, 6, nil)
+		svc := NewAdminUserService(repo, nil, nil)
 		svc.SetRevenueCatSummary(adminUserRCSummary{})
 		item := domain.AdminUserListItem{ID: "target", SubscriptionTier: tier, SubscriptionStatus: "active", ManualTierOverride: &tier}
 		if detail {
@@ -44,7 +44,7 @@ func TestAdminUserRevenueCatReadsCannotAdvertiseLegacyOverrides(t *testing.T) {
 
 func TestAdminUserRevenueCatKeepsFilteredProjectionSeparateFromLiveEffectiveAccess(t *testing.T) {
 	repo := new(MockAdminUserRepository)
-	svc := NewAdminUserService(repo, nil, nil, 6, nil)
+	svc := NewAdminUserService(repo, nil, nil)
 	svc.SetRevenueCatSummary(adminUserRCSummary{result: RevenueCatSummary{AccessResolved: true, Own: &domain.RevenueCatAccess{Tier: "household_3", Status: "active"}, Effective: &domain.EffectiveEntitlement{Tier: "household_3", Status: "active"}}})
 	filters := domain.AdminUserFilters{Tier: "premium", SortBy: "subscription_tier", SortDir: "asc"}
 	repo.On("ListUsers", mock.Anything, filters, 20, 0).Return([]domain.AdminUserListItem{{ID: "target", SubscriptionTier: "premium", SubscriptionStatus: "trial"}}, 1, nil)

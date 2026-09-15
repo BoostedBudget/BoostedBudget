@@ -81,9 +81,8 @@ type AdminSubscriptionDetailOutput struct {
 		// HouseholdActiveMemberCount is the number of active members in the household owned by
 		// this user (0 if they own no household — see
 		// AdminUserService.GetOwnedHouseholdActiveMemberCount's doc comment). Issue #1452: lets
-		// the override modal warn BEFORE an admin applies a downgrade that would leave the
-		// household over the target tier's seat limit, rather than only after (the existing
-		// post-apply warning appended to UpdateUserTier's response message). No omitempty — 0 is
+		// the override modal warn BEFORE an admin requests a downgrade that would leave the
+		// household over the target tier's seat limit. No omitempty — 0 is
 		// a real, meaningful answer ("not an owner" or "an empty household"), not an absence.
 		HouseholdActiveMemberCount int `json:"household_active_member_count"`
 		// AsOf is the server instant EffectiveTier/EffectiveStatus above were computed from
@@ -127,46 +126,23 @@ type AdminSubscriptionDetailInput struct {
 //	input.AdminAuthenticatedInput.UserID  -> the ACTING ADMIN (resolved from JWT/context)
 //
 // PUT /api/v1/admin/users/{user_id}/subscription/tier
+//
+// There is no local-write fallback: a change is queued as an audited RevenueCat grant request
+// and only takes effect once RevenueCat confirms it. If the RevenueCat admin integration is
+// unavailable the handler errors rather than writing local tier columns directly.
 func (h *AdminHandler) UpdateUserTier(ctx context.Context, input *AdminSubscriptionTierInput) (*AdminSubscriptionTierOutput, error) {
-	if h.revenueCat != nil {
-		grant := &AdminRevenueCatGrantInput{AdminAuthenticatedInput: input.AdminAuthenticatedInput, TargetUserID: input.UserID}
-		grant.Body.Class = "comp"
-		grant.Body.Tier = input.Body.Tier
-		grant.Body.ExpiresAt = input.Body.ExpiresAt
-		grant.Body.Reason = input.Body.Reason
-		if _, err := h.RequestRevenueCatGrant(ctx, grant); err != nil {
-			return nil, err
-		}
-		out := &AdminSubscriptionTierOutput{}
-		out.Body.Stage = "pending"
-		out.Body.Message = "Complimentary access change queued. Access changes only after RevenueCat confirms it."
-		return out, nil
+	grant := &AdminRevenueCatGrantInput{AdminAuthenticatedInput: input.AdminAuthenticatedInput, TargetUserID: input.UserID}
+	grant.Body.Class = "comp"
+	grant.Body.Tier = input.Body.Tier
+	grant.Body.ExpiresAt = input.Body.ExpiresAt
+	grant.Body.Reason = input.Body.Reason
+	if _, err := h.RequestRevenueCatGrant(ctx, grant); err != nil {
+		return nil, err
 	}
-	result, err := h.adminUserService.UpdateUserTier(
-		ctx,
-		input.AdminAuthenticatedInput.UserID,
-		input.UserID,
-		input.Body.Tier,
-		input.Body.Reason,
-		input.Body.ExpiresAt,
-	)
-
-	if err != nil {
-		if errors.Is(err, services.ErrAdminUserNotFound) {
-			return nil, huma.Error404NotFound("user not found")
-		}
-		if errors.Is(err, services.ErrInvalidTierOverride) {
-			return nil, huma.Error400BadRequest(err.Error())
-		}
-		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to update user tier: %w", err))
-	}
-
-	resp := &AdminSubscriptionTierOutput{}
-	resp.Body.Message = "User subscription tier updated successfully"
-	if result.Warning != "" {
-		resp.Body.Message += " " + result.Warning
-	}
-	return resp, nil
+	out := &AdminSubscriptionTierOutput{}
+	out.Body.Stage = "pending"
+	out.Body.Message = "Complimentary access change queued. Access changes only after RevenueCat confirms it."
+	return out, nil
 }
 
 // RemoveUserTierOverride clears a user's manual subscription tier override, restoring their
@@ -177,46 +153,23 @@ func (h *AdminHandler) UpdateUserTier(ctx context.Context, input *AdminSubscript
 // an error, and 404 is already taken by "user not found".
 //
 // POST /api/v1/admin/users/{user_id}/subscription/tier/clear
+//
+// Like UpdateUserTier, there is no local-write fallback: the revocation is queued as an audited
+// RevenueCat comp grant with Revoke=true and only takes effect once RevenueCat confirms it.
 func (h *AdminHandler) RemoveUserTierOverride(ctx context.Context, input *AdminRemoveTierOverrideInput) (*AdminRemoveTierOverrideOutput, error) {
-	if h.revenueCat != nil {
-		grant := &AdminRevenueCatGrantInput{AdminAuthenticatedInput: input.AdminAuthenticatedInput, TargetUserID: input.UserID}
-		grant.Body.Class = "comp"
-		grant.Body.Tier = "premium" // revocation is class-scoped, not key-scoped
-		grant.Body.Revoke = true
-		grant.Body.Reason = input.Body.Reason
-		operation, err := h.RequestRevenueCatGrant(ctx, grant)
-		if err != nil {
-			return nil, err
-		}
-		out := &AdminRemoveTierOverrideOutput{}
-		out.Body.Stage = operation.Body.Stage
-		out.Body.Message = "Complimentary access removal queued. Paid access and trials are unchanged."
-		return out, nil
-	}
-	// input.UserID is the struct's own path-bound field, which SHADOWS the field promoted from
-	// AdminAuthenticatedInput -> AuthenticatedInput at the top level. So:
-	//   input.UserID                          -> the TARGET user (path param)
-	//   input.AdminAuthenticatedInput.UserID  -> the ACTING ADMIN (resolved from JWT/context)
-	result, err := h.adminUserService.RemoveUserTierOverride(
-		ctx,
-		input.AdminAuthenticatedInput.UserID,
-		input.UserID,
-		input.Body.Reason,
-	)
-
+	grant := &AdminRevenueCatGrantInput{AdminAuthenticatedInput: input.AdminAuthenticatedInput, TargetUserID: input.UserID}
+	grant.Body.Class = "comp"
+	grant.Body.Tier = "premium" // revocation is class-scoped, not key-scoped
+	grant.Body.Revoke = true
+	grant.Body.Reason = input.Body.Reason
+	operation, err := h.RequestRevenueCatGrant(ctx, grant)
 	if err != nil {
-		if errors.Is(err, services.ErrAdminUserNotFound) {
-			return nil, huma.Error404NotFound("user not found")
-		}
-		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to remove user tier override: %w", err))
+		return nil, err
 	}
-
-	resp := &AdminRemoveTierOverrideOutput{}
-	resp.Body.Message = "Manual tier override removed successfully"
-	resp.Body.Removed = result.Removed
-	resp.Body.RevertedTier = result.RevertedTier
-	resp.Body.RevertedStatus = result.RevertedStatus
-	return resp, nil
+	out := &AdminRemoveTierOverrideOutput{}
+	out.Body.Stage = operation.Body.Stage
+	out.Body.Message = "Complimentary access removal queued. Paid access and trials are unchanged."
+	return out, nil
 }
 
 // GetUserSubscription gets user subscription details including overrides.
