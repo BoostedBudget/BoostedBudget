@@ -573,11 +573,6 @@ func (m *MockUserRepository) GetUsersWithExpiringTrials(ctx context.Context, wit
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockUserRepository) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
-	args := m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial)
-	return args.Error(0)
-}
-
 func (m *MockUserRepository) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error {
 	args := m.Called(ctx, userID, paddleCustomerID)
 	return args.Error(0)
@@ -688,11 +683,6 @@ func (m *MockUserRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Co
 }
 
 func (m *MockUserRepository) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
-	args := m.Called(ctx, userID)
-	return args.Bool(0), args.Error(1)
-}
-
-func (m *MockUserRepository) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)
 }

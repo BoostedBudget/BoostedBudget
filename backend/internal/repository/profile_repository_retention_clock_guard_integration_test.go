@@ -176,60 +176,6 @@ func TestRetentionClockGuard_Integration_ActivationCommitsDuringLockWait_WritesN
 	assert.Nil(t, expires, "no retention_expires_at may survive an activation that committed during the write's lock wait")
 }
 
-// TestRetentionClockGuard_Integration_TrialPath_StillInactive_WritesClock covers the OTHER
-// production caller. The legacy trial-expiry flow's (deleted in #1652) authorising condition is not the cancellation
-// webhook's: it is the CAS immediately above its call (ExpireTrialIfNoOverride), which moves the
-// user 'trial' -> 'inactive', so what must still hold at write time is 'inactive'.
-func TestRetentionClockGuard_Integration_TrialPath_StillInactive_WritesClock(t *testing.T) {
-	pool := connectTestDB(t)
-	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
-	ctx := context.Background()
-
-	user := newRetentionGuardUser(t, pool, repo, "trialok", "trial")
-	flipped, err := repo.ExpireTrialIfNoOverride(ctx, user.ID)
-	require.NoError(t, err)
-	require.True(t, flipped, "the trial-expiry CAS must flip a plain trial user")
-
-	before := dbNow(t, pool)
-	require.NoError(t, repo.SetRetentionDates(ctx, user.ID, RetentionClockRequiresStatus(domain.SubscriptionStatusInactive), testRetentionMonths))
-	after := dbNow(t, pool)
-
-	started, expires := readRetentionClock(t, pool, user.ID)
-	require.NotNil(t, started, "the trial-expiry path must still arm retention_started_at")
-	require.NotNil(t, expires, "the trial-expiry path must still arm retention_expires_at")
-	assertBetweenFence(t, before, after, *started, "retention_started_at must be ~now on the trial path")
-	assertBetweenFence(t, dbAddMonths(t, pool, before, testRetentionMonths), dbAddMonths(t, pool, after, testRetentionMonths), *expires,
-		"retention_expires_at must be ~now+retentionMonths on the trial path")
-}
-
-// TestRetentionClockGuard_Integration_TrialPath_ResubscribedUnderTheGate_WritesNothing is the
-// trial path's own instance of the same race: the user resubscribes between the CAS that flipped
-// them to 'inactive' and this write (the checkout webhook writes 'active' and clears the clock).
-// Re-arming a six-month deletion clock on that paying customer is the same defect the cancellation
-// path had, which is why this caller needs a guard too — just a different one.
-func TestRetentionClockGuard_Integration_TrialPath_ResubscribedUnderTheGate_WritesNothing(t *testing.T) {
-	pool := connectTestDB(t)
-	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
-	ctx := context.Background()
-
-	user := newRetentionGuardUser(t, pool, repo, "trialrace", "trial")
-	flipped, err := repo.ExpireTrialIfNoOverride(ctx, user.ID)
-	require.NoError(t, err)
-	require.True(t, flipped)
-
-	_, err = pool.Exec(ctx, `UPDATE users SET subscription_status = 'active' WHERE id = $1`, user.ID)
-	require.NoError(t, err)
-
-	err = repo.SetRetentionDates(ctx, user.ID, RetentionClockRequiresStatus(domain.SubscriptionStatusInactive), testRetentionMonths)
-	require.ErrorIs(t, err, ErrRetentionClockPreconditionLost)
-
-	started, expires := readRetentionClock(t, pool, user.ID)
-	assert.Nil(t, started, "no retention clock may be re-armed on a user who resubscribed")
-	assert.Nil(t, expires, "no retention clock may be re-armed on a user who resubscribed")
-}
-
 // TestRetentionClockGuard_Integration_DistinguishesNotFoundFromPreconditionLost is the requirement
 // that the two zero-rows-affected outcomes never collapse into one: the caller must be able to tell
 // "someone else changed this user" (a legitimate stop) from "no such user" (a genuine failure),

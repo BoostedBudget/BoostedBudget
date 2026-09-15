@@ -225,11 +225,6 @@ func (m *MockProfileRepositoryForDeletion) GetUsersWithExpiringTrials(ctx contex
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepositoryForDeletion) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
-	args := m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial)
-	return args.Error(0)
-}
-
 func (m *MockProfileRepositoryForDeletion) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error {
 	args := m.Called(ctx, userID, paddleCustomerID)
 	return args.Error(0)
@@ -302,10 +297,6 @@ func (m *MockProfileRepositoryForDeletion) GetUsersNeedingPlaidDisconnectRepair(
 }
 
 func (m *MockProfileRepositoryForDeletion) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
-
-func (m *MockProfileRepositoryForDeletion) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
 

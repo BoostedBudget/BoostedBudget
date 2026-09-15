@@ -5,8 +5,8 @@ package repository
 // Issue #1413 Finding 2 (High, Codex review, PR #1443 follow-up) lock-contention regression tests.
 //
 // Four writers of plaid_cleanup_pending_at — UpdateSubscriptionFromPaddle, UpdateTrialStatus,
-// ExpireTrialIfNoOverride, and (until #1652 deleted it) CancelIfPastDueOccurrenceWithRetention —
-// were restructured from a bare
+// ExpireTrialIfNoOverride, and CancelIfPastDueOccurrenceWithRetention (the last three since
+// deleted by #1652) — were restructured from a bare
 // `UPDATE ... SET plaid_cleanup_pending_at = COALESCE(..., NOW())`
 // into a `WITH candidate AS (SELECT ... FOR NO KEY UPDATE) UPDATE ... FROM candidate` shape, mirroring
 // StampMissingPlaidCleanupMarkers's own ROUND 21/23 fix (profile_repository.go) — see that method's
@@ -26,11 +26,12 @@ package repository
 // row and this suite's serialized (-p 1, no t.Parallel) execution, blockerPID's lock has exactly one
 // possible contender at any time: the writer under test — so this barrier does identify that
 // specific backend, satisfying Issue #1413 Finding 1 (Medium, Codex review, PR #1443 second
-// follow-up round). Four tests cover the three remaining writers — UpdateSubscriptionFromPaddle has
+// follow-up round). Two tests cover the one remaining writer — UpdateSubscriptionFromPaddle has
 // two, covering its two independent query paths per Finding 3 (Low, same round) below. (Issue #1442
 // deleted a fifth writer, CancelIfPastDueWithRetention, and its dedicated test here — it had zero
-// production callers; #1652 deleted CancelIfPastDueOccurrenceWithRetention and its own test, which
-// covered the identical ROUND 23 restructure for its occurrence-scoped successor.)
+// production callers; #1652 deleted CancelIfPastDueOccurrenceWithRetention, UpdateTrialStatus and
+// ExpireTrialIfNoOverride, along with their own tests, which covered the identical ROUND 23
+// restructure.)
 //
 // Falsifiability (Issue #1413's own standing requirement, sharpened by this round's brief): each of
 // these tests was verified RED against BOTH of the following, by temporarily reverting the
@@ -213,77 +214,3 @@ func TestFinding2LockContention_UpdateSubscriptionFromPaddle_WithSubscriptionID_
 	assertMarkerReflectsPostWaitTime(t, startFence, releaseFence, finding2PostBlockHoldDuration, marker)
 }
 
-// TestFinding2LockContention_UpdateTrialStatus_ClockTimestampReflectsWallTimeAcrossLockWait covers
-// UpdateTrialStatus's ROUND 23 restructure. This writer is latent in production (its only caller
-// always passes "trial", which takes the ELSE/clearing branch, never this COALESCE branch — see the
-// method's own doc comment) — this test calls it directly with an eligible status ("cancelled") to
-// exercise the COALESCE branch regardless, proving the fix "for consistency" as the brief requires.
-func TestFinding2LockContention_UpdateTrialStatus_ClockTimestampReflectsWallTimeAcrossLockWait(t *testing.T) {
-	pool := connectTestDB(t)
-	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
-	ctx := context.Background()
-
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	user := &domain.User{
-		ClerkUserID:        "clerk_f2_trial_" + suffix,
-		Email:              "f2-trial-" + suffix + "@example.com",
-		SubscriptionTier:   "premium",
-		SubscriptionStatus: "active",
-		PrimaryRegion:      "iad",
-		IsActive:           true,
-	}
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
-	require.NoError(t, tx.Commit(ctx))
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM users WHERE id = $1", user.ID) })
-
-	trialStarted := time.Now()
-	trialEnds := trialStarted.Add(30 * 24 * time.Hour)
-	startFence, releaseFence, callErr := runWriterUnderLockContention(t, pool, user.ID, finding2PostBlockHoldDuration, func() error {
-		return repo.UpdateTrialStatus(ctx, user.ID, "cancelled", &trialStarted, &trialEnds, true)
-	})
-	require.NoError(t, callErr)
-
-	var marker *time.Time
-	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
-	assertMarkerReflectsPostWaitTime(t, startFence, releaseFence, finding2PostBlockHoldDuration, marker)
-}
-
-// TestFinding2LockContention_ExpireTrialIfNoOverride_ClockTimestampReflectsWallTimeAcrossLockWait
-// covers ExpireTrialIfNoOverride's ROUND 23 restructure — the third genuine CAS writer.
-func TestFinding2LockContention_ExpireTrialIfNoOverride_ClockTimestampReflectsWallTimeAcrossLockWait(t *testing.T) {
-	pool := connectTestDB(t)
-	enc := newTestFieldEncryptor(t)
-	repo := NewProfileRepository(pool, enc)
-	ctx := context.Background()
-
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	user := &domain.User{
-		ClerkUserID:        "clerk_f2_trialexp_" + suffix,
-		Email:              "f2-trialexp-" + suffix + "@example.com",
-		SubscriptionTier:   "premium",
-		SubscriptionStatus: "trial",
-		PrimaryRegion:      "iad",
-		IsActive:           true,
-	}
-	tx, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	require.NoError(t, repo.CreateUserTx(ctx, tx, user))
-	require.NoError(t, tx.Commit(ctx))
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM users WHERE id = $1", user.ID) })
-
-	var flipped bool
-	startFence, releaseFence, callErr := runWriterUnderLockContention(t, pool, user.ID, finding2PostBlockHoldDuration, func() error {
-		var innerErr error
-		flipped, innerErr = repo.ExpireTrialIfNoOverride(ctx, user.ID)
-		return innerErr
-	})
-	require.NoError(t, callErr)
-	assert.True(t, flipped, "the CAS must succeed once the concurrent lock releases")
-
-	var marker *time.Time
-	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
-	assertMarkerReflectsPostWaitTime(t, startFence, releaseFence, finding2PostBlockHoldDuration, marker)
-}
