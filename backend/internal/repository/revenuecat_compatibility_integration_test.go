@@ -66,4 +66,42 @@ func TestRevenueCatCompatibilityProjectionRetentionEpisodes(t *testing.T) {
 	read()
 	require.Equal(t, "inactive", status)
 	require.NotNil(t, start)
+
+	// --- Extension (todo 3): the two Save behaviours the service-layer drop-guard depends on ---
+	//
+	// (a) next_refresh_at is pinned to the earliest grant expiry, so RevenueCatRepairWorker wakes
+	// the moment a grant lapses rather than at the generic cadence.
+	soon := time.Now().Add(2 * time.Minute).UTC().Truncate(time.Millisecond)
+	state.Grants = []domain.RevenueCatGrant{{Key: "paid_premium", ExpiresAt: &soon}}
+	state.AccessUpdatedAt = time.Now()
+	save()
+	read()
+	require.Equal(t, "active", status)
+	require.Nil(t, marker)
+	var nextRefresh time.Time
+	require.NoError(t, pool.QueryRow(ctx, `SELECT next_refresh_at FROM revenuecat_customers WHERE user_id=$1`, id).Scan(&nextRefresh))
+	require.True(t, nextRefresh.Equal(soon), "next_refresh_at must be pinned to the grant's ExpiresAt: got %v want %v", nextRefresh, soon)
+
+	// (b) Failure path (ii) at the repository boundary: Save only projects a state that still
+	// resolves. A state whose ONLY grant has lapsed early-returns without touching the users
+	// projection, so the inactive projection is never persisted from here — which is exactly why
+	// the fix lives at the fresh-fetch boundary (applyRevenueCatGrants drops the expired grant
+	// before Save sees it), not inside ResolveAccess.
+	expiredEnd := time.Now().Add(-time.Second)
+	state.Grants = []domain.RevenueCatGrant{{Key: "paid_premium", ExpiresAt: &expiredEnd}}
+	state.AccessUpdatedAt = time.Now()
+	save()
+	read()
+	require.Equal(t, "active", status, "an expired-only state does not resolve, so Save deliberately does not project it")
+	require.Nil(t, marker)
+	require.Nil(t, start)
+
+	// The post-drop state the service now hands Save: same user, unusable grant removed.
+	state.Grants = nil
+	state.AccessUpdatedAt = time.Now()
+	save()
+	read()
+	require.Equal(t, "inactive", status)
+	require.NotNil(t, marker)
+	require.NotNil(t, start)
 }

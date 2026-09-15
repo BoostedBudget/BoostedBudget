@@ -137,7 +137,7 @@ func (s *RevenueCatService) refreshLocked(ctx context.Context, session repositor
 		grants, err = nil, nil
 	}
 	if err == nil {
-		err = applyRevenueCatGrants(state, grants, time.Now())
+		applyRevenueCatGrants(state, grants, time.Now())
 	}
 	if err != nil {
 		state.AccessError = revenueCatErrorCode(err)
@@ -174,13 +174,29 @@ func (s *RevenueCatService) refreshLocked(ctx context.Context, session repositor
 	}
 	return session.Save(ctx, *state)
 }
-func applyRevenueCatGrants(state *domain.RevenueCatState, grants []rc.Entitlement, now time.Time) error {
+// applyRevenueCatGrants projects a FRESH provider read, which is authoritative about what access
+// the customer has NOW. A grant that can no longer resolve — already lapsed, an unrecognised key,
+// or a duplicate — is DROPPED rather than failing the whole refresh. Failing here aborted the
+// refresh BEFORE Save, so the inactive projection (retention arming + plaid_cleanup_pending_at)
+// was never persisted, and a persistently-returned lapsed grant left the user indefinitely active.
+// An empty projection is meaningful: it resolves inactive.
+//
+// The cached-state rule is untouched — domain.RevenueCatState.ResolveAccess still refuses an expired
+// CACHED grant, which forces this refresh; this function only decides the projection that refresh
+// writes. Write decisions (applyOperation/revenueCatDesired) still reject unrecognised keys before
+// they can ever reach here.
+func applyRevenueCatGrants(state *domain.RevenueCatState, grants []rc.Entitlement, now time.Time) {
 	projected := make([]domain.RevenueCatGrant, 0, len(grants))
 	seen := map[string]bool{}
 	for _, g := range grants {
-		_, _, _, ok := domain.RevenueCatKey(g.LookupKey)
-		if !ok || seen[g.LookupKey] || (g.ExpiresAt != nil && !now.Before(*g.ExpiresAt)) {
-			return domain.ErrRevenueCatUnresolved
+		if _, _, _, ok := domain.RevenueCatKey(g.LookupKey); !ok {
+			continue
+		}
+		if g.ExpiresAt != nil && !now.Before(*g.ExpiresAt) {
+			continue
+		}
+		if seen[g.LookupKey] {
+			continue
 		}
 		seen[g.LookupKey] = true
 		projected = append(projected, domain.RevenueCatGrant{Key: g.LookupKey, ExpiresAt: g.ExpiresAt})
@@ -188,7 +204,6 @@ func applyRevenueCatGrants(state *domain.RevenueCatState, grants []rc.Entitlemen
 	state.Grants = projected
 	state.AccessUpdatedAt = now
 	state.AccessError = ""
-	return nil
 }
 func revenueCatErrorCode(err error) string {
 	var httpErr *rc.HTTPError
@@ -340,9 +355,7 @@ func (s *RevenueCatService) applyOperation(ctx context.Context, session reposito
 		}
 		return errors.New("grant change not yet confirmed")
 	}
-	if err = applyRevenueCatGrants(state, final, time.Now()); err != nil {
-		return err
-	}
+	applyRevenueCatGrants(state, final, time.Now())
 	return session.Save(ctx, *state)
 }
 func sameRevenueCatExpiry(a, b *time.Time) bool {
