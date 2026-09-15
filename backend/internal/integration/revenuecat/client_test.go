@@ -276,6 +276,19 @@ func TestFetchSubscriptionsPreservesProviderReportedIdentifier(t *testing.T) {
 	}
 }
 
+func TestFetchSubscriptionsReadsManagementURL(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"object":"list","items":[{"id":"sub_rc","product_id":"prod_rc","store_subscription_identifier":"sub_paddle","status":"active","store":"paddle","environment":"production","auto_renewal_status":"will_renew","current_period_ends_at":1800000000123,"ends_at":null,"management_url":"https://paddle.example/manage"}],"next_page":null}`)
+	})
+	subs, err := c.FetchSubscriptions(context.Background(), "user_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(subs) != 1 || subs[0].ManagementURL != "https://paddle.example/manage" {
+		t.Fatalf("wrong management url: %+v", subs)
+	}
+}
+
 func TestCustomerExistsConfirmsOnly404AsAbsent(t *testing.T) {
 	for _, tc := range []struct {
 		status          int

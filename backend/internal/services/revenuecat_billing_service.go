@@ -71,6 +71,23 @@ func (s *RevenueCatBillingService) Resolve(ctx context.Context, user *domain.Use
 	return nil, summary, ErrSubscriptionNotFound
 }
 
+// ManagementURL returns the RevenueCat-resolved self-service management URL for the
+// customer's single paid subscription. RevenueCat populates this for Paddle
+// subscriptions when the Paddle API key carries the "Customer portal sessions (Write)"
+// permission; an empty result is an unresolved authority, never a fabricated link.
+func (s *RevenueCatBillingService) ManagementURL(ctx context.Context, user *domain.User) (string, error) {
+	_, summary, err := s.Resolve(ctx, user)
+	if err != nil {
+		return "", err
+	}
+	for _, b := range summary.Billing {
+		if b.Store == "paddle" && b.Status != "expired" && b.ManagementURL != "" {
+			return b.ManagementURL, nil
+		}
+	}
+	return "", domain.ErrRevenueCatUnresolved
+}
+
 func (s *RevenueCatBillingService) subscriptionID(ctx context.Context, id string) (string, error) {
 	if strings.HasPrefix(id, "txn_") {
 		if s.transactions == nil {

@@ -166,7 +166,7 @@ func (s *RevenueCatService) refreshLocked(ctx context.Context, session repositor
 		state.PreserveBilling = false
 		state.Billing = make([]domain.RevenueCatBilling, 0, len(billing))
 		for _, b := range billing {
-			state.Billing = append(state.Billing, domain.RevenueCatBilling{ID: b.ID, ProductID: b.ProductID, StoreSubscriptionIdentifier: b.StoreSubscriptionIdentifier, Status: b.Status, Store: b.Store, Environment: b.Environment, AutoRenewalStatus: b.AutoRenewalStatus, CurrentPeriodEndsAt: b.CurrentPeriodEndsAt, EndsAt: b.EndsAt})
+			state.Billing = append(state.Billing, domain.RevenueCatBilling{ID: b.ID, ProductID: b.ProductID, StoreSubscriptionIdentifier: b.StoreSubscriptionIdentifier, Status: b.Status, Store: b.Store, Environment: b.Environment, AutoRenewalStatus: b.AutoRenewalStatus, CurrentPeriodEndsAt: b.CurrentPeriodEndsAt, EndsAt: b.EndsAt, ManagementURL: b.ManagementURL})
 		}
 		now := time.Now()
 		state.BillingUpdatedAt = &now

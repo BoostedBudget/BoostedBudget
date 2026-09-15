@@ -14,6 +14,7 @@ import (
 
 type revenueCatBillingReader interface {
 	Resolve(context.Context, *domain.User) (*paddle.Subscription, services.RevenueCatSummary, error)
+	ManagementURL(context.Context, *domain.User) (string, error)
 }
 
 func (h *PaddleCheckoutHandler) WithRevenueCatBilling(b revenueCatBillingReader) *PaddleCheckoutHandler {
@@ -34,14 +35,7 @@ func (h *PaddleCheckoutHandler) revenueCatBillingPortal(ctx context.Context, id 
 	if err != nil || user == nil {
 		return nil, huma.Error404NotFound("Account not found.")
 	}
-	sub, _, err := h.rcBilling.Resolve(ctx, user)
-	if err != nil {
-		return nil, revenueCatBillingError(err)
-	}
-	if sub.CustomerID == "" {
-		return nil, revenueCatBillingError(domain.ErrRevenueCatUnresolved)
-	}
-	url, err := h.paddleService.GetBillingPortalURL(ctx, sub.CustomerID)
+	url, err := h.rcBilling.ManagementURL(ctx, user)
 	if err != nil {
 		return nil, revenueCatBillingError(err)
 	}
