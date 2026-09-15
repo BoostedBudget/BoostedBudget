@@ -1957,35 +1957,6 @@ components:
       required:
         - message
       type: object
-    CancelSubscriptionOutputBody:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/CancelSubscriptionOutputBody.json
-          format: uri
-          readOnly: true
-          type: string
-        ends_at:
-          description: Date subscription ends
-          examples:
-            - "2026-03-01"
-          type: string
-        message:
-          description: Cancellation confirmation message
-          examples:
-            - Subscription will be cancelled at end of billing period
-          type: string
-        subscription_id:
-          description: Cancelled Paddle subscription ID
-          examples:
-            - sub_01h1234567890
-          type: string
-      required:
-        - subscription_id
-        - message
-      type: object
     CancelTransferSuggestionInputBody:
       additionalProperties: false
       properties:
@@ -4358,26 +4329,6 @@ components:
       required:
         - count
       type: object
-    GrantTrialResponseBody:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/GrantTrialResponseBody.json
-          format: uri
-          readOnly: true
-          type: string
-        message:
-          description: Description of the result
-          type: string
-        success:
-          description: Whether the trial was granted successfully
-          type: boolean
-      required:
-        - success
-        - message
-      type: object
     HoldingSnapshotHistory:
       additionalProperties: false
       properties:
@@ -6088,70 +6039,6 @@ components:
         - name
         - conditions
       type: object
-    PreviewUpdateInputBody:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/PreviewUpdateInputBody.json
-          format: uri
-          readOnly: true
-          type: string
-        billing_interval:
-          description: Billing interval for new tier (month or year)
-          enum:
-            - month
-            - year
-          examples:
-            - month
-          type: string
-        new_tier:
-          description: New subscription tier to preview
-          examples:
-            - household_2
-          minLength: 1
-          type: string
-      required:
-        - new_tier
-        - billing_interval
-      type: object
-    PreviewUpdateOutputBody:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/PreviewUpdateOutputBody.json
-          format: uri
-          readOnly: true
-          type: string
-        currency:
-          description: Currency code (USD, EUR, etc.)
-          examples:
-            - USD
-          type: string
-        next_charge_amount:
-          description: Amount of next regular charge
-          examples:
-            - "12.99"
-          type: string
-        next_charge_date:
-          description: Date of next regular charge
-          examples:
-            - "2026-02-26"
-          type: string
-        proration_amount:
-          description: Amount to charge (positive) or credit (negative) immediately
-          examples:
-            - "5.00"
-          type: string
-      required:
-        - proration_amount
-        - currency
-        - next_charge_date
-        - next_charge_amount
-      type: object
     Primary:
       additionalProperties: false
       properties:
@@ -6765,6 +6652,8 @@ components:
           type: string
         id:
           type: string
+        management_url:
+          type: string
         product_id:
           type: string
         status:
@@ -6783,6 +6672,7 @@ components:
         - auto_renewal_status
         - current_period_ends_at
         - ends_at
+        - management_url
       type: object
     RevenueCatCheckoutIntent:
       additionalProperties: false
@@ -9106,81 +8996,6 @@ components:
           format: double
           type: number
       type: object
-    UpdateSubscriptionInputBody:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/UpdateSubscriptionInputBody.json
-          format: uri
-          readOnly: true
-          type: string
-        billing_interval:
-          description: Billing interval (month or year)
-          enum:
-            - month
-            - year
-          examples:
-            - month
-          type: string
-        current_billing_interval:
-          description: Current billing interval, used server-side to detect and reject no-op updates
-          enum:
-            - month
-            - year
-          examples:
-            - month
-          type: string
-        new_tier:
-          description: New subscription tier
-          examples:
-            - household_2
-          minLength: 1
-          type: string
-        proration_billing_mode:
-          description: Proration mode (prorated_immediately, full_immediately, full_next_billing_period)
-          enum:
-            - prorated_immediately
-            - full_immediately
-            - full_next_billing_period
-          examples:
-            - prorated_immediately
-          type: string
-      required:
-        - new_tier
-        - billing_interval
-      type: object
-    UpdateSubscriptionOutputBody:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/UpdateSubscriptionOutputBody.json
-          format: uri
-          readOnly: true
-          type: string
-        message:
-          description: Human-readable update message
-          examples:
-            - Subscription upgraded successfully
-          type: string
-        status:
-          description: Subscription status
-          examples:
-            - active
-          type: string
-        subscription_id:
-          description: Paddle subscription ID
-          examples:
-            - sub_01h1234567890
-          type: string
-      required:
-        - subscription_id
-        - status
-        - message
-      type: object
     UpdateTransactionCategoryBody:
       additionalProperties: false
       properties:
@@ -10712,28 +10527,6 @@ paths:
       summary: Retry webhook processing or refresh a completed receipt's customer
       tags:
         - Admin Subscriptions
-  /api/v1/admin/subscription/grant-trial:
-    post:
-      description: Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but deliberately available in every environment — any admin can already change subscriptions through the other admin endpoints. Returns success if the user already has or had a trial.
-      operationId: grantTrial
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GrantTrialResponseBody"
-          description: OK
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ErrorModel"
-          description: Error
-      security:
-        - clerk: []
-      summary: Grant trial subscription (admin)
-      tags:
-        - Admin
   /api/v1/admin/system/health:
     get:
       description: Returns comprehensive system health metrics including database, job queues, and sync status. Requires admin role.
@@ -16256,29 +16049,6 @@ paths:
       tags:
         - Subscription
         - Paddle
-  /api/v1/subscription/cancel:
-    post:
-      description: Cancels subscription at end of current billing period. User retains access until period ends.
-      operationId: cancel-paddle-subscription
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CancelSubscriptionOutputBody"
-          description: OK
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ErrorModel"
-          description: Error
-      security:
-        - clerk: []
-      summary: Cancel subscription
-      tags:
-        - Subscription
-        - Paddle
   /api/v1/subscription/checkout:
     post:
       description: Creates a Paddle checkout session for purchasing a subscription. Returns checkout URL to open in Paddle.js Overlay or as redirect.
@@ -16380,35 +16150,6 @@ paths:
       tags:
         - Subscription
         - Paddle
-  /api/v1/subscription/preview-update:
-    post:
-      description: Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details.
-      operationId: preview-paddle-subscription-update
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PreviewUpdateInputBody"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PreviewUpdateOutputBody"
-          description: OK
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ErrorModel"
-          description: Error
-      security:
-        - clerk: []
-      summary: Preview subscription tier change
-      tags:
-        - Subscription
-        - Paddle
   /api/v1/subscription/tiers:
     get:
       description: Returns all available subscription tiers with their limits, features, and pricing. This is a public endpoint for displaying pricing information.
@@ -16433,35 +16174,6 @@ paths:
       summary: Get subscription tiers
       tags:
         - Subscription
-  /api/v1/subscription/update:
-    post:
-      description: Updates subscription to a different tier or billing interval. Handles proration automatically.
-      operationId: update-paddle-subscription
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateSubscriptionInputBody"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/UpdateSubscriptionOutputBody"
-          description: OK
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ErrorModel"
-          description: Error
-      security:
-        - clerk: []
-      summary: Update subscription tier
-      tags:
-        - Subscription
-        - Paddle
   /api/v1/tags:
     get:
       description: Retrieves all tags for the authenticated user.

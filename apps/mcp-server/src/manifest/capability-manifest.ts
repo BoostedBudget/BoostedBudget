@@ -626,10 +626,11 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excludedWrite('beginRevenueCatCheckout', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
   // Release closes a checkout intent; it does not destroy its retained history.
   excludedWrite('releaseRevenueCatCheckout', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
-  excludedWrite('cancel-paddle-subscription', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
+  // #1652 deleted the three Paddle self-service routes (preview-update / update / cancel) in
+  // favour of the RevenueCat-resolved management URL; their manifest entries went with them.
+  // `create-paddle-checkout` survives — HandleCreateCheckoutSession still exists and already
+  // returns 409 under RevenueCat.
   excludedWrite('create-paddle-checkout', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
-  excludedWrite('preview-paddle-subscription-update', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
-  excludedWrite('update-paddle-subscription', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
 
   // ── Merchants (Issue #957: merchant name handling + MCP exposure) ────────
   // Reads: always available for browsing and duplicate detection.

@@ -1012,18 +1012,6 @@
       "excluded": true
     },
     {
-      "operationId": "grantTrial",
-      "method": "POST",
-      "path": "/api/v1/admin/subscription/grant-trial",
-      "summary": "Grant trial subscription (admin)",
-      "tags": [
-        "Admin"
-      ],
-      "manifestClass": "write",
-      "excluded": true,
-      "description": "Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but deliberately available in every environment — any admin can already change subscriptions through the other admin endpoints. Returns success if the user already has or had a trial."
-    },
-    {
       "operationId": "getSystemHealth",
       "method": "GET",
       "path": "/api/v1/admin/system/health",
@@ -14996,19 +14984,6 @@
       ]
     },
     {
-      "operationId": "cancel-paddle-subscription",
-      "method": "POST",
-      "path": "/api/v1/subscription/cancel",
-      "summary": "Cancel subscription",
-      "tags": [
-        "Subscription",
-        "Paddle"
-      ],
-      "manifestClass": "write",
-      "excluded": true,
-      "description": "Cancels subscription at end of current billing period. User retains access until period ends."
-    },
-    {
       "operationId": "create-paddle-checkout",
       "method": "POST",
       "path": "/api/v1/subscription/checkout",
@@ -15164,37 +15139,6 @@
       ]
     },
     {
-      "operationId": "preview-paddle-subscription-update",
-      "method": "POST",
-      "path": "/api/v1/subscription/preview-update",
-      "summary": "Preview subscription tier change",
-      "tags": [
-        "Subscription",
-        "Paddle"
-      ],
-      "manifestClass": "write",
-      "excluded": true,
-      "description": "Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details.",
-      "requestBody": [
-        {
-          "name": "billing_interval",
-          "type": "string",
-          "required": true,
-          "enum": [
-            "month",
-            "year"
-          ],
-          "description": "Billing interval for new tier (month or year)"
-        },
-        {
-          "name": "new_tier",
-          "type": "string",
-          "required": true,
-          "description": "New subscription tier to preview"
-        }
-      ]
-    },
-    {
       "operationId": "getSubscriptionTiers",
       "method": "GET",
       "path": "/api/v1/subscription/tiers",
@@ -15220,56 +15164,6 @@
           "type": "object",
           "required": true,
           "description": "Map of tier names to tier configurations"
-        }
-      ]
-    },
-    {
-      "operationId": "update-paddle-subscription",
-      "method": "POST",
-      "path": "/api/v1/subscription/update",
-      "summary": "Update subscription tier",
-      "tags": [
-        "Subscription",
-        "Paddle"
-      ],
-      "manifestClass": "write",
-      "excluded": true,
-      "description": "Updates subscription to a different tier or billing interval. Handles proration automatically.",
-      "requestBody": [
-        {
-          "name": "billing_interval",
-          "type": "string",
-          "required": true,
-          "enum": [
-            "month",
-            "year"
-          ],
-          "description": "Billing interval (month or year)"
-        },
-        {
-          "name": "current_billing_interval",
-          "type": "string",
-          "enum": [
-            "month",
-            "year"
-          ],
-          "description": "Current billing interval, used server-side to detect and reject no-op updates"
-        },
-        {
-          "name": "new_tier",
-          "type": "string",
-          "required": true,
-          "description": "New subscription tier"
-        },
-        {
-          "name": "proration_billing_mode",
-          "type": "string",
-          "enum": [
-            "prorated_immediately",
-            "full_immediately",
-            "full_next_billing_period"
-          ],
-          "description": "Proration mode (prorated_immediately, full_immediately, full_next_billing_period)"
         }
       ]
     },
