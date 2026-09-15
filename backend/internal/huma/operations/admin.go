@@ -20,12 +20,6 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 )
 
-// TrialGranter defines the interface for granting trials to users.
-// Issue #698: Used by admin endpoint to grant trial during E2E tests.
-type TrialGranter interface {
-	GrantTrial(ctx context.Context, userID string) error
-}
-
 // AdminHandler handles admin-only endpoints for testing and troubleshooting.
 // Routes are protected by AdminMiddleware, which authorizes by identity and admin role in
 // every environment (Issue #1499 removed its environment check).
@@ -33,7 +27,6 @@ type AdminHandler struct {
 	revenueCat            *RevenueCatAdminDeps
 	plaidService          services.PlaidService
 	linkedItemRepo        repository.LinkedItemRepository
-	trialService          TrialGranter
 	adminService          services.AdminService
 	adminUserService      services.AdminUserService
 	systemHealthService   services.SystemHealthService
@@ -62,7 +55,6 @@ type AdminHandler struct {
 func NewAdminHandler(
 	plaidService services.PlaidService,
 	linkedItemRepo repository.LinkedItemRepository,
-	trialService TrialGranter,
 	adminService services.AdminService,
 	adminUserService services.AdminUserService,
 	systemHealthService services.SystemHealthService,
@@ -72,7 +64,6 @@ func NewAdminHandler(
 	return &AdminHandler{
 		plaidService:        plaidService,
 		linkedItemRepo:      linkedItemRepo,
-		trialService:        trialService,
 		adminService:        adminService,
 		adminUserService:    adminUserService,
 		systemHealthService: systemHealthService,
@@ -145,23 +136,6 @@ type FireWebhookResponseBody struct {
 	RequestID    string `json:"request_id" doc:"The request ID from Plaid"`
 	ItemID       string `json:"item_id" doc:"The Plaid item ID"`
 	WebhookCode  string `json:"webhook_code" doc:"The webhook code that was fired"`
-}
-
-// GrantTrialInput represents the input for granting trial to current user.
-// Issue #698: Used by E2E tests to ensure test user has active subscription.
-type GrantTrialInput struct {
-	inputs.AdminAuthenticatedInput
-}
-
-// GrantTrialOutput represents the response for trial grant.
-type GrantTrialOutput struct {
-	Body GrantTrialResponseBody
-}
-
-// GrantTrialResponseBody defines the response body for trial grant.
-type GrantTrialResponseBody struct {
-	Success bool   `json:"success" doc:"Whether the trial was granted successfully"`
-	Message string `json:"message" doc:"Description of the result"`
 }
 
 // CheckRoleInput represents the input for checking admin role.
@@ -310,56 +284,6 @@ func (h *AdminHandler) FireWebhook(ctx context.Context, input *FireWebhookInput)
 			RequestID:    response.RequestId,
 			ItemID:       input.Body.ItemID,
 			WebhookCode:  input.Body.WebhookCode,
-		},
-	}, nil
-}
-
-// GrantTrial grants a 60-day trial subscription to the authenticated user.
-// Issue #698: Used by E2E tests to ensure test user has active subscription.
-//
-// POST /api/v1/admin/subscription/grant-trial
-//
-// Issue #1498 — DELIBERATE DECISION, do not "fix" this by adding an environment gate.
-// Issue #1499 removed the admin middleware's environment gate, so this endpoint is now
-// reachable in production. That was reviewed and accepted: granting a trial is a
-// legitimate admin action, and any real admin can already change a user's subscription
-// through the other admin subscription endpoints (see AdminUserService's tier-override
-// and subscription-management paths). Gating this one endpoint would buy no security
-// while breaking the E2E flow. The OpenAPI summary used to say "QA only"; it now says
-// "(admin)" and states the every-environment availability, so the contract matches reality.
-// Recorded in docs/decisions/2026-08-06-admin-authorization-posture.md.
-//
-// Error Responses:
-//   - 401: Not authenticated
-//   - 403: Not an admin (checked by AdminMiddleware)
-//   - 409: User has already had a trial
-//   - 500: Failed to grant trial
-//   - 503: Trial service not configured
-func (h *AdminHandler) GrantTrial(ctx context.Context, input *GrantTrialInput) (*GrantTrialOutput, error) {
-	// Check if trial service is configured
-	if h.trialService == nil {
-		return nil, huma.Error503ServiceUnavailable("Trial service not configured")
-	}
-
-	// Grant trial to the authenticated user
-	err := h.trialService.GrantTrial(ctx, input.UserID)
-	if err != nil {
-		// Check if user already had a trial (not an error for E2E purposes)
-		if strings.Contains(err.Error(), "has already had a trial") {
-			return &GrantTrialOutput{
-				Body: GrantTrialResponseBody{
-					Success: true,
-					Message: "User already has or had a trial",
-				},
-			}, nil
-		}
-		return nil, humaerrors.LoggingMapError(ctx, fmt.Errorf("failed to grant trial: %w", err))
-	}
-
-	return &GrantTrialOutput{
-		Body: GrantTrialResponseBody{
-			Success: true,
-			Message: "Trial granted successfully",
 		},
 	}, nil
 }
@@ -538,23 +462,6 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 		Tags:     []string{"Admin"},
 		Security: []map[string][]string{{"clerk": {}}},
 	}, handler.FireWebhook)
-
-	// POST /api/v1/admin/subscription/grant-trial - Grant trial to current user
-	// Issue #698: Used by E2E tests to ensure test user has active subscription.
-	// Issue #1498: the summary used to say "QA only". This endpoint is DELIBERATELY reachable in
-	// production — see the decision note on AdminHandler.GrantTrial — so that wording misstated
-	// the security boundary in the generated contract. Do not re-add it.
-	huma.Register(api, huma.Operation{
-		OperationID: "grantTrial",
-		Method:      http.MethodPost,
-		Path:        "/api/v1/admin/subscription/grant-trial",
-		Summary:     "Grant trial subscription (admin)",
-		Description: "Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but " +
-			"deliberately available in every environment — any admin can already change subscriptions " +
-			"through the other admin endpoints. Returns success if the user already has or had a trial.",
-		Tags:     []string{"Admin"},
-		Security: []map[string][]string{{"clerk": {}}},
-	}, handler.GrantTrial)
 
 	// GET /api/v1/admin/check-role - Check if current user is admin
 	// Issue #638: Available to all authenticated users (not just admins).

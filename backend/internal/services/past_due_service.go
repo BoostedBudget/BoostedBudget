@@ -227,7 +227,7 @@ func (s *PastDueService) SetAnalytics(a phclient.Analytics) {
 }
 
 // SetHouseholdChecker wires the household-coverage exemption for past_due dunning.
-// #1413 — mirrors TrialService.SetHouseholdChecker. Nil-safe: an unset checker preserves
+// #1413 — mirrors the deleted TrialService's SetHouseholdChecker convention. Nil-safe: an unset checker preserves
 // pre-#1413 behavior.
 func (s *PastDueService) SetHouseholdChecker(c householdCoverageCheckerForPastDue) {
 	s.householdChecker = c
@@ -266,15 +266,15 @@ func (s *PastDueService) ProcessPastDueUser(ctx context.Context, user domain.Use
 	// is reachable unless gated here. The domain.User passed in is populated via
 	// userSelectQuery, which already includes the override columns, so this check is free —
 	// no DB round-trip. Checked before the household-coverage lookup below for the same
-	// pure-and-cheap-first reason as TrialService.ExpireTrial.
+	// pure-and-cheap-first reason as the legacy trial-expiry flow (deleted in #1652).
 	if user.HasActiveManualOverride() {
 		s.logger.Info("skipping past_due processing for actively comped user", "user_id", user.ID)
 		return nil
 	}
 
-	// #1413: closes an asymmetry with TrialService — exempt actively covered household
+	// #1413: closes an asymmetry with the legacy trial flow (deleted in #1652) — exempt actively covered household
 	// members. Fail closed on an uncertain check (skip processing this run) but PROPAGATE the
-	// error rather than swallowing it — see trial_service.go:197-204 for why swallowing would
+	// error rather than swallowing it — see the legacy trial service (deleted in #1652) for why swallowing would
 	// hide an operational failure. The job retries, so this self-heals.
 	if s.householdChecker != nil {
 		covered, err := s.householdChecker.IsCoveredByHousehold(ctx, user.ID)

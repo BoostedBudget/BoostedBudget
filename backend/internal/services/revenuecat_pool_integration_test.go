@@ -194,7 +194,7 @@ func newRCConcurrencyFixture(t *testing.T, url string) rcConcurrencyFixture {
 }
 
 // TestConcurrentRefreshes_ArmOneRetentionEpisode is the todo-3 work-claim replacement proof. The
-// old ActionTrialExpiration claim guarded the ExpireTrial flow; its only external side effect (the
+// old trial-expiration work claim guarded the (now-deleted) ExpireTrial flow; its only external side effect (the
 // Plaid disconnect) is now driven by RetentionCleanupCheckWorker under its OWN claim, so the
 // remaining question is whether the retention ARMING itself is single-writer.
 //

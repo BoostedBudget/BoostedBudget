@@ -41,7 +41,7 @@ var (
 //
 // It exists because SetRetentionDates's two production callers do NOT share one authorising
 // condition — the cancellation webhook may arm the clock only while the user is still 'cancelled',
-// while TrialService.ExpireTrial may arm it only for the user its own CAS
+// while the legacy trial-expiry flow (deleted in #1652) armed it only for the user its own CAS
 // (ExpireTrialIfNoOverride) just moved to 'inactive'. Hardcoding either condition inside the
 // repository would be wrong for the other caller, so the condition is passed by the caller that
 // knows it — the same way CancelIfPastDueOccurrenceWithRetention takes its expected past_due
@@ -513,7 +513,7 @@ type ProfileRepository interface {
 	// role in this query at all now — do not reintroduce it here.
 	//
 	// Issue #1413 round-7 (Codex review): this is the ratified DEFER design, not an ordering fix.
-	// TrialService.ExpireTrial no longer calls Plaid at all — no ordering of a status flip and an
+	// The legacy trial-expiry flow (deleted in #1652) never called Plaid — no ordering of a status flip and an
 	// irreversible Plaid call can be safe, because /subscription/checkout is deliberately
 	// whitelisted for read-only users, so becoming read-only never stops a user from becoming
 	// active again. Disconnecting Plaid is deferred entirely to this repair pass
@@ -2759,7 +2759,7 @@ func (r *profileRepository) DeletionStillAuthorised(ctx context.Context, userID 
 // Issue #679: Trial service and auto-grant logic
 //
 // Issue #1413 round-11 Fix 2 (High): also clears plaid_cleanup_pending_at when status makes the
-// user Plaid-eligible — this method's only production caller (TrialService.GrantTrial) always
+// user Plaid-eligible — this method's only production caller (the legacy trial-grant flow, deleted in #1652) always
 // passes SubscriptionStatusTrial, which is never repair-eligible, so this always clears in
 // practice. Deriving the CASE from the `status` parameter (mirroring
 // UpdateSubscriptionFromPaddle's own status-driven clearing), rather than hardcoding NULL, keeps
@@ -2789,7 +2789,7 @@ func (r *profileRepository) DeletionStillAuthorised(ctx context.Context, userID 
 //
 // ROUND 23 (Issue #1413 Finding 2, High, Codex review, PR #1443 follow-up) is that follow-up.
 // Fixed "for consistency," per that finding: this method is latent in production (its only caller,
-// TrialService.GrantTrial, always passes SubscriptionStatusTrial, which takes the ELSE/clearing
+// the legacy trial-grant flow (deleted in #1652), always passed SubscriptionStatusTrial, which takes the ELSE/clearing
 // branch below, never this COALESCE branch — see this method's own round-11 note above), but a
 // future caller could reach it, and leaving one documented-but-unfixed sibling next to four other
 // now-fixed ones is exactly the kind of trap this branch has already had to clean up once. Same

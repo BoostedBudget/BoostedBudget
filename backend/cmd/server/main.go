@@ -2546,7 +2546,7 @@ func main() {
 		// and the orphaned-Plaid-Item view — none of which is Plaid-specific. plaidService and
 		// linkedItemRepo feed exactly one handler (FireWebhook, a QA webhook-firing helper),
 		// which returns 503 when either is nil rather than dereferencing it.
-		humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, nil, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
+		humaAdminHandler := operations.NewAdminHandler(plaidService, linkedItemRepo, adminService, adminUserService, systemHealthService, subscriptionService, cfg).
 			WithRevenueCat(operations.RevenueCatAdminDeps{Grants: revenueCatService, Profiles: profileRepo, States: revenueCatRepo, Summary: revenueCatSummaryService, Admin: repository.NewRevenueCatAdminRepository(db)}).
 			WithPaddleTransactionRepo(paddleTransactionRepo).
 			WithPaddleWebhookRepo(paddleWebhookRepo).

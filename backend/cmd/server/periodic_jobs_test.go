@@ -31,7 +31,6 @@ func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 	return periodicJobsDeps{
 		scheduledDeletionCheckWorker:        jobs.NewScheduledDeletionCheckWorker(jobs.ScheduledDeletionCheckWorkerDeps{}),
 		itemCleanupCheckWorker:              jobs.NewItemCleanupCheckWorker(jobs.ItemCleanupCheckWorkerDeps{}),
-		trialExpirationCheckWorker:          jobs.NewTrialExpirationCheckWorker(jobs.TrialExpirationCheckWorkerDeps{}),
 		pastDueCheckWorker:                  jobs.NewPastDueCheckWorker(jobs.PastDueCheckWorkerDeps{}),
 		paddleReconciliationWorker:          jobs.NewPaddleReconciliationWorker(jobs.PaddleReconciliationWorkerDeps{}),
 		retentionCleanupCheckWorker:         jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{}),
@@ -53,20 +52,25 @@ func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 }
 
 // TestBuildPeriodicJobSpecs_Count proves every nil-guarded worker (plus the always-on jobs)
-// produces exactly one spec when non-nil — 16 nil-guarded workers + 2 unconditional jobs
-// (idempotency cleanup, and Issue #1497's orphan-token purge) = 18.
+// produces exactly one spec when non-nil — 15 nil-guarded workers + 2 unconditional jobs
+// (idempotency cleanup, and Issue #1497's orphan-token purge) = 17.
 //
 // ⚠ THIS COUNT MOVED TWICE INDEPENDENTLY AND THE TWO INCREMENTS ARE BOTH REAL. #1625 Task 18 fix
 // round 1 added the rule quarantine census (nil-guarded), 16 -> 17 on staging; #1626 Phase 3
 // Defect 3 added the balance snapshot dispatch (nil-guarded), 16 -> 17 on this branch. Merging the
-// two branches means BOTH specs exist, so the count is 18 — a resolution that kept only one side's
+// two branches means BOTH specs exist, so the count was 18 — a resolution that kept only one side's
 // number would have left an unwired worker, and `periodicJobsDeps` fields are nil-safe by design
 // so nothing else in the suite would have said so.
+//
+// #1652 removed the trial expiration check spec (its worker and TrialService are deleted; the
+// Args/Kind survive only for the drain), 18 -> 17. Todos 6/7 remove the past-due, paddle
+// reconciliation and manual-tier-override specs, taking this to 14; each todo decrements by the
+// specs IT removes so the tree stays green between commits.
 func TestBuildPeriodicJobSpecs_Count(t *testing.T) {
 	specs := buildPeriodicJobSpecs(allNonNilPeriodicJobsDeps())
 
-	if len(specs) != 18 {
-		t.Fatalf("expected 18 periodic job specs when every worker is non-nil, got %d", len(specs))
+	if len(specs) != 17 {
+		t.Fatalf("expected 17 periodic job specs when every worker is non-nil, got %d", len(specs))
 	}
 }
 
@@ -105,8 +109,8 @@ func TestBuildPeriodicJobSpecs_NilWorkerOmitsItsSpec(t *testing.T) {
 
 	specs := buildPeriodicJobSpecs(deps)
 
-	if len(specs) != 17 {
-		t.Fatalf("expected 17 specs with itemCleanupCheckWorker nil, got %d", len(specs))
+	if len(specs) != 16 {
+		t.Fatalf("expected 16 specs with itemCleanupCheckWorker nil, got %d", len(specs))
 	}
 	for _, s := range specs {
 		if s.name == "item cleanup check" {

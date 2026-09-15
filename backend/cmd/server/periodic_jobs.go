@@ -27,7 +27,6 @@ type periodicJobsDeps struct {
 	revenueCatRepairWorker              *jobs.RevenueCatRepairWorker
 	scheduledDeletionCheckWorker        *jobs.ScheduledDeletionCheckWorker
 	itemCleanupCheckWorker              *jobs.ItemCleanupCheckWorker
-	trialExpirationCheckWorker          *jobs.TrialExpirationCheckWorker
 	pastDueCheckWorker                  *jobs.PastDueCheckWorker
 	paddleReconciliationWorker          *jobs.PaddleReconciliationWorker
 	retentionCleanupCheckWorker         *jobs.RetentionCleanupCheckWorker
@@ -139,19 +138,6 @@ func buildPeriodicJobSpecs(deps periodicJobsDeps) []periodicJobSpec {
 				return jobs.ItemCleanupCheckArgs{TriggerSource: "periodic"}, jobs.ItemCleanupCheckInsertOpts()
 			},
 			opts: jobs.ItemCleanupCheckPeriodicOpts(),
-		})
-	}
-
-	// Issue #679, #680: Trial expiration check (daily).
-	if deps.trialExpirationCheckWorker != nil {
-		specs = append(specs, periodicJobSpec{
-			name:       "trial expiration check",
-			logMessage: "Trial expiration check periodic job configured (daily)",
-			interval:   24 * time.Hour,
-			build: func() (river.JobArgs, *river.InsertOpts) {
-				return jobs.TrialExpirationCheckArgs{TriggerSource: "periodic"}, jobs.TrialExpirationCheckInsertOpts()
-			},
-			opts: jobs.TrialExpirationCheckPeriodicOpts(),
 		})
 	}
 

@@ -177,7 +177,7 @@ func TestRetentionClockGuard_Integration_ActivationCommitsDuringLockWait_WritesN
 }
 
 // TestRetentionClockGuard_Integration_TrialPath_StillInactive_WritesClock covers the OTHER
-// production caller. TrialService.ExpireTrial's authorising condition is not the cancellation
+// production caller. The legacy trial-expiry flow's (deleted in #1652) authorising condition is not the cancellation
 // webhook's: it is the CAS immediately above its call (ExpireTrialIfNoOverride), which moves the
 // user 'trial' -> 'inactive', so what must still hold at write time is 'inactive'.
 func TestRetentionClockGuard_Integration_TrialPath_StillInactive_WritesClock(t *testing.T) {

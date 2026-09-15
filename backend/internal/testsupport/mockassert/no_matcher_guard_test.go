@@ -81,7 +81,6 @@ var noMatcherBaseline = map[string]int{
 	"backend/internal/queue/jobs/savings_stats_worker_test.go":                             1,
 	"backend/internal/queue/jobs/scheduled_deletion_check_test.go":                         2,
 	"backend/internal/queue/jobs/subscription_webhook_test.go":                             42,
-	"backend/internal/queue/jobs/trial_expiration_check_test.go":                           2,
 	"backend/internal/queue/jobs/webhook_processing_test.go":                               19,
 	"backend/internal/services/admin_user_service_test.go":                                 2,
 	"backend/internal/services/budget_category_matching_service_test.go":                   1,

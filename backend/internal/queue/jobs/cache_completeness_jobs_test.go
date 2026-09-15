@@ -139,12 +139,11 @@ var jobFileDispositions = map[string]jobFileDisposition{
 	"paddle_reconciliation.go": {dispositionNoCacheImpact, "writes ProfileRepository." +
 		"UpdateSubscriptionFromPaddle only — subscription status is deliberately NOT a cached " +
 		"namespace: NamespaceEntitlement is HardDisabled in cache/namespace.go and can never be enabled, and `users` is not one of the 12 tables any cache.GetOrLoad-backed read observes (see docs/architecture/cache-invalidation-dispositions.md)."},
-	"trial_expiration_check.go": {dispositionNoCacheImpact, "calls TrialService.ExpireTrial, which " +
-		"updates trial/subscription status fields — the same deliberately-uncached bucket as " +
-		"paddle_reconciliation.go. Subscription/trial columns on `users`, which no cached read " +
-		"observes; see the corresponding ProfileRepository entries in " +
-		"repository/cache_completeness_repo_test.go. ExpireTrial touches no entitlement or household " +
-		"field that IS cached."},
+	"trial_expiration_check.go": {dispositionNoCacheImpact, "retains only the retired job's Args/Kind " +
+		"and UniqueOpts (#1652 deleted the worker and TrialService); it performs no write at all, so " +
+		"no cached mapping is invalidated. The legacy ExpireTrial it used to drive wrote only " +
+		"subscription/trial columns on `users`, which no cached read observes; see the corresponding " +
+		"ProfileRepository entries in repository/cache_completeness_repo_test.go."},
 	"past_due_check.go": {dispositionNoCacheImpact, "calls PastDueService.ProcessPastDueUser, which " +
 		"updates past-due/subscription status fields only — the same deliberately-uncached bucket; see " +
 		"the corresponding ProfileRepository entries in repository/cache_completeness_repo_test.go " +

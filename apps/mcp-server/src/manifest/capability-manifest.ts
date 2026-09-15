@@ -362,7 +362,6 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excludedWrite('addAdminDeadLetterJobNotes', REASON_ADMIN),
   excludedWrite('retryAdminDeadLetterJob', REASON_ADMIN),
   excludedWrite('fireWebhook', REASON_ADMIN),
-  excludedWrite('grantTrial', REASON_ADMIN),
   excludedWrite('replayAdminPaddleWebhook', REASON_ADMIN),
   // Hard destruction: `DELETE FROM dead_letter_jobs` (dead_letter_job_repository.go:187).
   destructive('deleteAdminDeadLetterJob', { excluded: true, reason: REASON_ADMIN }),

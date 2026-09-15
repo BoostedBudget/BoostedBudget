@@ -486,7 +486,7 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // subscription_status at all — so removing a comp from a 'trial' user whose trial_ends_at has
 // already passed leaves them at raw 'trial', not normalized to 'inactive'. Do NOT "fix" this by
 // normalizing status here: GetUsersWithExpiredTrials selects on raw subscription_status =
-// 'trial', so a silent normalization would make TrialService.ExpireTrial's job never reselect
+// 'trial', so a silent normalization would make the legacy trial-expiry job (deleted in #1652) never reselect
 // this user again, and its retention-clock side effect (SetRetentionDates) would never run — the
 // only side effect that survives this reasoning today. (A pre-round-7 version of this comment
 // also cited a Plaid disconnect ExpireTrial performed directly; that no longer exists — the

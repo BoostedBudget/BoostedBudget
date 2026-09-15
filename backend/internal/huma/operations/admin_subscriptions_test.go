@@ -110,7 +110,7 @@ func setupAdminSubscriptionsAPI(t *testing.T) (humatest.TestAPI, *MockAdminUserS
 	mockAdminService := new(MockAdminService)
 
 	cfg := &config.Config{Environment: "qa"} // Set to QA so middleware allows the request
-	handler := NewAdminHandler(nil, nil, nil, mockAdminService, mockAdminUserService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, mockAdminService, mockAdminUserService, nil, nil, cfg)
 	RegisterAdminSubscriptionsOperations(api, handler)
 	return api, mockAdminUserService, mockAdminService
 }
@@ -219,7 +219,7 @@ func TestUpdateAdminUserTier_WarningAppendedToMessage(t *testing.T) {
 func TestUpdateAdminUserTier_InvalidTier_Returns400(t *testing.T) {
 	mockService := new(MockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, mockService, nil, nil, cfg)
 
 	actorUserID := uuid.New().String()
 	targetUserID := uuid.New().String()
@@ -683,7 +683,7 @@ func setupAdminSubscriptionsAPIWithSubService(t *testing.T, subService *services
 	mockAdminService := new(MockAdminService)
 
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, mockAdminService, mockAdminUserService, nil, subService, cfg)
+	handler := NewAdminHandler(nil, nil, mockAdminService, mockAdminUserService, nil, subService, cfg)
 	RegisterAdminSubscriptionsOperations(api, handler)
 	return api, mockAdminUserService, mockAdminService
 }

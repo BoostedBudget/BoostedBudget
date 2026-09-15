@@ -273,7 +273,7 @@ type RetentionProfileRepository interface {
 	// (inactive/cancelled), whose plaid_cleanup_pending_at marker (Issue #1413 round-10) is older
 	// than gracePeriod, and who still have at least one LIVE linked item — Issue #1413 round-7
 	// repair path. See ProfileRepository.GetUsersNeedingPlaidDisconnectRepair's doc comment
-	// (profile_repository.go) for the full rationale: TrialService.ExpireTrial never calls Plaid at
+	// (profile_repository.go) for the full rationale: the legacy trial-expiry flow (deleted in #1652) never called Plaid at
 	// all (no ordering of a status flip and an irreversible Plaid call can be safe, since
 	// /subscription/checkout is whitelisted for read-only users) — this repair pass, run only after
 	// the grace window elapses, is the ONLY place a read-only user's Plaid items are disconnected.
@@ -546,7 +546,7 @@ func (w *RetentionCleanupCheckWorker) SetWorkClaimsRepo(repo repository.WorkClai
 
 // SetPlaidCleanup wires the Plaid cleanup collaborator repairPlaidDisconnects requires — Issue
 // #1413 round-6 repair path. Called after Plaid is configured (main.go), mirroring
-// TrialService.SetPlaidCleanup/PastDueService.SetPlaidCleanup's late-binding convention.
+// PastDueService.SetPlaidCleanup's late-binding convention.
 //
 // Issue #1413 round-11 said an unset plaidCleanup was a hard configuration error that failed the
 // WHOLE retention_cleanup_check job — correct reasoning at the time, but it stopped being correct
@@ -628,7 +628,7 @@ func (w *RetentionCleanupCheckWorker) Work(ctx context.Context, job *river.Job[R
 
 	// Step 0b: Disconnect Plaid for any read-only-status user past the round-7 grace window —
 	// Issue #1413 round-7 (Codex review). This is the ONLY place a read-only user's Plaid items
-	// are disconnected at all; TrialService.ExpireTrial never calls Plaid (see that function's doc
+	// are disconnected at all; the legacy trial-expiry flow (deleted in #1652) never called Plaid (see that flow's doc
 	// comment for why no ordering of a status flip and an irreversible Plaid call can be safe).
 	//
 	// A missing Plaid cleanup collaborator no longer fails the whole job (through round-10 Fix 1 it
@@ -1239,7 +1239,7 @@ func (w *RetentionCleanupCheckWorker) repairRetentionClocks(ctx context.Context,
 // (plaidDisconnectRepairGracePeriod) as measured from their plaid_cleanup_pending_at marker
 // (Issue #1413 round-10), with at least one live linked item, and disconnects Plaid — Issue #1413
 // round-7 (Codex review). This is the ONLY place a read-only user's Plaid items are ever
-// disconnected: TrialService.ExpireTrial no longer calls Plaid at all, because no ordering of a
+// disconnected: the legacy trial-expiry flow (deleted in #1652) never called Plaid, because no ordering of a
 // status flip and an irreversible Plaid call can be safe — /subscription/checkout is deliberately
 // whitelisted for read-only users, so becoming read-only never stops a user from becoming active
 // again. Deferring behind a grace window instead of ordering around the race turns "resubscribed
