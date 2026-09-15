@@ -51,6 +51,12 @@ jobs:
     runs-on: ubicloud-standard-2
     steps:
       - run: npx lhci autorun
+  mobile-test:
+    if: needs.detect-changes.outputs.mobile == 'true'
+    needs: detect-changes
+    runs-on: ubicloud-standard-2
+    steps:
+      - run: bun run --cwd apps/mobile export:web
   backend-test:
     runs-on: [self-hosted, macOS, mac-mini]
     steps:

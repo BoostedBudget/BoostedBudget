@@ -19,7 +19,8 @@ ISOLATION rather than against the complete `if:` expression it feeds:
 
 A comment asserting what the condition does is what produced that bug, so this is a script instead:
 it evaluates a hand-written path -> expected-outcome table against the ACTUAL globs and the ACTUAL
-complete `if:` strings read out of the workflow file.
+complete `if:` strings read out of the workflow file. Only the API-client workspace package is MCP
+source; shared-types and design-tokens are explicit negative rows.
 
 INDEPENDENCE (this is the part that makes it a guard rather than a tautology)
 ----------------------------------------------------------------------------
@@ -27,7 +28,7 @@ The expectations in TRUTH_TABLE below are written by hand from what the jobs are
 derived from the `if:` expression being checked. The glob matcher and the expression evaluator here
 are independent re-implementations of picomatch's `dir/**` semantics and of GitHub's `&&`/`||`
 semantics; they read the workflow purely as data. So restoring the `backend` OR, or dropping
-`packages/**` from the trigger surface, makes specific rows go red. See
+`packages/api-client/**` from the trigger surface, makes specific rows go red. See
 scripts/__tests__/check-mcp-job-triggers.test.sh, which proves exactly that by mutating a throwaway
 copy of the workflow.
 
@@ -114,14 +115,16 @@ TRUTH_TABLE = [
     ("packages/api-client/src/x.ts", True,
      "apps/mcp-server/package.json depends on @boostedbudget/api-client (workspace:*), so an "
      "api-client change must run MCP typecheck + integration — this is the coverage fix"),
-    ("packages/shared-types/src/x.ts", True,
-     "ACCEPTED OVER-TRIGGER: packages/** is used rather than packages/api-client/** deliberately. "
-     "There are exactly two packages, so the cost is one job pair on shared-types PRs, and the "
-     "broad form stays correct if mcp-server ever adds that dependency"),
+    ("packages/shared-types/src/x.ts", False,
+     "shared-types is not in the MCP server workspace dependency graph"),
+    ("packages/design-tokens/src/x.ts", False,
+     "design tokens are not in the MCP server workspace dependency graph"),
     ("apps/mcp-server/src/x.ts", True, "the MCP server's own source"),
     ("apps/mcp-server/package.json", True, "the MCP server's own manifest"),
     ("package.json", True, "root manifest can move the undici version miniflare pins"),
     ("bun.lock", True, "root lockfile can move the undici version miniflare pins"),
+    ("tsconfig.json", False,
+     "root compiler defaults are not part of the dependency-exact MCP trigger surface"),
     ("api/openapi.yaml", True, "the spec the MCP spec-index and facade are generated from"),
     ("api/schemas/foo.yaml", True,
      "the ONLY row that discriminates the `api` OR: api/openapi.yaml is matched by the `mcp` filter "
@@ -333,14 +336,16 @@ DEPLOY_TRUTH_TABLE = [
      "THE #1484 ROW: apps/mcp-server/package.json depends on @boostedbudget/api-client "
      "(workspace:*), so an api-client-only change must redeploy the worker. Before the fix this "
      "row was red — the frontend redeployed and the worker stayed on a stale api-client"),
-    ("packages/shared-types/src/x.ts", True,
-     "ACCEPTED OVER-TRIGGER, same as test.yml's `mcp` filter: packages/** rather than "
-     "packages/api-client/** costs one redeploy on shared-types changes and stays correct if "
-     "mcp-server ever adds that dependency"),
+    ("packages/shared-types/src/x.ts", False,
+     "shared-types is not in the deployed worker's workspace dependency graph"),
+    ("packages/design-tokens/src/x.ts", False,
+     "design tokens are not in the deployed worker's workspace dependency graph"),
     ("package.json", True, "root manifest can move a dependency the worker bundles"),
     ("bun.lock", True,
      "the workspace shares ONE root lockfile, so a resolved-version change for the worker's own "
      "dependency tree lands here and nowhere else"),
+    ("tsconfig.json", False,
+     "root compiler defaults do not change the deployed worker artifact"),
     ("api/openapi.yaml", True, "the spec the MCP spec-index and facade are generated from"),
     ("apps/web/src/x.tsx", False, "the web app is not deployed by the MCP job"),
     ("backend/internal/x.go", False, "backend code is deployed to Fly, not to Cloudflare"),
