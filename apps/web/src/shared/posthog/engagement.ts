@@ -4,7 +4,6 @@ import {
   type PostHogConfig,
   type Survey,
 } from 'posthog-js'
-import { matchPath } from 'react-router'
 import {
   clearPostHogQueuedEvents,
   clearPostHogSessionPersistence,
@@ -25,31 +24,6 @@ const SUPPORT_PERSISTENCE_NAME = 'boostedbudget_support'
 const SURVEY_PERSISTENCE_NAME = 'boostedbudget_surveys'
 const SURVEY_STORAGE_KEYS = ['lastSeenSurveyDate']
 const SURVEY_STORAGE_PREFIXES = ['seenSurvey_', 'inProgressSurvey_', 'abandonedSurvey_']
-
-export const POSTHOG_ENGAGEMENT_ROUTES = {
-  dashboard: '/dashboard',
-  accounts: '/accounts',
-  reconnectAccount: '/accounts/reconnect',
-  account: '/accounts/:accountId',
-  transactions: '/transactions',
-  review: '/review',
-  insights: '/insights',
-  planning: '/planning',
-  budget: '/budgets/:budgetId',
-  autoCategorization: '/auto-categorization',
-  boosts: '/boosts',
-  newBoost: '/boosts/new',
-  boost: '/boosts/:id',
-  editBoost: '/boosts/:id/edit',
-  profile: '/profile',
-  billingManage: '/billing/manage',
-  billingSuccess: '/billing/success',
-} as const
-
-export function isPostHogEngagementRoute(pathname: string): boolean {
-  return Object.values(POSTHOG_ENGAGEMENT_ROUTES)
-    .some(path => matchPath({ path, end: true }, pathname) !== null)
-}
 
 export interface EngagementPostHogClient {
   setIdentity(distinctId: string, identityHash: string): void

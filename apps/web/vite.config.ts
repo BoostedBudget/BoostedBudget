@@ -83,6 +83,28 @@ export default defineConfig({
               test: /node_modules\/(echarts|zrender|echarts-for-react)\//,
               priority: 15, // echarts (~500 KB raw) isolated from vendor
             },
+            // #1650. The consent-gated posthog-js SDK is ~92 kB gzip and is loaded
+            // lazily by src/shared/lib/posthog.ts, so it must not sit in `vendor`
+            // (which is eagerly imported). Isolating it here gives the lazy import
+            // a stable chunk name and a budget of its own.
+            //
+            // The two source modules move with it, and that half is load-bearing:
+            // groups assign chunks by PATH, so leaving them in `shared` (priority 7)
+            // would keep a static `shared -> posthog` edge and the SDK would still be
+            // modulepreloaded on `/`. They are reachable only through App.tsx's
+            // React.lazy boundary, so the whole chunk stays lazy. routes.ts is
+            // deliberately NOT here — App.tsx imports it eagerly and it must stay
+            // SDK-free in `shared`.
+            {
+              name: 'posthog',
+              test: /\/apps\/web\/src\/shared\/posthog\/(AuthenticatedPostHogExperiences|engagement)\./,
+              priority: 11,
+            },
+            {
+              name: 'posthog',
+              test: /node_modules\/(posthog-js|@posthog)\//,
+              priority: 11,
+            },
             // #1601. Isolating echarts from `vendor` was NOT enough to keep it off the landing
             // route, because our own wrappers around it live under src/shared/charts/ — which the
             // `shared` group (priority 7) swept into the eagerly-imported shared chunk. The

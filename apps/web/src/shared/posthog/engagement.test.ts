@@ -8,10 +8,10 @@ import {
   createIsolatedSurveyClient,
   createPostHogEngagementController,
   installPinnedPostHogRequestBoundary,
-  isPostHogEngagementRoute,
   isSupportedSurvey,
   type EngagementPostHogClient,
 } from './engagement'
+import { isPostHogEngagementRoute } from './routes'
 
 type SupportedQuestionType = 'rating' | 'single_choice' | 'multiple_choice' | 'open' | 'link'
 

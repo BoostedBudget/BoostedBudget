@@ -10,8 +10,6 @@ import { store } from './store/store'
 import { setAuthTokenProvider } from '@boostedbudget/api-client/client'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { initSentry } from './shared/lib/sentry'
-import { posthog } from './shared/lib/posthog'
-import { PostHogProvider } from 'posthog-js/react'
 import { ThemeProvider } from './shared/theme'
 import { configureWebApiClient } from './shared/lib/apiClient'
 import './index.css'
@@ -148,17 +146,15 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         signInUrl="/"
         signUpUrl="/"
       >
-        <PostHogProvider client={posthog}>
-          <ErrorBoundary>
-            <Provider store={store}>
-              <AuthReadyGate>
-                <QueryClientProvider client={queryClient}>
-                  <App />
-                </QueryClientProvider>
-              </AuthReadyGate>
-            </Provider>
-          </ErrorBoundary>
-        </PostHogProvider>
+        <ErrorBoundary>
+          <Provider store={store}>
+            <AuthReadyGate>
+              <QueryClientProvider client={queryClient}>
+                <App />
+              </QueryClientProvider>
+            </AuthReadyGate>
+          </Provider>
+        </ErrorBoundary>
       </ClerkProvider>
       </ThemeProvider>
     </BrowserRouter>

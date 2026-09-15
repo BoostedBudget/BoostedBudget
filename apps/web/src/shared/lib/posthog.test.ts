@@ -543,6 +543,50 @@ describe('posthog lifecycle', () => {
     expect(lifecycle.getState()).toBe('granted');
   });
 
+  test('waits for the lazy SDK load before initializing', async () => {
+    let resolveReady: (() => void) | undefined
+    client.ready = mock(() => new Promise<void>(resolve => { resolveReady = resolve }))
+    lifecycle.setScope('user-a');
+
+    const grant = lifecycle.grantFromAuthority('user-a', 'user-a');
+    expect(client.init).not.toHaveBeenCalled();
+
+    resolveReady?.();
+    await grant;
+
+    expect(client.init).toHaveBeenCalledTimes(1);
+    expect(lifecycle.getState()).toBe('granted');
+  });
+
+  test('does not initialize after a withdrawal that lands while the SDK load is in flight', async () => {
+    let resolveReady: (() => void) | undefined
+    client.ready = mock(() => new Promise<void>(resolve => { resolveReady = resolve }))
+    lifecycle.setScope('user-a');
+
+    const grant = lifecycle.grantFromAuthority('user-a', 'user-a');
+    lifecycle.withdraw('user-a');
+    resolveReady?.();
+    await grant;
+
+    expect(client.init).not.toHaveBeenCalled();
+    expect(lifecycle.getState()).toBe('denied');
+    expect(captureGate.isGranted()).toBe(false);
+  });
+
+  test('does not initialize a stale scope when the SDK load resolves after a scope change', async () => {
+    let resolveReady: (() => void) | undefined
+    client.ready = mock(() => new Promise<void>(resolve => { resolveReady = resolve }))
+    lifecycle.setScope('user-a');
+
+    const grant = lifecycle.grantFromAuthority('user-a', 'user-a');
+    lifecycle.setScope('user-b');
+    resolveReady?.();
+    await grant;
+
+    expect(client.init).not.toHaveBeenCalled();
+    expect(lifecycle.getState()).toBe('pending');
+  });
+
   test('preserves the unconfigured no-op', () => {
     key = undefined;
     expect(lifecycle.init()).toBe(false);
