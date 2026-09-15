@@ -159,7 +159,6 @@ func validTierConfigForValidationTests() *TierConfig {
 		},
 		DefaultTier: domain.TierPremium,
 		Trial:       TrialConfig{Enabled: true, DurationDays: 60, Tier: domain.TierPremium},
-		PastDue:     PastDueConfig{PlaidDisconnectDays: 14, GraceDays: 21},
 	}
 }
 
@@ -479,7 +478,6 @@ type catalogueSemanticProjection struct {
 	TrialTier    domain.TierName
 	TrialDays    int
 	TrialEnabled bool
-	PastDue      PastDueConfig
 }
 
 func projectCatalogue(tc *TierConfig) catalogueSemanticProjection {
@@ -500,7 +498,6 @@ func projectCatalogue(tc *TierConfig) catalogueSemanticProjection {
 		TrialTier:    tc.Trial.Tier,
 		TrialDays:    tc.Trial.DurationDays,
 		TrialEnabled: tc.Trial.Enabled,
-		PastDue:      tc.PastDue,
 	}
 }
 
@@ -510,7 +507,7 @@ func TestCatalogueSemanticParity_DevVsProduction(t *testing.T) {
 
 	assert.Equal(t, projectCatalogue(dev), projectCatalogue(prod),
 		"dev (config/subscription_tiers.yaml) and production catalogues must agree on canonical "+
-			"keys, users_included, limits, features, prices, default_tier, trial, and past_due — "+
+			"keys, users_included, limits, features, prices, default_tier, and trial — "+
 			"only Paddle price IDs and documented display_name/description differences are allowed")
 }
 
@@ -520,7 +517,7 @@ func TestCatalogueSemanticParity_DevVsSandbox(t *testing.T) {
 
 	assert.Equal(t, projectCatalogue(dev), projectCatalogue(sandbox),
 		"dev (config/subscription_tiers.yaml) and sandbox catalogues must agree on canonical "+
-			"keys, users_included, limits, features, prices, default_tier, trial, and past_due")
+			"keys, users_included, limits, features, prices, default_tier, and trial")
 }
 
 // loadTierConfigForEnvironment loads the tier config for the given PADDLE_ENVIRONMENT value
@@ -662,81 +659,24 @@ func TestSubscriptionTierYAMLHasNoAdsEnabled(t *testing.T) {
 	}
 }
 
-// Issue #898: Test GetPastDueConfig returns correct values
-func TestTierConfig_GetPastDueConfig(t *testing.T) {
-	config, err := LoadTierConfig()
-	require.NoError(t, err)
-
-	pastDueConfig := config.GetPastDueConfig()
-
-	assert.Equal(t, 14, pastDueConfig.PlaidDisconnectDays)
-	assert.Equal(t, 21, pastDueConfig.GraceDays)
-}
-
-// Issue #898: Test Reload copies PastDue
-func TestTierConfig_Reload_CopiesPastDue(t *testing.T) {
-	defer setAndCleanupEnv(t, map[string]string{
-		"SUBSCRIPTION_TIERS_CONFIG": "",
-	})()
-	resetConfigSingleton()
-
-	config, err := LoadTierConfig()
-	require.NoError(t, err)
-
-	// Store original values
-	originalPastDue := config.GetPastDueConfig()
-
-	// Reload
-	err = config.Reload()
-	assert.NoError(t, err)
-
-	// Verify PastDue was copied
-	reloadedPastDue := config.GetPastDueConfig()
-	assert.Equal(t, originalPastDue.PlaidDisconnectDays, reloadedPastDue.PlaidDisconnectDays)
-	assert.Equal(t, originalPastDue.GraceDays, reloadedPastDue.GraceDays)
-}
-
-// Issue #898: Test validation rejects invalid PastDue values
-func TestTierConfig_Validation_InvalidPastDue(t *testing.T) {
-	validTiers := map[domain.TierName]domain.SubscriptionTier{
-		domain.TierPremium:    {Name: domain.TierPremium, DisplayName: "Premium", Pricing: domain.SubscriptionPricing{PriceMonthly: 8.99, PriceYearly: 79, MobilePriceYearly: 89.99, UsersIncluded: 1}},
-		domain.TierHousehold2: {Name: domain.TierHousehold2, DisplayName: "Household (2)", Pricing: domain.SubscriptionPricing{PriceMonthly: 12.99, PriceYearly: 119, MobilePriceYearly: 134.99, UsersIncluded: 2}},
-		domain.TierHousehold3: {Name: domain.TierHousehold3, DisplayName: "Household (3)", Pricing: domain.SubscriptionPricing{PriceMonthly: 14.99, PriceYearly: 139, MobilePriceYearly: 154.99, UsersIncluded: 3}},
-		domain.TierHousehold4: {Name: domain.TierHousehold4, DisplayName: "Household (4)", Pricing: domain.SubscriptionPricing{PriceMonthly: 16.99, PriceYearly: 159, MobilePriceYearly: 179.99, UsersIncluded: 4}},
-		domain.TierHousehold5: {Name: domain.TierHousehold5, DisplayName: "Household (5+)", Pricing: domain.SubscriptionPricing{PriceMonthly: 18.99, PriceYearly: 179, MobilePriceYearly: 199.99, UsersIncluded: 5}},
+// #1652 todo 6: the past_due config block was removed entirely (its only consumer, PastDueService,
+// was deleted). This is the config-load acceptance criterion: the catalogue must still parse and
+// validate with no past_due key present, and the key must be gone from every catalogue file.
+func TestTierConfig_LoadsWithoutPastDueBlock(t *testing.T) {
+	for _, path := range []string{
+		"../../../config/subscription_tiers.yaml",
+		"../../../config/subscription_tiers.sandbox.yaml",
+		"../../../config/subscription_tiers.production.yaml",
+	} {
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err, "could not read %s", path)
+		assert.NotContains(t, string(raw), "past_due",
+			"%s must no longer carry the removed past_due block (#1652)", path)
 	}
 
-	newConfig := func(plaidDays, graceDays int) *TierConfig {
-		return &TierConfig{
-			Tiers:       validTiers,
-			DefaultTier: domain.TierPremium,
-			Trial:       TrialConfig{DurationDays: 60, Tier: domain.TierPremium},
-			PastDue:     PastDueConfig{PlaidDisconnectDays: plaidDays, GraceDays: graceDays},
-		}
-	}
-
-	tests := []struct {
-		name        string
-		plaidDays   int
-		graceDays   int
-		expectError bool
-	}{
-		{"valid past_due config", 14, 21, false},
-		{"past_due with plaid_disconnect_days = 0 should fail", 0, 21, true},
-		{"past_due with grace_days = 0 should fail", 14, 0, true},
-		{"past_due with grace_days < plaid_disconnect_days should fail", 21, 14, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := newConfig(tt.plaidDays, tt.graceDays).validate()
-			if tt.expectError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
+	cfg := loadTierConfigForEnvironment(t, "")
+	require.NotNil(t, cfg)
+	require.NoError(t, cfg.validate(), "the catalogue must validate with no past_due block")
 }
 
 // Issue #1569 Task 20 (S10) — the census claim, RE-DERIVED AND NOT REPRODUCED, then made loud.

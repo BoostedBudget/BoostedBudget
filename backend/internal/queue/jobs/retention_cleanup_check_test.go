@@ -2306,8 +2306,8 @@ func TestRetentionCleanupCheck_PlaidRepairNilCleanup_SkipsRepairPass_JobStillSuc
 // IsReadOnlySubscription(), which ALSO includes 'past_due'. An old inactive/cancelled candidate
 // that transitions into a NEW past_due cycle (e.g. a resubscribe followed by a failed payment)
 // before this re-read still passed the recheck and could be disconnected immediately — bypassing
-// past_due's own dunning timeline (past_due_service.go, PastDueConfig.PlaidDisconnectDays), which
-// exists precisely to give a paying-but-behind user time before Plaid access is touched.
+// past_due's own dunning timeline (the deleted past_due_service.go / PastDueConfig.PlaidDisconnectDays,
+// #1652), which existed precisely to give a paying-but-behind user time before Plaid access is touched.
 //
 // Falsifiability: reverting the recheck to IsReadOnlySubscription() makes this test fail —
 // DisconnectAllUserItemsIfEligible would be called for a user who is now 'past_due', not

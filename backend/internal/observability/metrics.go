@@ -429,8 +429,8 @@ var (
 	// schedule naturally retries).
 	//
 	// Issue #1413 #1453 (Codex review, PR #1443 follow-up): also incremented from TWO more call
-	// sites outside this worker — services.PastDueService's grace-expiry disconnect
-	// (past_due_service.go) and queue/jobs.SubscriptionWebhookWorker's cancellation handler
+	// sites outside this worker — services.PastDueService's grace-expiry disconnect (deleted in
+	// #1652) and queue/jobs.SubscriptionWebhookWorker's cancellation handler
 	// (subscription_webhook.go) — each brought into line with repairPlaidDisconnects's identical
 	// bounded-retry-then-Error-log pattern for the SAME underlying write
 	// (ClearPlaidCleanupPendingIfMatches after an already-successful synchronous disconnect).

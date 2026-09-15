@@ -22,7 +22,7 @@ import (
 // retentionNoticeClaimLease is the lease duration requested for both ActionRetentionNotice30d and
 // ActionRetentionNotice7d work claims (Issue #1413 Medium finding M9, Codex review round 3).
 // Shorter than the 15-minute lease used by claims guarding a Plaid/Paddle call (ExecuteDeletion,
-// PastDueService, SubscriptionWebhookWorker): sending a notice email has no slow external cleanup
+// the deleted PastDueService, SubscriptionWebhookWorker): sending a notice email has no slow external cleanup
 // step behind it, so 5 minutes is generous while still keeping a crashed worker's claim quickly
 // reclaimable.
 const retentionNoticeClaimLease = 5 * time.Minute
@@ -50,8 +50,8 @@ const retentionNoticeClaimLease = 5 * time.Minute
 // dedup period), so any grace value in the 24-72h range resolves to about the same number of
 // worker ticks in practice; 72h leaves comfortable headroom for a slow notice-then-pay flow
 // without meaningfully changing how many daily runs elapse before disconnect. This mirrors the
-// same grace-then-cleanup shape past_due_service.go already uses (PastDueConfig.PlaidDisconnectDays,
-// 14 days) and the retention/deletion notice windows (30d/7d) — but is deliberately much shorter
+// same grace-then-cleanup shape the deleted past_due_service.go used (PastDueConfig.PlaidDisconnectDays,
+// 14 days, #1652) and the retention/deletion notice windows (30d/7d) — but is deliberately much shorter
 // than either, since a lapsed trial/subscription is a harder terminal state than past_due dunning
 // (no pending payment retry) and the primary goal here is closing a payment race, not running a
 // full second dunning cycle.
@@ -70,8 +70,8 @@ const plaidDisconnectRepairGracePeriod = 72 * time.Hour
 // plaidCleanupMarkerClearRetryDelay just below, are no longer independent literals — both now alias
 // repository.PlaidCleanupMarkerClearMaxAttempts / repository.PlaidCleanupMarkerClearRetryDelay (see
 // that pair's own doc comment, profile_repository.go, for the full rationale). Before this fix,
-// services/past_due_service.go carried a second, genuinely independent copy of these same two
-// numbers, with its own doc comment explicitly acknowledging the duplication. Aliasing here — rather
+// services/past_due_service.go (since deleted in #1652) carried a second, genuinely independent
+// copy of these same two numbers, with its own doc comment explicitly acknowledging the duplication. Aliasing here — rather
 // than qualifying every reference in this file and subscription_webhook.go as
 // repository.PlaidCleanupMarkerClearMaxAttempts — keeps every existing unqualified reference in both
 // files (and their tests) compiling unchanged, while ensuring there is exactly one place either
@@ -388,7 +388,7 @@ type RetentionEmailService interface {
 
 // RetentionPlaidCleanup defines the Plaid cleanup operation needed by repairPlaidDisconnects —
 // Issue #1413 round-7 grace-window repair path. Narrow, single-method interface mirroring this
-// codebase's existing per-consumer convention (PastDuePlaidCleanup, PlaidItemCleanupForWebhook)
+// codebase's existing per-consumer convention (the deleted PastDuePlaidCleanup, PlaidItemCleanupForWebhook)
 // rather than depending on the full services.PlaidItemCleanupService.
 // DisconnectAllUserItemsIfEligible is itself idempotent and self-claiming
 // (repository.ActionPlaidDisconnectUser, via services.claimSideEffectAndRun) —
@@ -444,7 +444,7 @@ type RetentionCleanupCheckWorker struct {
 	// claimsRepo backs the durable work-claims mechanism send30dNotices/send7dNotices require for
 	// EXCLUSIVITY on ActionRetentionNotice30d/7d before a notice email is sent (Issue #1413 Medium
 	// finding M9, Codex review round 3). See SetWorkClaimsRepo — like
-	// DeletionService/PastDueService/SubscriptionWebhookWorker's claims repos, this is required,
+	// DeletionService/the deleted PastDueService/SubscriptionWebhookWorker's claims repos, this is required,
 	// not optional.
 	claimsRepo      repository.WorkClaimsRepository
 	retentionMonths int
@@ -536,7 +536,7 @@ func NewRetentionCleanupCheckWorker(deps RetentionCleanupCheckWorkerDeps) *Reten
 
 // SetWorkClaimsRepo wires the durable work-claims mechanism send30dNotices/send7dNotices require
 // for EXCLUSIVITY on ActionRetentionNotice30d/7d before a notice email is sent (Issue #1413 Medium
-// finding M9, Codex review round 3). Mirrors DeletionService/PastDueService/
+// finding M9, Codex review round 3). Mirrors DeletionService/the deleted PastDueService/
 // SubscriptionWebhookWorker's SetWorkClaimsRepo — like theirs, this is NOT an optional capability:
 // a nil claims repo makes the notice-sending path fail loudly (logged, per-user, as an error) for
 // every candidate rather than silently reverting to the old conflated claim-marker behavior.
@@ -546,7 +546,7 @@ func (w *RetentionCleanupCheckWorker) SetWorkClaimsRepo(repo repository.WorkClai
 
 // SetPlaidCleanup wires the Plaid cleanup collaborator repairPlaidDisconnects requires — Issue
 // #1413 round-6 repair path. Called after Plaid is configured (main.go), mirroring
-// PastDueService.SetPlaidCleanup's late-binding convention.
+// the deleted PastDueService.SetPlaidCleanup's late-binding convention.
 //
 // Issue #1413 round-11 said an unset plaidCleanup was a hard configuration error that failed the
 // WHOLE retention_cleanup_check job — correct reasoning at the time, but it stopped being correct
@@ -563,7 +563,7 @@ func (w *RetentionCleanupCheckWorker) SetPlaidCleanup(c RetentionPlaidCleanup) {
 }
 
 // releaseClaimOnFailure releases a work claim and logs any release failure. Mirrors
-// PastDueService/SubscriptionWebhookWorker's helper of the same name.
+// the deleted PastDueService/SubscriptionWebhookWorker's helper of the same name.
 //
 // userID and resourceID are both taken (rather than deriving one from the other) because, since
 // Issue #1413 P5, resourceID is a composite "{userID}:{occurrence discriminator}" built by
@@ -1172,8 +1172,8 @@ func (w *RetentionCleanupCheckWorker) canSendRetentionNotice(jobID int64, notice
 }
 
 // repairRetentionClocks finds users stuck read-only-status with no retention clock and repairs
-// them — Issue #1413 round-3 finding H5 residual. CancelIfPastDueWithRetention
-// (past_due_service.go) closes the specific race on the past-due grace-cancel path going
+// them — Issue #1413 round-3 finding H5 residual. CancelIfPastDueWithRetention (past_due_service.go,
+// since deleted in #1652) closed the specific race on the past-due grace-cancel path going
 // forward by making the CAS and the retention write one atomic statement, but this repair query
 // also catches: (a) any row already stuck in this state from before that fix existed, and (b)
 // any other, currently-unknown path that might leave a user cancelled/inactive with a NULL
@@ -1202,7 +1202,7 @@ func (w *RetentionCleanupCheckWorker) repairRetentionClocks(ctx context.Context,
 		// Belt-and-braces: a comped user must never have a retention clock started for them,
 		// even though the candidate query already excludes any override (live or lapsed) via
 		// noManualOverrideAtAllPredicate. Mirrors the same defensive pattern used throughout this
-		// worker and past_due_service.go.
+		// worker and the deleted past_due_service.go.
 		if user.HasAnyManualOverride() {
 			w.logger.Info("skipping retention clock repair for user with a manual tier override (live or lapsed)",
 				"job_id", jobID, "user_id", user.ID)
@@ -1427,7 +1427,7 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 		// Issue #1413 round-11 Fix 3: the marker VALUE this worker selected on, captured ONCE and
 		// threaded into both isStillEligible (every per-item recheck) and the final clear call
 		// below — the same occurrence-identity pattern already established for work_claims
-		// (repository.OccurrenceResourceID / FormatOccurrenceTimestamp) and for past_due_service.go's
+		// (repository.OccurrenceResourceID / FormatOccurrenceTimestamp) and for the deleted past_due_service.go's
 		// reReadStillPastDue (which requires past_due_started_at to still match, not merely be
 		// non-nil). GetUsersNeedingPlaidDisconnectRepair's WHERE clause guarantees
 		// PlaidCleanupPendingAt is non-nil on every candidate it returns.
@@ -1453,7 +1453,7 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 		// (GetUsersNeedingPlaidDisconnectRepair) selects only 'inactive'/'cancelled'. Using the wider
 		// read-only definition here let an old inactive/cancelled candidate that transitioned into a
 		// NEW past_due cycle before this re-read still pass and be disconnected immediately —
-		// bypassing past_due's own dunning timeline (past_due_service.go). See
+		// bypassing past_due's own dunning timeline (the deleted past_due_service.go, #1652). See
 		// domain.SubscriptionStatus.IsEligibleForPlaidDisconnectRepair's doc comment for the full
 		// rationale and the parity test that keeps this in agreement with the SQL predicate.
 		//
@@ -1552,7 +1552,7 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 			}
 			// ErrSideEffectClaimBusy is benign, expected contention (another flow is already
 			// mid-disconnect for this user) — logged at Info, not Warn, mirroring
-			// past_due_service.go's processGraceExpiry precedent for the same distinction.
+			// the deleted past_due_service.go's processGraceExpiry precedent for the same distinction.
 			if errors.Is(disconnectErr, services.ErrSideEffectClaimBusy) {
 				w.logger.Info("Plaid-disconnect repair deferred — side-effect claim held by another flow",
 					"job_id", jobID, "user_id", userID)

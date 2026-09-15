@@ -502,9 +502,9 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // CURRENT write (anchored on the lapse instant or on clock_timestamp(), never COALESCE — COALESCE
 // was removed in ROUND 18 and must not be reintroduced). Deliberately narrower than
 // should_rearm_retention's ('inactive', 'cancelled', 'past_due') — 'past_due' is excluded here for
-// the SAME reason plaidDisconnectRepairEligibleStatusPredicate excludes it: past_due has its own
-// dunning timeline (past_due_service.go, PastDueConfig.PlaidDisconnectDays) and must never be
-// immediately Plaid-disconnected by this repair pass. A comp removed while the reverted status is
+// the SAME reason plaidDisconnectRepairEligibleStatusPredicate excludes it: past_due had its own
+// dunning timeline (the deleted past_due_service.go / PastDueConfig.PlaidDisconnectDays, #1652) and
+// must never be immediately Plaid-disconnected by this repair pass. A comp removed while the reverted status is
 // 'past_due' leaves plaid_cleanup_pending_at untouched — it should already be NULL (past_due is
 // never a state that sets this marker), and past_due's own dunning flow owns that user's Plaid
 // fate instead.

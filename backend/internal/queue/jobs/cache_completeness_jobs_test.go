@@ -144,10 +144,12 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"no cached mapping is invalidated. The legacy ExpireTrial it used to drive wrote only " +
 		"subscription/trial columns on `users`, which no cached read observes; see the corresponding " +
 		"ProfileRepository entries in repository/cache_completeness_repo_test.go."},
-	"past_due_check.go": {dispositionNoCacheImpact, "calls PastDueService.ProcessPastDueUser, which " +
-		"updates past-due/subscription status fields only — the same deliberately-uncached bucket; see " +
-		"the corresponding ProfileRepository entries in repository/cache_completeness_repo_test.go " +
-		"and docs/architecture/cache-invalidation-dispositions.md."},
+	"past_due_check.go": {dispositionNoCacheImpact, "retains only the retired job's Args/Kind " +
+		"and UniqueOpts (#1652 deleted the worker and PastDueService); it performs no write at all, so " +
+		"no cached mapping is invalidated. The legacy ProcessPastDueUser it used to drive wrote only " +
+		"past-due/subscription status fields on `users`, which no cached read observes; see the " +
+		"corresponding ProfileRepository entries in repository/cache_completeness_repo_test.go and " +
+		"docs/architecture/cache-invalidation-dispositions.md."},
 	"manual_tier_override_expiry_check.go": {dispositionNoCacheImpact, "clears an expired manual " +
 		"tier override on the user's profile (a subscription-tier field) — the same deliberately- " +
 		"uncached bucket; see the corresponding ProfileRepository entries in repository/cache_completeness_repo_test.go and docs/architecture/cache-invalidation-dispositions.md."},

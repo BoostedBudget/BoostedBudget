@@ -212,8 +212,8 @@ type User struct {
 	//     within one repair-pass interval.
 	//
 	// In short: writers owe correctness; the backstop owes recovery. Neither excuses the other. The
-	// known SET sites are: UpdateSubscriptionFromPaddle, CancelIfPastDueOccurrenceWithRetention,
-	// ExpireTrialIfNoOverride, UpdateTrialStatus (all profile_repository.go — this last one's own
+	// known SET sites are: UpdateSubscriptionFromPaddle, the deleted CancelIfPastDueOccurrenceWithRetention
+	// (#1652), ExpireTrialIfNoOverride, UpdateTrialStatus (all profile_repository.go — this last one's own
 	// eligible-status branch COALESCEs a fresh value in exactly like its siblings; see its doc
 	// comment for the "granting a trial to a cancelled user with an outstanding marker" case this
 	// closes), AdminUserRepository's

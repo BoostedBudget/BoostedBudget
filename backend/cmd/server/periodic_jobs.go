@@ -27,7 +27,6 @@ type periodicJobsDeps struct {
 	revenueCatRepairWorker              *jobs.RevenueCatRepairWorker
 	scheduledDeletionCheckWorker        *jobs.ScheduledDeletionCheckWorker
 	itemCleanupCheckWorker              *jobs.ItemCleanupCheckWorker
-	pastDueCheckWorker                  *jobs.PastDueCheckWorker
 	paddleReconciliationWorker          *jobs.PaddleReconciliationWorker
 	retentionCleanupCheckWorker         *jobs.RetentionCleanupCheckWorker
 	manualTierOverrideExpiryCheckWorker *jobs.ManualTierOverrideExpiryCheckWorker
@@ -138,19 +137,6 @@ func buildPeriodicJobSpecs(deps periodicJobsDeps) []periodicJobSpec {
 				return jobs.ItemCleanupCheckArgs{TriggerSource: "periodic"}, jobs.ItemCleanupCheckInsertOpts()
 			},
 			opts: jobs.ItemCleanupCheckPeriodicOpts(),
-		})
-	}
-
-	// Issue #898: Past-due check (daily) — disconnects Plaid at 14d and auto-cancels at 21d.
-	if deps.pastDueCheckWorker != nil {
-		specs = append(specs, periodicJobSpec{
-			name:       "past-due check",
-			logMessage: "Past-due check periodic job configured (daily)",
-			interval:   24 * time.Hour,
-			build: func() (river.JobArgs, *river.InsertOpts) {
-				return jobs.PastDueCheckArgs{TriggerSource: "periodic"}, jobs.PastDueCheckInsertOpts()
-			},
-			opts: jobs.PastDueCheckPeriodicOpts(),
 		})
 	}
 

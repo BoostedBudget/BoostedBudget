@@ -44,8 +44,8 @@ var (
 // while the legacy trial-expiry flow (deleted in #1652) armed it only for the user its own CAS
 // (ExpireTrialIfNoOverride) just moved to 'inactive'. Hardcoding either condition inside the
 // repository would be wrong for the other caller, so the condition is passed by the caller that
-// knows it — the same way CancelIfPastDueOccurrenceWithRetention takes its expected past_due
-// occurrence value rather than inventing one.
+// knows it — the same way the deleted (#1652) past-due grace-cancel CAS took its expected
+// past_due occurrence value rather than inventing one.
 //
 // The zero value is INVALID (ErrRetentionClockGuardUnspecified), so the unguarded write can only
 // be reached by naming it.
@@ -129,12 +129,11 @@ type ProfileRepository interface {
 	// Issue #1413 round-10 correction: this used to claim "every writer of this column now shares one
 	// semantics." That was FALSE while a landmine still existed: CancelIfPastDueWithRetention (the
 	// non-occurrence predecessor superseded by round-4 finding H1) took a Go-computed expiry and had
-	// ZERO production callers — the narrower PastDueProfileRepository interface past_due_service.go
-	// actually consumes did not even declare it — so it was not live drift, but wiring it up would
+	// ZERO production callers — the narrower PastDueProfileRepository interface the deleted
+	// past_due_service.go consumed did not even declare it — so it was not live drift, but wiring it up would
 	// have reintroduced the month-end over-retention bug. Issue #1442 deleted it, so the claim is
 	// unqualified and accurate again: every writer of this column — SetRetentionDates (here),
-	// RepairRetentionClock, CancelIfPastDueOccurrenceWithRetention, and
-	// AdminUserRepository.RemoveUserTierOverride — clamps.
+	// RepairRetentionClock, and AdminUserRepository.RemoveUserTierOverride — clamps.
 	//
 	// TWO POPULATIONS OF THIS COLUMN EXIST, and that is a deliberate decision, not an oversight.
 	// Rows written before commit 144b0e3a used Go's AddDate (month overflow normalized FORWARD); rows
@@ -473,8 +472,8 @@ type ProfileRepository interface {
 
 	// GetUsersNeedingRetentionClockRepair returns users who are read-only-status
 	// (inactive/cancelled) but have NO retention clock started (retention_expires_at IS NULL) —
-	// Issue #1413 H5 residual, belt-and-braces repair path. CancelIfPastDueOccurrenceWithRetention
-	// closes the specific race on the past-due grace-cancel path going forward, but this query also
+	// Issue #1413 H5 residual, belt-and-braces repair path. The deleted (#1652) past-due
+	// grace-cancel CAS closed the specific race on that path going forward, but this query also
 	// catches: (a) any row already stuck in this state from BEFORE that fix existed, and (b) any
 	// other, currently-unknown path that might leave a user cancelled with no clock. Mirrors the
 	// other retention queries' predicates (subscription_status IN ('inactive', 'cancelled'),
@@ -578,9 +577,8 @@ func (r *profileRepository) SetOverrideTierValidator(validator func(tierName str
 //
 // Returns the concrete *profileRepository type (not the ProfileRepository interface) — Issue
 // #1413 round-4 finding P6. profileRepository grew occurrence-scoped sibling methods
-// (ClearPastDueStartedAtIfMatches, CancelIfPastDueOccurrenceWithRetention,
-// IsRetentionNotice30dEligibleForOccurrence/7d) that are needed only by past_due_service.go's and
-// retention_cleanup_check.go's own narrow consumer interfaces, not by the broad canonical
+// (ClearPastDueStartedAtIfMatches, IsRetentionNotice30dEligibleForOccurrence/7d) that are needed
+// only by retention_cleanup_check.go's own narrow consumer interface, not by the broad canonical
 // ProfileRepository interface every other service's test double also implements. Every existing
 // call site (main.go, every _test.go in this package) already assigns via `:=` or passes the
 // value straight into a function parameter, so this is a compile-compatible widening: the
@@ -1095,8 +1093,8 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	// CI-observed clock-skew fix: through the fix below, `updated_at` AND the
 	// plaid_cleanup_pending_at COALESCE both used a single Go-computed `now := time.Now()` passed as
 	// a query parameter — the ONE writer of this column that did not use a Postgres-native clock,
-	// unlike every sibling writer (CancelIfPastDueOccurrenceWithRetention, ExpireTrialIfNoOverride,
-	// UpdateTrialStatus below, removeUserTierOverrideUpdate). That inconsistency is exactly what
+	// unlike every sibling writer (ExpireTrialIfNoOverride, UpdateTrialStatus below,
+	// removeUserTierOverrideUpdate). That inconsistency is exactly what
 	// failed TestUpdateSubscriptionFromPaddle_Integration_GenuineNewEpisodeGetsFreshMarker in CI: the
 	// test fences a "before" bound via `SELECT NOW()` (correctly, per this file's own established
 	// convention) and then asserts this method's freshly-stamped marker is not before that bound — but
@@ -1174,9 +1172,8 @@ func (r *profileRepository) UpdateSubscriptionFromPaddle(
 	// a genuine transition) leaves plaid_cleanup_pending_at completely untouched — whatever it
 	// currently is (NULL after a completed repair, or still running) is exactly what the invariant
 	// says it should be, and only a real transition is licensed to change it.
-	// CancelIfPastDueOccurrenceWithRetention/ExpireTrialIfNoOverride
-	// need no equivalent guard: their own WHERE clauses already require the OLD status to be
-	// 'past_due'/'trial' (never already repair-eligible), so every successful write there is a
+	// ExpireTrialIfNoOverride needs no equivalent guard: its own WHERE clause already requires the
+	// OLD status to be 'trial' (never already repair-eligible), so every successful write there is a
 	// transition into ineligibility by construction.
 	//
 	// Issue #1413 round-13: this eligible branch NO LONGER gates on whether the row currently
@@ -2965,14 +2962,14 @@ func (r *profileRepository) GetUsersWithActivePaddleSubscriptions(ctx context.Co
 // cancellation retention/deletion dates onto a now-active, paying customer. No read-then-write gate
 // can close that — only the write itself can, by re-evaluating the authorising condition against
 // committed state as part of the same statement. Same shape, and for the same stated reason, as
-// CancelIfPastDueOccurrenceWithRetention: "this method's WHERE clause is its OWN correctness
-// mechanism".
+// the deleted (#1652) past-due grace-cancel CAS: "this method's WHERE clause is its OWN
+// correctness mechanism".
 //
 // The condition comes from the caller (guard), because the two production callers do not share one
 // — see RetentionClockGuard's doc comment.
 //
 // The candidate CTE takes `FOR NO KEY UPDATE` before the status is compared, matching
-// CancelIfPastDueOccurrenceWithRetention/ExpireTrialIfNoOverride's own ROUND 23 shape: a locked
+// ExpireTrialIfNoOverride's own ROUND 23 shape: a locked
 // SELECT follows the row's update chain, so the status compared here is the row version that exists
 // once any concurrent writer's lock is RELEASED, not the pre-wait one this statement first scanned.
 // (Never `FOR UPDATE` — see StampMissingPlaidCleanupMarkers's Finding 1 correction for the
@@ -3112,11 +3109,11 @@ func (r *profileRepository) ClearRetentionDates(ctx context.Context, userID stri
 // hand-copied definitions: queue/jobs/retention_cleanup_check.go's own unexported
 // plaidCleanupMarkerClearMaxAttempts/plaidCleanupMarkerClearRetryDelay (which subscription_webhook.go
 // — same package — also references directly, so THAT pair was never actually duplicated), and a
-// second, genuinely independent pair in services/past_due_service.go, whose own doc comment said so
-// explicitly: "Duplicated here (not imported) rather than shared: retention_cleanup_check.go's
-// constants are unexported in a different package (queue/jobs vs services)." Codex measured the
-// runtime difference this queue/jobs's context-aware exponential backoff vs. past_due_service.go's
-// flat time.Sleep loop produces as cosmetic (~150ms vs ~100ms total, at most a 100ms shutdown delay)
+// second, genuinely independent pair in the since-deleted services/past_due_service.go (#1652),
+// whose own doc comment said so explicitly: "Duplicated here (not imported) rather than shared:
+// retention_cleanup_check.go's constants are unexported in a different package (queue/jobs vs
+// services)." Codex measured the runtime difference this queue/jobs's context-aware exponential
+// backoff vs. past_due_service.go's flat time.Sleep loop produced as cosmetic (~150ms vs ~100ms total, at most a 100ms shutdown delay)
 // — the actual risk Finding 3 identifies is DRIFT between two independently-maintained copies of the
 // same two numbers, not the timing shape. That is the exact failure mode that produced this branch's
 // main.go wiring bug (a helper corrected while a hand-written duplicate went stale), so it is worth
@@ -3129,7 +3126,7 @@ func (r *profileRepository) ClearRetentionDates(ctx context.Context, userID stri
 // `services` already import `repository` (this is the package that defines
 // ClearPlaidCleanupPendingIfMatches itself, the call every one of these retry loops wraps). Both
 // queue/jobs (retention_cleanup_check.go, and by extension subscription_webhook.go in the same
-// package) and services (past_due_service.go) now define their own unexported, same-named constant
+// package) and services (past_due_service.go, since deleted in #1652) defined their own unexported, same-named constant
 // as a plain alias to these exported values (`= repository.PlaidCleanupMarkerClearMaxAttempts`, etc.)
 // rather than a second independent literal — so every existing internal reference and test in both
 // packages keeps working unchanged, but there is now exactly ONE place either NUMBER can be written
@@ -3174,7 +3171,7 @@ func (r *profileRepository) ClearPlaidCleanupPending(ctx context.Context, userID
 
 // ClearPlaidCleanupPendingIfMatches is ClearPlaidCleanupPending's occurrence-scoped sibling —
 // Issue #1413 round-11 Fix 3, mirroring ClearPastDueStartedAtIfMatches's established CAS shape
-// (past_due_service.go's exact solution to the same occurrence-identity problem, applied here to
+// (the deleted past_due_service.go's exact solution to the same occurrence-identity problem, applied here to
 // plaid_cleanup_pending_at rather than past_due_started_at).
 //
 // ONLY clears the marker when it still equals expected — the value the caller observed when it
@@ -3379,12 +3376,12 @@ const manualTierOverrideNonEmptyClause = `manual_tier_override IS NOT NULL AND m
 // TestNoActiveManualOverridePredicate_Integration_ExactExpiryBoundary kept exercising it purely
 // so the exact production string wouldn't silently drift from a hand-copied restatement. As of
 // the Issue #1413 Codex review round 3 fix (High findings H5/H6), it now has real production
-// callers too — CancelIfPastDueOccurrenceWithRetention and ExpireTrialIfNoOverride splice this
-// constant into a conditional UPDATE's WHERE clause, per the claim-then-act pattern (a third former
-// caller, ClaimPlaidDisconnectIfPastDue, was deleted in round 4 — see past_due_service.go's H6a
-// fix, which replaced its self-assigning-update "claim" with a real work_claims claim; a fourth,
-// CancelIfPastDueWithRetention — the non-occurrence predecessor of CancelIfPastDueOccurrenceWithRetention
-// above — was deleted by Issue #1442 for having zero production callers): this is the one place the
+// callers too — ExpireTrialIfNoOverride splices this constant into a conditional UPDATE's WHERE
+// clause, per the claim-then-act pattern (a former caller, ClaimPlaidDisconnectIfPastDue, was
+// deleted in round 4 — see the deleted past_due_service.go's H6a fix, which replaced its
+// self-assigning-update "claim" with a real work_claims claim; CancelIfPastDueWithRetention was
+// deleted by Issue #1442 for having zero production callers; and the occurrence-scoped
+// CancelIfPastDueOccurrenceWithRetention was deleted by #1652): this is the one place the
 // "still live right now" rule (as opposed to noManualOverrideAtAllPredicate's "not even a lapsed
 // one") is actually the correct rule to enforce, because these are point-in-time transitions
 // guarded against a comp granted in a race window, not the retention-notice/hard-delete queries'
@@ -3673,9 +3670,9 @@ func (r *profileRepository) RepairRetentionClock(ctx context.Context, userID str
 // (Codex review). Deliberately NARROWER than the read-only notion used by the retention-notice/
 // hard-delete queries above (which also don't include past_due, but for a different family of
 // predicates entirely): 'past_due' is read-only, but must never be immediately Plaid-disconnected
-// by THIS repair pass — it has its own dunning timeline (past_due_service.go,
-// PastDueConfig.PlaidDisconnectDays) that exists precisely to give a paying-but-behind user time
-// before Plaid access is touched. This branch already has a precedent for this exact failure class
+// by THIS repair pass — it had its own dunning timeline (the deleted past_due_service.go /
+// PastDueConfig.PlaidDisconnectDays, #1652) that existed precisely to give a paying-but-behind user
+// time before Plaid access is touched. This branch already has a precedent for this exact failure class
 // — an override predicate existing in both SQL and Go, kept honest by a parity test
 // (noActiveManualOverridePredicate / domain.User.HasActiveManualOverride(), guarded by
 // TestNoActiveManualOverridePredicate_Integration_ParityWithGo) — this constant and
@@ -3715,8 +3712,7 @@ const liveLinkedItemExistsClause = `EXISTS (
 //     ineligibility episode began at this instant, cleanup outstanding" — a durable,
 //     override-independent fact (see domain.User.PlaidCleanupPendingAt's doc comment) — and is
 //     NULL whenever nothing is pending (see ExpireTrialIfNoOverride/
-//     CancelIfPastDueOccurrenceWithRetention/UpdateSubscriptionFromPaddle/
-//     UpdateTrialStatus for where it's set/cleared). A NULL marker is explicitly excluded — this pass must never
+//     UpdateSubscriptionFromPaddle/UpdateTrialStatus for where it's set/cleared). A NULL marker is explicitly excluded — this pass must never
 //     invent work from a derived signal.
 //   - an EXISTS check for at least one linked item that is still "live" — not 'disconnected' or
 //     'replaced', the same definition LinkedItemRepository.GetActiveItemsByUserID uses, EXCEPT a
@@ -4026,8 +4022,8 @@ func (r *profileRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Con
 // (retention_cleanup_check.go), not by the broad canonical interface every OTHER service's test
 // double also implements in full — adding it there would force a new stub method onto every one of
 // those unrelated mocks for a capability only one caller needs. Mirrors this file's existing
-// precedent for ClearPastDueStartedAtIfMatches, CancelIfPastDueOccurrenceWithRetention, and the two
-// occurrence-scoped retention-notice-eligibility methods (see NewProfileRepository's own doc comment).
+// precedent for ClearPastDueStartedAtIfMatches and the two occurrence-scoped
+// retention-notice-eligibility methods (see NewProfileRepository's own doc comment).
 func (r *profileRepository) StampMissingPlaidCleanupMarkers(ctx context.Context) (int, error) {
 	// ROUND 21 correction (Issue #1413 Finding 2, Codex review, PR #1443 follow-up): a bare
 	// `UPDATE ... SET plaid_cleanup_pending_at = clock_timestamp() WHERE ...` is NOT enough, and this
@@ -4085,7 +4081,7 @@ func (r *profileRepository) StampMissingPlaidCleanupMarkers(ctx context.Context)
 	// rather than papering over one specific interleaving of it. Every CTE added for Issue #1413
 	// Finding 2 (the four sibling COALESCE(plaid_cleanup_pending_at, ...) writers restructured in this
 	// same round — UpdateSubscriptionFromPaddle, UpdateTrialStatus,
-	// CancelIfPastDueOccurrenceWithRetention, ExpireTrialIfNoOverride) uses `FOR NO KEY UPDATE` for
+	// ExpireTrialIfNoOverride) uses `FOR NO KEY UPDATE` for
 	// this identical reason: any of those four rows could equally be an audit actor, so `FOR UPDATE`
 	// there would reproduce this exact cycle four more times over.
 	//
@@ -5010,9 +5006,9 @@ func (r *profileRepository) ClearPastDueStartedAt(ctx context.Context, userID st
 // #1413 round-4 finding H3). ClearPastDueStartedAt above is UNCONDITIONAL (WHERE id = $1) —
 // correct for subscription_webhook.go's recovery-path callers, where Paddle telling us the
 // subscription is no longer past_due IS the authorization. It is WRONG for
-// processGraceExpiry's auto-cancel step (past_due_service.go), which captured a SPECIFIC dunning
-// cycle's timestamp earlier in its own run: sequence — the CAS (CancelIfPastDueOccurrenceWithRetention)
-// succeeds and the flow reaches this clear step; meanwhile the user recovers, then re-enters
+// the deleted (#1652) processGraceExpiry auto-cancel step, which captured a SPECIFIC dunning
+// cycle's timestamp earlier in its own run: sequence — the CAS succeeds and the flow reaches this
+// clear step; meanwhile the user recovers, then re-enters
 // past_due, and the webhook stamps a NEW past_due_started_at (SetPastDueStartedAt) for the NEW
 // cycle; the ORIGINAL flow, still holding its stale snapshot, then reaches an unconditional clear
 // and would erase the NEW cycle's timestamp too. Because GetUsersInPastDue requires
@@ -5133,113 +5129,12 @@ func (r *profileRepository) GetUsersInPastDue(ctx context.Context) ([]domain.Use
 	return users, nil
 }
 
-// CancelIfPastDueOccurrenceWithRetention atomically flips subscription_status to 'cancelled' AND
-// starts the retention clock (retention_started_at, retention_expires_at) in the same UPDATE,
-// occurrence-scoped (Issue #1413 round-4 finding H1). Its predecessor, CancelIfPastDueWithRetention
-// (deleted by Issue #1442 for having zero production callers), CASed only on still-'past_due' and
-// no currently-active manual override (noActiveManualOverridePredicate) — necessary but not
-// sufficient once a worker can be racing a NEWER past_due cycle for the SAME user: a batch snapshot
-// captures cycle A's past_due_started_at, the user recovers, then re-enters past_due as cycle B (a
-// genuinely NEW past_due_started_at) — cycle B is ALSO 'past_due' with no override, so that
-// predicate would happily flip it even though the worker only ever verified cycle A's grace
-// period, not cycle B's. Adding `AND past_due_started_at = expectedPastDueStartedAt` closes this:
-// the CAS now only succeeds for the EXACT cycle the caller claimed and re-verified.
-//
-// Returns (true, nil) when the flip happened, (false, nil) whenever the predicate misses for ANY
-// reason — recovered, comped, or a different cycle now occupies the row. All three are the same
-// "someone else's business, not an error" outcome for this caller: past_due_service.go's
-// processGraceExpiry Releases (never Completes) its claim and lets a future run handle whatever
-// cycle is actually current. Issue #898: CAS guard against recovery race condition. Issue #1413
-// High finding H6 (Codex review round 3): predicate extended with noActiveManualOverridePredicate —
-// a prior read-only HasActiveManualOverride() check in the caller cannot, by itself, protect this
-// write, since the two are not atomic.
-//
-// retention_expires_at is computed entirely in Postgres, clock_timestamp() + make_interval(months
-// => $3) — Task NA2 (Issue #1413 follow-up on PR #1443): this method used to accept a Go-computed
-// retentionExpires time.Time built via now.AddDate(0, retentionMonths, 0) in past_due_service.go,
-// which disagrees with Postgres's make_interval whenever the anchor's day-of-month does not exist
-// N months later (Go normalizes the overflow FORWARD; Postgres clamps to the target month's last
-// day instead) — the wrong direction for a GDPR deletion deadline. Matches SetRetentionDates and
-// AdminUserRepository.RemoveUserTierOverride's SQL exactly, so every writer of this column shares
-// one semantics — see SetRetentionDates' interface doc comment for why the pre-144b0e3a row
-// population was deliberately not backfilled. (Round 10 narrowed this claim to writers with a
-// production caller while a dead sibling, CancelIfPastDueWithRetention, still existed on the old
-// Go-computed semantics; Issue #1442 deleted that sibling, so the unqualified claim holds again.)
-//
-// Round-10 note on the clock pairing, so it is not mistaken for an oversight: retention_started_at is
-// supplied by the caller while retention_expires_at is computed here from clock_timestamp() at write
-// time, so in a BATCH caller (past_due_check.go captures one time.Now() before its per-user loop, and
-// each iteration makes Plaid/Paddle calls before reaching this write) a later row's window is N months
-// plus the batch's elapsed time. That is the same class of skew removeUserTierOverrideUpdate's doc
-// comment already accepts for lock waits — "affects only what the started-at audit trail SAYS, never
-// what any query DOES with it" — but the batch magnitude (potentially minutes, not milliseconds) is
-// larger than that precedent analysed. Filed as a follow-up rather than fixed here: the obvious fix,
-// hoisting one clock_timestamp() into a `WITH t AS (SELECT clock_timestamp())` CTE, is NOT safe in
-// this method, because a trivial CTE like that can be evaluated BEFORE the sibling candidate CTE's
-// FOR NO KEY UPDATE lock wait completes — reintroducing exactly the pre-lock-wait-row-version hazard
-// ROUND 23 restructured this statement to fix. Trading microseconds of column skew for seconds of
-// lock-wait skew is the wrong direction.
-//
-// retention_started_at stays a plain Go-computed value ($2, unchanged) — per
-// removeUserTierOverrideUpdate's own doc comment (admin_user_repository.go), retention_started_at
-// is a paired audit field nothing computes an age from or compares to NOW()/clock_timestamp()
-// anywhere; only retention_expires_at is ever read back as a deadline, so basing it on a
-// DIFFERENT, fresher clock than retention_started_at is the established, already-reviewed pattern
-// here, not a new inconsistency.
-func (r *profileRepository) CancelIfPastDueOccurrenceWithRetention(ctx context.Context, userID string, expectedPastDueStartedAt, retentionStarted time.Time, retentionMonths int) (bool, error) {
-	// Issue #1413 round-10: plaid_cleanup_pending_at starts atomically with this SAME CAS write —
-	// see GetUsersNeedingPlaidDisconnectRepair's doc comment. COALESCE guards against a retried
-	// call re-pushing an already-running marker forward.
-	//
-	// Issue #1413 Finding 2 (Medium, Codex review, PR #1443 follow-up) audited this marker COALESCE
-	// too, for the same reason UpdateSubscriptionFromPaddle's own doc comment (this file) explains
-	// in full: a bare substitution would not actually fix anything here, and the real fix was
-	// scoped into the same follow-up at the time.
-	//
-	// ROUND 23 (Issue #1413 Finding 2, High, Codex review, PR #1443 follow-up) is that follow-up.
-	// This method's WHERE clause is its OWN correctness mechanism: `past_due_started_at = $4` is
-	// exactly the extra guard this method exists to add (see this method's own H1 doc comment above)
-	// against a worker racing a NEWER past_due cycle for the same user, so it moves into the CTE's
-	// SELECT alongside the other two conditions, UNCHANGED and in full —
-	// `subscription_status = 'past_due'`, `past_due_started_at = $4`, and
-	// noActiveManualOverridePredicate, nothing added, nothing removed. Same `FOR NO KEY UPDATE` lock
-	// mode and same verified-fresh target-table COALESCE read as UpdateSubscriptionFromPaddle's own
-	// ROUND 23 fix — see that method's doc comment for the full mechanism.
-	//
-	// RowsAffected() semantics are unchanged: past_due_service.go's processGraceExpiry reads the
-	// returned bool to decide between Completing (flipped) and Releasing (not flipped) its claim —
-	// the join with the CTE still produces zero rows in EXACTLY the circumstances (id not found,
-	// status no longer 'past_due', a DIFFERENT past_due cycle now occupies the row, or a
-	// currently-active override) the bare UPDATE's WHERE clause used to.
-	ct, err := r.db.Exec(ctx, `
-		WITH candidate AS (
-			SELECT id FROM users
-			WHERE id = $1 AND subscription_status = 'past_due' AND past_due_started_at = $4
-		`+noActiveManualOverridePredicate+`
-			FOR NO KEY UPDATE
-		)
-		UPDATE users
-		SET subscription_status = 'cancelled',
-		    retention_started_at = $2,
-		    retention_expires_at = clock_timestamp() + make_interval(months => $3::int),
-		    plaid_cleanup_pending_at = COALESCE(plaid_cleanup_pending_at, clock_timestamp()),
-		    updated_at = NOW()
-		FROM candidate
-		WHERE users.id = candidate.id
-	`,
-		userID, retentionStarted, retentionMonths, expectedPastDueStartedAt)
-	if err != nil {
-		return false, fmt.Errorf("CancelIfPastDueOccurrenceWithRetention: %w", err)
-	}
-	return ct.RowsAffected() > 0, nil
-}
-
 // ExpireTrialIfNoOverride atomically flips subscription_status to 'inactive' only if the user is
 // still 'trial' and carries no currently-active manual tier override. Returns (true, nil) if the
 // flip happened, (false, nil) if an admin granted/extended a comp between the caller's earlier
 // HasActiveManualOverride() read and this call, or the user's status has otherwise already moved
-// on. Issue #1413 High finding H5, Codex review round 3: follows CancelIfPastDueOccurrenceWithRetention's
-// shape — the predicate that authorises the transition lives in the UPDATE's WHERE clause,
+// on. Issue #1413 High finding H5, Codex review round 3: follows the deleted (#1652) past-due
+// grace-cancel CAS's shape — the predicate that authorises the transition lives in the UPDATE's WHERE clause,
 // evaluated against committed state at the moment of the write, not in an earlier, non-atomic
 // read-then-check.
 func (r *profileRepository) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
@@ -5260,12 +5155,11 @@ func (r *profileRepository) ExpireTrialIfNoOverride(ctx context.Context, userID 
 	// non-atomic HasActiveManualOverride() read cannot. Both conditions move into the locked CTE's
 	// SELECT unchanged, nothing added, nothing removed. Same `FOR NO KEY UPDATE` lock mode (never
 	// `FOR UPDATE` — see StampMissingPlaidCleanupMarkers's Finding 1 correction for the cross-user
-	// deadlock that mode would risk) and same verified-fresh target-table COALESCE read as
-	// CancelIfPastDueOccurrenceWithRetention's own ROUND 23 fix — see that method's doc comment for
-	// the full mechanism.
+	// deadlock that mode would risk) and same verified-fresh target-table COALESCE read as the
+	// deleted (#1652) past-due grace-cancel CAS's own ROUND 23 fix.
 	//
 	// RowsAffected() semantics are unchanged: this method's own callers use the returned bool exactly
-	// as CancelIfPastDueOccurrenceWithRetention's callers do — the join with the CTE still produces zero rows
+	// as the deleted past-due grace-cancel CAS's callers did — the join with the CTE still produces zero rows
 	// in EXACTLY the circumstances (id not found, status no longer 'trial', or a currently-active
 	// override — i.e. an admin granted/extended a comp between the caller's HasActiveManualOverride()
 	// read and this call) the bare UPDATE's WHERE clause used to.

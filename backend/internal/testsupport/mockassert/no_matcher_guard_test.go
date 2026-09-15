@@ -75,7 +75,6 @@ var noMatcherBaseline = map[string]int{
 	"backend/internal/queue/jobs/item_cleanup_use_time_recheck_test.go":                    2,
 	"backend/internal/queue/jobs/manual_tier_override_expiry_check_test.go":                2,
 	"backend/internal/queue/jobs/paddle_reconciliation_test.go":                            6,
-	"backend/internal/queue/jobs/past_due_check_test.go":                                   2,
 	"backend/internal/queue/jobs/plaid_sync_test.go":                                       1,
 	"backend/internal/queue/jobs/retention_cleanup_check_test.go":                          4,
 	"backend/internal/queue/jobs/savings_stats_worker_test.go":                             1,

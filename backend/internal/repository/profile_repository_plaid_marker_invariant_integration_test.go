@@ -942,30 +942,6 @@ func TestPlaidMarkerInvariant_Integration_Sweep(t *testing.T) {
 		assert.True(t, found, "a comp granted over an already-cancelled user, lapsed and never removed, must still be found by the repair pass")
 	})
 
-	t.Run("past_due_to_grace", func(t *testing.T) {
-		user := createPlaidMarkerTestUser(t, pool, repo, "sweeppastdue", "past_due")
-		// See trial_to_expire's comment above for why this seed is required (not optional) for the
-		// invariant check after the grace-expiry cancellation to be anything other than a
-		// tautology.
-		seedLinkedItem(t, pool, user.ID, "item-"+user.ID, "active")
-		assertPlaidMarkerInvariant(t, pool, user.ID, "past_due: initial")
-
-		// Issue #1442: CancelIfPastDueWithRetention (non-occurrence) was deleted for having zero
-		// production callers; past_due_service.go's real caller uses the occurrence-scoped CAS, which
-		// requires past_due_started_at to match the EXACT claimed cycle — so this fixture must seed
-		// one before the call, or the CAS silently matches nothing and the method no-ops. The
-		// require.True(t, flipped) below is what catches that: without a matching seed, flipped would
-		// be false and this test would fail loudly instead of passing for the wrong reason.
-		pastDueStarted := time.Now().Add(-30 * 24 * time.Hour).Truncate(time.Microsecond)
-		require.NoError(t, repo.SetPastDueStartedAt(ctx, user.ID, pastDueStarted))
-
-		retentionStart := time.Now()
-		flipped, err := repo.CancelIfPastDueOccurrenceWithRetention(ctx, user.ID, pastDueStarted, retentionStart, 6)
-		require.NoError(t, err)
-		require.True(t, flipped, "CancelIfPastDueOccurrenceWithRetention must flip for the exact matching past_due occurrence")
-		assertPlaidMarkerInvariant(t, pool, user.ID, "past_due->grace: after grace-expiry cancellation")
-	})
-
 	// t.Run("branch1_backstop_heals_stale_marker_on_reactivation", ...) is Issue #1455's sweep
 	// subtest: the invariant's FIRST branch (status NOT ineligible ⇒ marker must be NULL) had no
 	// runtime backstop at all until ClearMarkersOnEligibleStatus (profile_repository.go) — both
