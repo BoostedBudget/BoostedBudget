@@ -102,8 +102,7 @@ type HouseholdOverCapacityCheckRepository interface {
 }
 
 // HouseholdOverCapacityUserRepository defines the owner-lookup method needed to
-// recompute the owner's current effective-tier seat count on every scan pass — the
-// same technique paddle_checkout.go's checkDowngradeSeatCapacity (Task 5) uses.
+// recompute the owner's current effective-tier seat count on every scan pass.
 type HouseholdOverCapacityUserRepository interface {
 	GetUserByID(ctx context.Context, id string) (*domain.User, error)
 }

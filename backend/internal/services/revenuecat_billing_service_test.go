@@ -91,3 +91,33 @@ func TestRevenueCatBillingCompOnlyHasNoPaidSubscription(t *testing.T) {
 	require.ErrorIs(t, err, ErrSubscriptionNotFound)
 	require.NotNil(t, got.Comp)
 }
+
+func TestRevenueCatBillingManagementURLUsesResolvedPaddleRecord(t *testing.T) {
+	p := &rcBillingPaddle{sub: &paddle.Subscription{ID: "sub_paid", CustomerID: "ctm_paid"}}
+	summary := rcBillingSummary{RevenueCatSummary{BillingAvailable: true, Billing: []domain.RevenueCatBilling{
+		{Store: "paddle", Status: "active", StoreSubscriptionIdentifier: "sub_paid", ManagementURL: "https://rc.example/manage"},
+	}}}
+	url, err := NewRevenueCatBillingService(summary, p, nil).ManagementURL(context.Background(), &domain.User{ID: "user"})
+	require.NoError(t, err)
+	require.Equal(t, "https://rc.example/manage", url)
+}
+
+func TestRevenueCatBillingManagementURLUnresolvedWhenRevenueCatHasNone(t *testing.T) {
+	p := &rcBillingPaddle{sub: &paddle.Subscription{ID: "sub_paid", CustomerID: "ctm_paid"}}
+	summary := rcBillingSummary{RevenueCatSummary{BillingAvailable: true, Billing: []domain.RevenueCatBilling{
+		{Store: "paddle", Status: "active", StoreSubscriptionIdentifier: "sub_paid"},
+	}}}
+	_, err := NewRevenueCatBillingService(summary, p, nil).ManagementURL(context.Background(), &domain.User{ID: "user"})
+	require.ErrorIs(t, err, domain.ErrRevenueCatUnresolved)
+}
+
+func TestRevenueCatBillingManagementURLIgnoresExpiredRecord(t *testing.T) {
+	p := &rcBillingPaddle{sub: &paddle.Subscription{ID: "sub_paid", CustomerID: "ctm_paid"}}
+	summary := rcBillingSummary{RevenueCatSummary{BillingAvailable: true, Billing: []domain.RevenueCatBilling{
+		{Store: "paddle", Status: "expired", StoreSubscriptionIdentifier: "sub_paid", ManagementURL: "https://rc.example/stale"},
+		{Store: "paddle", Status: "active", StoreSubscriptionIdentifier: "sub_paid", ManagementURL: "https://rc.example/live"},
+	}}}
+	url, err := NewRevenueCatBillingService(summary, p, nil).ManagementURL(context.Background(), &domain.User{ID: "user"})
+	require.NoError(t, err)
+	require.Equal(t, "https://rc.example/live", url)
+}

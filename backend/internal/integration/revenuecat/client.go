@@ -95,6 +95,10 @@ type Subscription struct {
 	AutoRenewalStatus           string     `json:"auto_renewal_status"`
 	CurrentPeriodEndsAt         *time.Time `json:"current_period_ends_at"`
 	EndsAt                      *time.Time `json:"ends_at"`
+	// ManagementURL is RevenueCat's self-service link for this subscription. The v2
+	// Subscription object populates it for Paddle (and App Store/Play/Amazon/Web
+	// Billing) subscriptions; it is empty when RevenueCat has not resolved one.
+	ManagementURL string `json:"management_url"`
 }
 type Snapshot struct {
 	Entitlements  []Entitlement
@@ -246,6 +250,7 @@ func (c *Client) FetchSubscriptions(ctx context.Context, id string) ([]Subscript
 			AutoRenewalStatus           string          `json:"auto_renewal_status"`
 			CurrentPeriodEndsAt         json.RawMessage `json:"current_period_ends_at"`
 			EndsAt                      json.RawMessage `json:"ends_at"`
+			ManagementURL               string          `json:"management_url"`
 		}
 		if json.Unmarshal(raw, &wire) != nil || wire.ID == "" || wire.Status == "" || wire.Store == "" || wire.Environment == "" {
 			return nil, errors.New("invalid RevenueCat subscription")
@@ -258,7 +263,7 @@ func (c *Client) FetchSubscriptions(ctx context.Context, id string) ([]Subscript
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, Subscription{ID: wire.ID, ProductID: wire.ProductID, StoreSubscriptionIdentifier: wire.StoreSubscriptionIdentifier, Status: wire.Status, Store: wire.Store, Environment: wire.Environment, AutoRenewalStatus: wire.AutoRenewalStatus, CurrentPeriodEndsAt: period, EndsAt: end})
+		result = append(result, Subscription{ID: wire.ID, ProductID: wire.ProductID, StoreSubscriptionIdentifier: wire.StoreSubscriptionIdentifier, Status: wire.Status, Store: wire.Store, Environment: wire.Environment, AutoRenewalStatus: wire.AutoRenewalStatus, CurrentPeriodEndsAt: period, EndsAt: end, ManagementURL: wire.ManagementURL})
 	}
 	return result, nil
 }

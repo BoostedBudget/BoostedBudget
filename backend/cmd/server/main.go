@@ -1179,10 +1179,6 @@ func main() {
 					// freed to self-subscribe once their owner stops actually covering
 					// them, even if the raw entitlement row hasn't been cleaned up yet.
 					EntitlementRepo: householdEntitlementService,
-					// Issue #1371 Task 5 — in-app downgrade seat guard: blocks a
-					// household owner from downgrading to a tier without enough seats
-					// for their current active+pending household.
-					HouseholdRepo: householdRepo,
 				}).WithRevenueCatBilling(services.NewRevenueCatBillingService(revenueCatSummaryService, paddleService, paddleService.GetClient()))
 				appLogger.Info("Paddle checkout handler created")
 			}

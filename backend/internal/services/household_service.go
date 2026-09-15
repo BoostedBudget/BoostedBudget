@@ -758,8 +758,7 @@ func (s *householdService) removeMemberTx(ctx context.Context, tx pgx.Tx, househ
 	// only EVER checked) when the household is currently in over-capacity grace —
 	// households never in grace skip this entirely, no extra queries. Re-counts
 	// activeCount POST-removal (the removal above already committed within this same
-	// tx) against the owner's CURRENT effective-tier seat count (same technique as
-	// paddle_checkout.go's checkDowngradeSeatCapacity — Task 5), so an owner manually
+	// tx) against the owner's CURRENT effective-tier seat count, so an owner manually
 	// removing members during grace gets immediate credit without waiting for the next
 	// daily household_over_capacity_check worker run (Task 6, Part C).
 	//

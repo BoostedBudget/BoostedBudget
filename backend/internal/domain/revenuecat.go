@@ -25,6 +25,10 @@ type RevenueCatBilling struct {
 	AutoRenewalStatus           string     `json:"auto_renewal_status"`
 	CurrentPeriodEndsAt         *time.Time `json:"current_period_ends_at"`
 	EndsAt                      *time.Time `json:"ends_at"`
+	// ManagementURL is RevenueCat's self-service link for this subscription, populated
+	// for Paddle subscriptions when the Paddle API key carries the "Customer portal
+	// sessions (Write)" permission. Empty means RevenueCat has not resolved one.
+	ManagementURL string `json:"management_url"`
 }
 type RevenueCatState struct {
 	ErasureStartedAt   *time.Time          `json:"erasure_started_at,omitempty"`

@@ -352,8 +352,7 @@ func (w *SubscriptionWebhookWorker) syncClerkMetadata(ctx context.Context, userI
 //
 // No-op (nil error) when householdRepo isn't wired, or when ownerUserID doesn't own a
 // household. Otherwise locks the household row, recomputes the owner's CURRENT
-// effective-tier seat count (same technique as paddle_checkout.go's
-// checkDowngradeSeatCapacity — Task 5), and either starts or clears the
+// effective-tier seat count, and either starts or clears the
 // over_capacity_since grace clock via the idempotent SetOverCapacity/ClearOverCapacity
 // repository methods (Task 1). Every write here is safe to call twice —
 // SetOverCapacity's CTE only executes the UPDATE on a real NULL-to-value transition,
