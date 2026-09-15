@@ -6,11 +6,7 @@ import { useSubscriptionManagement } from './useSubscriptionManagement'
 import { mockUseAuth, createMockClerkAuth } from '@/test/mocks/clerk'
 import {
   mockUseGetCurrentSubscription,
-  mockUseUpdatePaddleSubscription,
-  mockUseCancelPaddleSubscription,
   mockUseGetBillingPortalUrl,
-  mockUpdateSubscriptionMutateAsync,
-  mockCancelSubscriptionMutateAsync,
 } from '@/test/mocks/subscription-api'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 
@@ -33,29 +29,11 @@ const defaultQueryState = {
   refetch: () => Promise.resolve({ data: undefined, error: null }),
 }
 
-const defaultMutationState = {
-  isPending: false,
-  isSuccess: false,
-  isError: false,
-  error: null,
-  reset: () => {},
-}
-
 describe('useSubscriptionManagement', () => {
   beforeEach(() => {
     mockUseGetCurrentSubscription.mockReturnValue(defaultQueryState)
-    mockUseUpdatePaddleSubscription.mockReturnValue({
-      mutateAsync: mockUpdateSubscriptionMutateAsync,
-      ...defaultMutationState,
-    })
-    mockUseCancelPaddleSubscription.mockReturnValue({
-      mutateAsync: mockCancelSubscriptionMutateAsync,
-      ...defaultMutationState,
-    })
     mockUseGetBillingPortalUrl.mockClear()
     mockUseGetBillingPortalUrl.mockReturnValue(defaultQueryState)
-    mockUpdateSubscriptionMutateAsync.mockClear()
-    mockCancelSubscriptionMutateAsync.mockClear()
     // Non-comped by default (the hook also consults the profile-derived presentation as a
     // resilience fallback for comped users, Issue #1413).
     mockUseGetUserProfile.mockClear()
@@ -315,41 +293,43 @@ describe('useSubscriptionManagement', () => {
     })
   })
 
-  describe('updateSubscription', () => {
-    it('includes current_billing_interval in mutation payload when provided', async () => {
-      mockUpdateSubscriptionMutateAsync.mockResolvedValue({})
+  describe('billing portal error state', () => {
+    it('normalizes a portal-URL failure instead of leaving a dead control', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: { status: 'active', tier: 'premium', subscription_id: 'sub_123' },
+      })
+      mockUseGetBillingPortalUrl.mockReturnValue({
+        ...defaultQueryState,
+        error: { status: 503, message: 'Service Unavailable' },
+      })
+
       const { result } = renderHook(() => useSubscriptionManagement(), {
         wrapper: createWrapper(),
       })
 
-      await result.current.updateSubscription({
-        newTier: 'household_2',
-        billingInterval: 'year',
-        currentBillingInterval: 'month',
-      })
-
-      expect(mockUpdateSubscriptionMutateAsync).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          new_tier: 'household_2',
-          billing_interval: 'year',
-          current_billing_interval: 'month',
-        }),
-      })
+      expect(result.current.billingPortalError?.message).toBe(
+        'Subscription service temporarily unavailable'
+      )
+      expect(result.current.billingPortalError?.message).not.toContain('503')
     })
 
-    it('omits current_billing_interval when not provided', async () => {
-      mockUpdateSubscriptionMutateAsync.mockResolvedValue({})
+    it('returns null billingPortalError when the portal resolves', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: { status: 'active', tier: 'premium', subscription_id: 'sub_123' },
+      })
+      mockUseGetBillingPortalUrl.mockReturnValue({
+        ...defaultQueryState,
+        data: { portal_url: 'https://portal.paddle.com/123' },
+      })
+
       const { result } = renderHook(() => useSubscriptionManagement(), {
         wrapper: createWrapper(),
       })
 
-      await result.current.updateSubscription({
-        newTier: 'premium',
-        billingInterval: 'month',
-      })
-
-      const call = mockUpdateSubscriptionMutateAsync.mock.calls[0]?.[0]
-      expect(call.data.current_billing_interval).toBeUndefined()
+      expect(result.current.billingPortalError).toBeNull()
+      expect(result.current.billingPortalUrl).toBe('https://portal.paddle.com/123')
     })
   })
 

@@ -50,48 +50,6 @@ export const mockUseCreatePaddleCheckout = mock(() => ({
   ...defaultMutationState,
 }))
 
-// === usePreviewPaddleSubscriptionUpdate ===
-export const mockPreviewUpdateMutateAsync = mock(() =>
-  Promise.resolve({
-    proration_amount: '5.00',
-    currency: 'USD',
-    next_charge_date: '2026-03-15',
-  })
-)
-
-export const mockUsePreviewPaddleSubscriptionUpdate = mock(() => ({
-  mutateAsync: mockPreviewUpdateMutateAsync,
-  ...defaultMutationState,
-}))
-
-// === useUpdatePaddleSubscription ===
-export const mockUpdateSubscriptionMutateAsync = mock(() =>
-  Promise.resolve({
-    subscription_id: 'sub_123',
-    status: 'active',
-    message: 'Subscription updated successfully',
-  })
-)
-
-export const mockUseUpdatePaddleSubscription = mock(() => ({
-  mutateAsync: mockUpdateSubscriptionMutateAsync,
-  ...defaultMutationState,
-}))
-
-// === useCancelPaddleSubscription ===
-export const mockCancelSubscriptionMutateAsync = mock(() =>
-  Promise.resolve({
-    subscription_id: 'sub_123',
-    message: 'Subscription cancelled',
-    ends_at: '2026-03-15',
-  })
-)
-
-export const mockUseCancelPaddleSubscription = mock(() => ({
-  mutateAsync: mockCancelSubscriptionMutateAsync,
-  ...defaultMutationState,
-}))
-
 // === useGetBillingPortalUrl ===
 export const mockUseGetBillingPortalUrl = mock(() => ({
   data: undefined,
@@ -109,8 +67,5 @@ mock.module('@boostedbudget/api-client/endpoints/subscription/subscription', () 
   useGetSubscriptionTiers: mockUseGetSubscriptionTiers,
   useGetCurrentSubscription: mockUseGetCurrentSubscription,
   useCreatePaddleCheckout: mockUseCreatePaddleCheckout,
-  usePreviewPaddleSubscriptionUpdate: mockUsePreviewPaddleSubscriptionUpdate,
-  useUpdatePaddleSubscription: mockUseUpdatePaddleSubscription,
-  useCancelPaddleSubscription: mockUseCancelPaddleSubscription,
   useGetBillingPortalUrl: mockUseGetBillingPortalUrl,
 }))

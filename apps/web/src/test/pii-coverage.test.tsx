@@ -87,7 +87,6 @@ import {
 } from '@/test/mocks/investments-api'
 import { mockUseSavingsImpactData } from '@/test/mocks/savings-impact-hooks'
 import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
-import { mockUsePreviewPaddleSubscriptionUpdate } from '@/test/mocks/subscription-api'
 import {
   mockUseRequestDeletion,
   mockRequestDeletionMutateAsync,
@@ -161,7 +160,6 @@ const { BalanceOverview } = await import('@/features/dashboard/components/Balanc
 const { NetWorthSparkline } = await import('@/features/dashboard/components/NetWorthSparkline')
 
 const { CurrentSubscriptionDisplay } = await import('@/features/billing/components/CurrentSubscriptionDisplay')
-const { PlanChangeModal } = await import('@/features/billing/components/PlanChangeModal')
 const { SubscriptionOverrideModal } = await import('@/features/admin/components/SubscriptionOverrideModal')
 
 const { AutoCategorizationRuleTable } = await import(
@@ -1217,66 +1215,6 @@ describe('PII coverage — Round 8: billing components (personal charge surfaces
     // the aria-label containing the amount must not expose it unmasked (pii-masking.ts:80-94
     // scans attributes verbatim, not skipping masked ancestors for attributes).
     expect(scanForUnmaskedPII(document.body, [])).toEqual([])
-  })
-
-  test('PlanChangeModal masks proration_amount in upgrade preview section', () => {
-    // Provide mock tiers where 'premium' (selected) costs more than 'standard' (current)
-    // so isUpgrade=true and the proration section renders.
-    const tiers = {
-      standard: {
-        display_name: 'Standard',
-        pricing: { price_monthly: 4.99, price_yearly: 49.99, users_included: 1 },
-        limits: {},
-        features: [],
-      },
-      premium: {
-        display_name: 'Premium',
-        pricing: { price_monthly: 8.99, price_yearly: 89.99, users_included: 2 },
-        limits: {},
-        features: [],
-      },
-    }
-
-    // Override the preloaded mock to return a success state with proration data so the
-    // upgrade preview section renders synchronously on the first render.
-    mockUsePreviewPaddleSubscriptionUpdate.mockReturnValueOnce({
-      mutateAsync: mock(),
-      isPending: false,
-      isSuccess: true,
-      isError: false,
-      error: null,
-      reset: mock(),
-      data: { proration_amount: '3.50', currency: 'USD', next_charge_date: '2026-07-01' },
-    })
-
-    render(
-      <PlanChangeModal
-        open={true}
-        currentTier="standard"
-        currentBillingInterval="month"
-        tiers={tiers as any}
-        isUpdating={false}
-        onChangePlan={mock(() => {})}
-        onClose={mock(() => {})}
-        initialTier="premium"
-        initialInterval="month"
-      />,
-      { wrapper: createWrapper() }
-    )
-    // Confirm the proration amount is actually in the DOM before asserting.
-    expect(document.body.textContent).toContain('3.50')
-    // NOTE: PlanChangeModal also renders public catalog tier prices ($8.99 etc.) in its tier
-    // selection grid — these are NOT PII. Scope the scan to just the charge <p> so catalog prices
-    // in the tier grid are not false-positives (plan fallback: "focused render of just the
-    // isUpgrade preview section"). Inside the charge paragraph, the ONLY currency-shaped text is
-    // the proration amount "USD 3.50" — if unmasked, CURRENCY_RE catches it; if masked, passes.
-    const chargePara = Array.from(document.body.querySelectorAll('p')).find(
-      (p) => p.textContent?.includes("You'll be charged")
-    ) as HTMLElement | undefined
-    expect(chargePara).not.toBeUndefined()
-    // scanForUnmaskedPII on just the charge paragraph covers both text nodes and attributes
-    // (aria-label, title, etc.) within that element — stronger than a structural assertion.
-    expect(scanForUnmaskedPII(chargePara!, [])).toEqual([])
   })
 })
 

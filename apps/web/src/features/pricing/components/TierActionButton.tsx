@@ -2,24 +2,27 @@ import { useClerk } from '@clerk/react-router'
 import { Link } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { useRevenueCatCheckout } from '../../billing/hooks/useRevenueCatCheckout'
-import { classifyTierChange } from '../../subscription/lib/tierDirection'
+import { BillingPortalButton } from '../../billing/components/BillingPortalButton'
 import type { PricingState } from '../hooks/usePricingContext'
-import type { SubscriptionTier, TierName } from '../../subscription/types'
+import type { TierName } from '../../subscription/types'
 
 interface TierActionButtonProps {
   tierKey: TierName
   billingInterval: 'month' | 'year'
   pricingState: PricingState
-  tiers: Record<TierName, SubscriptionTier> | null
-  onChangePlan: (tier: TierName, interval: 'month' | 'year') => void
+  /** The provider's resolved management portal — the single self-service action (#1652). */
+  billingPortalUrl?: string
+  isLoadingPortal?: boolean
+  portalError?: unknown
 }
 
 export function TierActionButton({
   tierKey,
   billingInterval,
   pricingState,
-  tiers,
-  onChangePlan,
+  billingPortalUrl,
+  isLoadingPortal,
+  portalError,
 }: TierActionButtonProps) {
   const { openSignUp } = useClerk()
   const { checkout, isLoading } = useRevenueCatCheckout()
@@ -66,38 +69,14 @@ export function TierActionButton({
     )
   }
 
-  if (pricingState.status === 'past_due') {
-    return <Button disabled className="w-full">Update Payment</Button>
-  }
-
-  if (pricingState.status === 'paused') {
-    return <Button disabled className="w-full">Manage Billing</Button>
-  }
-
-  if (
-    pricingState.status === 'active' ||
-    pricingState.status === 'trialing' ||
-    pricingState.status === 'cancelled'
-  ) {
-    const direction = tiers
-      ? classifyTierChange(pricingState.tier, pricingState.billingInterval, tierKey, billingInterval, tiers)
-      : 'same'
-
-    if (direction === 'same') {
-      return <Button disabled className="w-full">Current Plan</Button>
-    }
-
-    const label =
-      direction === 'upgrade' ? 'Upgrade' :
-      direction === 'downgrade' ? 'Downgrade' :
-      billingInterval === 'year' ? 'Switch to Yearly' : 'Switch to Monthly'
-
-    return (
-      <Button onClick={() => onChangePlan(tierKey, billingInterval)} className="w-full">
-        {label}
-      </Button>
-    )
-  }
-
-  return <Button disabled className="w-full">Subscribe</Button>
+  // Any paid subscription (active, trialing, cancelled, past_due, paused) is managed through the
+  // provider's own portal. #1652 removed the in-app Paddle update/cancel/preview mutations, so
+  // there is exactly one self-service action here — no per-tier Upgrade/Downgrade/Resubscribe.
+  return (
+    <BillingPortalButton
+      billingPortalUrl={billingPortalUrl}
+      isLoadingPortal={!!isLoadingPortal}
+      error={portalError}
+    />
+  )
 }

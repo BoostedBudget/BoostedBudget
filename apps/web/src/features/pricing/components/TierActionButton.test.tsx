@@ -4,7 +4,6 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { TierActionButton } from './TierActionButton'
 import type { PricingState } from '../hooks/usePricingContext'
-import type { SubscriptionTier } from '../../subscription/types'
 import type { TierName } from '../../subscription/types'
 import { mockUseClerk, createMockClerk, mockUseAuth, createMockClerkAuth } from '@/test/mocks/clerk'
 import { revenueCatCheckout } from '../../billing/revenueCatRuntime'
@@ -12,47 +11,27 @@ import { revenueCatCheckout } from '../../billing/revenueCatRuntime'
 const mockStartCheckout = mock(async () => {})
 let restoreStartCheckout = () => {}
 
-function makeTier(priceMonthly: number): SubscriptionTier {
-  return {
-    name: 'premium',
-    display_name: 'Premium',
-    description: '',
-    limits: { transaction_history_days: 365 },
-    features: {
-      api_access: false,
-      priority_support: false,
-      custom_categories: true,
-      custom_tags: true,
-      advanced_reports: false,
-    },
-    pricing: {
-      price_monthly: priceMonthly,
-      price_yearly: priceMonthly * 10,
-      mobile_price_yearly: priceMonthly * 10,
-      users_included: 1,
-    },
-  }
+interface PortalProps {
+  url?: string
+  loading?: boolean
+  error?: unknown
 }
 
-const tiers: Record<TierName, SubscriptionTier> = {
-  premium: makeTier(8.99),
-  household_2: makeTier(12.99),
-  household_3: makeTier(14.99),
-  household_4: makeTier(16.99),
-  household_5: makeTier(18.99),
-}
-
-const mockOnChangePlan = mock(() => {})
-
-function renderButton(pricingState: PricingState, tierKey: TierName = 'household_2', billingInterval: 'month' | 'year' = 'month') {
+function renderButton(
+  pricingState: PricingState,
+  tierKey: TierName = 'household_2',
+  billingInterval: 'month' | 'year' = 'month',
+  portal: PortalProps = {},
+) {
   return render(
     <MemoryRouter>
       <TierActionButton
         tierKey={tierKey}
         billingInterval={billingInterval}
         pricingState={pricingState}
-        tiers={tiers}
-        onChangePlan={mockOnChangePlan}
+        billingPortalUrl={portal.url}
+        isLoadingPortal={portal.loading}
+        portalError={portal.error}
       />
     </MemoryRouter>
   )
@@ -64,7 +43,6 @@ it('links unresolved subscription state to billing recovery', () => {
 })
 
 beforeEach(() => {
-  mockOnChangePlan.mockClear()
   mockUseClerk.mockClear()
   mockUseClerk.mockReturnValue(createMockClerk())
   mockUseAuth.mockReturnValue(createMockClerkAuth({ userId: 'user_button', isSignedIn: true }))
@@ -152,172 +130,73 @@ describe('TierActionButton', () => {
     })
   })
 
-  describe('active state', () => {
-    it('shows disabled Current Plan for same tier + interval', () => {
-      const activeState: PricingState = {
-        status: 'active',
-        tier: 'premium',
-        billingInterval: 'month',
-        subscriptionId: 'sub_123',
-        cancelAtPeriodEnd: false,
-      }
-      renderButton(activeState, 'premium', 'month')
-      const btn = screen.getByRole('button')
-      expect(btn).toBeDisabled()
-      expect(btn.textContent).toContain('Current Plan')
+  // #1652: every paid subscription is managed through the provider's portal — one action, no
+  // in-app Upgrade/Downgrade/Resubscribe/Update-Payment mutations.
+  describe('subscribed states route to the management portal', () => {
+    const activeState: PricingState = {
+      status: 'active',
+      tier: 'premium',
+      billingInterval: 'month',
+      subscriptionId: 'sub_123',
+      cancelAtPeriodEnd: false,
+    }
+    const trialingState: PricingState = {
+      status: 'trialing',
+      tier: 'premium',
+      billingInterval: 'month',
+      subscriptionId: 'sub_123',
+    }
+    const cancelledState: PricingState = {
+      status: 'cancelled',
+      tier: 'premium',
+      billingInterval: 'month',
+      subscriptionId: 'sub_123',
+      cancelAtPeriodEnd: true,
+    }
+    const pastDueState: PricingState = {
+      status: 'past_due',
+      tier: 'premium',
+      billingInterval: 'month',
+      subscriptionId: 'sub_123',
+    }
+    const pausedState: PricingState = {
+      status: 'paused',
+      tier: 'premium',
+      billingInterval: 'month',
+      subscriptionId: 'sub_123',
+    }
+
+    for (const [name, state] of [
+      ['active', activeState],
+      ['trialing', trialingState],
+      ['cancelled', cancelledState],
+      ['past_due', pastDueState],
+      ['paused', pausedState],
+    ] as const) {
+      it(`renders the resolved management link for ${name}`, () => {
+        renderButton(state, 'household_2', 'month', { url: 'https://portal.paddle.com/sub' })
+        const link = screen.getByRole('link', { name: /manage subscription/i })
+        expect(link).toHaveAttribute('href', 'https://portal.paddle.com/sub')
+        expect(link).toHaveAttribute('target', '_blank')
+      })
+
+      it(`renders a disabled control (not a dead mutation) for ${name} while the portal is unresolved`, () => {
+        renderButton(state)
+        const btn = screen.getByRole('button', { name: /manage subscription/i })
+        expect(btn).toBeDisabled()
+      })
+    }
+
+    it('shows an error state when the portal URL fails to resolve', () => {
+      renderButton(activeState, 'household_2', 'month', { error: { status: 503 } })
+      expect(screen.getByRole('alert')).toHaveTextContent(/couldn't load the billing portal/i)
+      expect(screen.queryByRole('link', { name: /manage subscription/i })).toBeNull()
     })
 
-    it('shows Upgrade for higher-price tier', () => {
-      const activeState: PricingState = {
-        status: 'active',
-        tier: 'premium',
-        billingInterval: 'month',
-        subscriptionId: 'sub_123',
-        cancelAtPeriodEnd: false,
-      }
-      renderButton(activeState, 'household_2', 'month')
-      expect(screen.getByRole('button').textContent).toContain('Upgrade')
-    })
-
-    it('shows Downgrade for lower-price tier', () => {
-      const activeState: PricingState = {
-        status: 'active',
-        tier: 'household_5',
-        billingInterval: 'month',
-        subscriptionId: 'sub_123',
-        cancelAtPeriodEnd: false,
-      }
-      renderButton(activeState, 'premium', 'month')
-      expect(screen.getByRole('button').textContent).toContain('Downgrade')
-    })
-
-    it('shows interval switch label when same tier but different interval', () => {
-      const activeState: PricingState = {
-        status: 'active',
-        tier: 'premium',
-        billingInterval: 'month',
-        subscriptionId: 'sub_123',
-        cancelAtPeriodEnd: false,
-      }
-      renderButton(activeState, 'premium', 'year')
-      expect(screen.getByRole('button').textContent?.toLowerCase()).toContain('yearly')
-    })
-
-    it('calls onChangePlan with target tier and interval on Upgrade click', () => {
-      const activeState: PricingState = {
-        status: 'active',
-        tier: 'premium',
-        billingInterval: 'month',
-        subscriptionId: 'sub_123',
-        cancelAtPeriodEnd: false,
-      }
-      renderButton(activeState, 'household_2', 'month')
-      fireEvent.click(screen.getByRole('button'))
-      expect(mockOnChangePlan).toHaveBeenCalledWith('household_2', 'month')
-    })
-  })
-
-  describe('trialing state', () => {
-    it('shows disabled Current Plan for same tier + interval', () => {
-      const trialingState: PricingState = {
-        status: 'trialing',
-        tier: 'premium',
-        billingInterval: 'month',
-        subscriptionId: 'sub_123',
-      }
-      renderButton(trialingState, 'premium', 'month')
-      const btn = screen.getByRole('button')
-      expect(btn).toBeDisabled()
-      expect(btn.textContent).toContain('Current Plan')
-    })
-
-    it('shows Upgrade for higher-price tier', () => {
-      const trialingState: PricingState = {
-        status: 'trialing',
-        tier: 'premium',
-        billingInterval: 'month',
-        subscriptionId: 'sub_123',
-      }
-      renderButton(trialingState, 'household_3', 'month')
-      expect(screen.getByRole('button').textContent).toContain('Upgrade')
-    })
-  })
-
-  describe('cancelled state', () => {
-    it('shows disabled Current Plan for same tier', () => {
-      const cancelledState: PricingState = {
-        status: 'cancelled',
-        tier: 'premium',
-        billingInterval: 'month',
-        subscriptionId: 'sub_123',
-        cancelAtPeriodEnd: true,
-        scheduledChangeAt: '2026-06-01T00:00:00Z',
-      }
-      renderButton(cancelledState, 'premium', 'month')
-      const btn = screen.getByRole('button')
-      expect(btn).toBeDisabled()
-    })
-
-    it('shows Upgrade for a higher-priced tier', () => {
-      const cancelledState: PricingState = {
-        status: 'cancelled',
-        tier: 'premium',
-        billingInterval: 'month',
-        subscriptionId: 'sub_123',
-        cancelAtPeriodEnd: true,
-      }
-      renderButton(cancelledState, 'household_2', 'month')
-      expect(screen.getByRole('button', { name: 'Upgrade' })).not.toBeDisabled()
-    })
-
-    it('shows Downgrade for a lower-priced tier', () => {
-      const cancelledState: PricingState = {
-        status: 'cancelled',
-        tier: 'household_5',
-        billingInterval: 'month',
-        subscriptionId: 'sub_123',
-        cancelAtPeriodEnd: true,
-      }
-      renderButton(cancelledState, 'premium', 'month')
-      expect(screen.getByRole('button', { name: 'Downgrade' })).not.toBeDisabled()
-    })
-
-    it('shows Switch to Yearly for same tier different interval', () => {
-      const cancelledState: PricingState = {
-        status: 'cancelled',
-        tier: 'premium',
-        billingInterval: 'month',
-        subscriptionId: 'sub_123',
-        cancelAtPeriodEnd: true,
-      }
-      renderButton(cancelledState, 'premium', 'year')
-      expect(screen.getByRole('button', { name: 'Switch to Yearly' })).not.toBeDisabled()
-    })
-
-    it('calls onChangePlan on directional CTA click', () => {
-      const cancelledState: PricingState = {
-        status: 'cancelled',
-        tier: 'premium',
-        billingInterval: 'month',
-        subscriptionId: 'sub_123',
-        cancelAtPeriodEnd: true,
-      }
-      renderButton(cancelledState, 'household_2', 'month')
-      fireEvent.click(screen.getByRole('button', { name: 'Upgrade' }))
-      expect(mockOnChangePlan).toHaveBeenCalledWith('household_2', 'month')
-    })
-  })
-
-  describe('past_due state', () => {
-    it('shows disabled button', () => {
-      const pastDueState: PricingState = {
-        status: 'past_due',
-        tier: 'premium',
-        billingInterval: 'month',
-        subscriptionId: 'sub_123',
-      }
-      renderButton(pastDueState, 'household_2', 'month')
+    it('shows a loading control while the portal URL is being resolved', () => {
+      renderButton(activeState, 'household_2', 'month', { loading: true })
       expect(screen.getByRole('button')).toBeDisabled()
+      expect(screen.getByRole('button').textContent).toContain('Loading')
     })
   })
 

@@ -1,13 +1,15 @@
 /**
- * Active-Subscriber Billing Management E2E Tests (Issue #1456)
+ * Active-Subscriber Billing Management E2E Tests (Issue #1456, updated by #1652)
  *
  * `/billing/manage` has E2E coverage for the complimentary (comped) view only
  * (comped-account.auth.spec.ts:163-184), which asserts *Change Plan* and
  * *Cancel Subscription* are ABSENT for a comped user. This file covers the opposite state:
- * a user with a real, active paid subscription, for whom those same controls must be
- * PRESENT — including the highest-consequence action available on this route
- * (cancellation) and the billing details (next-billing date + amount) that the comped
- * view deliberately suppresses.
+ * a user with a real, active paid subscription.
+ *
+ * #1652 pivoted billing self-service to a single "Manage subscription" action that opens the
+ * provider's own portal (Paddle stays merchant of record). The in-app Change Plan / Cancel
+ * Subscription mutations are gone, so this spec now asserts the resolved management link and
+ * the billing details (next-billing date + amount) that the comped view deliberately suppresses.
  *
  * Uses API mocking (page.route) — no live Paddle subscription required. Modeled directly
  * on comped-account.auth.spec.ts: same mocking helpers, role-based selectors, and the
@@ -44,6 +46,8 @@ const TIERS_FIXTURE = {
     },
   },
 }
+
+const PORTAL_URL = 'https://sandbox-vendors.paddle.com/subscription-portal/test'
 
 async function mockTiers(page: Page) {
   await page.route('**/api/v1/subscription/tiers*', (route) =>
@@ -86,9 +90,7 @@ async function mockBillingPortal(page: Page) {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        portal_url: 'https://sandbox-vendors.paddle.com/subscription-portal/test',
-      }),
+      body: JSON.stringify({ portal_url: PORTAL_URL }),
     })
   )
 }
@@ -116,11 +118,18 @@ test.describe('Active-subscriber billing management', () => {
     await expect(page.getByRole('heading', { name: 'Manage Subscription' })).toBeVisible()
   })
 
-  test('shows Change Plan and Cancel Subscription for an active paid subscriber', async ({
+  test('shows the resolved Manage subscription link for an active paid subscriber', async ({
     page,
   }) => {
-    await expect(page.getByRole('button', { name: 'Change Plan' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Cancel Subscription' })).toBeVisible()
+    const manage = page.getByRole('link', { name: 'Manage subscription' })
+    await expect(manage).toBeVisible()
+    await expect(manage).toHaveAttribute('href', PORTAL_URL)
+    await expect(manage).toHaveAttribute('target', '_blank')
+  })
+
+  test('does not render in-app Change Plan or Cancel Subscription controls', async ({ page }) => {
+    await expect(page.getByRole('button', { name: 'Change Plan' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Cancel Subscription' })).toHaveCount(0)
   })
 
   test('renders the next-billing date and amount (asserted absent in the comped view)', async ({
@@ -136,39 +145,5 @@ test.describe('Active-subscriber billing management', () => {
     await expect(billingDetails.getByText('2026-08-31')).toBeVisible()
     await expect(billingDetails.getByText('Amount:', { exact: true })).toBeVisible()
     await expect(billingDetails.getByText('USD 8.99')).toBeVisible()
-  })
-
-  test('clicking Cancel Subscription opens the confirmation modal', async ({ page }) => {
-    await page.getByRole('button', { name: 'Cancel Subscription' }).click()
-
-    await expect(page.getByRole('heading', { name: 'Cancel Subscription' })).toBeVisible()
-    await expect(
-      page.getByText(/are you sure you want to cancel your premium subscription/i)
-    ).toBeVisible()
-  })
-
-  test('the cancel modal can be dismissed via the explicit "Keep Subscription" action', async ({
-    page,
-  }) => {
-    await page.getByRole('button', { name: 'Cancel Subscription' }).click()
-    await expect(page.getByRole('heading', { name: 'Cancel Subscription' })).toBeVisible()
-
-    await page.getByRole('button', { name: 'Keep Subscription' }).click()
-
-    await expect(page.getByRole('heading', { name: 'Cancel Subscription' })).not.toBeVisible()
-    // The page underneath is unaffected — Cancel Subscription remains available to retry.
-    await expect(page.getByRole('button', { name: 'Cancel Subscription' })).toBeVisible()
-  })
-
-  test('the cancel modal can be dismissed by clicking the overlay', async ({ page }) => {
-    await page.getByRole('button', { name: 'Cancel Subscription' }).click()
-    await expect(page.getByRole('heading', { name: 'Cancel Subscription' })).toBeVisible()
-
-    // Radix Dialog closes on a pointer-down outside DialogContent. DialogContent is
-    // centered with max-w-2xl, so a corner of the full-viewport overlay is guaranteed
-    // to be uncovered.
-    await page.locator('[data-slot="dialog-overlay"]').click({ position: { x: 5, y: 5 } })
-
-    await expect(page.getByRole('heading', { name: 'Cancel Subscription' })).not.toBeVisible()
   })
 })
