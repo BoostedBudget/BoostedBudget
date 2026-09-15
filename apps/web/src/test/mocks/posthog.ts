@@ -68,7 +68,6 @@ mock.module('posthog-js', () => ({
 // isPostHogConfigured uses the real window.ENV check so individual tests can control
 // configured vs. non-configured state by setting window.ENV.POSTHOG_KEY.
 mock.module('../../shared/lib/posthog', () => ({
-  initPostHog: mock(() => {}),
   posthog: mockPosthogInstance,
   isPostHogConfigured: () => !!(window.ENV?.POSTHOG_KEY),
   captureProductEvent: mockCaptureProductEvent,

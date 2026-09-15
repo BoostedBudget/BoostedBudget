@@ -386,10 +386,6 @@ export function setProductAnalyticsScope(scope: string): void {
   analyticsLifecycle.setScope(scope)
 }
 
-export function initPostHog(): boolean {
-  return analyticsLifecycle.init()
-}
-
 export function grantProductAnalytics(
   scope: string,
   distinctId?: string,
