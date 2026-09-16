@@ -13,6 +13,18 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
+var ErrRegistrationErasureFenced = errors.New("registration refused for erased Clerk identity")
+
+type ClerkErasureFenceReader interface {
+	IsClerkIdentityErasureFenced(context.Context, string) (bool, error)
+}
+
+// RegistrationAuthority prevents a valid but stale Clerk token from recreating an erased account.
+type RegistrationAuthority struct {
+	ErasureFence    ClerkErasureFenceReader
+	ClerkUserGetter ClerkUserGetter
+}
+
 // TxBeginner is an interface for database connection pools that can begin transactions.
 // Both *pgxpool.Pool and pgxmock.PgxPoolIface satisfy this interface.
 type TxBeginner interface {
@@ -80,9 +92,11 @@ type registrationService struct {
 	identityRepo repository.UserIdentityRepository
 	privacyRepo  repository.PrivacyRepository
 	auditLogger  AuditLogger
-	db           TxBeginner       // Database connection pool for transaction management
-	trialGranter TrialGranter     // Issue #679: Optional trial granter for auto-grant on registration
+	db           TxBeginner         // Database connection pool for transaction management
+	trialGranter TrialGranter       // Issue #679: Optional trial granter for auto-grant on registration
 	analytics    phclient.Analytics // Optional PostHog analytics client
+	erasureFence ClerkErasureFenceReader
+	clerkGetter  ClerkUserGetter
 }
 
 // NewRegistrationService creates a new RegistrationService
@@ -92,13 +106,20 @@ func NewRegistrationService(
 	privacyRepo repository.PrivacyRepository,
 	auditLogger AuditLogger,
 	db TxBeginner,
+	authorities ...RegistrationAuthority,
 ) RegistrationService {
+	var authority RegistrationAuthority
+	if len(authorities) > 0 {
+		authority = authorities[0]
+	}
 	return &registrationService{
 		profileRepo:  profileRepo,
 		identityRepo: identityRepo,
 		privacyRepo:  privacyRepo,
 		auditLogger:  auditLogger,
 		db:           db,
+		erasureFence: authority.ErasureFence,
+		clerkGetter:  authority.ClerkUserGetter,
 	}
 }
 
@@ -147,6 +168,15 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 	if clerkUserID == "" {
 		return nil, errors.New("clerk_user_id is required")
 	}
+	if s.erasureFence != nil {
+		fenced, err := s.erasureFence.IsClerkIdentityErasureFenced(ctx, clerkUserID)
+		if err != nil {
+			return nil, fmt.Errorf("check Clerk erasure fence: %w", err)
+		}
+		if fenced {
+			return nil, ErrRegistrationErasureFenced
+		}
+	}
 
 	// Validate email format
 	if _, err := mail.ParseAddress(email); err != nil {
@@ -167,6 +197,15 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 			return nil, fmt.Errorf("failed to get existing user: %w", err)
 		}
 		return user, nil
+	}
+	if s.clerkGetter != nil {
+		_, err = s.clerkGetter.GetUser(ctx, clerkUserID)
+		if errors.Is(err, ErrClerkUserNotFound) {
+			return nil, ErrRegistrationErasureFenced
+		}
+		if err != nil {
+			return nil, fmt.Errorf("verify Clerk user before registration: %w", err)
+		}
 	}
 
 	// #1001: Fallback — blind-index lookup misses rows that were created before encryption

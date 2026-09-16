@@ -48,7 +48,6 @@ BOOSTEDBUDGET_API_URL = "https://api.boostedbudget.com"
 #                            generate: openssl rand -hex 32
 #                            set on backend:  MCP_WORKER_SECRET=<value>
 #   BOOSTEDBUDGET_API_URL    (override per env; defaults to https://api.boostedbudget.com)
-#   POSTHOG_API_KEY          (optional) PostHog API key for MCP analytics; Worker is a no-op if unset
 
 [env.staging]
 name = "boostedbudget-mcp-staging"

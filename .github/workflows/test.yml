@@ -32,6 +32,7 @@ jobs:
       config: ${{ steps.filter.outputs.config }}
       deps: ${{ steps.filter.outputs.deps }}
       scanconfig: ${{ steps.filter.outputs.scanconfig }}
+      posthog_contract: ${{ steps.filter.outputs.posthog_contract }}
       mobile: ${{ steps.filter.outputs.mobile }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -103,6 +104,24 @@ jobs:
             # to OpenAPI generation, migrations and integration tests.
             scanconfig:
               - '.grype.yaml'
+            posthog_contract:
+              - 'config/posthog_events.yaml'
+              - 'config/product_metrics.yaml'
+              - 'config/posthog_rollout.yaml'
+              - 'scripts/generate-posthog-events.ts'
+              - 'scripts/generate-posthog-events.test.ts'
+              - 'scripts/validate-posthog-rollout.ts'
+              - 'scripts/validate-posthog-rollout.test.ts'
+              - 'scripts/fixtures/posthog-events-v1.json'
+              # The static raw-capture guard scans these complete production surfaces.
+              - 'apps/web/src/**'
+              - 'apps/mcp-server/src/**'
+              - 'backend/internal/**'
+              - 'backend/cmd/**'
+              - 'package.json'
+              - 'bun.lock'
+              - 'Makefile'
+              - '.github/workflows/test.yml'
             # Universal Expo application inputs. Keep this list dependency-exact: backend source
             # changes do not rebuild a client unless the generated OpenAPI contract changes, and
             # desktop-web/shared-types changes are outside the mobile workspace graph.
@@ -124,6 +143,39 @@ jobs:
               - '.github/dependabot.yml'
               - 'scripts/check-mobile-ci.py'
               - 'scripts/__tests__/check-mobile-ci.test.sh'
+
+  posthog-contract-validate:
+    name: PostHog Contract Validation
+    needs: detect-changes
+    if: needs.detect-changes.outputs.posthog_contract == 'true'
+    runs-on: [self-hosted, macOS, mac-mini]
+    env:
+      UNIQUE_WORKSPACE: workspace-posthog-contract-${{ github.run_id }}
+    steps:
+      - name: Clean workspace
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: ${{ env.UNIQUE_WORKSPACE }}
+          clean: false
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.3.14"
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Install workspace dependencies
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bun install --frozen-lockfile
+      - name: Validate PostHog contracts
+        working-directory: ${{ env.UNIQUE_WORKSPACE }}
+        run: bun run validate:posthog
+      - name: Final workspace cleanup
+        if: always()
+        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
 
   # =============================================================================
   # E2E Tests (starts immediately — no needs — so it gets runner priority over
@@ -1108,8 +1160,13 @@ jobs:
 
       - name: Generate TypeScript client
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/packages/api-client
-        # Use npx orval (not bunx) - Bun's AJV version has compatibility issues
-        run: npx orval
+        # Use npx orval (not bunx) - Bun's AJV version has compatibility issues.
+        # Then normalize output exactly as `make generate-api-client` does: orval appends
+        # trailing blank lines and the committed client is the normalized form, so checking
+        # the raw output here fails against a correctly generated tree.
+        run: |
+          npx orval
+          node scripts/normalize-generated-output.mjs
 
       - name: Check if generated client is up to date
         working-directory: ${{ env.UNIQUE_WORKSPACE }}

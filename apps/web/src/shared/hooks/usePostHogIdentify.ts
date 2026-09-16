@@ -1,71 +1,126 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useUser } from '@clerk/react-router'
-import { posthog } from '../lib/posthog'
-import { ANALYTICS_EVENTS } from '../analytics'
+import { useGetPrivacySettings } from '@boostedbudget/api-client/endpoints/privacy/privacy'
 import { useProfile } from '@/features/profile/hooks/useProfile'
+import { privacySettingsQueryKey } from '../privacy/privacyQueryKey'
+import {
+  applyProductAnalyticsAuthority,
+  denyProductAnalytics,
+  listenForAnalyticsWithdrawal,
+  setProductAnalyticsScope,
+  setProductAnalyticsPersonProperties,
+  setAnalyticsLifecyclePending,
+} from '../lib/posthog'
+
+export interface AnalyticsLifecycle {
+  applyAuthority: typeof applyProductAnalyticsAuthority
+  deny: typeof denyProductAnalytics
+  listenForWithdrawal: typeof listenForAnalyticsWithdrawal
+  setScope: typeof setProductAnalyticsScope
+  setPending: typeof setAnalyticsLifecyclePending
+  setPersonProperties: typeof setProductAnalyticsPersonProperties
+}
+
+const defaultLifecycle: AnalyticsLifecycle = {
+  applyAuthority: applyProductAnalyticsAuthority,
+  deny: denyProductAnalytics,
+  listenForWithdrawal: listenForAnalyticsWithdrawal,
+  setScope: setProductAnalyticsScope,
+  setPending: setAnalyticsLifecyclePending,
+  setPersonProperties: setProductAnalyticsPersonProperties,
+}
 
 /**
- * Identifies the current Clerk user in PostHog.
- * Fires sign_in_completed / sign_up_completed on sign-in and
- * sign_out_completed on sign-out, using ref-based transition detection.
- *
- * Issue #1413: Also syncs server-authoritative subscription fields (effective tier,
- * effective status, comp flag) as PostHog person properties once the profile query
- * resolves. This is a *second*, independent effect — the identify() call above must
- * keep firing immediately on the Clerk sign-in transition (it anchors sign_in_completed
- * timing), so it is left untouched. Clerk's publicMetadata.subscription_tier lags the
- * database and carries no comp signal at all, so every tier-segmented funnel was
- * misreporting comped users before this sync existed.
+ * Resolves the only browser analytics authority. Signed-in users are governed
+ * exclusively by their server privacy record; signed-out visitors are governed
+ * exclusively by the anonymous-device cookie supplied by App.
  */
-export function usePostHogIdentify(): void {
-  const { user } = useUser()
-  const prevUserRef = useRef<typeof user>(undefined)
-  // Gated on a signed-in Clerk user: this hook is mounted at the App root, so it also runs on
-  // public routes (landing, pricing). Ungated, it would fire GET /api/v1/user/profile on every
-  // anonymous page view and take a 401 — the profile was previously only fetched behind
-  // PremiumRoute. The person-property sync below has nothing to report when signed out anyway.
-  const { user: profile, loading: profileLoading } = useProfile({ enabled: !!user })
+export function usePostHogIdentify(
+  anonymousAnalyticsConsent: boolean | null,
+  lifecycle: AnalyticsLifecycle = defaultLifecycle,
+): void {
+  const { user, isLoaded } = useUser()
+  const userId = user?.id
+  const appliedAuthority = useRef<string | null>(null)
+  const privacy = useGetPrivacySettings({
+    query: {
+      enabled: Boolean(userId),
+      queryKey: privacySettingsQueryKey(userId),
+      retry: false,
+    },
+  })
+  const { user: profile, loading: profileLoading } = useProfile({
+    enabled: Boolean(userId),
+    userId,
+  })
 
-  useEffect(() => {
-    const prevUser = prevUserRef.current
-    prevUserRef.current = user
+  useEffect(() => lifecycle.listenForWithdrawal(), [lifecycle])
 
-    if (!prevUser && user) {
-      // Transition: signed out → signed in
-      posthog.identify(user.id, {
-        subscription_tier: user.publicMetadata?.subscription_tier,
-        primary_region: user.publicMetadata?.primary_region,
-      })
-      posthog.capture(ANALYTICS_EVENTS.SIGN_IN_COMPLETED)
-
-      // 60-second heuristic for sign-up detection: Clerk's user.createdAt timestamp
-      // is compared against the current time to determine if this sign-in is part of
-      // a new account activation. Chosen because most real sign-ups complete within
-      // this window. Limitations: multi-step Clerk flows (email verification, MFA)
-      // may take longer; client-server clock skew can cause false negatives.
-      // This is an intentional trade-off (analytics, not billing) — silent misfire is acceptable.
-      if (user.createdAt && Date.now() - user.createdAt.getTime() < 60_000) {
-        posthog.capture(ANALYTICS_EVENTS.SIGN_UP_COMPLETED)
-      }
-    } else if (prevUser && !user) {
-      // Transition: signed in → signed out
-      posthog.capture(ANALYTICS_EVENTS.SIGN_OUT_COMPLETED)
-      posthog.reset()
+  useLayoutEffect(() => {
+    if (!isLoaded) {
+      lifecycle.setPending()
+      return
     }
-  }, [user])
 
-  // Issue #1413: Sync server-authoritative tier/status/comp fields whenever the
-  // profile resolves or changes. Independent of the sign-in transition effect above
-  // by design — it must not gate or delay the identify() call's timing, and it should
-  // stay in sync (e.g. an admin comp applied mid-session) rather than firing once.
+    const scope = userId ?? 'anonymous'
+    lifecycle.setScope(scope)
+
+    if (!userId) {
+      const authority = `anonymous:${anonymousAnalyticsConsent === true ? 'granted' : 'denied'}`
+      if (appliedAuthority.current === authority) return
+      appliedAuthority.current = authority
+      if (anonymousAnalyticsConsent === true) lifecycle.applyAuthority(scope)
+      else lifecycle.deny()
+      return
+    }
+
+    if (privacy.isLoading || privacy.isFetching) {
+      lifecycle.setPending()
+      appliedAuthority.current = null
+      return
+    }
+
+    const granted = privacy.error == null && privacy.data?.gdpr_analytics_consent === true
+    const authority = `${userId}:${granted ? 'granted' : 'denied'}`
+    if (appliedAuthority.current === authority) return
+    appliedAuthority.current = authority
+
+    if (!granted) {
+      lifecycle.deny()
+      return
+    }
+
+    lifecycle.applyAuthority(scope, userId, {
+      subscription_tier: user.publicMetadata?.subscription_tier,
+      primary_region: user.publicMetadata?.primary_region,
+    })
+  }, [
+    anonymousAnalyticsConsent,
+    isLoaded,
+    lifecycle,
+    privacy.data,
+    privacy.error,
+    privacy.isFetching,
+    privacy.isLoading,
+    user,
+    userId,
+  ])
+
   useEffect(() => {
-    if (!user) return // signed out — nothing to sync
-    if (profileLoading || !profile) return // profile query hasn't resolved yet
-
-    posthog.setPersonProperties({
+    if (!userId || profileLoading || !profile) return
+    lifecycle.setPersonProperties({
       subscription_tier: profile.effective_tier,
       subscription_status_effective: profile.effective_status,
       is_comped: profile.is_comped,
     })
-  }, [user, profile, profileLoading])
+  }, [
+    lifecycle,
+    privacy.data,
+    privacy.error,
+    privacy.isFetching,
+    privacy.isLoading,
+    profile,
+    profileLoading,
+    userId,
+  ])
 }

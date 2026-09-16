@@ -15,7 +15,7 @@ export function TermsOfService() {
     <div className="privacy-policy">
       <div className="privacy-policy-container">
         <h1>Terms of Service</h1>
-        <p className="last-updated">Last Updated: August 25, 2026</p>
+        <p className="last-updated">Last Updated: September 13, 2026</p>
 
         <section>
           <h2>1. Acceptance of Terms</h2>
@@ -351,7 +351,8 @@ export function TermsOfService() {
               <a href="https://www.paddle.com/legal/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a></li>
             <li><strong>Clerk:</strong> Authentication and user management — subject to
               Clerk's <a href="https://clerk.com/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a></li>
-            <li><strong>PostHog:</strong> Product analytics (with your consent) — subject to
+            <li><strong>PostHog:</strong> Product analytics and surveys (with your consent), and
+              authenticated Support chat — subject to
               PostHog's <a href="https://posthog.com/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a></li>
             <li><strong>Sentry:</strong> Error tracking and application performance monitoring — subject to
               Sentry's <a href="https://sentry.io/privacy/" target="_blank" rel="noopener noreferrer">Privacy Policy</a></li>

@@ -358,6 +358,9 @@ var jobFileDispositions = map[string]jobFileDisposition{
 		"RecordOperatorResolution) are retry/resolution bookkeeping on those same orphan rows plus " +
 		"sweep-cursor bookkeeping (SweepCursorRepository, already NoCacheImpact in the repo guard) — " +
 		"neither is a cached namespace."},
+	"posthog_erasure.go": {dispositionNoCacheImpact, "operates only on the posthog_erasure_outbox " +
+		"that deliberately outlives an already-erased user. Its writes are provider retry and " +
+		"verification bookkeeping; no application read or cache namespace consumes them."},
 }
 
 // listJobFiles returns the basenames of every non-test .go file directly in dir.

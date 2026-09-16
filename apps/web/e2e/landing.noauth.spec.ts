@@ -34,6 +34,12 @@ test.describe('Landing Page - Unauthenticated', () => {
   });
 
   test.describe('Hero Section', () => {
+    test('never loads authenticated PostHog Support or Surveys', async ({ page }) => {
+      await expect(page.getByRole('button', { name: /^support/i })).toHaveCount(0);
+      await expect(page.locator('#ph-conversations-widget-container')).toHaveCount(0);
+      await expect(page.locator('[class^="PostHogSurvey-"]')).toHaveCount(0);
+    });
+
     test('should display main headline', async ({ page }) => {
       const headline = page.getByRole('heading', { level: 1 });
       await expect(headline).toBeVisible();

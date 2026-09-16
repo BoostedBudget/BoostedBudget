@@ -2286,9 +2286,3 @@ export function useGetTopMovers<TData = Awaited<ReturnType<typeof getTopMovers>>
 
   return withQueryKey(query, queryOptions.queryKey);
 }
-
-
-
-
-
-

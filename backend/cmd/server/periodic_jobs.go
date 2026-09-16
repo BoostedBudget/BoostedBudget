@@ -51,6 +51,7 @@ type periodicJobsDeps struct {
 	// unconditional, so making it a nil-guardable dependency would be the first step towards it
 	// silently not running. See the spec below.
 	plaidOrphanRetryWorker *jobs.PlaidOrphanRetryWorker
+	postHogErasureWorker   *jobs.PostHogErasureWorker
 }
 
 // periodicJobSpec is an intermediate representation of a periodic job registration, captured
@@ -105,6 +106,21 @@ func (s periodicJobSpec) toPeriodicJob() *river.PeriodicJob {
 // (periodic_jobs_test.go) enforces this for every entry this function returns.
 func buildPeriodicJobSpecs(deps periodicJobsDeps) []periodicJobSpec {
 	var specs []periodicJobSpec
+
+	// #1650: drain durable PostHog erasure obligations promptly. The worker is registered even
+	// when provider credentials are absent; that condition is persisted as a configuration retry,
+	// never interpreted as successful deletion.
+	if deps.postHogErasureWorker != nil {
+		specs = append(specs, periodicJobSpec{
+			name:       "PostHog erasure",
+			logMessage: "PostHog erasure periodic job configured (minutely)",
+			interval:   time.Minute,
+			build: func() (river.JobArgs, *river.InsertOpts) {
+				return jobs.PostHogErasureArgs{TriggerSource: "periodic"}, jobs.PostHogErasureInsertOpts()
+			},
+			opts: jobs.PostHogErasurePeriodicOpts(),
+		})
+	}
 
 	// Issue #930 / #1450: Scheduled deletion check (hourly).
 	if deps.scheduledDeletionCheckWorker != nil {

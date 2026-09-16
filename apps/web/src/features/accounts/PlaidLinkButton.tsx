@@ -10,8 +10,6 @@ import {
   useCreateLinkToken,
   useExchangePublicToken,
 } from '@boostedbudget/api-client/endpoints/plaid/plaid'
-import { useQueryClient } from '@tanstack/react-query'
-import { getGetAccountsQueryKey } from '@boostedbudget/api-client/endpoints/accounts/accounts'
 import type { ExchangePublicTokenResponse } from './types'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
@@ -30,17 +28,10 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const trackEvent = useTrackEvent()
-  const queryClient = useQueryClient()
 
   // Use generated mutation hooks
   const createLinkTokenMutation = useCreateLinkToken()
   const exchangePublicTokenMutation = useExchangePublicToken()
-
-  // Read accounts from cache to check if this is the first account (no extra network request)
-  const cachedAccountsData = queryClient.getQueryData<{ accounts: unknown[] }>(
-    getGetAccountsQueryKey({ include_hidden: 'true' })
-  )
-  const accounts = cachedAccountsData?.accounts ?? []
 
   // Derive exchanging state from mutation
   const exchanging = exchangePublicTokenMutation.isPending
@@ -78,12 +69,7 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
         },
       })
 
-      trackEvent(ANALYTICS_EVENTS.PLAID_LINK_SUCCEEDED)
-
-      // Track first account linked event
-      if (accounts.length === 0) {
-        trackEvent(ANALYTICS_EVENTS.FIRST_ACCOUNT_LINKED)
-      }
+      trackEvent(ANALYTICS_EVENTS.ACCOUNT_LINK_COMPLETED, { provider: 'plaid' })
 
       // Notify parent component if callback provided
       onSuccess?.(response as ExchangePublicTokenResponse)

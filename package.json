@@ -12,7 +12,9 @@
     "test": "turbo run test",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
-    "generate:api": "turbo run generate:api --filter=@boostedbudget/api-client"
+    "generate:api": "turbo run generate:api --filter=@boostedbudget/api-client",
+    "generate:posthog": "bun run scripts/generate-posthog-events.ts",
+    "validate:posthog": "bun test --timeout 30000 scripts/generate-posthog-events.test.ts scripts/validate-posthog-rollout.test.ts && bun run scripts/generate-posthog-events.ts --check && bun run scripts/validate-posthog-rollout.ts"
   },
   "devDependencies": {
     "@lhci/cli": "^0.15.1",
@@ -20,7 +22,8 @@
     "basic-ftp": "^6.0.1",
     "serve": "^14.2.6",
     "size-limit": "^12.1.0",
-    "turbo": "^2.10.9"
+    "turbo": "^2.10.9",
+    "yaml": "2.8.3"
   },
   "overrides": {
     "js-cookie": ">=3.0.7",
@@ -31,7 +34,7 @@
     "undici": ">=7.29.0 <8",
     "picomatch": ">=4.0.4",
     "postcss": ">=8.5.18",
-    "yaml": ">=2.8.3",
+    "yaml": "2.8.3",
     "brace-expansion": ">=5.0.9",
     "ip-address": ">=10.3.1 <11",
     "tmp": ">=0.2.7",

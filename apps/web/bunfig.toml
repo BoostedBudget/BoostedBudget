@@ -31,6 +31,7 @@ preload = [
   "./src/test/mocks/transactions-api.ts",
   "./src/test/mocks/categories-api.ts",
   "./src/test/mocks/privacy-api.ts",
+  "./src/test/mocks/support-api.ts",
   "./src/test/mocks/sonner.ts",
   "./src/test/mocks/boosts-api.ts",
   "./src/test/mocks/budgets-wrapper.ts",
