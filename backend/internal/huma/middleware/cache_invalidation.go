@@ -200,6 +200,10 @@ func NewCacheInvalidationMiddleware(gens *cache.Generations, hh HouseholdLookup,
 			next(ctx)
 			return
 		}
+		if IsReadEquivalentOperation(ctx.Operation()) {
+			next(ctx)
+			return
+		}
 
 		// #1600. The acting user's id is available here (this middleware runs after the auth
 		// middleware, which populates UserIDKey — see the package doc), so the pre-flush bump can

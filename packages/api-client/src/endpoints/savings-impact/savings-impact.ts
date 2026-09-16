@@ -254,9 +254,3 @@ export function useGetSavingsImpactMe<TData = Awaited<ReturnType<typeof getSavin
 
   return withQueryKey(query, queryOptions.queryKey);
 }
-
-
-
-
-
-

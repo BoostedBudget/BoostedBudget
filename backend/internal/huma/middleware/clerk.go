@@ -288,6 +288,11 @@ func NewClerkMiddleware(
 
 					_, err = registrationService.RegisterUser(ctx.Context(), clerkUserID, email, emailVerified)
 					if err != nil {
+						if errors.Is(err, services.ErrRegistrationErasureFenced) {
+							logger.Warn("registration refused by durable erasure fence")
+							writeClerkJSONError(ctx, http.StatusForbidden, "Account has been erased")
+							return
+						}
 						logger.Error("failed to register user", "clerk_user_id", clerkUserID, "error", err)
 						writeClerkJSONError(ctx, http.StatusInternalServerError, "Failed to create user account")
 						return

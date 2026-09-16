@@ -27,7 +27,7 @@
 
 import { test, expect, type Page } from '@playwright/test'
 import { mockAuthDependencies } from './helpers/api-mocks'
-import { navigateWithPrivacySync, rejectUnmockedPrivacy } from './helpers/privacy-consent'
+import { navigateWithPrivacyLoad, rejectUnmockedPrivacy } from './helpers/privacy-consent'
 
 const ACCOUNT_ID = 'acc-hide-1'
 const USER_ACCOUNT_ID = 'ua-hide-1'
@@ -136,7 +136,7 @@ test.describe('Hiding an account persists (Issue #1609)', () => {
     // documented at household-invite.auth.spec.ts:129-134, which this spec fell into: it asserted
     // on `name` and the element it waited for could never appear, burning the full 15s timeout
     // on every run in CI (P3-T7).
-    await navigateWithPrivacySync(page, () => page.goto('/accounts'))
+    await navigateWithPrivacyLoad(page, () => page.goto('/accounts'))
     await expect(page).toHaveURL(/\/accounts$/)
     await expect(page.getByText('Premium Checking Account').first()).toBeVisible({ timeout: 15000 })
 
@@ -162,7 +162,7 @@ test.describe('Hiding an account persists (Issue #1609)', () => {
 
     // THE ASSERTION THAT MATTERS. A fresh page has no optimistic cache to fall back on, so what
     // renders here is what the server said.
-    await navigateWithPrivacySync(page, () => page.reload())
+    await navigateWithPrivacyLoad(page, () => page.reload())
     await expect(page).toHaveURL(/\/accounts$/)
     await expect(page.getByRole('button', { name: /Show Hidden/ })).toBeVisible({ timeout: 15000 })
     await expect(page.getByText('Premium Checking Account')).toBeHidden()

@@ -263,9 +263,9 @@ var (
 	}, []string{"client", "op"})
 
 	// DeadLetterQueueSize tracks the current size of the dead letter queue
-	DeadLetterQueueSize = promauto.NewGauge(prometheus.GaugeOpts{
+	DeadLetterQueueSize = UnmeasuredGauge(prometheus.GaugeOpts{
 		Name: "dead_letter_queue_size",
-		Help: "Current number of jobs in the dead letter queue.",
+		Help: "Current number of unresolved jobs in the dead letter queue. Absent until measured from the database.",
 	})
 
 	// ManualTierOverrideOldestUnclearedExpiredSeconds tracks the age (in seconds) of the OLDEST

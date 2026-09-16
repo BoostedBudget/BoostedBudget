@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -239,14 +240,19 @@ type Config struct {
 	FrontendURL string
 
 	// Observability
-	LogLevel         string  // from LOG_LEVEL — "debug"/"info"/"warn"/"error", default "info"
-	EnableMetrics    bool    // from ENABLE_METRICS, default true
-	SentryDSN        string  // from SENTRY_DSN — empty = disabled
-	OTELEndpoint     string  // from OTEL_EXPORTER_OTLP_ENDPOINT — empty = disabled
-	SentrySampleRate float64 // from SENTRY_SAMPLE_RATE — default 1.0
-	OTELSampleRate   float64 // from OTEL_SAMPLE_RATE — default 1.0
-	PostHogAPIKey    string  // from POSTHOG_API_KEY — empty = disabled
-	PostHogHost      string  // from POSTHOG_HOST — default us.i.posthog.com
+	LogLevel                       string     // from LOG_LEVEL — "debug"/"info"/"warn"/"error", default "info"
+	EnableMetrics                  bool       // from ENABLE_METRICS, default true
+	SentryDSN                      string     // from SENTRY_DSN — empty = disabled
+	OTELEndpoint                   string     // from OTEL_EXPORTER_OTLP_ENDPOINT — empty = disabled
+	SentrySampleRate               float64    // from SENTRY_SAMPLE_RATE — default 1.0
+	OTELSampleRate                 float64    // from OTEL_SAMPLE_RATE — default 1.0
+	PostHogAPIKey                  string     // from POSTHOG_API_KEY — empty = disabled
+	PostHogHost                    string     // from POSTHOG_HOST — default us.i.posthog.com
+	PostHogSecretAPIToken          string     // from POSTHOG_SECRET_API_TOKEN — server-only Support identity HMAC key
+	PostHogPersonalAPIKey          string     // from POSTHOG_PERSONAL_API_KEY — server-only GDPR deletion credential
+	PostHogProjectID               string     // from POSTHOG_PROJECT_ID — environment-isolated project target
+	PostHogPrivateHost             string     // from POSTHOG_PRIVATE_HOST — us.posthog.com or eu.posthog.com
+	PostHogSyncCompletionCutoverAt *time.Time // from POSTHOG_SYNC_COMPLETION_CUTOVER_AT — unset suppresses first-sync telemetry
 
 	// Paddle Reconciliation
 	PaddleReconciliationEnabled bool // from PADDLE_RECONCILIATION_ENABLED, default true
@@ -352,14 +358,18 @@ func Load() (*Config, error) {
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 
 		// Observability
-		LogLevel:         getEnv("LOG_LEVEL", "info"),
-		EnableMetrics:    getEnvBool("ENABLE_METRICS", true),
-		SentryDSN:        getEnv("SENTRY_DSN", ""),
-		OTELEndpoint:     getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-		SentrySampleRate: getEnvFloat64("SENTRY_SAMPLE_RATE", 1.0),
-		OTELSampleRate:   getEnvFloat64("OTEL_SAMPLE_RATE", 1.0),
-		PostHogAPIKey:    getEnv("POSTHOG_API_KEY", ""),
-		PostHogHost:      getEnv("POSTHOG_HOST", "https://us.i.posthog.com"),
+		LogLevel:              getEnv("LOG_LEVEL", "info"),
+		EnableMetrics:         getEnvBool("ENABLE_METRICS", true),
+		SentryDSN:             getEnv("SENTRY_DSN", ""),
+		OTELEndpoint:          getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		SentrySampleRate:      getEnvFloat64("SENTRY_SAMPLE_RATE", 1.0),
+		OTELSampleRate:        getEnvFloat64("OTEL_SAMPLE_RATE", 1.0),
+		PostHogAPIKey:         getEnv("POSTHOG_API_KEY", ""),
+		PostHogHost:           getEnv("POSTHOG_HOST", "https://us.i.posthog.com"),
+		PostHogSecretAPIToken: getEnv("POSTHOG_SECRET_API_TOKEN", ""),
+		PostHogPersonalAPIKey: getEnv("POSTHOG_PERSONAL_API_KEY", ""),
+		PostHogProjectID:      getEnv("POSTHOG_PROJECT_ID", ""),
+		PostHogPrivateHost:    getEnv("POSTHOG_PRIVATE_HOST", "https://us.posthog.com"),
 
 		// Paddle Reconciliation
 		PaddleReconciliationEnabled: getEnvBool("PADDLE_RECONCILIATION_ENABLED", true),
@@ -372,6 +382,14 @@ func Load() (*Config, error) {
 		MCPWorkerSecret: getEnv("MCP_WORKER_SECRET", ""),
 	}
 
+	if rawCutover := os.Getenv("POSTHOG_SYNC_COMPLETION_CUTOVER_AT"); rawCutover != "" {
+		cutover, err := time.Parse(time.RFC3339, rawCutover)
+		if err != nil {
+			return nil, fmt.Errorf("POSTHOG_SYNC_COMPLETION_CUTOVER_AT must be RFC3339: %w", err)
+		}
+		cfg.PostHogSyncCompletionCutoverAt = &cutover
+	}
+
 	// RATE_LIMIT_BACKEND is validated unconditionally — in every environment, not just
 	// production/staging — because an unrecognised value is a config typo the process should
 	// never silently misinterpret as "auto", regardless of where it's running.
@@ -382,6 +400,31 @@ func Load() (*Config, error) {
 			"RATE_LIMIT_BACKEND must be one of \"auto\", \"memory\", or \"redis\" (got %q)",
 			cfg.RateLimitBackend,
 		)
+	}
+
+	// Capturing new analytics while lacking the credentials needed to honour an erasure request
+	// creates an obligation the deployment cannot discharge. Enforce this relationship in every
+	// environment so a staging or local configuration cannot silently exercise a weaker policy.
+	if cfg.PostHogAPIKey != "" {
+		if cfg.PostHogPersonalAPIKey == "" {
+			return nil, fmt.Errorf("POSTHOG_PERSONAL_API_KEY is required when POSTHOG_API_KEY enables ingestion")
+		}
+		if cfg.PostHogProjectID == "" {
+			return nil, fmt.Errorf("POSTHOG_PROJECT_ID is required when POSTHOG_API_KEY enables ingestion")
+		}
+		privateURL, err := url.Parse(cfg.PostHogPrivateHost)
+		if err != nil || privateURL.Scheme != "https" || (privateURL.Hostname() != "us.posthog.com" && privateURL.Hostname() != "eu.posthog.com") {
+			return nil, fmt.Errorf("POSTHOG_PRIVATE_HOST must be an allowlisted PostHog HTTPS host when ingestion is enabled")
+		}
+		ingestionURL, err := url.Parse(cfg.PostHogHost)
+		if err != nil || ingestionURL.Scheme != "https" {
+			return nil, fmt.Errorf("POSTHOG_HOST must be a valid PostHog HTTPS ingestion host")
+		}
+		ingestionRegion := map[string]string{"us.i.posthog.com": "us", "eu.i.posthog.com": "eu"}[strings.ToLower(ingestionURL.Hostname())]
+		privateRegion := strings.TrimSuffix(strings.ToLower(privateURL.Hostname()), ".posthog.com")
+		if ingestionRegion == "" || ingestionRegion != privateRegion {
+			return nil, fmt.Errorf("POSTHOG_HOST and POSTHOG_PRIVATE_HOST must target the same region")
+		}
 	}
 
 	// Validate required fields for production

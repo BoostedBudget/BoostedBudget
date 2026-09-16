@@ -53,8 +53,6 @@ wrangler secret put MCP_OAUTH_AUDIENCE        --env staging   # from step 1
 wrangler secret put BOOSTEDBUDGET_ORIGIN_SECRET --env staging # must match CF Transform Rule
 wrangler secret put MCP_WORKER_SECRET         --env staging   # generated in step 2
 # BOOSTEDBUDGET_API_URL defaults to https://staging-api.boostedbudget.com via wrangler.toml
-# POSTHOG_API_KEY is optional — analytics will be disabled if unset
-# wrangler secret put POSTHOG_API_KEY         --env staging   # optional
 
 # ── Production (after staging validated) ─────────────────
 wrangler secret put CLERK_SECRET_KEY
@@ -64,7 +62,6 @@ wrangler secret put CLERK_ISSUER_URL
 wrangler secret put MCP_OAUTH_AUDIENCE
 wrangler secret put BOOSTEDBUDGET_ORIGIN_SECRET
 wrangler secret put MCP_WORKER_SECRET
-# wrangler secret put POSTHOG_API_KEY         # optional
 ```
 
 ---

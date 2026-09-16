@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import type { PrivacySettings } from '@boostedbudget/api-client/models'
 import { mockAuthDependencies } from './helpers/api-mocks'
+import { navigateWithPrivacyLoad } from './helpers/privacy-consent'
 
 const privacyPath = '/api/v1/user/privacy'
 
@@ -87,4 +88,20 @@ test('privacy overrides win and unrelated paths and methods fall through', async
       status: 403, body: { detail: 'Privacy update refused' },
     })
   }
+})
+
+test('privacy navigation waits for the server-authoritative GET without a PUT', async ({ page }) => {
+  const methods: string[] = []
+  await page.route(url => url.pathname === privacyPath, route => {
+    methods.push(route.request().method())
+    return route.fulfill({ status: 200, json: {} })
+  })
+  await page.route('**/privacy-load-contract', route => route.fulfill({
+    contentType: 'text/html',
+    body: `<script>fetch('${privacyPath}')</script>`,
+  }))
+
+  await navigateWithPrivacyLoad(page, () => page.goto('/privacy-load-contract'))
+
+  expect(methods).toEqual(['GET'])
 })

@@ -60,6 +60,9 @@ import type {
   ListAdminRetentionWithheldOutputBody,
   ListPlaidOrphanedItemsOutputBody,
   PaddleWebhookEvent,
+  PostHogErasureOperatorIdentity,
+  PostHogErasureOperatorOutputBody,
+  PostHogErasureOperatorRow,
   RecordPlaidOrphanedItemOperatorResolutionOutputBody,
   SystemHealthResponse,
   WebhookEventListResponse,
@@ -95,6 +98,16 @@ export const getFireWebhookResponseMock = (overrideResponse: Partial<Extract<Fir
 export const getListAdminPlaidOrphanedItemsResponseMock = (overrideResponse: Partial<Extract<ListPlaidOrphanedItemsOutputBody, object>> = {}): ListPlaidOrphanedItemsOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), as_of: faker.string.alpha({length: {min: 10, max: 20}}), auto_retrying: faker.number.int(), items: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({admin_state: faker.string.alpha({length: {min: 10, max: 20}}), erasure_error_code: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), institution_id: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), institution_name: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), last_retry_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), last_retry_error_code: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), linked_item_status_at_erasure: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), operator_resolution_note: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), operator_resolved_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), operator_resolved_by: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), orphaned_at: faker.date.past().toISOString().slice(0, 19) + 'Z', plaid_item_id: faker.string.alpha({length: {min: 10, max: 20}}), resolved_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), retry_attempt_count: faker.number.int(), terminal_since: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), token_expires_at: faker.date.past().toISOString().slice(0, 19) + 'Z', token_purged_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', undefined]), token_retained: faker.datatype.boolean()})), null]), limit: faker.number.int(), manual_intervention_required: faker.number.int(), offset: faker.number.int(), operator_attested: faker.number.int(), resolved: faker.number.int(), total: faker.number.int(), ...overrideResponse})
 
 export const getRecordAdminPlaidOrphanedItemOperatorResolutionResponseMock = (overrideResponse: Partial<Extract<RecordPlaidOrphanedItemOperatorResolutionOutputBody, object>> = {}): RecordPlaidOrphanedItemOperatorResolutionOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), id: faker.string.alpha({length: {min: 10, max: 20}}), note: faker.string.alpha({length: {min: 10, max: 20}}), operator_resolved_at: faker.string.alpha({length: {min: 10, max: 20}}), operator_resolved_by: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getListPostHogErasuresResponseMock = (): PostHogErasureOperatorRow[] | null => (Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({id: faker.string.alpha({length: {min: 10, max: 20}}), phase: faker.string.alpha({length: {min: 10, max: 20}}), project_id: faker.string.alpha({length: {min: 10, max: 20}}), region: faker.string.alpha({length: {min: 10, max: 20}}), requested_at: faker.date.past().toISOString().slice(0, 19) + 'Z', required_manual_surfaces: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), state: faker.string.alpha({length: {min: 10, max: 20}})})))
+
+export const getRecordPostHogErasureEvidenceResponseMock = (overrideResponse: Partial<Extract<PostHogErasureOperatorOutputBody, object>> = {}): PostHogErasureOperatorOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), state: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getReplayPostHogErasureResponseMock = (overrideResponse: Partial<Extract<PostHogErasureOperatorOutputBody, object>> = {}): PostHogErasureOperatorOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), state: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getRetargetPostHogErasureResponseMock = (overrideResponse: Partial<Extract<PostHogErasureOperatorOutputBody, object>> = {}): PostHogErasureOperatorOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), state: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getRevealPostHogErasureResponseMock = (overrideResponse: Partial<Extract<PostHogErasureOperatorIdentity, object>> = {}): PostHogErasureOperatorIdentity => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), distinct_ids: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), person_uuids: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => (faker.string.alpha({length: {min: 10, max: 20}}))), null]), ...overrideResponse})
 
 export const getListAdminRetentionWithheldResponseMock = (overrideResponse: Partial<Extract<ListAdminRetentionWithheldOutputBody, object>> = {}): ListAdminRetentionWithheldOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), accounts: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({days_withheld: faker.number.int(), has_email_on_file: faker.datatype.boolean(), notice_30d_sent_at: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), notice_7d_sent_at: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), retention_expires_at: faker.string.alpha({length: {min: 10, max: 20}}), subscription_status: faker.string.alpha({length: {min: 10, max: 20}}), user_id: faker.string.alpha({length: {min: 10, max: 20}})})), null]), as_of: faker.string.alpha({length: {min: 10, max: 20}}), limit: faker.number.int(), next_cursor: faker.helpers.arrayElement([{cursor_expires_at: faker.string.alpha({length: {min: 10, max: 20}}), cursor_user_id: faker.string.alpha({length: {min: 10, max: 20}})}, undefined]), notice_pending: faker.number.int(), withheld_total: faker.number.int(), ...overrideResponse})
 
@@ -283,6 +296,66 @@ export const getRecordAdminPlaidOrphanedItemOperatorResolutionMockHandler = (ove
   }, options)
 }
 
+export const getListPostHogErasuresMockHandler = (overrideResponse?: PostHogErasureOperatorRow[] | null | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<PostHogErasureOperatorRow[] | null> | PostHogErasureOperatorRow[] | null), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/admin/posthog-erasure', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getListPostHogErasuresResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getRecordPostHogErasureEvidenceMockHandler = (overrideResponse?: PostHogErasureOperatorOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<PostHogErasureOperatorOutputBody> | PostHogErasureOperatorOutputBody), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/admin/posthog-erasure/:erasureId/evidence', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getRecordPostHogErasureEvidenceResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getReplayPostHogErasureMockHandler = (overrideResponse?: PostHogErasureOperatorOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<PostHogErasureOperatorOutputBody> | PostHogErasureOperatorOutputBody), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/admin/posthog-erasure/:erasureId/replay', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getReplayPostHogErasureResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getRetargetPostHogErasureMockHandler = (overrideResponse?: PostHogErasureOperatorOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<PostHogErasureOperatorOutputBody> | PostHogErasureOperatorOutputBody), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/admin/posthog-erasure/:erasureId/retarget', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getRetargetPostHogErasureResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getRevealPostHogErasureMockHandler = (overrideResponse?: PostHogErasureOperatorIdentity | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<PostHogErasureOperatorIdentity> | PostHogErasureOperatorIdentity), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/admin/posthog-erasure/:erasureId/reveal', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getRevealPostHogErasureResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
 export const getListAdminRetentionWithheldMockHandler = (overrideResponse?: ListAdminRetentionWithheldOutputBody | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<ListAdminRetentionWithheldOutputBody> | ListAdminRetentionWithheldOutputBody), options?: RequestHandlerOptions) => {
   return http.get('*/api/v1/admin/retention/withheld', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
 
@@ -405,6 +478,11 @@ export const getAdminMock = () => [
   getFireWebhookMockHandler(),
   getListAdminPlaidOrphanedItemsMockHandler(),
   getRecordAdminPlaidOrphanedItemOperatorResolutionMockHandler(),
+  getListPostHogErasuresMockHandler(),
+  getRecordPostHogErasureEvidenceMockHandler(),
+  getReplayPostHogErasureMockHandler(),
+  getRetargetPostHogErasureMockHandler(),
+  getRevealPostHogErasureMockHandler(),
   getListAdminRetentionWithheldMockHandler(),
   getGrantTrialMockHandler(),
   getGetSystemHealthMockHandler(),
