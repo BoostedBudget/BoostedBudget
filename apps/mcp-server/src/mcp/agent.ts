@@ -26,8 +26,9 @@ import {
 import { createHostProxy } from '../sandbox/host-proxy'
 import { createFetchMutator } from '../client/fetch-mutator'
 import { createRateLimiter } from '../limits/rate-limit'
-import { createPosthogClient, MCP_EVENTS } from '../analytics/posthog-client'
 import { createAuditClient } from '../audit/audit-client'
+import { createMCPToolTelemetryClient } from '../telemetry/telemetry-client'
+import { classifyExecuteFamily, instrumentTool } from '../telemetry/tool-telemetry'
 import { extractMcpHeaders, buildPropsFromHeaders } from './agent-auth'
 import { toAuditEntry } from './audit-mapping'
 import type { SpecIndex } from '../spec/search-runtime'
@@ -123,8 +124,16 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       rateLimiter,
     })
 
-    // PostHog analytics client (no-op if POSTHOG_API_KEY is unset)
-    const posthog = createPosthogClient((env as unknown as Record<string, unknown>)['POSTHOG_API_KEY'] as string | undefined ?? '')
+    // Completion delivery is best effort and at most once. waitUntil lets the bounded backend
+    // request (up to 5s for cold auth/consent resolution) finish without delaying or changing the
+    // MCP tool response.
+    const telemetry = createMCPToolTelemetryClient({
+      baseUrl: env.BOOSTEDBUDGET_API_URL,
+      originSecret: env.BOOSTEDBUDGET_ORIGIN_SECRET,
+      workerSecret: env.MCP_WORKER_SECRET,
+      getAccessToken: () => (this.props as McpAgentProps).accessToken,
+    })
+    const scheduleTelemetry = (promise: Promise<void>): void => this.ctx.waitUntil(promise)
 
     // Audit client — posts read/protocol events to POST /api/v1/mcp/audit (fire-and-forget)
     const audit = createAuditClient(env)
@@ -160,14 +169,18 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       },
       // Explicit type annotation: the `as any` cast above erases the inferred input type,
       // so this is what keeps the handler's argument checked.
-      async (input: { query?: string; detail?: 'compact' | 'full'; class?: 'read' | 'write' | 'destructive'; tag?: string; limit?: number }) => {
+      instrumentTool({
+        surface: 'search',
+        family: () => 'discovery',
+        telemetry,
+        schedule: scheduleTelemetry,
+      }, async (input: { query?: string; detail?: 'compact' | 'full'; class?: 'read' | 'write' | 'destructive'; tag?: string; limit?: number }) => {
         const p = this.props as McpAgentProps
-        posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'search' })
         const result = handleSearch(input, specIndex)
         void audit.record({ actorUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown',
           operationClass: 'read', operationId: 'search', result: 'success' })
         return result
-      },
+      }),
     )
 
     // ── readExecute / writeExecute tools (issue #1610b) ───────────────────────
@@ -207,20 +220,25 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           ).max(25, 'Maximum 25 calls per readExecute() invocation').describe('Ordered list of admitted non-destructive API calls to execute (max 25)'),
         },
       },
-      async (input: {
+      instrumentTool({
+        surface: 'read_execute',
+        family: (input: { calls: ExecuteCall[] }) => classifyExecuteFamily(input.calls, specIndex.entries),
+        telemetry,
+        schedule: scheduleTelemetry,
+      }, async (input: {
         calls: ExecuteCall[]
-      }) => {
+      }, reportOutcome) => {
         const p = this.props as McpAgentProps
-        posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'readExecute' })
         const { toolResult, auditEvents } = await readExecuteHandler(input)
-        const callCount = input.calls?.length ?? 0
-        posthog.capture(p.clerkUserId, MCP_EVENTS.CODE_EXECUTED, { callCount })
+        if (input.calls.length === 0 || auditEvents.some(event => event.result === 'denied' || event.result === 'error')) {
+          reportOutcome('failed')
+        }
         const actor = { clerkUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown' }
         for (const event of auditEvents) {
           void audit.record(toAuditEntry(event, actor))
         }
         return toolResult
-      },
+      }),
     )
 
     // writeExecute accepts every class and keeps confirmationToken. Reads stay legal inside a
@@ -247,24 +265,29 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           confirmationToken: z.string().optional().describe('Confirmation token for write operations'),
         },
       },
-      async (input: {
+      instrumentTool({
+        surface: 'write_execute',
+        family: (input: { calls: ExecuteCall[] }) => classifyExecuteFamily(input.calls, specIndex.entries),
+        telemetry,
+        schedule: scheduleTelemetry,
+      }, async (input: {
         calls: ExecuteCall[]
         confirmationToken?: string
-      }) => {
+      }, reportOutcome) => {
         const p = this.props as McpAgentProps
-        posthog.capture(p.clerkUserId, MCP_EVENTS.TOOL_CALLED, { tool: 'writeExecute' })
         // ExecuteResult includes per-call audit events with the correct operationClass/result.
         // Previously this hardcoded operationClass:'read'/'execute' for all calls — fixed here.
         const { toolResult, auditEvents } = await writeExecuteHandler(input)
-        const callCount = input.calls?.length ?? 0
-        posthog.capture(p.clerkUserId, MCP_EVENTS.CODE_EXECUTED, { callCount })
+        if (input.calls.length === 0 || auditEvents.some(event => event.result === 'denied' || event.result === 'error')) {
+          reportOutcome('failed')
+        }
         // Record one audit entry per executed call with the real class and result.
         const actor = { clerkUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown' }
         for (const event of auditEvents) {
           void audit.record(toAuditEntry(event, actor))
         }
         return toolResult
-      },
+      }),
     )
 
     // ── recipe tools ──────────────────────────────────────────────────────────
@@ -276,13 +299,18 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
         description: 'List your saved MCP workflow recipes.',
         inputSchema: {},
       },
-      async () => {
+      instrumentTool({
+        surface: 'recipe_list',
+        family: () => 'workflows',
+        telemetry,
+        schedule: scheduleTelemetry,
+      }, async (_input: Record<string, never>) => {
         const p = this.props as McpAgentProps
         const result = await recipeTools.list({})
         void audit.record({ actorUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown',
           operationClass: 'read', operationId: 'recipe.list', result: 'success' })
         return result
-      },
+      }),
     )
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see search tool comment above
@@ -302,16 +330,22 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           confirmationToken: z.string().optional(),
         },
       },
-      async (input: {
+      instrumentTool({
+        surface: 'recipe_save',
+        family: () => 'workflows',
+        telemetry,
+        schedule: scheduleTelemetry,
+      }, async (input: {
         name: string
         description?: string
         calls: Array<{ operationId: string; params?: Record<string, unknown>; body?: Record<string, unknown>; pathParams?: Record<string, string>; detail?: 'compact' | 'full' }>
         confirmationToken?: string
-      }) => {
+      }, reportOutcome) => {
         const p = this.props as McpAgentProps
         // save() returns {toolResult, auditResult} so we can emit the correct audit label.
         // auditResult='confirmation_required' on the first (challenge) call; 'success' on confirm.
         const { toolResult, auditResult } = await recipeTools.save(input)
+        if (auditResult === 'error') reportOutcome('failed')
         void audit.record({
           actorUserId: p.clerkUserId,
           grantId: p.grantId ?? 'unknown',
@@ -322,7 +356,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           confirmationConfirmed: auditResult === 'success',
         })
         return toolResult
-      },
+      }),
     )
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see search tool comment above
@@ -334,13 +368,18 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           id: z.string().describe('Recipe ID (from recipe.list())'),
         },
       },
-      async (input: { id: string }) => {
+      instrumentTool({
+        surface: 'recipe_run',
+        family: () => 'workflows',
+        telemetry,
+        schedule: scheduleTelemetry,
+      }, async (input: { id: string }) => {
         const p = this.props as McpAgentProps
         const result = await recipeTools.run(input)
         void audit.record({ actorUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown',
           operationClass: 'read', operationId: 'recipe.run', result: 'success' })
         return result
-      },
+      }),
     )
 
     this.server.registerTool(
@@ -349,13 +388,18 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
         description: `List available starter recipe templates. ${RECIPE_TEMPLATE_USAGE_GUIDANCE}`,
         inputSchema: {},
       },
-      async () => {
+      instrumentTool({
+        surface: 'recipe_templates',
+        family: () => 'workflows',
+        telemetry,
+        schedule: scheduleTelemetry,
+      }, async (_input: Record<string, never>) => {
         const p = this.props as McpAgentProps
         const result = recipeTools.templates()
         void audit.record({ actorUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown',
           operationClass: 'read', operationId: 'recipe.templates', result: 'success' })
         return result
-      },
+      }),
     )
   }
 }

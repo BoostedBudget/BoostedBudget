@@ -1,295 +1,175 @@
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { beforeEach, describe, expect, it, mock } from 'bun:test'
 import { renderHook } from '@testing-library/react'
-import { ANALYTICS_EVENTS } from '../analytics'
-// Issue #1323: Use centralized Clerk mock (preloaded via bunfig.toml).
-// Inline mock.module('@clerk/react-router') with only {useUser} clobbers the full
-// mock and pollutes tests that depend on other Clerk exports (e.g. useActiveAccounts).
-import { mockUseUser } from '@/test/mocks/clerk'
-// Issue #1413: Use the centralized preloaded posthog mock (see
-// feedback_bun_test_mock_module_global.md) instead of an inline mock.module() call,
-// so this file can't shadow the richer mock other files rely on (e.g. setPersonProperties).
+import { createMockClerkUser, mockClerkUser, mockUseUser } from '@/test/mocks/clerk'
+import { mockUseGetPrivacySettings } from '@/test/mocks/privacy-api'
 import {
-  mockPosthogIdentify,
-  mockPosthogCapture,
-  mockPosthogReset,
-  mockPosthogSetPersonProperties,
+  mockApplyProductAnalyticsAuthority,
+  mockDenyProductAnalytics,
+  mockListenForAnalyticsWithdrawal,
+  mockSetAnalyticsLifecyclePending,
+  mockSetProductAnalyticsScope,
 } from '@/test/mocks/posthog'
-// Issue #1413: Server-authoritative tier/comp/status come from the profile query
-// (useProfile -> useGetUserProfile), centrally mocked to avoid a real network fetch.
-import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
-import type { User } from '@boostedbudget/api-client/models'
-
 import { usePostHogIdentify } from './usePostHogIdentify'
+import { privacySettingsQueryKey } from '../privacy/privacyQueryKey'
 
-// Mocked user shape
-function makeUser(overrides?: Partial<{ createdAt: Date; id: string; publicMetadata: Record<string, unknown> }>) {
-  return {
-    id: 'user_123',
-    primaryEmailAddress: { emailAddress: 'test@example.com' },
-    fullName: 'Test User',
-    publicMetadata: { subscription_tier: 'premium', primary_region: 'us-east-1' },
-    createdAt: new Date(Date.now() - 120_000), // 2 minutes ago (not a new sign-up)
-    ...overrides,
-  }
+const lifecycle = {
+  applyAuthority: mockApplyProductAnalyticsAuthority,
+  deny: mockDenyProductAnalytics,
+  listenForWithdrawal: mockListenForAnalyticsWithdrawal,
+  setPending: mockSetAnalyticsLifecyclePending,
+  setScope: mockSetProductAnalyticsScope,
+  setPersonProperties: () => {},
 }
 
-function makeProfile(overrides?: Partial<User>): User {
-  return {
-    id: 'user_123',
-    clerk_user_id: 'user_123',
-    email: 'test@example.com',
-    email_verified: true,
-    had_trial: false,
-    primary_region: 'us-east-1',
-    subscription_tier: 'premium',
-    subscription_status: 'active',
-    effective_tier: 'premium',
-    effective_status: 'active',
-    is_comped: false,
-    timezone: 'America/New_York',
-    timezone_source: 'user',
-    is_active: true,
-    is_deleted: false,
-    created_at: '2025-01-01T00:00:00Z',
-    updated_at: '2025-01-15T10:00:00Z',
-    ...overrides,
-  }
+type PrivacyResult = {
+  data?: Record<string, boolean | undefined>
+  isLoading: boolean
+  isFetching: boolean
+  error: Error | null
+  refetch: () => Promise<unknown>
 }
 
-function mockProfileQuery(overrides: { data?: User; isLoading?: boolean } = {}) {
-  mockUseGetUserProfile.mockReturnValue({
-    data: overrides.data,
-    isLoading: overrides.isLoading ?? true,
+function setSignedIn(userId = 'user-a'): void {
+  mockUseUser.mockReturnValue(createMockClerkUser({
+    isLoaded: true,
+    isSignedIn: true,
+    user: { ...mockClerkUser, id: userId },
+  }))
+}
+
+function setPrivacy(result: Partial<PrivacyResult>): void {
+  mockUseGetPrivacySettings.mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    isFetching: false,
     error: null,
     refetch: () => Promise.resolve(),
+    ...result,
   })
 }
 
-describe('usePostHogIdentify', () => {
+describe('usePostHogIdentify consent authority', () => {
   beforeEach(() => {
-    mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
-    mockPosthogIdentify.mockClear()
-    mockPosthogCapture.mockClear()
-    mockPosthogReset.mockClear()
-    mockPosthogSetPersonProperties.mockClear()
-    mockProfileQuery() // default: loading, no data
+    mockUseUser.mockClear()
+    mockUseGetPrivacySettings.mockClear()
+    mockApplyProductAnalyticsAuthority.mockClear()
+    mockDenyProductAnalytics.mockClear()
+    mockSetAnalyticsLifecyclePending.mockClear()
+    mockSetProductAnalyticsScope.mockClear()
+    mockListenForAnalyticsWithdrawal.mockClear()
+    mockUseUser.mockReturnValue(createMockClerkUser({ isLoaded: true, user: null }))
+    setPrivacy({})
   })
 
-  describe('Initial render with no user', () => {
-    it('should not call identify, capture, or reset when user is null on mount', () => {
-      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
-      renderHook(() => usePostHogIdentify())
+  for (const cookie of [true, false, null]) {
+    for (const server of ['true', 'false', 'missing', 'error'] as const) {
+      it(`ignores stale anonymous cookie ${String(cookie)} when signed-in server state is ${server}`, () => {
+        setSignedIn()
+        setPrivacy({
+          data: server === 'true'
+            ? { gdpr_analytics_consent: true }
+            : server === 'false'
+              ? { gdpr_analytics_consent: false }
+              : server === 'missing'
+                ? {}
+                : undefined,
+          error: server === 'error' ? new Error('privacy unavailable') : null,
+        })
 
-      expect(mockPosthogIdentify).not.toHaveBeenCalled()
-      expect(mockPosthogCapture).not.toHaveBeenCalled()
-      expect(mockPosthogReset).not.toHaveBeenCalled()
-    })
+        renderHook(() => usePostHogIdentify(cookie, lifecycle))
+
+        if (server === 'true') {
+          expect(mockApplyProductAnalyticsAuthority).toHaveBeenCalledTimes(1)
+          expect(mockApplyProductAnalyticsAuthority.mock.calls[0]?.slice(0, 2)).toEqual(['user-a', 'user-a'])
+          expect(mockDenyProductAnalytics).not.toHaveBeenCalled()
+        } else {
+          expect(mockApplyProductAnalyticsAuthority).not.toHaveBeenCalled()
+          expect(mockDenyProductAnalytics).toHaveBeenCalledTimes(1)
+        }
+      })
+    }
+  }
+
+  it('stays pending without init, capture, or identify while signed-in privacy is loading', () => {
+    setSignedIn()
+    setPrivacy({ isLoading: true, isFetching: true })
+
+    renderHook(() => usePostHogIdentify(true, lifecycle))
+
+    expect(mockSetAnalyticsLifecyclePending).toHaveBeenCalledTimes(1)
+    expect(mockApplyProductAnalyticsAuthority).not.toHaveBeenCalled()
+    expect(mockDenyProductAnalytics).not.toHaveBeenCalled()
   })
 
-  describe('Sign-in transition (null → user)', () => {
-    it('should call identify and fire sign_in_completed when user appears', () => {
-      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
-      const { rerender } = renderHook(() => usePostHogIdentify())
-
-      mockUseUser.mockReturnValue({ user: makeUser(), isLoaded: true, isSignedIn: true })
-      rerender()
-
-      expect(mockPosthogIdentify).toHaveBeenCalledWith('user_123', {
-        subscription_tier: 'premium',
-        primary_region: 'us-east-1',
-      })
-      expect(mockPosthogCapture).toHaveBeenCalledWith(ANALYTICS_EVENTS.SIGN_IN_COMPLETED)
-    })
-
-    it('should NOT fire sign_up_completed for an existing user (createdAt > 60s ago)', () => {
-      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
-      const { rerender } = renderHook(() => usePostHogIdentify())
-
-      mockUseUser.mockReturnValue({ user: makeUser({ createdAt: new Date(Date.now() - 120_000) }), isLoaded: true, isSignedIn: true })
-      rerender()
-
-      const capturedEvents = mockPosthogCapture.mock.calls.map((c: unknown[]) => c[0])
-      expect(capturedEvents).not.toContain(ANALYTICS_EVENTS.SIGN_UP_COMPLETED)
-    })
-
-    it('should fire sign_up_completed when createdAt is within last 60 seconds', () => {
-      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
-      const { rerender } = renderHook(() => usePostHogIdentify())
-
-      mockUseUser.mockReturnValue({ user: makeUser({ createdAt: new Date(Date.now() - 5_000) }), isLoaded: true, isSignedIn: true })
-      rerender()
-
-      const capturedEvents = mockPosthogCapture.mock.calls.map((c: unknown[]) => c[0])
-      expect(capturedEvents).toContain(ANALYTICS_EVENTS.SIGN_IN_COMPLETED)
-      expect(capturedEvents).toContain(ANALYTICS_EVENTS.SIGN_UP_COMPLETED)
-    })
-
-    it('should not fire sign_out_completed on sign-in', () => {
-      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
-      const { rerender } = renderHook(() => usePostHogIdentify())
-
-      mockUseUser.mockReturnValue({ user: makeUser(), isLoaded: true, isSignedIn: true })
-      rerender()
-
-      const capturedEvents = mockPosthogCapture.mock.calls.map((c: unknown[]) => c[0])
-      expect(capturedEvents).not.toContain(ANALYTICS_EVENTS.SIGN_OUT_COMPLETED)
-      expect(mockPosthogReset).not.toHaveBeenCalled()
-    })
+  it.each([
+    [true, 1, 0],
+    [false, 0, 1],
+    [null, 0, 1],
+  ])('uses signed-out anonymous cookie %s as authority', (cookie, grants, denials) => {
+    renderHook(() => usePostHogIdentify(cookie, lifecycle))
+    expect(mockApplyProductAnalyticsAuthority).toHaveBeenCalledTimes(grants)
+    expect(mockDenyProductAnalytics).toHaveBeenCalledTimes(denials)
   })
 
-  describe('Sign-out transition (user → null)', () => {
-    it('should fire sign_out_completed and call reset when user becomes null', () => {
-      mockUseUser.mockReturnValue({ user: makeUser(), isLoaded: true, isSignedIn: true })
-      const { rerender } = renderHook(() => usePostHogIdentify())
+  it('does not identify again on same-user rerenders', () => {
+    setSignedIn()
+    setPrivacy({ data: { gdpr_analytics_consent: true } })
+    const { rerender } = renderHook(() => usePostHogIdentify(false, lifecycle))
 
-      // Clear calls from initial mount (no transition from null, so nothing should fire)
-      mockPosthogCapture.mockClear()
-      mockPosthogReset.mockClear()
+    rerender()
 
-      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
-      rerender()
-
-      expect(mockPosthogCapture).toHaveBeenCalledWith(ANALYTICS_EVENTS.SIGN_OUT_COMPLETED)
-      expect(mockPosthogReset).toHaveBeenCalled()
-    })
-
-    it('should not call identify on sign-out', () => {
-      mockUseUser.mockReturnValue({ user: makeUser(), isLoaded: true, isSignedIn: true })
-      const { rerender } = renderHook(() => usePostHogIdentify())
-
-      mockPosthogIdentify.mockClear()
-      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
-      rerender()
-
-      expect(mockPosthogIdentify).not.toHaveBeenCalled()
-    })
+    expect(mockApplyProductAnalyticsAuthority).toHaveBeenCalledTimes(1)
   })
 
-  describe('Stable user (no transition)', () => {
-    it('should not fire any events when the same user object is re-rendered', () => {
-      const user = makeUser()
-      mockUseUser.mockReturnValue({ user, isLoaded: true, isSignedIn: true })
-      const { rerender } = renderHook(() => usePostHogIdentify())
-
-      // Same user reference re-render (no state change)
-      mockPosthogCapture.mockClear()
-      mockPosthogIdentify.mockClear()
-      mockPosthogReset.mockClear()
-
-      rerender()
-
-      // useEffect only re-runs when user changes; same ref → no re-run
-      expect(mockPosthogCapture).not.toHaveBeenCalled()
-      expect(mockPosthogIdentify).not.toHaveBeenCalled()
-      expect(mockPosthogReset).not.toHaveBeenCalled()
+  it('tears down A before granting B on a direct user switch', () => {
+    const calls: string[] = []
+    mockDenyProductAnalytics.mockImplementation(() => { calls.push('deny') })
+    mockSetProductAnalyticsScope.mockImplementation(scope => { calls.push(`scope:${scope}`) })
+    mockApplyProductAnalyticsAuthority.mockImplementation((_scope, id) => {
+      calls.push(`grant:${id}`)
+      return Promise.resolve()
     })
+    setSignedIn('user-a')
+    setPrivacy({ data: { gdpr_analytics_consent: true } })
+    const { rerender } = renderHook(() => usePostHogIdentify(false, lifecycle))
+
+    setSignedIn('user-b')
+    rerender()
+
+    expect(calls).toEqual(['scope:user-a', 'grant:user-a', 'scope:user-b', 'grant:user-b'])
+    expect(mockUseGetPrivacySettings.mock.calls[0]?.[0]?.query?.queryKey).toEqual(
+      privacySettingsQueryKey('user-a'),
+    )
+    expect(mockUseGetPrivacySettings.mock.calls.at(-1)?.[0]?.query?.queryKey).toEqual(
+      privacySettingsQueryKey('user-b'),
+    )
   })
 
-  describe('User with missing optional fields', () => {
-    it('should omit email when primaryEmailAddress is null', () => {
-      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
-      const { rerender } = renderHook(() => usePostHogIdentify())
-
-      mockUseUser.mockReturnValue({
-        user: {
-          id: 'user_456',
-          primaryEmailAddress: null,
-          fullName: null,
-          publicMetadata: {},
-          createdAt: new Date(Date.now() - 120_000),
-        } as unknown as ReturnType<typeof makeUser>,
-        isLoaded: true,
-        isSignedIn: true,
-      })
-      rerender()
-
-      expect(mockPosthogIdentify).toHaveBeenCalledWith('user_456', {
-        subscription_tier: undefined,
-        primary_region: undefined,
-      })
-      // email and name should NOT be in the properties object (PII policy)
-      const callArgs = mockPosthogIdentify.mock.calls[0][1]
-      expect('email' in callArgs).toBe(false)
-      expect('name' in callArgs).toBe(false)
+  it('tears down the user before reconsidering an anonymous grant on logout', () => {
+    const calls: string[] = []
+    mockDenyProductAnalytics.mockImplementation(() => { calls.push('deny') })
+    mockSetProductAnalyticsScope.mockImplementation(scope => { calls.push(`scope:${scope}`) })
+    mockApplyProductAnalyticsAuthority.mockImplementation((_scope, id) => {
+      calls.push(`grant:${id ?? 'anonymous'}`)
+      return Promise.resolve()
     })
+    setSignedIn('user-a')
+    setPrivacy({ data: { gdpr_analytics_consent: true } })
+    const { rerender } = renderHook(() => usePostHogIdentify(true, lifecycle))
 
-    it('should handle user with null createdAt (no sign_up_completed)', () => {
-      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
-      const { rerender } = renderHook(() => usePostHogIdentify())
+    mockUseUser.mockReturnValue(createMockClerkUser({ isLoaded: true, user: null }))
+    rerender()
 
-      mockUseUser.mockReturnValue({
-        user: { ...makeUser(), createdAt: null } as unknown as ReturnType<typeof makeUser>,
-        isLoaded: true,
-        isSignedIn: true,
-      })
-      rerender()
-
-      const capturedEvents = mockPosthogCapture.mock.calls.map((c: unknown[]) => c[0])
-      expect(capturedEvents).not.toContain(ANALYTICS_EVENTS.SIGN_UP_COMPLETED)
-    })
+    expect(calls).toEqual(['scope:user-a', 'grant:user-a', 'scope:anonymous', 'grant:anonymous'])
   })
 
-  // Issue #1413: comped users were reporting the stale Clerk-derived tier (or none at
-  // all) to every tier-segmented funnel, with no way to segment out comped accounts.
-  // The identify() call above stays untouched (still fires immediately on sign-in with
-  // the Clerk tier, preserving sign_in_completed timing) — this is a *second*, independent
-  // sync of server-authoritative fields once the profile query resolves.
-  describe('Person-property sync from the profile (server-authoritative tier/comp)', () => {
-    it('does not call setPersonProperties before the profile resolves', () => {
-      mockUseUser.mockReturnValue({ user: makeUser(), isLoaded: true, isSignedIn: true })
-      mockProfileQuery({ data: undefined, isLoading: true })
+  it('installs and cleans up the cross-tab withdrawal listener', () => {
+    const cleanup = mock(() => {})
+    mockListenForAnalyticsWithdrawal.mockReturnValue(cleanup)
+    const { unmount } = renderHook(() => usePostHogIdentify(null, lifecycle))
 
-      renderHook(() => usePostHogIdentify())
-
-      expect(mockPosthogSetPersonProperties).not.toHaveBeenCalled()
-    })
-
-    it('does not call setPersonProperties when signed out', () => {
-      mockUseUser.mockReturnValue({ user: null, isLoaded: true, isSignedIn: false })
-      mockProfileQuery({ data: makeProfile(), isLoading: false })
-
-      renderHook(() => usePostHogIdentify())
-
-      expect(mockPosthogSetPersonProperties).not.toHaveBeenCalled()
-    })
-
-    it('sets person properties with the effective tier, status, and is_comped once the profile resolves', () => {
-      mockUseUser.mockReturnValue({ user: makeUser(), isLoaded: true, isSignedIn: true })
-      mockProfileQuery({
-        data: makeProfile({ effective_tier: 'premium', effective_status: 'active', is_comped: false }),
-        isLoading: false,
-      })
-
-      renderHook(() => usePostHogIdentify())
-
-      expect(mockPosthogSetPersonProperties).toHaveBeenCalledWith({
-        subscription_tier: 'premium',
-        subscription_status_effective: 'active',
-        is_comped: false,
-      })
-    })
-
-    it('reports is_comped: true and the comp tier for a comped user, not the stale Clerk tier', () => {
-      // Clerk's publicMetadata.subscription_tier is stale ("free") — the DB/profile says
-      // this user is comped onto household_3. The bug this guards: identify() reads the
-      // stale Clerk value, so without this second sync, is_comped never surfaces at all.
-      mockUseUser.mockReturnValue({
-        user: makeUser({ publicMetadata: { subscription_tier: 'free', primary_region: 'us-east-1' } }),
-        isLoaded: true,
-        isSignedIn: true,
-      })
-      mockProfileQuery({
-        data: makeProfile({ effective_tier: 'household_3', effective_status: 'active', is_comped: true }),
-        isLoading: false,
-      })
-
-      renderHook(() => usePostHogIdentify())
-
-      expect(mockPosthogSetPersonProperties).toHaveBeenCalledWith({
-        subscription_tier: 'household_3',
-        subscription_status_effective: 'active',
-        is_comped: true,
-      })
-    })
+    expect(mockListenForAnalyticsWithdrawal).toHaveBeenCalledTimes(1)
+    unmount()
+    expect(cleanup).toHaveBeenCalledTimes(1)
   })
 })

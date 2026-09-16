@@ -45,7 +45,7 @@ setup_linked_items() {
     local sql="
       INSERT INTO linked_items (
         id, user_id, item_id, institution_name,
-        access_token_encrypted, cursor, created_at, updated_at
+        access_token_encrypted, cursor, created_at, updated_at, transaction_sync_state
       )
       VALUES (
         '$item_id',
@@ -55,7 +55,8 @@ setup_linked_items() {
         '$access_token',
         NULL,
         NOW(),
-        NOW()
+        NOW(),
+        'never_synced'
       );
     "
 

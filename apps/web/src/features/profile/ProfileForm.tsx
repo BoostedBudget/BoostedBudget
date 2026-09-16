@@ -7,7 +7,6 @@ import { useRegions } from '../../shared/hooks/useRegions'
 import { ConfirmationDialog } from '../../components/ui/confirmation-dialog'
 import { Button } from '../../components/ui/button'
 import { AlertCircle } from 'lucide-react'
-import { posthog } from '../../shared/lib/posthog'
 import { Card } from '../../components/ui/card'
 import type { User, UpdateProfileRequest } from './types'
 import { IANA_TIMEZONES } from './timezones'
@@ -96,8 +95,6 @@ export function ProfileForm({ user, onProfileUpdate }: ProfileFormProps) {
             toast.success(
               'Profile updated. Check your inbox to verify your new email address.',
             )
-            // Re-identify in PostHog with new email to prevent analytics identity split
-            posthog.identify(updatedUser.id, { email: updatedUser.email })
           } else {
             toast.success('Profile updated successfully!')
           }

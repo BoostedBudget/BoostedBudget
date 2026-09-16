@@ -23,7 +23,7 @@
     "@boostedbudget/api-client": "workspace:*",
     "@boostedbudget/design-tokens": "workspace:*",
     "@tanstack/react-query": "^5.101.4",
-    "expo": "~57.0.0",
+    "expo": "~57.0.23",
     "expo-constants": "~57.0.18",
     "expo-linking": "~57.0.10",
     "expo-router": "~57.0.21",

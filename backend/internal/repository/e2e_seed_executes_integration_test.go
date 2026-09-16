@@ -84,6 +84,17 @@ func TestE2ESeedScriptSeedsEveryTable_Integration(t *testing.T) {
 	_, err = tx.Exec(ctx, script)
 	require.NoError(t, err, "the E2E seed script must execute against the fully migrated schema")
 
+	var completedWithoutTimestamp int
+	require.NoError(t, tx.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM linked_items li
+		JOIN users u ON u.id = li.user_id
+		WHERE u.email = $1
+		  AND li.transaction_sync_state = 'completed'
+		  AND li.first_transaction_sync_completed_at IS NULL`, "e2e+clerk_test@boostedbudget.com").Scan(&completedWithoutTimestamp))
+	require.Zero(t, completedWithoutTimestamp,
+		"completed E2E linked items must carry the same durable completion timestamp as production rows")
+
 	// Executing without error is necessary but NOT sufficient: a future edit could make the block
 	// no-op. Pin the same ten counts the script's own verification SELECT reports, all of which
 	// were 0 except the first three while the bug was live.

@@ -986,9 +986,3 @@ export function useGetWidgetTypes<TData = Awaited<ReturnType<typeof getWidgetTyp
 
   return withQueryKey(query, queryOptions.queryKey);
 }
-
-
-
-
-
-

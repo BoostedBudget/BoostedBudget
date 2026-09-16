@@ -53,6 +53,7 @@ type AdminHandler struct {
 	// pair are never auto-repaired (see domain/budget.go's ErrEscapedNestedChild doc comment), so
 	// there is no write action for this surface to expose — only visibility.
 	budgetHierarchyAuditReader BudgetHierarchyAuditReader
+	postHogErasureOperator     PostHogErasureOperator
 	jobQueue                   queue.JobQueue
 	config                     *config.Config
 }
@@ -622,4 +623,7 @@ func RegisterAdminRoutes(api huma.API, handler *AdminHandler) {
 
 	// Issue #1630 Task B7: the enumerating read over budgets the hierarchy audit has flagged.
 	RegisterAdminBudgetHierarchyAuditOperations(api, handler)
+
+	// Durable, authenticated operator actions for provider erasure obligations.
+	RegisterAdminPostHogErasureOperations(api, handler)
 }

@@ -94,6 +94,11 @@ export function handleBaseUrls(url: string, method: string): Response | null {
     return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
   }
 
+  // Backend product-telemetry endpoint — tool responses never depend on this best-effort call.
+  if (url.includes('backend.test') && url.includes('/api/v1/mcp/telemetry') && method === 'POST') {
+    return new Response(null, { status: 204 })
+  }
+
   return null
 }
 

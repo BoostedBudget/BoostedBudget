@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/maxnussbaum/BoostedBudget/internal/database"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -17,7 +18,8 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// TestMain initializes the domain region registry before running tests.
+// TestMain initializes the domain region registry before running tests, then tears down the
+// PostHog erasure obligations this package's DeleteUserCascade fixtures leave behind.
 func TestMain(m *testing.M) {
 	domain.InitRegionRegistry(
 		map[string]domain.RegionInfo{
@@ -27,7 +29,31 @@ func TestMain(m *testing.M) {
 		"iad",
 		"iad",
 	)
-	os.Exit(m.Run())
+	code := m.Run()
+	cleanupPostHogErasureOutbox()
+	os.Exit(code)
+}
+
+// cleanupPostHogErasureOutbox removes the erasure obligations left behind by this package's
+// DeleteUserCascade fixtures. posthog_erasure_outbox deliberately has no users FK, so nothing
+// cascades these rows; without this teardown the NEXT `go test ./internal/...` run fails, because
+// internal/database runs BEFORE internal/services and its 000211 rollback guard refuses to drop
+// the table while obligations exist. The repository package's teardown cannot protect it for the
+// same ordering reason. Best-effort: a missing or unreachable DATABASE_URL must not fail the
+// package.
+func cleanupPostHogErasureOutbox() {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		return
+	}
+	ctx := context.Background()
+	pool, err := database.NewPoolFromURL(ctx, dsn)
+	if err != nil {
+		return
+	}
+	defer pool.Close()
+	_, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_operator_audit")
+	_, _ = pool.Exec(ctx, "DELETE FROM posthog_erasure_outbox")
 }
 
 // MockProfileRepository is a mock implementation of ProfileRepository

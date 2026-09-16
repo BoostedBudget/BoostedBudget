@@ -947,6 +947,99 @@
       ]
     },
     {
+      "operationId": "listPostHogErasures",
+      "method": "GET",
+      "path": "/api/v1/admin/posthog-erasure",
+      "summary": "List outstanding PostHog erasures",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "recordPostHogErasureEvidence",
+      "method": "POST",
+      "path": "/api/v1/admin/posthog-erasure/{erasure_id}/evidence",
+      "summary": "Record bounded PostHog erasure evidence",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "write",
+      "excluded": true,
+      "requestBody": [
+        {
+          "name": "evidence",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "provider_zero",
+            "provider_case_deleted"
+          ]
+        },
+        {
+          "name": "surface",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "events",
+            "recordings",
+            "surveys",
+            "support"
+          ]
+        }
+      ]
+    },
+    {
+      "operationId": "replayPostHogErasure",
+      "method": "POST",
+      "path": "/api/v1/admin/posthog-erasure/{erasure_id}/replay",
+      "summary": "Replay a dead-lettered PostHog erasure",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "write",
+      "excluded": true
+    },
+    {
+      "operationId": "retargetPostHogErasure",
+      "method": "POST",
+      "path": "/api/v1/admin/posthog-erasure/{erasure_id}/retarget",
+      "summary": "Retarget an unconfigured PostHog erasure",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "write",
+      "excluded": true,
+      "requestBody": [
+        {
+          "name": "project_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "us",
+            "eu"
+          ]
+        }
+      ]
+    },
+    {
+      "operationId": "revealPostHogErasure",
+      "method": "POST",
+      "path": "/api/v1/admin/posthog-erasure/{erasure_id}/reveal",
+      "summary": "Audit and reveal identifiers needed for provider verification",
+      "tags": [
+        "Admin"
+      ],
+      "manifestClass": "write",
+      "excluded": true
+    },
+    {
       "operationId": "listAdminRetentionWithheld",
       "method": "GET",
       "path": "/api/v1/admin/retention/withheld",
@@ -11183,6 +11276,71 @@
       ]
     },
     {
+      "operationId": "recordMCPToolTelemetry",
+      "method": "POST",
+      "path": "/api/v1/mcp/telemetry",
+      "summary": "Record an MCP tool completion",
+      "tags": [
+        "MCP Telemetry"
+      ],
+      "manifestClass": "write",
+      "excluded": true,
+      "description": "Records one bounded, best-effort MCP tool completion through the current-consent analytics gateway. Identity is derived from the authenticated OAuth bearer token, and the Worker secret is required.",
+      "requestBody": [
+        {
+          "name": "duration_bucket",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "under_250ms",
+            "250ms_to_1s",
+            "1s_to_5s",
+            "over_5s"
+          ]
+        },
+        {
+          "name": "outcome",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "succeeded",
+            "failed"
+          ]
+        },
+        {
+          "name": "tool_family",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "accounts",
+            "analytics",
+            "budgets",
+            "boosts",
+            "savings",
+            "transactions",
+            "discovery",
+            "workflows",
+            "cross_domain",
+            "other"
+          ]
+        },
+        {
+          "name": "tool_surface",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "search",
+            "read_execute",
+            "write_execute",
+            "recipe_list",
+            "recipe_save",
+            "recipe_run",
+            "recipe_templates"
+          ]
+        }
+      ]
+    },
+    {
       "operationId": "getMerchants",
       "method": "GET",
       "path": "/api/v1/merchants",
@@ -19446,6 +19604,18 @@
           "type": "string"
         }
       ]
+    },
+    {
+      "operationId": "getPostHogSupportIdentity",
+      "method": "GET",
+      "path": "/api/v1/user/posthog-support-identity",
+      "summary": "Get a verified PostHog Support identity",
+      "tags": [
+        "Support"
+      ],
+      "manifestClass": "read",
+      "excluded": true,
+      "description": "Returns the authenticated Clerk subject and its server-generated HMAC for PostHog Support."
     },
     {
       "operationId": "getPrivacySettings",

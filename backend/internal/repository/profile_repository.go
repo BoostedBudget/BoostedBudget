@@ -549,11 +549,27 @@ type profileRepository struct {
 	db                    DB
 	enc                   *appcrypto.FieldEncryptor
 	overrideTierValidator func(tierName string) bool
+	postHogProjectID      string
+	postHogRegion         string
 	// auditLog writes DeleteUserCascade's terminal `user.deleted` entry inside the cascade's own
 	// transaction (Issue #1507). Held as the interface rather than reaching for a package-level
 	// helper so the write goes through the one documented entry point — LogInTx — whose doc comment
 	// carries the #1506 warning a future implementer must not be able to miss.
 	auditLog AuditLogRepository
+}
+
+// SetPostHogErasureTarget records which isolated PostHog project an erasure obligation belongs to.
+// Missing configuration is represented explicitly as "unconfigured" so local GDPR deletion can
+// still commit while the durable row remains visibly pending for an operator.
+func (r *profileRepository) SetPostHogErasureTarget(projectID, region string) {
+	if strings.TrimSpace(projectID) == "" {
+		projectID = "unconfigured"
+	}
+	if strings.TrimSpace(region) == "" {
+		region = "unconfigured"
+	}
+	r.postHogProjectID = projectID
+	r.postHogRegion = region
 }
 
 // SetOverrideTierValidator injects a function that reports whether a manual_tier_override value
@@ -600,7 +616,7 @@ func NewProfileRepository(db DB, enc *appcrypto.FieldEncryptor) *profileReposito
 	// auditLog is constructed unconditionally and from the same handle: DeleteUserCascade only ever
 	// calls LogInTx, which writes through the transaction it is given and never touches this
 	// receiver's db, so there is no configuration for a caller to get wrong or forget.
-	return &profileRepository{db: db, enc: enc, auditLog: NewAuditLogRepository(db)}
+	return &profileRepository{db: db, enc: enc, auditLog: NewAuditLogRepository(db), postHogProjectID: "unconfigured", postHogRegion: "unconfigured"}
 }
 
 const userSelectQuery = `
@@ -1610,6 +1626,40 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 		return false, nil, domain.ErrHouseholdHasActiveMembers
 	}
 
+	// #1650: capture every PostHog distinct ID while the local identity rows still exist. The
+	// canonical users.clerk_user_id, historical user_identities Clerk IDs, and the internal UUID
+	// formerly used by backend producers are encrypted together below. No email is copied.
+	var canonicalEncryptedClerkID string
+	if err = tx.QueryRow(ctx, `SELECT clerk_user_id FROM users WHERE id = $1`, userID).
+		Scan(&canonicalEncryptedClerkID); err != nil {
+		return false, nil, fmt.Errorf("DeleteUserCascade: read canonical Clerk identity: %w", err)
+	}
+	identityRows, err := tx.Query(ctx, `
+		SELECT clerk_user_id FROM users WHERE id = $1
+		UNION ALL
+		SELECT clerk_user_id FROM user_identities WHERE user_id = $1`, userID)
+	if err != nil {
+		return false, nil, fmt.Errorf("DeleteUserCascade: read PostHog identities: %w", err)
+	}
+	var encryptedClerkIDs []string
+	for identityRows.Next() {
+		var clerkID string
+		if scanErr := identityRows.Scan(&clerkID); scanErr != nil {
+			identityRows.Close()
+			return false, nil, fmt.Errorf("DeleteUserCascade: scan PostHog identity: %w", scanErr)
+		}
+		encryptedClerkIDs = append(encryptedClerkIDs, clerkID)
+	}
+	if rowsErr := identityRows.Err(); rowsErr != nil {
+		identityRows.Close()
+		return false, nil, fmt.Errorf("DeleteUserCascade: read PostHog identities: %w", rowsErr)
+	}
+	identityRows.Close()
+	erasureEnvelope, err := buildPostHogErasureEnvelope(r.enc, userID, canonicalEncryptedClerkID, encryptedClerkIDs)
+	if err != nil {
+		return false, nil, fmt.Errorf("DeleteUserCascade: build PostHog erasure obligation: %w", err)
+	}
+
 	// Issue #1440 Finding 2 (Codex review): clear any DANGLING cross-user override BEFORE the hard
 	// delete below. transactions.custom_category_override_id -> custom_categories is ON DELETE
 	// RESTRICT (deliberately — see migration 000065: "prevents deleting a custom_category while it
@@ -1996,6 +2046,23 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	//   - household_invites.inviter_user_id / referrals.referrer_id/referred_id: unchanged from the
 	//     original audit — these only remove the relationship/invite row itself, never another
 	//     user's own `users` row or their independently-owned data, so no guard is needed for them.
+	// #1650: transactional outbox. This INSERT is in the exact transaction that commits the local
+	// hard delete and the terminal audit row. It deliberately precedes the users DELETE and the
+	// table deliberately has no users FK, so an insert failure restores all local data while a
+	// successful insert survives the cascade. ON CONFLICT is delivery idempotency, not permission
+	// to omit the write: the blind-index key names this one user-erasure generation without storing
+	// the internal UUID in plaintext.
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO posthog_erasure_outbox
+			(idempotency_key, identities_encrypted, clerk_user_id_encrypted,
+			 clerk_user_id_blind_idx, project_id, region, state, phase)
+		VALUES ($1, $2, $3, $4, $5, $6, 'pending', 'clerk_delete')
+		ON CONFLICT (idempotency_key) DO NOTHING`,
+		erasureEnvelope.IdempotencyKey, erasureEnvelope.Ciphertext, erasureEnvelope.ClerkCiphertext,
+		erasureEnvelope.ClerkFenceKey, r.postHogProjectID, r.postHogRegion); err != nil {
+		return false, nil, fmt.Errorf("DeleteUserCascade: persist PostHog erasure obligation: %w", err)
+	}
+
 	ct, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
 	if err != nil {
 		return false, nil, fmt.Errorf("DeleteUserCascade: delete user: %w", err)

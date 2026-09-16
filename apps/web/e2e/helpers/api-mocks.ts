@@ -35,8 +35,8 @@ export async function mockAuthDependencies(
     compEndsAt,
   } = overrides ?? {}
 
-  // CookieConsent replays saved consent on mount, including after a reload. Keep
-  // that App-level PUT in this page's fixture so it cannot trigger a live 401 redirect.
+  // Authenticated startup reads server-authoritative privacy settings. Keep PUT support for
+  // specs that exercise explicit changes from the privacy settings page.
   const privacy: PrivacySettings = {
     id: 'privacy-123',
     user_id: 'user-123',

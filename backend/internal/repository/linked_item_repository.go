@@ -19,6 +19,10 @@ var (
 	ErrLinkedItemNotFound = errors.New("linked item not found")
 	// ErrDuplicateLinkedItem is returned when attempting to create a linked item that already exists
 	ErrDuplicateLinkedItem = errors.New("linked item already exists for this user")
+	// ErrLinkedItemSyncStateChanged means a concurrent sync/reset or terminal lifecycle transition
+	// changed the item after the caller began fetching pages. The caller must retry from the newly
+	// durable state instead of overwriting it with a stale completion.
+	ErrLinkedItemSyncStateChanged = errors.New("linked item sync state changed")
 	// ErrLinkedItemNotDisconnected is returned by PurgeLinkedItem when the item's Plaid side has
 	// not yet been stopped (plaid_removed_at IS NULL). Purging first would permanently destroy the
 	// only local record of a Plaid Item that may still be billing, with no way to find or remove
@@ -414,11 +418,45 @@ type LinkedItemRepository interface {
 	UpdateLiabilitiesLastSyncedAt(ctx context.Context, id string, t time.Time) error
 }
 
-// linkedItemRepository implements LinkedItemRepository using PostgreSQL
-type linkedItemRepository struct {
-	db  DB
-	enc *appcrypto.FieldEncryptor
+// TransactionSyncCompletionRepository is the narrow metadata write boundary for a fully
+// paginated sync. It remains separate from the broad linked-item repository so unrelated readers
+// and their test doubles do not gain a completion-only method.
+type TransactionSyncCompletionRepository interface {
+	RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, expectedGeneration int64, completedCursor *string) (TransactionSyncCompletionDisposition, error)
 }
+
+type TransactionSyncCompletionDisposition string
+
+const (
+	TransactionSyncCompletionInitial                   TransactionSyncCompletionDisposition = "initial"
+	TransactionSyncCompletionRefresh                   TransactionSyncCompletionDisposition = "refresh"
+	TransactionSyncCompletionSuppressedCutoverUnset    TransactionSyncCompletionDisposition = "suppressed_cutover_unset"
+	TransactionSyncCompletionSuppressedPreCutover      TransactionSyncCompletionDisposition = "suppressed_pre_cutover"
+	TransactionSyncCompletionSuppressedLegacyAmbiguous TransactionSyncCompletionDisposition = "suppressed_legacy_ambiguous"
+)
+
+// TransactionSyncCursorResetRepository compare-and-resets a cursor rejected by Plaid without
+// overwriting progress committed by another sync.
+type TransactionSyncCursorResetRepository interface {
+	ResetCursorIfUnchanged(ctx context.Context, id, expectedCursor string) error
+}
+
+// TransactionSyncProgressRepository persists resumable partial pagination without marking a
+// sync completed or overwriting progress from a concurrent run.
+type TransactionSyncProgressRepository interface {
+	RecordTransactionSyncProgress(ctx context.Context, id, expectedCursor, nextCursor string) error
+}
+
+// linkedItemRepository implements LinkedItemRepository using PostgreSQL.
+type linkedItemRepository struct {
+	db                               DB
+	enc                              *appcrypto.FieldEncryptor
+	transactionSyncCompletionCutover *time.Time
+}
+
+var _ TransactionSyncCompletionRepository = (*linkedItemRepository)(nil)
+var _ TransactionSyncCursorResetRepository = (*linkedItemRepository)(nil)
+var _ TransactionSyncProgressRepository = (*linkedItemRepository)(nil)
 
 // Standard SELECT columns for linked_items (used across all repository methods).
 // Order matters: MUST match the order in Scan calls.
@@ -428,7 +466,7 @@ const linkedItemSelectCols = `id, user_id, item_id, access_token_encrypted,
        replaced_at, replaced_by_id,
        created_at, updated_at,
        investments_last_synced_date, liabilities_last_synced_at,
-       status_changed_at`
+       status_changed_at, transaction_sync_completion_generation`
 
 // NewLinkedItemRepository returns the CONCRETE *linkedItemRepository, not the LinkedItemRepository
 // interface — Issue #1469. It used to return the interface, which meant a method absent from that
@@ -454,6 +492,18 @@ var _ LinkedItemRepository = (*linkedItemRepository)(nil)
 
 func NewLinkedItemRepository(db DB, enc *appcrypto.FieldEncryptor) *linkedItemRepository { //nolint:revive // deliberate: see doc comment (mirrors NewProfileRepository)
 	return &linkedItemRepository{db: db, enc: enc}
+}
+
+// SetTransactionSyncCompletionCutover sets the shared deployment instant after which a newly
+// created item can be proven not to have been processed by a pre-cutover worker. Nil fails closed:
+// first completions are latched but suppressed, while already-completed items remain refreshes.
+func (r *linkedItemRepository) SetTransactionSyncCompletionCutover(cutover *time.Time) {
+	if cutover == nil {
+		r.transactionSyncCompletionCutover = nil
+		return
+	}
+	normalized := cutover.UTC()
+	r.transactionSyncCompletionCutover = &normalized
 }
 
 // encryptLinkedItemPIIFields encrypts PII fields on the item before writing to the database.
@@ -567,8 +617,8 @@ func (r *linkedItemRepository) Create(ctx context.Context, item *domain.LinkedIt
 
 	query := `
 		INSERT INTO linked_items
-		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at, item_id_blind_idx, institution_id_blind_idx, status_changed_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		(id, user_id, item_id, access_token_encrypted, institution_id, institution_name, provider, created_at, updated_at, item_id_blind_idx, institution_id_blind_idx, status_changed_at, transaction_sync_state)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'never_synced')
 	`
 
 	_, err = r.db.Exec(ctx, query,
@@ -629,6 +679,7 @@ func (r *linkedItemRepository) GetByID(ctx context.Context, id string) (*domain.
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
 		&item.StatusChangedAt,
+		&item.TransactionSyncCompletionGeneration,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -692,6 +743,7 @@ func (r *linkedItemRepository) GetByUserID(ctx context.Context, userID string) (
 			&item.InvestmentsLastSyncedDate,
 			&item.LiabilitiesLastSyncedAt,
 			&item.StatusChangedAt,
+			&item.TransactionSyncCompletionGeneration,
 		)
 		if err != nil {
 			return nil, err
@@ -748,6 +800,7 @@ func (r *linkedItemRepository) GetByItemID(ctx context.Context, itemID string) (
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
 		&item.StatusChangedAt,
+		&item.TransactionSyncCompletionGeneration,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -790,6 +843,100 @@ func (r *linkedItemRepository) UpdateCursor(ctx context.Context, id, cursor stri
 	}
 
 	return nil
+}
+
+// ResetCursorIfUnchanged clears an INVALID_CURSOR value only while it remains the item's current
+// nonterminal cursor. A stale Plaid response therefore cannot erase progress from a newer sync.
+func (r *linkedItemRepository) ResetCursorIfUnchanged(ctx context.Context, id, expectedCursor string) error {
+	query := `
+		UPDATE linked_items
+		SET cursor = '',
+		    updated_at = NOW()
+		WHERE id = $1
+		  AND COALESCE(cursor, '') = $2
+		  AND COALESCE(status, 'active') NOT IN ('replaced', 'disconnected', 'revoked')
+	`
+	commandTag, err := r.db.Exec(ctx, query, id, expectedCursor)
+	if err != nil {
+		return fmt.Errorf("reset transaction sync cursor: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return ErrLinkedItemSyncStateChanged
+	}
+	return nil
+}
+
+// RecordTransactionSyncProgress records resumable partial pagination progress without touching
+// last_synced_at. That distinction preserves last_synced_at as the rollout classification signal
+// while the first-completion latch is still empty.
+func (r *linkedItemRepository) RecordTransactionSyncProgress(ctx context.Context, id, expectedCursor, nextCursor string) error {
+	query := `
+		UPDATE linked_items
+		SET cursor = $3,
+		    updated_at = NOW()
+		WHERE id = $1
+		  AND COALESCE(cursor, '') = $2
+		  AND COALESCE(status, 'active') NOT IN ('replaced', 'disconnected', 'revoked')
+	`
+	commandTag, err := r.db.Exec(ctx, query, id, expectedCursor, nextCursor)
+	if err != nil {
+		return fmt.Errorf("advance partial transaction sync cursor: %w", err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return ErrLinkedItemSyncStateChanged
+	}
+	return nil
+}
+
+// RecordTransactionSyncCompletion finalizes only a fully paginated transaction sync. A single
+// UPDATE is the concurrency boundary: PostgreSQL rechecks both the expected cursor and durable
+// completion generation after waiting on a competing writer. The generation advances even when
+// Plaid returns no cursor, so only one caller can record a completion from a given starting state.
+func (r *linkedItemRepository) RecordTransactionSyncCompletion(
+	ctx context.Context,
+	id, expectedCursor string,
+	expectedGeneration int64,
+	completedCursor *string,
+) (TransactionSyncCompletionDisposition, error) {
+	query := `
+		WITH candidate AS (
+			SELECT id,
+			       CASE transaction_sync_state
+			           WHEN 'completed' THEN 'refresh'
+			           WHEN 'never_synced' THEN CASE
+			               WHEN $5::timestamptz IS NULL THEN 'suppressed_cutover_unset'
+			               WHEN created_at < $5::timestamptz THEN 'suppressed_pre_cutover'
+			               ELSE 'initial'
+			           END
+			           WHEN 'legacy_ambiguous' THEN 'suppressed_legacy_ambiguous'
+			       END AS completion_disposition
+			FROM linked_items
+			WHERE id = $1
+			  AND COALESCE(cursor, '') = $2
+			  AND transaction_sync_completion_generation = $3
+			  AND COALESCE(status, 'active') NOT IN ('replaced', 'disconnected', 'revoked')
+			FOR UPDATE
+		)
+		UPDATE linked_items AS li
+		SET cursor = CASE WHEN $4::text IS NULL THEN li.cursor ELSE $4::text END,
+		    first_transaction_sync_completed_at = COALESCE(li.first_transaction_sync_completed_at, NOW()),
+		    transaction_sync_state = 'completed',
+		    transaction_sync_completion_generation = li.transaction_sync_completion_generation + 1,
+		    last_synced_at = NOW(),
+		    updated_at = NOW()
+		FROM candidate
+		WHERE li.id = candidate.id
+		RETURNING candidate.completion_disposition
+	`
+
+	var disposition TransactionSyncCompletionDisposition
+	if err := r.db.QueryRow(ctx, query, id, expectedCursor, expectedGeneration, completedCursor, r.transactionSyncCompletionCutover).Scan(&disposition); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrLinkedItemSyncStateChanged
+		}
+		return "", fmt.Errorf("record transaction sync completion: %w", err)
+	}
+	return disposition, nil
 }
 
 // Update updates a linked item's fields (e.g., status, error details)
@@ -926,6 +1073,7 @@ func (r *linkedItemRepository) GetByIDAndUser(ctx context.Context, id, userID st
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
 		&item.StatusChangedAt,
+		&item.TransactionSyncCompletionGeneration,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1262,6 +1410,7 @@ func (r *linkedItemRepository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, 
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
 		&item.StatusChangedAt,
+		&item.TransactionSyncCompletionGeneration,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1319,6 +1468,7 @@ func (r *linkedItemRepository) GetByUserAndInstitution(ctx context.Context, user
 		&item.InvestmentsLastSyncedDate,
 		&item.LiabilitiesLastSyncedAt,
 		&item.StatusChangedAt,
+		&item.TransactionSyncCompletionGeneration,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1375,7 +1525,7 @@ const cleanupCandidateSelectQuery = `
 	       li.replaced_at, li.replaced_by_id,
 	       li.cleanup_notified_at, li.cleanup_scheduled_at,
 	       li.created_at, li.updated_at, li.investments_last_synced_date, li.liabilities_last_synced_at,
-	       li.status_changed_at
+	       li.status_changed_at, li.transaction_sync_completion_generation
 	FROM linked_items li
 	WHERE li.cleanup_scheduled_at IS NULL
 	  AND li.plaid_removed_at IS NULL
@@ -1607,6 +1757,7 @@ func (r *linkedItemRepository) queryCleanupCandidates(ctx context.Context, query
 			&item.InvestmentsLastSyncedDate,
 			&item.LiabilitiesLastSyncedAt,
 			&item.StatusChangedAt,
+			&item.TransactionSyncCompletionGeneration,
 		)
 		if err != nil {
 			return nil, err
@@ -1674,7 +1825,7 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 		       replaced_at, replaced_by_id,
 		       cleanup_notified_at, cleanup_scheduled_at,
 		       created_at, updated_at, investments_last_synced_date, liabilities_last_synced_at,
-		       status_changed_at
+		       status_changed_at, transaction_sync_completion_generation
 		FROM linked_items
 		WHERE cleanup_scheduled_at IS NOT NULL
 		  AND cleanup_scheduled_at < NOW()
@@ -1717,6 +1868,7 @@ func (r *linkedItemRepository) GetItemsPendingCleanup(ctx context.Context) ([]do
 			&item.InvestmentsLastSyncedDate,
 			&item.LiabilitiesLastSyncedAt,
 			&item.StatusChangedAt,
+			&item.TransactionSyncCompletionGeneration,
 		)
 		if err != nil {
 			return nil, err
@@ -2035,6 +2187,7 @@ func (r *linkedItemRepository) GetActiveItemsByUserID(ctx context.Context, userI
 			&item.InvestmentsLastSyncedDate,
 			&item.LiabilitiesLastSyncedAt,
 			&item.StatusChangedAt,
+			&item.TransactionSyncCompletionGeneration,
 		)
 		if err != nil {
 			return nil, err
