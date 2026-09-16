@@ -159,12 +159,6 @@ func (s *liabilitySyncService) ProcessWebhook(ctx context.Context, webhook *doma
 		if updateErr := s.webhookRepo.Update(ctx, webhook); updateErr != nil {
 			s.logger.Error("failed to update webhook processing state", "webhook_id", webhook.ID, "error", updateErr)
 		}
-		if s.analytics != nil {
-			s.analytics.Capture(linkedItem.UserID, phclient.EventLiabilitySyncFailed, map[string]interface{}{
-				"error_type":   fmt.Sprintf("%d", plaidErr.ErrorType),
-				"webhook_type": webhook.WebhookType,
-			})
-		}
 		return fmt.Errorf("liability sync failed: %w", err)
 	}
 

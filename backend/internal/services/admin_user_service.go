@@ -83,9 +83,8 @@ type AdminUserService interface {
 	// that user's UUID land on THEIR PostHog profile — so GDPR consent governs this regardless of
 	// who triggered the change: the target user did not act and may not have consented. This is
 	// why these use CaptureIfConsented (like transfer_suggestion_service.go's user-initiated
-	// events) rather than raw Capture (main.go's "operational/system events" carve-out does not
-	// apply here — an admin's action about a specific user's data is not "no user's action" in
-	// the sense that carve-out means; see main.go's gdprClient doc comment). audit_logs already
+	// events) rather than treating the action as system telemetry. The production gateway rejects
+	// operational PostHog events entirely. audit_logs already
 	// durably records both actions (admin_user_repository.go) as the compliance record; this
 	// governs only the separate PostHog product-analytics stream.
 	//

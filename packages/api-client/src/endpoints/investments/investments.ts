@@ -544,9 +544,3 @@ export function useGetPortfolioSummary<TData = Awaited<ReturnType<typeof getPort
 
   return withQueryKey(query, queryOptions.queryKey);
 }
-
-
-
-
-
-

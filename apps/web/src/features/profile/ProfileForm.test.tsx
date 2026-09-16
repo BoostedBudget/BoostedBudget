@@ -148,10 +148,7 @@ describe('ProfileForm', () => {
         expect(mockToastSuccess).toHaveBeenCalledWith(
           'Profile updated. Check your inbox to verify your new email address.',
         )
-        expect(mockPosthogIdentify).toHaveBeenCalledWith(
-          mockUser.id,
-          { email: 'updated@example.com' },
-        )
+        expect(mockPosthogIdentify).not.toHaveBeenCalled()
       })
     })
 

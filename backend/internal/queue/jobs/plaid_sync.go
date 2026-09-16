@@ -10,7 +10,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
-	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -55,8 +54,7 @@ type PlaidSyncWorker struct {
 	jobQueue       queue.JobQueue
 	logger         *slog.Logger
 	db             TxBeginner
-	itemErrorSvc   ItemErrorNotifier  // Issue #1609 P3-T2: nil-safe, notifies on permanent errors
-	analytics      phclient.Analytics // Issue #1609 P3-T2: nil-safe, first sync-failure analytics coverage in this worker
+	itemErrorSvc   ItemErrorNotifier // Issue #1609 P3-T2: nil-safe, notifies on permanent errors
 }
 
 // PlaidSyncWorkerDeps contains the dependencies for PlaidSyncWorker.
@@ -94,15 +92,6 @@ func NewPlaidSyncWorker(deps PlaidSyncWorkerDeps) *PlaidSyncWorker {
 // This resolves the circular dependency: worker registration before client creation.
 func (w *PlaidSyncWorker) SetJobQueue(jq queue.JobQueue) {
 	w.jobQueue = jq
-}
-
-// SetAnalytics injects the PostHog analytics client (setter injection, matching this codebase's
-// convention for optional per-service analytics — see CLAUDE.md § Analytics Instrumentation).
-// Issue #1609 P3-T2: this is the FIRST analytics coverage for this worker's sync-failure path —
-// the only existing EventSyncFailed fire site (plaid_sync_provider.go) is explicitly not wired
-// into production.
-func (w *PlaidSyncWorker) SetAnalytics(a phclient.Analytics) {
-	w.analytics = a
 }
 
 // Work processes a Plaid sync job.
@@ -250,16 +239,6 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 			// Non-blocking: a sync must not fail because a notification failed.
 			notifyPermanentPlaidError(ctx, w.itemErrorSvc, w.logger, linkedItem, plaidErr)
 
-			// Issue #1609 P3-T2: first sync-failure analytics coverage for this worker — the only
-			// existing EventSyncFailed fire site (plaid_sync_provider.go) is not wired into
-			// production, and this worker fired no sync-failure event at all before this.
-			if w.analytics != nil {
-				w.analytics.Capture(args.UserID, phclient.EventSyncFailed, map[string]interface{}{
-					"item_id":    args.ItemID,
-					"error_code": errorCode,
-				})
-			}
-
 			// Return nil to mark job as complete (not retryable)
 			return nil
 		}
@@ -280,7 +259,6 @@ func (w *PlaidSyncWorker) Work(ctx context.Context, job *river.Job[PlaidSyncArgs
 		"total_changes", totalChanges,
 		"duration_ms", time.Since(startTime).Milliseconds(),
 	)
-
 	// Issue #1609 Item 7: the lock transaction was already committed above, before the
 	// sync ran. Nothing to commit here.
 

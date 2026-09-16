@@ -227,6 +227,7 @@ describe('MCP transport integration', () => {
 
   it('Scenario 1: full chain — initialize, tools/list, tools/call (getCashFlowSummary)', async () => {
     // Mock the backend endpoint for getCashFlowSummary
+    let telemetryRequest: { body: unknown; authorization: string | null } | undefined
     const backendInterceptors: BackendInterceptor[] = [
       {
         url: '/api/v1/analytics/cash-flow-summary',
@@ -243,11 +244,26 @@ describe('MCP transport integration', () => {
           ),
         callCount: 0,
       },
+      {
+        url: '/api/v1/mcp/telemetry',
+        method: 'POST',
+        response: () => new Response(null, { status: 204 }),
+        callCount: 0,
+      },
     ]
 
-    vi.spyOn(globalThis, 'fetch').mockImplementation(
-      makeExtendedFetchSpy(backendInterceptors),
-    )
+    const extendedFetch = makeExtendedFetchSpy(backendInterceptors)
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const [url, method] = extractUrlAndMethod(input, init)
+      if (url.includes('/api/v1/mcp/telemetry') && method === 'POST') {
+        const request = input instanceof Request ? input.clone() : new Request(url, init)
+        telemetryRequest = {
+          body: await request.json(),
+          authorization: request.headers.get('Authorization'),
+        }
+      }
+      return extendedFetch(input, init)
+    })
 
     // Step 1: initialize
     const { sessionId, serverName, serverDescription, protocolVersion, instructions } =
@@ -337,6 +353,80 @@ describe('MCP transport integration', () => {
 
     // Backend was called exactly once for the tool execution
     expect(backendInterceptors[0]!.callCount).toBe(1)
+    expect(backendInterceptors[1]!.callCount).toBe(1)
+    expect(telemetryRequest).toEqual({
+      authorization: 'Bearer oat_test_clerk_access_token',
+      body: {
+        tool_surface: 'read_execute',
+        tool_family: 'analytics',
+        outcome: 'succeeded',
+        duration_bucket: expect.stringMatching(/^(under_250ms|250ms_to_1s|1s_to_5s|over_5s)$/),
+      },
+    })
+  })
+
+  it('returns the tool result unchanged when telemetry delivery fails', async () => {
+    const telemetryInterceptor: BackendInterceptor = {
+      url: '/api/v1/mcp/telemetry',
+      method: 'POST',
+      response: () => new Response(null, { status: 503 }),
+      callCount: 0,
+    }
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      makeExtendedFetchSpy([telemetryInterceptor]),
+    )
+
+    const { sessionId } = await initialize(worker, bearerToken)
+    const result = await sendMcp(
+      worker,
+      bearerToken,
+      'tools/call',
+      { name: 'search', arguments: { query: 'cash flow' } },
+      sessionId,
+    )
+
+    expect(result.status).not.toBe(401)
+    expect(result.status).not.toBe(503)
+    const content = (result.body?.result as { content?: Array<{ text: string }> } | undefined)
+      ?.content
+    expect(content?.[0]?.text).toContain('getCashFlowSummary')
+    expect(telemetryInterceptor.callCount).toBe(1)
+  })
+
+  it('classifies an execute denial as failed without changing the MCP error response', async () => {
+    let telemetryBody: unknown
+    const extendedFetch = makeExtendedFetchSpy([{
+      url: '/api/v1/mcp/telemetry',
+      method: 'POST',
+      response: () => new Response(null, { status: 204 }),
+      callCount: 0,
+    }])
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const [url, method] = extractUrlAndMethod(input, init)
+      if (url.includes('/api/v1/mcp/telemetry') && method === 'POST') {
+        const request = input instanceof Request ? input.clone() : new Request(url, init)
+        telemetryBody = await request.json()
+      }
+      return extendedFetch(input, init)
+    })
+
+    const { sessionId } = await initialize(worker, bearerToken)
+    const result = await sendMcp(
+      worker,
+      bearerToken,
+      'tools/call',
+      { name: 'readExecute', arguments: { calls: [{ operationId: 'unknownPrivateOperation' }] } },
+      sessionId,
+    )
+
+    const content = (result.body?.result as { content?: Array<{ text: string }> } | undefined)
+      ?.content
+    expect(content?.[0]?.text).toContain('not available via MCP')
+    expect(telemetryBody).toEqual(expect.objectContaining({
+      tool_surface: 'read_execute',
+      tool_family: 'other',
+      outcome: 'failed',
+    }))
   })
 
   // ── Test 2 (Scenario 4): write-confirmation round trip ────────────────────

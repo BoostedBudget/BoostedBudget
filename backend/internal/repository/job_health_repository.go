@@ -11,6 +11,10 @@ import (
 // internal/observability.RecordJobSuccess, the complementary generic last-success heartbeat every
 // periodic worker's Work() reports to on its success path).
 type JobHealthRepository interface {
+	// GetDeadLetterQueueSize returns the current unresolved queue depth. Resolved replays do not
+	// remain operational work merely because their retained audit row still exists.
+	GetDeadLetterQueueSize(ctx context.Context) (int, error)
+
 	// GetOldestUnclearedExpiredManualTierOverrideAge returns how long the OLDEST currently
 	// expired-but-uncleared manual_tier_override has been sitting uncleared: zero when there are
 	// none.
@@ -132,6 +136,18 @@ type jobHealthRepository struct {
 // NewJobHealthRepository creates a new JobHealthRepository instance.
 func NewJobHealthRepository(db DB) JobHealthRepository {
 	return &jobHealthRepository{db: db}
+}
+
+func (r *jobHealthRepository) GetDeadLetterQueueSize(ctx context.Context) (int, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM dead_letter_jobs
+		WHERE NOT ` + replayResolvedPredicate
+	var count int64
+	if err := r.db.QueryRow(ctx, query).Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to query unresolved dead letter queue size: %w", err)
+	}
+	return int(count), nil
 }
 
 func (r *jobHealthRepository) GetOldestUnclearedExpiredManualTierOverrideAge(ctx context.Context) (time.Duration, error) {
