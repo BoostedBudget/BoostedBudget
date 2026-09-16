@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, resolve } from 'node:path'
 import posthog, { PostHog, type Survey } from 'posthog-js'
 import {
   clearIsolatedSurveyState,
@@ -14,6 +15,37 @@ import {
 import { isPostHogEngagementRoute } from './routes'
 
 type SupportedQuestionType = 'rating' | 'single_choice' | 'multiple_choice' | 'open' | 'link'
+
+const PINNED_POSTHOG_SDK_ENTRY = 'lib/src/extensions/conversations/external/index.js'
+
+/**
+ * Locate the pinned posthog-js SDK source regardless of where the package manager
+ * placed it. Bun workspace hoisting puts `posthog-js` in the repo-root
+ * `node_modules`, not `apps/web/node_modules`, so a hardcoded relative path is
+ * brittle. Resolve the package first, then fall back to the two known layouts.
+ */
+function readPinnedPostHogSdkSource(): string {
+  const require = createRequire(import.meta.url)
+  const candidates: string[] = []
+  try {
+    candidates.push(
+      resolve(dirname(require.resolve('posthog-js/package.json')), PINNED_POSTHOG_SDK_ENTRY),
+    )
+  } catch {
+    // The package's `exports` map may block `package.json`; fall through to layout candidates.
+  }
+  candidates.push(
+    resolve(import.meta.dir, '../../../node_modules/posthog-js', PINNED_POSTHOG_SDK_ENTRY),
+    resolve(import.meta.dir, '../../../../node_modules/posthog-js', PINNED_POSTHOG_SDK_ENTRY),
+  )
+  const found = candidates.find((candidate) => existsSync(candidate))
+  if (!found) {
+    throw new Error(
+      `Unable to locate the pinned posthog-js SDK source. Tried:\n${candidates.join('\n')}`,
+    )
+  }
+  return readFileSync(found, 'utf8')
+}
 
 function surveyQuestion(type: SupportedQuestionType, hasOpenChoice: boolean) {
   if (type === 'rating') {
@@ -141,10 +173,7 @@ describe('PostHog authenticated experiences policy', () => {
   })
 
   test('the pinned SDK supplies reply polling with bounded cadence and generation cleanup', () => {
-    const source = readFileSync(resolve(
-      import.meta.dir,
-      '../../../node_modules/posthog-js/lib/src/extensions/conversations/external/index.js',
-    ), 'utf8')
+    const source = readPinnedPostHogSdkSource()
     expect(source).toContain('POLL_INTERVAL_OPEN_MS = 5000')
     expect(source).toContain('POLL_INTERVAL_CLOSED_MS = 15000')
     expect(source).toContain('POLL_RATE_LIMIT_MAX_MS = 60000')
@@ -153,10 +182,7 @@ describe('PostHog authenticated experiences policy', () => {
   })
 
   test('the pinned SDK clearIdentity path reloads tickets after entering anonymous mode', () => {
-    const source = readFileSync(resolve(
-      import.meta.dir,
-      '../../../node_modules/posthog-js/lib/src/extensions/conversations/external/index.js',
-    ), 'utf8')
+    const source = readPinnedPostHogSdkSource()
     const clearIdentity = source.slice(
       source.indexOf('ConversationsManager.prototype.clearIdentity'),
       source.indexOf('ConversationsManager.prototype._resetConversationState'),
