@@ -23,6 +23,16 @@ export const ANALYTICS_EVENTS = {
   ADMIN_DLQ_RETRY: 'admin_dlq_retry',
   ADMIN_ORPHANED_PLAID_ITEM_ATTESTED: 'admin_orphaned_plaid_item_attested',
   ADMIN_PAGE_VIEWED: 'admin_page_viewed',
+  // Fires when an admin queues a RevenueCat grant or revoke; properties are the bounded grant class, target tier, and revoke flag only, never the reason or the target user id.
+  ADMIN_REVENUECAT_GRANT_QUEUED: 'admin_revenuecat_grant_queued',
+  // Fires when an admin queues a RevenueCat customer refresh; carries no properties because the target user id is not a bounded dimension.
+  ADMIN_REVENUECAT_REFRESH_QUEUED: 'admin_revenuecat_refresh_queued',
+  // Fires when an admin queues a replay of a RevenueCat webhook receipt; carries no properties because the receipt id is a per-customer identifier.
+  ADMIN_REVENUECAT_REPLAY_QUEUED: 'admin_revenuecat_replay_queued',
+  // Fires when an admin queues a retry of a pending RevenueCat operation; carries no properties because the operation id is a per-customer identifier.
+  ADMIN_REVENUECAT_RETRY_QUEUED: 'admin_revenuecat_retry_queued',
+  // Fires when an admin-initiated subscription change is queued through the RevenueCat path; properties are the bounded action and the target tier only, never the reason or the target user id.
+  ADMIN_SUBSCRIPTION_CHANGE_QUEUED: 'admin_subscription_change_queued',
   ADMIN_SUBSCRIPTION_OVERRIDE_APPLIED: 'admin_subscription_override_applied',
   ADMIN_SUBSCRIPTION_OVERRIDE_REMOVED: 'admin_subscription_override_removed',
   ADMIN_WEBHOOK_REPLAY: 'admin_webhook_replay',
@@ -59,7 +69,11 @@ export const ANALYTICS_EVENTS = {
   BUDGET_SUB_ALLOCATION_ADDED: 'budget_sub_allocation_added',
   CATEGORY_FILTER_APPLIED: 'category_filter_applied',
   CATEGORY_FILTER_CLEARED: 'category_filter_cleared',
+  // Fires when the RevenueCat checkout returns to the cancelled state; carries no properties.
+  CHECKOUT_CANCELLED: 'checkout_cancelled',
   CHECKOUT_COMPLETED: 'checkout_completed',
+  // Fires when the RevenueCat checkout is awaiting provider confirmation; carries no properties.
+  CHECKOUT_CONFIRMATION_PENDING: 'checkout_confirmation_pending',
   CHECKOUT_STARTED: 'checkout_started',
   CUSTOM_CATEGORY_CREATED: 'custom_category_created',
   CUSTOM_CATEGORY_DELETED: 'custom_category_deleted',
@@ -222,6 +236,18 @@ export interface AnalyticsEventProperties {
   'admin_dlq_retry': Record<string, unknown>
   'admin_orphaned_plaid_item_attested': Record<string, unknown>
   'admin_page_viewed': Record<string, unknown>
+  'admin_revenuecat_grant_queued': {
+    grant_class: 'comp' | 'trial'
+    tier: 'premium' | 'household_2' | 'household_3' | 'household_4' | 'household_5'
+    revoke: boolean
+  }
+  'admin_revenuecat_refresh_queued': Record<string, never>
+  'admin_revenuecat_replay_queued': Record<string, never>
+  'admin_revenuecat_retry_queued': Record<string, never>
+  'admin_subscription_change_queued': {
+    action: 'grant' | 'revoke'
+    tier?: 'premium' | 'household_2' | 'household_3' | 'household_4' | 'household_5'
+  }
   'admin_subscription_override_applied': Record<string, unknown>
   'admin_subscription_override_removed': Record<string, unknown>
   'admin_webhook_replay': Record<string, unknown>
@@ -260,7 +286,9 @@ export interface AnalyticsEventProperties {
   'budget_sub_allocation_added': Record<string, unknown>
   'category_filter_applied': Record<string, unknown>
   'category_filter_cleared': Record<string, unknown>
+  'checkout_cancelled': Record<string, never>
   'checkout_completed': Record<string, unknown>
+  'checkout_confirmation_pending': Record<string, never>
   'checkout_started': Record<string, unknown>
   'custom_category_created': Record<string, unknown>
   'custom_category_deleted': Record<string, unknown>
@@ -636,6 +664,21 @@ export const ANALYTICS_EVENT_CONTRACTS: Readonly<Record<
   },
   'admin_page_viewed': {
   },
+  'admin_revenuecat_grant_queued': {
+    grant_class: { type: 'string', required: true, values: ['comp', 'trial'] },
+    tier: { type: 'string', required: true, values: ['premium', 'household_2', 'household_3', 'household_4', 'household_5'] },
+    revoke: { type: 'boolean', required: true },
+  },
+  'admin_revenuecat_refresh_queued': {
+  },
+  'admin_revenuecat_replay_queued': {
+  },
+  'admin_revenuecat_retry_queued': {
+  },
+  'admin_subscription_change_queued': {
+    action: { type: 'string', required: true, values: ['grant', 'revoke'] },
+    tier: { type: 'string', required: false, values: ['premium', 'household_2', 'household_3', 'household_4', 'household_5'] },
+  },
   'admin_subscription_override_applied': {
   },
   'admin_subscription_override_removed': {
@@ -708,7 +751,11 @@ export const ANALYTICS_EVENT_CONTRACTS: Readonly<Record<
   },
   'category_filter_cleared': {
   },
+  'checkout_cancelled': {
+  },
   'checkout_completed': {
+  },
+  'checkout_confirmation_pending': {
   },
   'checkout_started': {
   },

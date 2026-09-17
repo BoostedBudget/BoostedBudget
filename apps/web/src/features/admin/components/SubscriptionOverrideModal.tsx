@@ -154,7 +154,7 @@ function SubscriptionOverrideForm({
                 onSuccess: (data) => {
                     if (data?.stage === 'pending') {
                         toast.info(data.message)
-                        trackEvent(ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_CHANGE_QUEUED, { action: 'grant', tier: selectedTier })
+                        trackEvent(ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_CHANGE_QUEUED, { action: 'grant', tier: selectedTier as AdminSubscriptionTierInputBodyTier })
                         setConfirmSeatWarning(false)
                         onClose()
                         return
@@ -209,7 +209,7 @@ function SubscriptionOverrideForm({
                 onSuccess: (data) => {
                     if (data?.stage === 'pending') {
                         toast.info(data.message)
-                        trackEvent(ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_CHANGE_QUEUED, { action: 'revoke', tier: removedTier })
+                        trackEvent(ANALYTICS_EVENTS.ADMIN_SUBSCRIPTION_CHANGE_QUEUED, { action: 'revoke', tier: removedTier as AdminSubscriptionTierInputBodyTier | undefined })
                         setConfirmRemove(false)
                         onClose()
                         return
