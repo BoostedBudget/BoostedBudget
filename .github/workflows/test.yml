@@ -1937,11 +1937,15 @@ jobs:
 
       # Sibling of the step above, and the reason it is on THIS side of "Set up Go": this suite
       # drives scripts/summarize-go-test.sh against a throwaway two-file Go module in a temp dir
-      # (module summarizetestfixture — never the backend module), so it needs a Go toolchain. It
-      # runs in well under a second, touches no database and no network, and asserts the wrapper
-      # really does tally PASS/FAIL/SKIP so a skipped test can never read as an indistinguishable
-      # clean `ok`. #1569 round 15 task 1 also made its "go not on PATH" branch fail closed when
-      # $CI is set, so wiring it here cannot degrade into a step that silently exits 0.
+      # (module github.com/example/summarizetestfixture — never the backend module), so it needs a
+      # Go toolchain. It runs in well under a second, touches no database and no network, and
+      # asserts the wrapper really does tally PASS/FAIL/SKIP so a skipped test can never read as an
+      # indistinguishable clean `ok`. #1569 round 15 task 1 also made its "go not on PATH" branch
+      # fail closed when $CI is set, so wiring it here cannot degrade into a step that silently
+      # exits 0. #1652 G22 extended it to cover the second false-green: a Go BUILD failure emits a
+      # package-level `FAIL <pkg> [build failed]` line and never a `--- FAIL:` line, so the old
+      # summary printed PASS=0 FAIL=0 SKIP=0 at a non-zero exit. The suite now asserts the summary
+      # surfaces PKG_FAIL and a warning for that case, and that a clean run reports PKG_FAIL=0.
       - name: Test go-test skip summarizer (#1569 falsification suite)
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: bash scripts/__tests__/summarize-go-test.test.sh
