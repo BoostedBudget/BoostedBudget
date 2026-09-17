@@ -8,6 +8,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	rc "github.com/maxnussbaum/BoostedBudget/internal/integration/revenuecat"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue/jobs"
@@ -28,6 +29,7 @@ type RevenueCatWebhookDeps struct {
 	Profiles                     revenueCatIdentityLookup
 	Queue                        revenueCatTransactionalQueue
 	InvalidAttempts              repository.InvalidWebhookAttemptRepository
+	Analytics                    phclient.ProductAnalytics
 	Authorization, SigningSecret string
 }
 type RevenueCatWebhookHandler struct{ deps RevenueCatWebhookDeps }
@@ -89,8 +91,28 @@ func (h *RevenueCatWebhookHandler) Handle(ctx context.Context, input *RevenueCat
 	out.Body.Status = "duplicate"
 	if accepted {
 		out.Body.Status = "queued"
+		h.captureAccessChange(ctx, user.ID, payload.Event.Type)
 	}
 	return out, nil
+}
+
+// captureAccessChange emits the product event for a delivery that changed access. It is a pure
+// side effect of an accepted delivery: the response, the inbox write and the queued refresh are
+// identical whether or not analytics is configured. Only the bounded RevenueCat event type and the
+// grant/revoke direction are carried — never the webhook body, a customer id or an email. Duplicate
+// deliveries never reach here (they changed nothing) and a TEST delivery returns earlier.
+func (h *RevenueCatWebhookHandler) captureAccessChange(ctx context.Context, internalUserID, eventType string) {
+	if h.deps.Analytics == nil {
+		return
+	}
+	change, ok := rc.ClassifyAccessChange(eventType)
+	if !ok {
+		return
+	}
+	h.deps.Analytics.CaptureEvent(ctx, internalUserID, phclient.RevenueCatWebhookAccessChangedPayload{
+		EventType: phclient.RevenueCatWebhookAccessChangedEventType(change.EventType),
+		Revoked:   change.Revoked,
+	})
 }
 
 func RegisterRevenueCatWebhookRoutes(api huma.API, handler *RevenueCatWebhookHandler) {

@@ -490,6 +490,11 @@ func main() {
 	var revenueCatRepo repository.RevenueCatRepository
 	var revenueCatProfiles repository.ProfileRepository
 
+	// The consent-aware gateway is the only production path to PostHog. It is declared at function
+	// scope because the RevenueCat webhook route is registered outside the DB-initialization block
+	// and must share this one instance rather than constructing a second gateway.
+	var analyticsGateway *phclient.Gateway
+
 	// Issue #930: Declare retention cleanup check worker
 	var retentionCleanupCheckWorker *jobs.RetentionCleanupCheckWorker
 
@@ -745,7 +750,7 @@ func main() {
 		// canonical Clerk subjects and reads current DB consent for every product event.
 		// Operational signals stay in Prometheus/Sentry/logs and are rejected by the gateway.
 		analyticsAuthorityRepo := repository.NewAnalyticsAuthorityRepository(db, fieldEncryptor)
-		analyticsGateway := phclient.NewGateway(phClient, analyticsAuthorityRepo, appLogger)
+		analyticsGateway = phclient.NewGateway(phClient, analyticsAuthorityRepo, appLogger)
 		gdprClient := analyticsGateway
 
 		// GDPR audit trail. Until Issue #1505 this was &mockAuditLogger{} — a stub that logged a
@@ -778,7 +783,7 @@ func main() {
 				ClerkUserGetter: services.NewDefaultClerkUserGetter(),
 			})
 		registrationService.SetAnalytics(analyticsGateway)
-		revenueCatService.SetGDPRAnalytics(gdprClient)
+		revenueCatService.SetAnalytics(analyticsGateway)
 		subscriptionOverrideRepo := repository.NewSubscriptionOverrideRepository(db)
 		subscriptionService := services.NewSubscriptionService(tierConfig, subscriptionOverrideRepo)
 		// Issue #1413 (tier axis, this task): same validator as profileRepo/humaProfileHandler/
@@ -2706,6 +2711,7 @@ func main() {
 		operations.RegisterRevenueCatWebhookRoutes(humaAPI, operations.NewRevenueCatWebhookHandler(operations.RevenueCatWebhookDeps{
 			Inbox: revenueCatRepo, Profiles: revenueCatProfiles, Queue: jobQueue,
 			InvalidAttempts: invalidWebhookAttemptRepo,
+			Analytics:       analyticsGateway,
 			Authorization:   cfg.RevenueCatWebhookAuthorization, SigningSecret: cfg.RevenueCatWebhookSigningSecret,
 		}))
 	}

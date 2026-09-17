@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
+	"log/slog"
 	"strconv"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue/jobs"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -162,4 +165,133 @@ func TestRevenueCatWebhookRoutePreservesSignedRawBody(t *testing.T) {
 	response := api.Post("/webhooks/revenuecat", bytes.NewReader(input.RawBody), "Content-Type: application/json", "Authorization: "+input.Authorization, "X-RevenueCat-Webhook-Signature: "+input.Signature)
 	require.Equal(t, 200, response.Code, response.Body.String())
 	require.Equal(t, 1, inbox.writes)
+}
+
+// rcWebhookCapture records what actually reached the transport boundary, after the real Gateway
+// resolved identity, validated the generated contract and normalized every property.
+type rcWebhookCapture struct {
+	subject string
+	event   string
+	props   map[string]interface{}
+}
+
+type rcWebhookTransport struct{ captures []rcWebhookCapture }
+
+func (t *rcWebhookTransport) Capture(subject, event string, props map[string]interface{}) {
+	t.captures = append(t.captures, rcWebhookCapture{subject: subject, event: event, props: props})
+}
+func (*rcWebhookTransport) Identify(string, map[string]interface{}) {}
+func (*rcWebhookTransport) Close()                                  {}
+
+type rcWebhookAuthority struct {
+	granted bool
+	subject string
+	err     error
+}
+
+func (a rcWebhookAuthority) WithConsentedSubject(_ context.Context, _ string, emit func(string)) (bool, error) {
+	if a.err != nil {
+		return false, a.err
+	}
+	if a.granted {
+		emit(a.subject)
+	}
+	return a.granted, nil
+}
+
+// newRCWebhookGatewayHandler wires the handler to the real Gateway so a wrong contract cannot pass
+// behind a mock: the gateway drops any event whose contract is unknown, operational, inactive or
+// whose properties fail validation.
+func newRCWebhookGatewayHandler(authority rcWebhookAuthority) (*RevenueCatWebhookHandler, *rcWebhookInbox, *rcWebhookQueue, *rcWebhookTransport) {
+	inbox := &rcWebhookInbox{seen: map[string]bool{}}
+	q := &rcWebhookQueue{}
+	transport := &rcWebhookTransport{}
+	gateway := phclient.NewGateway(transport, authority, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := NewRevenueCatWebhookHandler(RevenueCatWebhookDeps{
+		Inbox: inbox, Profiles: rcWebhookProfiles{}, Queue: q, Analytics: gateway,
+		Authorization: "Bearer webhook-test", SigningSecret: "signing-test",
+	})
+	return h, inbox, q, transport
+}
+
+func TestRevenueCatWebhookEmitsAccessChangeThroughRealGateway(t *testing.T) {
+	for _, tc := range []struct {
+		eventType string
+		revoked   bool
+	}{
+		{eventType: "INITIAL_PURCHASE"},
+		{eventType: "RENEWAL"},
+		{eventType: "NON_RENEWING_PURCHASE"},
+		{eventType: "PRODUCT_CHANGE"},
+		{eventType: "SUBSCRIPTION_EXTENDED"},
+		{eventType: "TEMPORARY_ENTITLEMENT_GRANT"},
+		{eventType: "EXPIRATION", revoked: true},
+		{eventType: "SUBSCRIPTION_PAUSED", revoked: true},
+	} {
+		t.Run(tc.eventType, func(t *testing.T) {
+			h, _, q, transport := newRCWebhookGatewayHandler(rcWebhookAuthority{granted: true, subject: "canonical-clerk-subject"})
+			body := `{"event":{"id":"event-` + tc.eventType + `","type":"` + tc.eventType + `","app_user_id":"user_clerk"}}`
+			got, err := h.Handle(context.Background(), rcSignedWebhook(body))
+			require.NoError(t, err)
+			require.Equal(t, "queued", got.Body.Status)
+			require.Equal(t, []jobs.RevenueCatSyncArgs{{UserID: "internal-user", EventID: "event-" + tc.eventType}}, q.args)
+			require.Len(t, transport.captures, 1)
+			capture := transport.captures[0]
+			require.Equal(t, "canonical-clerk-subject", capture.subject)
+			require.Equal(t, "revenuecat_webhook_access_changed", capture.event)
+			require.Equal(t, map[string]interface{}{"event_type": tc.eventType, "revoked": tc.revoked}, capture.props)
+			for _, forbidden := range []string{"reason", "actor_id", "email", "amount", "account_id", "transaction_id", "item_id", "customer_id"} {
+				require.NotContains(t, capture.props, forbidden)
+			}
+		})
+	}
+}
+
+func TestRevenueCatWebhookEmitsNothingForDuplicatesTestAndNonAccessDeliveries(t *testing.T) {
+	h, inbox, _, transport := newRCWebhookGatewayHandler(rcWebhookAuthority{granted: true, subject: "canonical-clerk-subject"})
+	for _, body := range []string{
+		`{"event":{"id":"cancel-event","type":"CANCELLATION","cancel_reason":"CUSTOMER_SUPPORT","app_user_id":"user_clerk"}}`,
+		`{"event":{"id":"billing-event","type":"BILLING_ISSUE","app_user_id":"user_clerk"}}`,
+		`{"event":{"id":"transfer-event","type":"TRANSFER","app_user_id":"user_clerk"}}`,
+		`{"event":{"id":"unknown-event","type":"SOMETHING_NEW","app_user_id":"user_clerk"}}`,
+		`{"event":{"id":"test-event","type":"TEST"}}`,
+	} {
+		_, err := h.Handle(context.Background(), rcSignedWebhook(body))
+		require.NoError(t, err)
+	}
+	delivery := `{"event":{"id":"dup-event","type":"INITIAL_PURCHASE","app_user_id":"user_clerk"}}`
+	writesBefore := inbox.writes
+	_, err := h.Handle(context.Background(), rcSignedWebhook(delivery))
+	require.NoError(t, err)
+	_, err = h.Handle(context.Background(), rcSignedWebhook(delivery))
+	require.NoError(t, err)
+	require.Equal(t, writesBefore+1, inbox.writes, "the duplicate must not be re-accepted")
+	require.Len(t, transport.captures, 1, "only the first access-changing delivery changed access")
+}
+
+func TestRevenueCatWebhookEmitsNothingWhenConsentDenied(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		authority rcWebhookAuthority
+	}{
+		{name: "opted out", authority: rcWebhookAuthority{granted: false}},
+		{name: "authority unavailable", authority: rcWebhookAuthority{granted: true, err: errors.New("database unavailable")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, _, transport := newRCWebhookGatewayHandler(tc.authority)
+			got, err := h.Handle(context.Background(), rcSignedWebhook(`{"event":{"id":"consent-event","type":"INITIAL_PURCHASE","app_user_id":"user_clerk"}}`))
+			require.NoError(t, err)
+			require.Equal(t, "queued", got.Body.Status, "the business outcome is unchanged by consent")
+			require.Empty(t, transport.captures)
+		})
+	}
+}
+
+func TestRevenueCatWebhookAnalyticsUnconfiguredIsNoOp(t *testing.T) {
+	h, inbox, q := newRCWebhookTestHandler()
+	got, err := h.Handle(context.Background(), rcSignedWebhook(`{"event":{"id":"noop-event","type":"INITIAL_PURCHASE","app_user_id":"user_clerk"}}`))
+	require.NoError(t, err)
+	require.Equal(t, "queued", got.Body.Status)
+	require.Equal(t, 1, inbox.writes)
+	require.Len(t, q.args, 1)
 }

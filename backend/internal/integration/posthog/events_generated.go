@@ -54,7 +54,9 @@ const (
 	// EventRevenueCatOperationFailed Fires when a queued RevenueCat operation fails and remains pending for retry; properties are the bounded grant class, entitlement key, and revoke flag only.
 	EventRevenueCatOperationFailed = "revenuecat_operation_failed"
 	// EventRevenueCatOperationQueued Fires when an admin-initiated RevenueCat grant or revoke is queued for the target user; properties are the bounded grant class, entitlement key, and revoke flag only, never the reason or the acting admin.
-	EventRevenueCatOperationQueued       = "revenuecat_operation_queued"
+	EventRevenueCatOperationQueued = "revenuecat_operation_queued"
+	// EventRevenueCatWebhookAccessChanged Fires when a newly accepted RevenueCat webhook delivery's event type indicates the target user's entitlement state changed: a grant was applied or access was revoked. Carries only the bounded RevenueCat event type and the grant/revoke direction, never the webhook body, a customer id or an email; duplicates and non-entitlement deliveries emit nothing.
+	EventRevenueCatWebhookAccessChanged  = "revenuecat_webhook_access_changed"
 	EventSavingsGoalProgressBasisChanged = "savings_goal_progress_basis_changed"
 	EventSubscriptionCancelled           = "subscription_cancelled"
 	EventSubscriptionCreated             = "subscription_created"
@@ -307,6 +309,35 @@ func (p RevenueCatOperationQueuedPayload) Properties() map[string]interface{} {
 		"class":       p.Class,
 		"entitlement": p.Entitlement,
 		"revoke":      p.Revoke,
+	}
+}
+
+type RevenueCatWebhookAccessChangedEventType string
+
+const (
+	RevenueCatWebhookAccessChangedEventTypeINITIALPURCHASE           RevenueCatWebhookAccessChangedEventType = "INITIAL_PURCHASE"
+	RevenueCatWebhookAccessChangedEventTypeRENEWAL                   RevenueCatWebhookAccessChangedEventType = "RENEWAL"
+	RevenueCatWebhookAccessChangedEventTypeNONRENEWINGPURCHASE       RevenueCatWebhookAccessChangedEventType = "NON_RENEWING_PURCHASE"
+	RevenueCatWebhookAccessChangedEventTypePRODUCTCHANGE             RevenueCatWebhookAccessChangedEventType = "PRODUCT_CHANGE"
+	RevenueCatWebhookAccessChangedEventTypeSUBSCRIPTIONEXTENDED      RevenueCatWebhookAccessChangedEventType = "SUBSCRIPTION_EXTENDED"
+	RevenueCatWebhookAccessChangedEventTypeTEMPORARYENTITLEMENTGRANT RevenueCatWebhookAccessChangedEventType = "TEMPORARY_ENTITLEMENT_GRANT"
+	RevenueCatWebhookAccessChangedEventTypeEXPIRATION                RevenueCatWebhookAccessChangedEventType = "EXPIRATION"
+	RevenueCatWebhookAccessChangedEventTypeSUBSCRIPTIONPAUSED        RevenueCatWebhookAccessChangedEventType = "SUBSCRIPTION_PAUSED"
+)
+
+type RevenueCatWebhookAccessChangedPayload struct {
+	EventType RevenueCatWebhookAccessChangedEventType `json:"event_type"`
+	Revoked   bool                                    `json:"revoked"`
+}
+
+func (RevenueCatWebhookAccessChangedPayload) isGeneratedEvent() {}
+func (RevenueCatWebhookAccessChangedPayload) EventName() EventName {
+	return EventRevenueCatWebhookAccessChanged
+}
+func (p RevenueCatWebhookAccessChangedPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"event_type": p.EventType,
+		"revoked":    p.Revoked,
 	}
 }
 
@@ -574,6 +605,15 @@ var generatedEventContracts = map[EventName]EventContract{
 			"class":       {Kind: "string", Required: true, Values: []string{"comp", "trial"}, Minimum: nil, Maximum: nil},
 			"entitlement": {Kind: "string", Required: true, Values: []string{"comp_premium", "comp_household_2", "comp_household_3", "comp_household_4", "comp_household_5", "trial_premium"}, Minimum: nil, Maximum: nil},
 			"revoke":      {Kind: "boolean", Required: true, Values: []string{}, Minimum: nil, Maximum: nil},
+		},
+	},
+	EventRevenueCatWebhookAccessChanged: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"event_type": {Kind: "string", Required: true, Values: []string{"INITIAL_PURCHASE", "RENEWAL", "NON_RENEWING_PURCHASE", "PRODUCT_CHANGE", "SUBSCRIPTION_EXTENDED", "TEMPORARY_ENTITLEMENT_GRANT", "EXPIRATION", "SUBSCRIPTION_PAUSED"}, Minimum: nil, Maximum: nil},
+			"revoked":    {Kind: "boolean", Required: true, Values: []string{}, Minimum: nil, Maximum: nil},
 		},
 	},
 	EventSavingsGoalProgressBasisChanged: {
