@@ -8,8 +8,6 @@ const (
 	EventAccountSynced = "account_synced"
 	// EventAdminSubscriptionOverrideAppliedServer Identifies the target user whose tier changed; the unsuffixed frontend event instead identifies the acting admin, so analysts must not combine them as one subject.
 	EventAdminSubscriptionOverrideAppliedServer = "admin_subscription_override_applied_server"
-	// EventAdminSubscriptionOverrideExpired Tracks system-initiated override expiry with no acting admin; it must remain distinct from deliberate admin removal and has no frontend twin.
-	EventAdminSubscriptionOverrideExpired = "admin_subscription_override_expired"
 	// EventAdminSubscriptionOverrideRemovedServer Identifies the target user whose override was deliberately removed by an admin; the unsuffixed frontend event identifies the acting admin.
 	EventAdminSubscriptionOverrideRemovedServer = "admin_subscription_override_removed_server"
 	EventAutoCategorizationExecuted             = "auto_categorization_executed"
@@ -49,12 +47,8 @@ const (
 	EventMerchantsBulkOverridden = "merchants_bulk_overridden"
 	EventMerchantsMerged         = "merchants_merged"
 	EventPaddleCleanupFailed     = "paddle_cleanup_failed"
-	// EventPastDueAutoCancelled Fires when the daily dunning job automatically cancels a past-due subscription at the grace-period threshold.
-	EventPastDueAutoCancelled = "past_due_auto_cancelled"
-	// EventPastDuePlaidDisconnected Fires when the daily dunning job disconnects Plaid at the configured past-due disconnect threshold.
-	EventPastDuePlaidDisconnected = "past_due_plaid_disconnected"
-	EventPaymentFailed            = "payment_failed"
-	EventPaymentSucceeded         = "payment_succeeded"
+	EventPaymentFailed           = "payment_failed"
+	EventPaymentSucceeded        = "payment_succeeded"
 	// EventRevenueCatOperationApplied Fires after a queued RevenueCat operation is applied to the target user's access; properties are the bounded grant class, entitlement key, and revoke flag only.
 	EventRevenueCatOperationApplied = "revenuecat_operation_applied"
 	// EventRevenueCatOperationFailed Fires when a queued RevenueCat operation fails and remains pending for retry; properties are the bounded grant class, entitlement key, and revoke flag only.
@@ -77,6 +71,58 @@ const (
 	TransferSuggestionCanceled           = "transfer_suggestion_canceled"
 	TransferSuggestionRejected           = "transfer_suggestion_rejected"
 )
+
+type AdminSubscriptionOverrideAppliedServerTier string
+
+const (
+	AdminSubscriptionOverrideAppliedServerTierPremium    AdminSubscriptionOverrideAppliedServerTier = "premium"
+	AdminSubscriptionOverrideAppliedServerTierHousehold2 AdminSubscriptionOverrideAppliedServerTier = "household_2"
+	AdminSubscriptionOverrideAppliedServerTierHousehold3 AdminSubscriptionOverrideAppliedServerTier = "household_3"
+	AdminSubscriptionOverrideAppliedServerTierHousehold4 AdminSubscriptionOverrideAppliedServerTier = "household_4"
+	AdminSubscriptionOverrideAppliedServerTierHousehold5 AdminSubscriptionOverrideAppliedServerTier = "household_5"
+)
+
+type AdminSubscriptionOverrideAppliedServerPayload struct {
+	Tier      AdminSubscriptionOverrideAppliedServerTier `json:"tier"`
+	HadExpiry bool                                       `json:"had_expiry"`
+}
+
+func (AdminSubscriptionOverrideAppliedServerPayload) isGeneratedEvent() {}
+func (AdminSubscriptionOverrideAppliedServerPayload) EventName() EventName {
+	return EventAdminSubscriptionOverrideAppliedServer
+}
+func (p AdminSubscriptionOverrideAppliedServerPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"tier":       p.Tier,
+		"had_expiry": p.HadExpiry,
+	}
+}
+
+type AdminSubscriptionOverrideRemovedServerTier string
+
+const (
+	AdminSubscriptionOverrideRemovedServerTierPremium    AdminSubscriptionOverrideRemovedServerTier = "premium"
+	AdminSubscriptionOverrideRemovedServerTierHousehold2 AdminSubscriptionOverrideRemovedServerTier = "household_2"
+	AdminSubscriptionOverrideRemovedServerTierHousehold3 AdminSubscriptionOverrideRemovedServerTier = "household_3"
+	AdminSubscriptionOverrideRemovedServerTierHousehold4 AdminSubscriptionOverrideRemovedServerTier = "household_4"
+	AdminSubscriptionOverrideRemovedServerTierHousehold5 AdminSubscriptionOverrideRemovedServerTier = "household_5"
+)
+
+type AdminSubscriptionOverrideRemovedServerPayload struct {
+	Tier      AdminSubscriptionOverrideRemovedServerTier `json:"tier"`
+	HadExpiry bool                                       `json:"had_expiry"`
+}
+
+func (AdminSubscriptionOverrideRemovedServerPayload) isGeneratedEvent() {}
+func (AdminSubscriptionOverrideRemovedServerPayload) EventName() EventName {
+	return EventAdminSubscriptionOverrideRemovedServer
+}
+func (p AdminSubscriptionOverrideRemovedServerPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"tier":       p.Tier,
+		"had_expiry": p.HadExpiry,
+	}
+}
 
 type FinancialDataSyncCompletedSyncKind string
 
@@ -273,21 +319,21 @@ var generatedEventContracts = map[EventName]EventContract{
 	},
 	EventAdminSubscriptionOverrideAppliedServer: {
 		Consent:                    "analytics_required",
-		Status:                     "legacy",
-		LegacyPropertiesUnreviewed: true,
-		Properties:                 map[string]PropertyContract{},
-	},
-	EventAdminSubscriptionOverrideExpired: {
-		Consent:                    "analytics_required",
-		Status:                     "legacy",
-		LegacyPropertiesUnreviewed: true,
-		Properties:                 map[string]PropertyContract{},
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"tier":       {Kind: "string", Required: true, Values: []string{"premium", "household_2", "household_3", "household_4", "household_5"}, Minimum: nil, Maximum: nil},
+			"had_expiry": {Kind: "boolean", Required: true, Values: []string{}, Minimum: nil, Maximum: nil},
+		},
 	},
 	EventAdminSubscriptionOverrideRemovedServer: {
 		Consent:                    "analytics_required",
-		Status:                     "legacy",
-		LegacyPropertiesUnreviewed: true,
-		Properties:                 map[string]PropertyContract{},
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"tier":       {Kind: "string", Required: true, Values: []string{"premium", "household_2", "household_3", "household_4", "household_5"}, Minimum: nil, Maximum: nil},
+			"had_expiry": {Kind: "boolean", Required: true, Values: []string{}, Minimum: nil, Maximum: nil},
+		},
 	},
 	EventAutoCategorizationExecuted: {
 		Consent:                    "analytics_required",
@@ -486,18 +532,6 @@ var generatedEventContracts = map[EventName]EventContract{
 		Consent:                    "operational",
 		Status:                     "deprecated",
 		LegacyPropertiesUnreviewed: false,
-		Properties:                 map[string]PropertyContract{},
-	},
-	EventPastDueAutoCancelled: {
-		Consent:                    "analytics_required",
-		Status:                     "legacy",
-		LegacyPropertiesUnreviewed: true,
-		Properties:                 map[string]PropertyContract{},
-	},
-	EventPastDuePlaidDisconnected: {
-		Consent:                    "analytics_required",
-		Status:                     "legacy",
-		LegacyPropertiesUnreviewed: true,
 		Properties:                 map[string]PropertyContract{},
 	},
 	EventPaymentFailed: {
