@@ -59,7 +59,6 @@ func TestLegacyRawCaptureProducersArePinned(t *testing.T) {
 		"internal/services/liability_sync_service.go":              {"Capture:phclient.EventLiabilitiesSynced"},
 		"internal/services/merchant_service.go":                    {"Capture:phclient.EventMerchantOverrideCleared", "Capture:phclient.EventMerchantOverrideSet", "Capture:phclient.EventMerchantOverrideSet", "Capture:phclient.EventMerchantOverrideSet", "Capture:phclient.EventMerchantOverrideSet", "Capture:phclient.EventMerchantsBulkOverridden", "Capture:phclient.EventMerchantsMerged"},
 		"internal/services/registration_service.go":                {"Capture:phclient.EventUserRegistered"},
-		"internal/services/revenuecat_service.go":                  {"CaptureIfConsented:event", "CaptureIfConsented:event"},
 		"internal/services/rule_application_service.go":            {"Capture:phclient.EventAutoCategorizationExecuted", "Capture:phclient.EventAutoCategorizationExecuted"},
 		"internal/services/savings_goal_service.go":                {"Capture:phclient.EventSavingsGoalProgressBasisChanged"},
 		"internal/services/transaction_service.go":                 {"Capture:phclient.EventTransactionRecategorized", "Capture:phclient.EventTransactionRecategorized", "Capture:phclient.EventTransactionReviewStateChanged"},

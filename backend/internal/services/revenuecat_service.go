@@ -25,20 +25,50 @@ type RevenueCatProfileReader interface {
 	GetUserByID(context.Context, string) (*domain.User, error)
 }
 type RevenueCatService struct {
-	analytics phclient.GDPRAnalytics
+	analytics phclient.ProductAnalytics
 	repo      repository.RevenueCatRepository
 	provider  RevenueCatProvider
 	profiles  RevenueCatProfileReader
 }
 
-func (s *RevenueCatService) SetGDPRAnalytics(analytics phclient.GDPRAnalytics) {
+func (s *RevenueCatService) SetAnalytics(analytics phclient.ProductAnalytics) {
 	s.analytics = analytics
 }
-func (s *RevenueCatService) captureOperation(ctx context.Context, op domain.RevenueCatOperation, event string) {
-	if s.analytics != nil {
-		// These events describe the target user's access, even when an admin acts.
-		// Their consent governs the product analytics stream; operations retain audit.
-		s.analytics.CaptureIfConsented(ctx, op.UserID, event, map[string]interface{}{"class": op.Class, "entitlement": op.Key, "revoke": op.Revoke})
+
+type revenueCatOperationPhase int
+
+const (
+	revenueCatOperationQueued revenueCatOperationPhase = iota
+	revenueCatOperationApplied
+	revenueCatOperationFailed
+)
+
+func (s *RevenueCatService) captureOperation(ctx context.Context, op domain.RevenueCatOperation, phase revenueCatOperationPhase) {
+	if s.analytics == nil {
+		return
+	}
+	// These events describe the target user's access, even when an admin acts. The Gateway
+	// resolves that target's canonical identity and reads current DB consent before delivery;
+	// operations retain the audit trail regardless.
+	switch phase {
+	case revenueCatOperationQueued:
+		s.analytics.CaptureEvent(ctx, op.UserID, phclient.RevenueCatOperationQueuedPayload{
+			Class:       phclient.RevenueCatOperationQueuedClass(op.Class),
+			Entitlement: phclient.RevenueCatOperationQueuedEntitlement(op.Key),
+			Revoke:      op.Revoke,
+		})
+	case revenueCatOperationApplied:
+		s.analytics.CaptureEvent(ctx, op.UserID, phclient.RevenueCatOperationAppliedPayload{
+			Class:       phclient.RevenueCatOperationAppliedClass(op.Class),
+			Entitlement: phclient.RevenueCatOperationAppliedEntitlement(op.Key),
+			Revoke:      op.Revoke,
+		})
+	case revenueCatOperationFailed:
+		s.analytics.CaptureEvent(ctx, op.UserID, phclient.RevenueCatOperationFailedPayload{
+			Class:       phclient.RevenueCatOperationFailedClass(op.Class),
+			Entitlement: phclient.RevenueCatOperationFailedEntitlement(op.Key),
+			Revoke:      op.Revoke,
+		})
 	}
 }
 
@@ -52,13 +82,16 @@ func (s *RevenueCatService) captureAdminOverride(ctx context.Context, op domain.
 	if s.analytics == nil {
 		return
 	}
-	event := phclient.EventAdminSubscriptionOverrideAppliedServer
 	if op.Revoke {
-		event = phclient.EventAdminSubscriptionOverrideRemovedServer
+		s.analytics.CaptureEvent(ctx, op.UserID, phclient.AdminSubscriptionOverrideRemovedServerPayload{
+			Tier:      phclient.AdminSubscriptionOverrideRemovedServerTier(tier),
+			HadExpiry: op.ExpiresAt != nil,
+		})
+		return
 	}
-	s.analytics.CaptureIfConsented(ctx, op.UserID, event, map[string]interface{}{
-		"tier":       tier,
-		"had_expiry": op.ExpiresAt != nil,
+	s.analytics.CaptureEvent(ctx, op.UserID, phclient.AdminSubscriptionOverrideAppliedServerPayload{
+		Tier:      phclient.AdminSubscriptionOverrideAppliedServerTier(tier),
+		HadExpiry: op.ExpiresAt != nil,
 	})
 }
 
@@ -267,7 +300,7 @@ func (s *RevenueCatService) RequestGrant(ctx context.Context, id, class, tier st
 	op.ActorID = &actorID
 	err := s.repo.RequestOperation(ctx, &op)
 	if err == nil {
-		s.captureOperation(ctx, op, phclient.EventRevenueCatOperationQueued)
+		s.captureOperation(ctx, op, revenueCatOperationQueued)
 		s.captureAdminOverride(ctx, op, tier)
 	}
 	return op, err
@@ -315,11 +348,11 @@ func (s *RevenueCatService) ProcessOperation(ctx context.Context, userID, operat
 		return err
 	}
 	if attempted != nil {
-		event := phclient.EventRevenueCatOperationApplied
+		phase := revenueCatOperationApplied
 		if workErr != nil {
-			event = phclient.EventRevenueCatOperationFailed
+			phase = revenueCatOperationFailed
 		}
-		s.captureOperation(ctx, *attempted, event)
+		s.captureOperation(ctx, *attempted, phase)
 	}
 	return workErr
 }
