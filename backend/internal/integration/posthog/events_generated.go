@@ -52,9 +52,15 @@ const (
 	// EventPastDueAutoCancelled Fires when the daily dunning job automatically cancels a past-due subscription at the grace-period threshold.
 	EventPastDueAutoCancelled = "past_due_auto_cancelled"
 	// EventPastDuePlaidDisconnected Fires when the daily dunning job disconnects Plaid at the configured past-due disconnect threshold.
-	EventPastDuePlaidDisconnected        = "past_due_plaid_disconnected"
-	EventPaymentFailed                   = "payment_failed"
-	EventPaymentSucceeded                = "payment_succeeded"
+	EventPastDuePlaidDisconnected = "past_due_plaid_disconnected"
+	EventPaymentFailed            = "payment_failed"
+	EventPaymentSucceeded         = "payment_succeeded"
+	// EventRevenueCatOperationApplied Fires after a queued RevenueCat operation is applied to the target user's access; properties are the bounded grant class, entitlement key, and revoke flag only.
+	EventRevenueCatOperationApplied = "revenuecat_operation_applied"
+	// EventRevenueCatOperationFailed Fires when a queued RevenueCat operation fails and remains pending for retry; properties are the bounded grant class, entitlement key, and revoke flag only.
+	EventRevenueCatOperationFailed = "revenuecat_operation_failed"
+	// EventRevenueCatOperationQueued Fires when an admin-initiated RevenueCat grant or revoke is queued for the target user; properties are the bounded grant class, entitlement key, and revoke flag only, never the reason or the acting admin.
+	EventRevenueCatOperationQueued       = "revenuecat_operation_queued"
 	EventSavingsGoalProgressBasisChanged = "savings_goal_progress_basis_changed"
 	EventSubscriptionCancelled           = "subscription_cancelled"
 	EventSubscriptionCreated             = "subscription_created"
@@ -151,6 +157,110 @@ func (p MCPToolCompletedPayload) Properties() map[string]interface{} {
 		"tool_family":     p.ToolFamily,
 		"outcome":         p.Outcome,
 		"duration_bucket": p.DurationBucket,
+	}
+}
+
+type RevenueCatOperationAppliedClass string
+
+const (
+	RevenueCatOperationAppliedClassComp  RevenueCatOperationAppliedClass = "comp"
+	RevenueCatOperationAppliedClassTrial RevenueCatOperationAppliedClass = "trial"
+)
+
+type RevenueCatOperationAppliedEntitlement string
+
+const (
+	RevenueCatOperationAppliedEntitlementCompPremium    RevenueCatOperationAppliedEntitlement = "comp_premium"
+	RevenueCatOperationAppliedEntitlementCompHousehold2 RevenueCatOperationAppliedEntitlement = "comp_household_2"
+	RevenueCatOperationAppliedEntitlementCompHousehold3 RevenueCatOperationAppliedEntitlement = "comp_household_3"
+	RevenueCatOperationAppliedEntitlementCompHousehold4 RevenueCatOperationAppliedEntitlement = "comp_household_4"
+	RevenueCatOperationAppliedEntitlementCompHousehold5 RevenueCatOperationAppliedEntitlement = "comp_household_5"
+	RevenueCatOperationAppliedEntitlementTrialPremium   RevenueCatOperationAppliedEntitlement = "trial_premium"
+)
+
+type RevenueCatOperationAppliedPayload struct {
+	Class       RevenueCatOperationAppliedClass       `json:"class"`
+	Entitlement RevenueCatOperationAppliedEntitlement `json:"entitlement"`
+	Revoke      bool                                  `json:"revoke"`
+}
+
+func (RevenueCatOperationAppliedPayload) isGeneratedEvent() {}
+func (RevenueCatOperationAppliedPayload) EventName() EventName {
+	return EventRevenueCatOperationApplied
+}
+func (p RevenueCatOperationAppliedPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"class":       p.Class,
+		"entitlement": p.Entitlement,
+		"revoke":      p.Revoke,
+	}
+}
+
+type RevenueCatOperationFailedClass string
+
+const (
+	RevenueCatOperationFailedClassComp  RevenueCatOperationFailedClass = "comp"
+	RevenueCatOperationFailedClassTrial RevenueCatOperationFailedClass = "trial"
+)
+
+type RevenueCatOperationFailedEntitlement string
+
+const (
+	RevenueCatOperationFailedEntitlementCompPremium    RevenueCatOperationFailedEntitlement = "comp_premium"
+	RevenueCatOperationFailedEntitlementCompHousehold2 RevenueCatOperationFailedEntitlement = "comp_household_2"
+	RevenueCatOperationFailedEntitlementCompHousehold3 RevenueCatOperationFailedEntitlement = "comp_household_3"
+	RevenueCatOperationFailedEntitlementCompHousehold4 RevenueCatOperationFailedEntitlement = "comp_household_4"
+	RevenueCatOperationFailedEntitlementCompHousehold5 RevenueCatOperationFailedEntitlement = "comp_household_5"
+	RevenueCatOperationFailedEntitlementTrialPremium   RevenueCatOperationFailedEntitlement = "trial_premium"
+)
+
+type RevenueCatOperationFailedPayload struct {
+	Class       RevenueCatOperationFailedClass       `json:"class"`
+	Entitlement RevenueCatOperationFailedEntitlement `json:"entitlement"`
+	Revoke      bool                                 `json:"revoke"`
+}
+
+func (RevenueCatOperationFailedPayload) isGeneratedEvent()    {}
+func (RevenueCatOperationFailedPayload) EventName() EventName { return EventRevenueCatOperationFailed }
+func (p RevenueCatOperationFailedPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"class":       p.Class,
+		"entitlement": p.Entitlement,
+		"revoke":      p.Revoke,
+	}
+}
+
+type RevenueCatOperationQueuedClass string
+
+const (
+	RevenueCatOperationQueuedClassComp  RevenueCatOperationQueuedClass = "comp"
+	RevenueCatOperationQueuedClassTrial RevenueCatOperationQueuedClass = "trial"
+)
+
+type RevenueCatOperationQueuedEntitlement string
+
+const (
+	RevenueCatOperationQueuedEntitlementCompPremium    RevenueCatOperationQueuedEntitlement = "comp_premium"
+	RevenueCatOperationQueuedEntitlementCompHousehold2 RevenueCatOperationQueuedEntitlement = "comp_household_2"
+	RevenueCatOperationQueuedEntitlementCompHousehold3 RevenueCatOperationQueuedEntitlement = "comp_household_3"
+	RevenueCatOperationQueuedEntitlementCompHousehold4 RevenueCatOperationQueuedEntitlement = "comp_household_4"
+	RevenueCatOperationQueuedEntitlementCompHousehold5 RevenueCatOperationQueuedEntitlement = "comp_household_5"
+	RevenueCatOperationQueuedEntitlementTrialPremium   RevenueCatOperationQueuedEntitlement = "trial_premium"
+)
+
+type RevenueCatOperationQueuedPayload struct {
+	Class       RevenueCatOperationQueuedClass       `json:"class"`
+	Entitlement RevenueCatOperationQueuedEntitlement `json:"entitlement"`
+	Revoke      bool                                 `json:"revoke"`
+}
+
+func (RevenueCatOperationQueuedPayload) isGeneratedEvent()    {}
+func (RevenueCatOperationQueuedPayload) EventName() EventName { return EventRevenueCatOperationQueued }
+func (p RevenueCatOperationQueuedPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"class":       p.Class,
+		"entitlement": p.Entitlement,
+		"revoke":      p.Revoke,
 	}
 }
 
@@ -401,6 +511,36 @@ var generatedEventContracts = map[EventName]EventContract{
 		Status:                     "legacy",
 		LegacyPropertiesUnreviewed: true,
 		Properties:                 map[string]PropertyContract{},
+	},
+	EventRevenueCatOperationApplied: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"class":       {Kind: "string", Required: true, Values: []string{"comp", "trial"}, Minimum: nil, Maximum: nil},
+			"entitlement": {Kind: "string", Required: true, Values: []string{"comp_premium", "comp_household_2", "comp_household_3", "comp_household_4", "comp_household_5", "trial_premium"}, Minimum: nil, Maximum: nil},
+			"revoke":      {Kind: "boolean", Required: true, Values: []string{}, Minimum: nil, Maximum: nil},
+		},
+	},
+	EventRevenueCatOperationFailed: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"class":       {Kind: "string", Required: true, Values: []string{"comp", "trial"}, Minimum: nil, Maximum: nil},
+			"entitlement": {Kind: "string", Required: true, Values: []string{"comp_premium", "comp_household_2", "comp_household_3", "comp_household_4", "comp_household_5", "trial_premium"}, Minimum: nil, Maximum: nil},
+			"revoke":      {Kind: "boolean", Required: true, Values: []string{}, Minimum: nil, Maximum: nil},
+		},
+	},
+	EventRevenueCatOperationQueued: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"class":       {Kind: "string", Required: true, Values: []string{"comp", "trial"}, Minimum: nil, Maximum: nil},
+			"entitlement": {Kind: "string", Required: true, Values: []string{"comp_premium", "comp_household_2", "comp_household_3", "comp_household_4", "comp_household_5", "trial_premium"}, Minimum: nil, Maximum: nil},
+			"revoke":      {Kind: "boolean", Required: true, Values: []string{}, Minimum: nil, Maximum: nil},
+		},
 	},
 	EventSavingsGoalProgressBasisChanged: {
 		Consent:                    "analytics_required",
