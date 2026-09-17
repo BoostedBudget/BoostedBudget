@@ -30,6 +30,105 @@ func TestLoad_ServerTimeoutDefaults(t *testing.T) {
 	assert.Equal(t, "1M", cfg.MaxBodySize, "MaxBodySize should default to 1M")
 }
 
+func TestLoad_PostHogSupportIdentitySecretIsServerOnlyConfiguration(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("POSTHOG_SECRET_API_TOKEN", "phs_server_only")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "phs_server_only", cfg.PostHogSecretAPIToken)
+}
+
+func TestLoad_PostHogErasureUsesServerOnlyPrivateAPIConfiguration(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("POSTHOG_PERSONAL_API_KEY", "phx_private")
+	t.Setenv("POSTHOG_PROJECT_ID", "357017")
+	t.Setenv("POSTHOG_PRIVATE_HOST", "https://us.posthog.com")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "phx_private", cfg.PostHogPersonalAPIKey)
+	assert.Equal(t, "357017", cfg.PostHogProjectID)
+	assert.Equal(t, "https://us.posthog.com", cfg.PostHogPrivateHost)
+}
+
+func TestLoad_PostHogIngestionRequiresCompleteErasureConfiguration(t *testing.T) {
+	for _, missing := range []string{"POSTHOG_PERSONAL_API_KEY", "POSTHOG_PROJECT_ID"} {
+		t.Run(missing, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", "development")
+			t.Setenv("POSTHOG_API_KEY", "phc_ingestion_enabled")
+			t.Setenv("POSTHOG_PERSONAL_API_KEY", "phx_private")
+			t.Setenv("POSTHOG_PROJECT_ID", "42")
+			t.Setenv(missing, "")
+			_, err := Load()
+			require.ErrorContains(t, err, missing)
+		})
+	}
+	t.Run("private host", func(t *testing.T) {
+		t.Setenv("ENVIRONMENT", "development")
+		t.Setenv("POSTHOG_API_KEY", "phc_ingestion_enabled")
+		t.Setenv("POSTHOG_PERSONAL_API_KEY", "phx_private")
+		t.Setenv("POSTHOG_PROJECT_ID", "42")
+		t.Setenv("POSTHOG_PRIVATE_HOST", "https://attacker.example")
+		_, err := Load()
+		require.ErrorContains(t, err, "POSTHOG_PRIVATE_HOST")
+	})
+}
+
+func TestLoad_PostHogIngestionAndErasureRegionsMustMatch(t *testing.T) {
+	for _, tc := range []struct {
+		ingestion, private string
+		wantErr            bool
+	}{
+		{"https://us.i.posthog.com", "https://us.posthog.com", false},
+		{"https://eu.i.posthog.com", "https://eu.posthog.com", false},
+		{"https://us.i.posthog.com", "https://eu.posthog.com", true},
+		{"https://eu.i.posthog.com", "https://us.posthog.com", true},
+	} {
+		t.Run(tc.ingestion+tc.private, func(t *testing.T) {
+			t.Setenv("ENVIRONMENT", "development")
+			t.Setenv("POSTHOG_API_KEY", "phc_enabled")
+			t.Setenv("POSTHOG_PERSONAL_API_KEY", "phx_private")
+			t.Setenv("POSTHOG_PROJECT_ID", "42")
+			t.Setenv("POSTHOG_HOST", tc.ingestion)
+			t.Setenv("POSTHOG_PRIVATE_HOST", tc.private)
+			_, err := Load()
+			if tc.wantErr {
+				require.ErrorContains(t, err, "same region")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestLoad_PostHogSyncCompletionCutover(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("POSTHOG_SYNC_COMPLETION_CUTOVER_AT", "2026-09-13T20:15:00Z")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.NotNil(t, cfg.PostHogSyncCompletionCutoverAt)
+	assert.Equal(t, time.Date(2026, 9, 13, 20, 15, 0, 0, time.UTC), *cfg.PostHogSyncCompletionCutoverAt)
+}
+
+func TestLoad_PostHogSyncCompletionCutoverUnsetFailsClosed(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("POSTHOG_SYNC_COMPLETION_CUTOVER_AT", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Nil(t, cfg.PostHogSyncCompletionCutoverAt)
+}
+
+func TestLoad_PostHogSyncCompletionCutoverRejectsInvalidValue(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("POSTHOG_SYNC_COMPLETION_CUTOVER_AT", "not-rfc3339")
+
+	_, err := Load()
+	require.ErrorContains(t, err, "POSTHOG_SYNC_COMPLETION_CUTOVER_AT must be RFC3339")
+}
+
 func TestLoad_ServerTimeoutsConfigurable(t *testing.T) {
 	// See TestLoad_ServerTimeoutDefaults: an ambient production/staging ENVIRONMENT
 	// would fail require.NoError below for an unrelated reason.

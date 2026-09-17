@@ -161,9 +161,3 @@ export function useGetHealth<TData = Awaited<ReturnType<typeof getHealth>>, TErr
 
   return withQueryKey(query, queryOptions.queryKey);
 }
-
-
-
-
-
-

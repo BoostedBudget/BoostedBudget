@@ -1,4 +1,4 @@
--- 000211_backfill_legacy_manual_tier_override.down.sql
+-- 000217_backfill_legacy_manual_tier_override.down.sql
 --
 -- This repair is irreversible: the pre-repair manual_tier_override/manual_tier_ends_at values are
 -- not recorded anywhere, so there is nothing to restore. The statement below is a deliberate no-op

@@ -366,7 +366,7 @@ describe('isPiiKey: digit-interrupted ID_ALLOWLIST entries (issue #1514, defect 
       });
 
       test(`${key} ${label} (posthog before_send)`, () => {
-        const cfg = posthogConfig();
+        const cfg = posthogConfig(() => true);
         const event = { event: 'test_event', properties: { [key]: 'sensitive-value' } };
         const out = cfg.before_send?.(event as Parameters<NonNullable<typeof cfg.before_send>>[0]);
         if (expectRedacted) {
@@ -412,7 +412,7 @@ describe('isPiiKey: punctuation-delimited keys bypass the matcher (issue #1514)'
     });
 
     test(`${key} is redacted (posthog before_send)`, () => {
-      const cfg = posthogConfig();
+      const cfg = posthogConfig(() => true);
       const event = { event: 'test_event', properties: { [key]: 'sensitive-value' } };
       const out = cfg.before_send?.(event as Parameters<NonNullable<typeof cfg.before_send>>[0]);
       expect(out?.properties?.[key]).toBeUndefined();

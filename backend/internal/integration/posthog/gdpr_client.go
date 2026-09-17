@@ -13,9 +13,8 @@ type ConsentChecker interface {
 // Compile-time assertion: *GDPRClient must satisfy GDPRAnalytics.
 var _ GDPRAnalytics = (*GDPRClient)(nil)
 
-// GDPRClient wraps Analytics and gates user-behavior events behind consent checks.
-// Use Capture for system/operational events (not gated).
-// Use CaptureIfConsented for user-behavior events.
+// GDPRClient is retained for compatibility tests and non-production adapters. Production wiring
+// uses Gateway, which additionally resolves canonical identity and rejects operational events.
 type GDPRClient struct {
 	analytics Analytics
 	consent   ConsentChecker
@@ -35,7 +34,7 @@ func (g *GDPRClient) CaptureIfConsented(ctx context.Context, userID, event strin
 
 	consented, err := g.consent.HasAnalyticsConsent(ctx, userID)
 	if err != nil {
-		g.logger.Warn("posthog: failed to check analytics consent, skipping event", "user_id", userID, "event", event, "error", err)
+		g.logger.Warn("posthog: analytics consent unavailable; event skipped")
 		return
 	}
 

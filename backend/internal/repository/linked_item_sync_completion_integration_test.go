@@ -1,0 +1,314 @@
+//go:build integration
+
+package repository
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestLinkedItemRepository_RecordTransactionSyncCompletionIsDurableAndConcurrent(t *testing.T) {
+	pool := connectTestDB(t)
+	repo := NewLinkedItemRepository(pool, nil)
+	cutover := time.Now().Add(-time.Hour)
+	repo.SetTransactionSyncCompletionCutover(&cutover)
+	ctx := context.Background()
+	userID := uuid.NewString()
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad') RETURNING id`,
+		userID, "clerk_"+userID, userID+"@example.com").Scan(&userID))
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID) })
+
+	insertItem := func() string {
+		id := uuid.NewString()
+		_, err := pool.Exec(ctx, `
+			INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted, cursor, transaction_sync_state)
+			VALUES ($1, $2, $3, 'ciphertext', '', 'never_synced')`, id, userID, "plaid_"+id)
+		require.NoError(t, err)
+		return id
+	}
+	insertLegacyItem := func(cursor string, lastSynced *time.Time) string {
+		id := uuid.NewString()
+		_, err := pool.Exec(ctx, `
+			INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted, cursor, last_synced_at)
+			VALUES ($1, $2, $3, 'ciphertext', $4, $5)`, id, userID, "plaid_"+id, cursor, lastSynced)
+		require.NoError(t, err)
+		return id
+	}
+
+	itemID := insertItem()
+	start := make(chan struct{})
+	results := make(chan struct {
+		disposition TransactionSyncCompletionDisposition
+		err         error
+	}, 2)
+	var wg sync.WaitGroup
+	for _, cursor := range []string{"cursor-a", "cursor-b"} {
+		wg.Add(1)
+		go func(next string) {
+			defer wg.Done()
+			<-start
+			disposition, err := repo.RecordTransactionSyncCompletion(ctx, itemID, "", 0, &next)
+			results <- struct {
+				disposition TransactionSyncCompletionDisposition
+				err         error
+			}{disposition: disposition, err: err}
+		}(cursor)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	firstWins, staleLosers := 0, 0
+	for result := range results {
+		if result.err == nil && result.disposition == TransactionSyncCompletionInitial {
+			firstWins++
+		} else if errors.Is(result.err, ErrLinkedItemSyncStateChanged) {
+			staleLosers++
+		}
+	}
+	assert.Equal(t, 1, firstWins)
+	assert.Equal(t, 1, staleLosers)
+
+	var durableCursor string
+	var completed bool
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT cursor, first_transaction_sync_completed_at IS NOT NULL
+		FROM linked_items WHERE id = $1`, itemID).Scan(&durableCursor, &completed))
+	assert.Contains(t, []string{"cursor-a", "cursor-b"}, durableCursor)
+	assert.True(t, completed)
+
+	partialID := insertItem()
+	require.NoError(t, repo.RecordTransactionSyncProgress(ctx, partialID, "", "cursor-partial"))
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT first_transaction_sync_completed_at IS NOT NULL FROM linked_items WHERE id = $1`, partialID).Scan(&completed))
+	assert.False(t, completed, "resumable partial progress is not a completed sync")
+	partialFinal := "cursor-final"
+	disposition, err := repo.RecordTransactionSyncCompletion(ctx, partialID, "cursor-partial", 0, &partialFinal)
+	require.NoError(t, err)
+	assert.Equal(t, TransactionSyncCompletionInitial, disposition, "the first eventual full catch-up remains initial after partial progress")
+
+	// A stale INVALID_CURSOR response must not erase a cursor committed by a newer sync.
+	err = repo.ResetCursorIfUnchanged(ctx, itemID, "")
+	require.ErrorIs(t, err, ErrLinkedItemSyncStateChanged)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT cursor FROM linked_items WHERE id = $1`, itemID).Scan(&durableCursor))
+	assert.Contains(t, []string{"cursor-a", "cursor-b"}, durableCursor)
+
+	// INVALID_CURSOR deliberately clears only the cursor. The durable latch keeps the recovery a
+	// refresh, and a newly relinked row gets its own first completion.
+	_, err = pool.Exec(ctx, `UPDATE linked_items SET cursor = '' WHERE id = $1`, itemID)
+	require.NoError(t, err)
+	recoveryCursor := "cursor-recovered"
+	disposition, err = repo.RecordTransactionSyncCompletion(ctx, itemID, "", 1, &recoveryCursor)
+	require.NoError(t, err)
+	assert.Equal(t, TransactionSyncCompletionRefresh, disposition)
+
+	creationRepo := NewLinkedItemRepository(pool, newTestFieldEncryptor(t))
+	relinkedID := uuid.NewString()
+	require.NoError(t, creationRepo.Create(ctx, &domain.LinkedItem{
+		ID: relinkedID, UserID: userID, ItemID: "plaid_" + relinkedID,
+		AccessToken: "token", Provider: "plaid",
+	}))
+	var syncState string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT transaction_sync_state FROM linked_items WHERE id = $1`, relinkedID).Scan(&syncState))
+	assert.Equal(t, "never_synced", syncState)
+	relinkedCursor := "cursor-relinked"
+	disposition, err = repo.RecordTransactionSyncCompletion(ctx, relinkedID, "", 0, &relinkedCursor)
+	require.NoError(t, err)
+	assert.Equal(t, TransactionSyncCompletionInitial, disposition)
+
+	// After the migration, legacy last_synced_at activity cannot prove whether an old binary fully
+	// completed or persisted partial progress. The first new-code completion is conservatively
+	// suppressed while latching the item; only the following completion is a refresh.
+	legacyCases := []struct {
+		name       string
+		cursor     string
+		lastSynced *time.Time
+	}{
+		{name: "old_blank_final", cursor: "", lastSynced: nil},
+		{name: "old_partial", cursor: "legacy-partial-cursor", lastSynced: timePtr(time.Now().Add(-time.Minute))},
+		{name: "old_full", cursor: "legacy-full-cursor", lastSynced: timePtr(time.Now())},
+	}
+	for _, legacyActivity := range legacyCases {
+		t.Run(legacyActivity.name+"_after_migration_is_suppressed_once", func(t *testing.T) {
+			legacyID := insertLegacyItem(legacyActivity.cursor, legacyActivity.lastSynced)
+			require.NoError(t, pool.QueryRow(ctx, `
+				SELECT first_transaction_sync_completed_at IS NOT NULL FROM linked_items WHERE id = $1`, legacyID).Scan(&completed))
+			assert.False(t, completed)
+			legacyCompletedCursor := "legacy-completed"
+			got, recordErr := repo.RecordTransactionSyncCompletion(ctx, legacyID, legacyActivity.cursor, 0, &legacyCompletedCursor)
+			require.NoError(t, recordErr)
+			assert.Equal(t, TransactionSyncCompletionSuppressedLegacyAmbiguous, got)
+			nextRefreshCursor := "legacy-next-refresh"
+			got, recordErr = repo.RecordTransactionSyncCompletion(ctx, legacyID, legacyCompletedCursor, 1, &nextRefreshCursor)
+			require.NoError(t, recordErr)
+			assert.Equal(t, TransactionSyncCompletionRefresh, got)
+		})
+	}
+
+	// Hold an old-style last_synced_at write uncommitted while the new completion starts. The
+	// completion must re-evaluate the row after the lock is released and suppress, not use the
+	// pre-wait NULL as proof of a new initial sync.
+	racingLegacyID := insertLegacyItem("", nil)
+	legacyTx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	_, err = legacyTx.Exec(ctx, `UPDATE linked_items SET last_synced_at = NOW() WHERE id = $1`, racingLegacyID)
+	require.NoError(t, err)
+	raceResult := make(chan struct {
+		disposition TransactionSyncCompletionDisposition
+		err         error
+	}, 1)
+	go func() {
+		got, recordErr := repo.RecordTransactionSyncCompletion(ctx, racingLegacyID, "", 0, nil)
+		raceResult <- struct {
+			disposition TransactionSyncCompletionDisposition
+			err         error
+		}{disposition: got, err: recordErr}
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waitingOnRowLock bool
+		require.NoError(t, pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity
+				WHERE datname = current_database()
+				  AND pid <> pg_backend_pid()
+				  AND state = 'active'
+				  AND wait_event_type = 'Lock'
+				  AND query LIKE '%completion_disposition%'
+			)`).Scan(&waitingOnRowLock))
+		if waitingOnRowLock {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("completion query never reached the legacy writer's row lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.NoError(t, legacyTx.Commit(ctx))
+	raced := <-raceResult
+	require.NoError(t, raced.err)
+	assert.Equal(t, TransactionSyncCompletionSuppressedLegacyAmbiguous, raced.disposition)
+}
+
+func TestLinkedItemRepository_BlankFinalCompletionsLatchInitialOnce(t *testing.T) {
+	pool := connectTestDB(t)
+	repo := NewLinkedItemRepository(pool, nil)
+	cutover := time.Now().Add(-time.Hour)
+	repo.SetTransactionSyncCompletionCutover(&cutover)
+	ctx := context.Background()
+	userID := uuid.NewString()
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad') RETURNING id`,
+		userID, "clerk_"+userID, userID+"@example.com").Scan(&userID))
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID) })
+
+	itemID := uuid.NewString()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO linked_items (id, user_id, item_id, access_token_encrypted, cursor, transaction_sync_state)
+		VALUES ($1, $2, $3, 'ciphertext', '', 'never_synced')`, itemID, userID, "plaid_"+itemID)
+	require.NoError(t, err)
+
+	start := make(chan struct{})
+	results := make(chan struct {
+		disposition TransactionSyncCompletionDisposition
+		err         error
+	}, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			disposition, recordErr := repo.RecordTransactionSyncCompletion(ctx, itemID, "", 0, nil)
+			results <- struct {
+				disposition TransactionSyncCompletionDisposition
+				err         error
+			}{disposition: disposition, err: recordErr}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	firstCount, staleCount := 0, 0
+	for result := range results {
+		if result.err == nil && result.disposition == TransactionSyncCompletionInitial {
+			firstCount++
+		} else if errors.Is(result.err, ErrLinkedItemSyncStateChanged) {
+			staleCount++
+		}
+	}
+	assert.Equal(t, 1, firstCount)
+	assert.Equal(t, 1, staleCount)
+	var generation int64
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT transaction_sync_completion_generation FROM linked_items WHERE id = $1`, itemID).Scan(&generation))
+	assert.EqualValues(t, 1, generation)
+}
+
+func TestLinkedItemRepository_TransactionSyncCompletionCutover(t *testing.T) {
+	pool := connectTestDB(t)
+	ctx := context.Background()
+	userID := uuid.NewString()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO users (id, clerk_user_id, email, subscription_tier, subscription_status, primary_region)
+		VALUES ($1, $2, $3, 'premium', 'active', 'iad')`,
+		userID, "clerk_"+userID, userID+"@example.com")
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID) })
+
+	cutover := time.Now().UTC().Truncate(time.Microsecond)
+	insertNeverSynced := func(createdAt time.Time) string {
+		id := uuid.NewString()
+		_, insertErr := pool.Exec(ctx, `
+			INSERT INTO linked_items
+			    (id, user_id, item_id, access_token_encrypted, cursor, created_at, updated_at, transaction_sync_state)
+			VALUES ($1, $2, $3, 'ciphertext', '', $4, $4, 'never_synced')`,
+			id, userID, "plaid_"+id, createdAt)
+		require.NoError(t, insertErr)
+		return id
+	}
+
+	repo := NewLinkedItemRepository(pool, nil)
+	repo.SetTransactionSyncCompletionCutover(&cutover)
+
+	beforeID := insertNeverSynced(cutover.Add(-time.Microsecond))
+	disposition, err := repo.RecordTransactionSyncCompletion(ctx, beforeID, "", 0, nil)
+	require.NoError(t, err)
+	assert.Equal(t, TransactionSyncCompletionSuppressedPreCutover, disposition,
+		"a new-writer item an old worker could have completed with a blank cursor must suppress")
+	disposition, err = repo.RecordTransactionSyncCompletion(ctx, beforeID, "", 1, nil)
+	require.NoError(t, err)
+	assert.Equal(t, TransactionSyncCompletionRefresh, disposition)
+
+	equalID := insertNeverSynced(cutover)
+	disposition, err = repo.RecordTransactionSyncCompletion(ctx, equalID, "", 0, nil)
+	require.NoError(t, err)
+	assert.Equal(t, TransactionSyncCompletionInitial, disposition)
+
+	afterID := insertNeverSynced(cutover.Add(time.Microsecond))
+	disposition, err = repo.RecordTransactionSyncCompletion(ctx, afterID, "", 0, nil)
+	require.NoError(t, err)
+	assert.Equal(t, TransactionSyncCompletionInitial, disposition)
+
+	unsetRepo := NewLinkedItemRepository(pool, nil)
+	unsetID := insertNeverSynced(cutover.Add(time.Hour))
+	disposition, err = unsetRepo.RecordTransactionSyncCompletion(ctx, unsetID, "", 0, nil)
+	require.NoError(t, err)
+	assert.Equal(t, TransactionSyncCompletionSuppressedCutoverUnset, disposition,
+		"an unset cutover must fail closed even for newly created items")
+}
+
+func timePtr(value time.Time) *time.Time { return &value }

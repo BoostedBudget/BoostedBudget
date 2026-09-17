@@ -54,6 +54,8 @@ EXCLUDE_PATTERNS=(
     # #1626: must run against the REAL @radix-ui/react-toggle-group, not the shared bunfig-preloaded
     # mock, to prove SankeyViewModeControl actually supplies item-level aria-labels
     "src/features/reports/components/SankeyViewModeControl.test.tsx"
+    # #1650: must exercise the real PostHog SDK without the centralized PostHog module mock.
+    "src/shared/lib/posthog-real-sdk.test.ts"
 )
 
 echo "Running tests with centralized mocks (excluding process-isolated tests)..."

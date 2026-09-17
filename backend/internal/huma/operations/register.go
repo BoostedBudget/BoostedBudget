@@ -48,6 +48,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	plaidReconnectHandler := &PlaidReconnectHandler{}
 	profileHandler := &ProfileHandler{}
 	privacyHandler := &PrivacyHandler{}
+	postHogSupportIdentityHandler := &PostHogSupportIdentityHandler{}
 	// Issue #1587: GDPR data export
 	dataExportHandler := &DataExportHandler{}
 	adminHandler := &AdminHandler{}
@@ -79,6 +80,8 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #1087: MCP audit log
 	mcpAuditHandler := &MCPAuditHandler{}
+	// Issue #1650: consent-gated MCP product telemetry
+	mcpToolTelemetryHandler := &MCPToolTelemetryHandler{}
 
 	// Issue #138: Investment portfolio endpoints (8 ops: 4 core + 4 analytics)
 	investmentHandler := &InvestmentHandler{}
@@ -133,6 +136,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 	RegisterPlaidReconnectRoutes(api, plaidReconnectHandler)
 	RegisterProfileRoutes(api, profileHandler)
 	RegisterPrivacyRoutes(api, privacyHandler)
+	RegisterPostHogSupportIdentityRoutes(api, postHogSupportIdentityHandler)
 	RegisterDataExportRoutes(api, dataExportHandler)
 	RegisterAdminRoutes(api, adminHandler)
 	RegisterCategoryPreviewRoutes(api, categoryPreviewHandler)
@@ -169,6 +173,7 @@ func RegisterAllRoutesForSpec(api huma.API) {
 
 	// Issue #1087: MCP audit log
 	RegisterMCPAuditRoutes(api, mcpAuditHandler)
+	RegisterMCPToolTelemetryRoutes(api, mcpToolTelemetryHandler)
 
 	// Issue #138: Investment portfolio (4 core + 4 analytics operations)
 	RegisterInvestmentRoutes(api, investmentHandler)

@@ -45,12 +45,13 @@ func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 		// on purpose, so there is nothing to set and nothing that could omit it. That asymmetry is
 		// what TestBuildPeriodicJobSpecs_PurgeSpecSurvivesEveryNilWorker below asserts.
 		plaidOrphanRetryWorker: jobs.NewPlaidOrphanRetryWorker(jobs.PlaidOrphanRetryWorkerDeps{}),
+		postHogErasureWorker:   jobs.NewPostHogErasureWorker(jobs.PostHogErasureWorkerDeps{}),
 	}
 }
 
 // TestBuildPeriodicJobSpecs_Count proves every nil-guarded worker (plus the always-on jobs)
-// produces exactly one spec when non-nil — 12 nil-guarded workers + 2 unconditional jobs
-// (idempotency cleanup, and Issue #1497's orphan-token purge) = 14.
+// produces exactly one spec when non-nil — 13 nil-guarded workers + 2 unconditional jobs
+// (idempotency cleanup, and Issue #1497's orphan-token purge) = 15.
 //
 // ⚠ THIS COUNT MOVED TWICE INDEPENDENTLY AND THE TWO INCREMENTS ARE BOTH REAL. #1625 Task 18 fix
 // round 1 added the rule quarantine census (nil-guarded), 16 -> 17 on staging; #1626 Phase 3
@@ -66,8 +67,8 @@ func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 func TestBuildPeriodicJobSpecs_Count(t *testing.T) {
 	specs := buildPeriodicJobSpecs(allNonNilPeriodicJobsDeps())
 
-	if len(specs) != 14 {
-		t.Fatalf("expected 14 periodic job specs when every worker is non-nil, got %d", len(specs))
+	if len(specs) != 15 {
+		t.Fatalf("expected 15 periodic job specs when every worker is non-nil, got %d", len(specs))
 	}
 }
 
@@ -106,8 +107,8 @@ func TestBuildPeriodicJobSpecs_NilWorkerOmitsItsSpec(t *testing.T) {
 
 	specs := buildPeriodicJobSpecs(deps)
 
-	if len(specs) != 13 {
-		t.Fatalf("expected 13 specs with itemCleanupCheckWorker nil, got %d", len(specs))
+	if len(specs) != 14 {
+		t.Fatalf("expected 14 specs with itemCleanupCheckWorker nil, got %d", len(specs))
 	}
 	for _, s := range specs {
 		if s.name == "item cleanup check" {

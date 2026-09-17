@@ -210,6 +210,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // ── MCP Audit (service-auth via X-Origin-Secret, not end-user Clerk JWT) ──
   // The audit endpoint is excluded from MCP tool calls; only the Worker service calls it directly.
   excludedWrite('recordMCPAuditEntry', 'Internal service endpoint; called by Worker service auth, not end-user MCP tools'),
+  excludedWrite('recordMCPToolTelemetry', 'Internal telemetry endpoint; the Worker completion wrapper calls it directly and agents cannot manufacture analytics events'),
 
   // ── MCP Recipes (read/write allowed; recipes exposed as MCP tools) ────────
   read('listMCPRecipes'),
@@ -333,6 +334,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excluded('getAdminDeadLetterJobArgs', REASON_ADMIN),
   excluded('getAdminPaymentFailures', REASON_ADMIN),
   excluded('listAdminPlaidOrphanedItems', REASON_ADMIN),
+  excluded('listPostHogErasures', REASON_ADMIN),
   // #1584: the enumerating read over accounts the #1569 T1 pre-deletion-notice gate is holding
   // indefinitely. Excluded under the blanket admin policy — and note it is a READ, so exclusion
   // costs the agent nothing an agent could act on: the surface exists so a human operator can
@@ -343,6 +345,12 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // act on, not for an MCP client to consume.
   excluded('listAdminBudgetHierarchyAudits', REASON_ADMIN),
   excludedWrite('recordAdminPlaidOrphanedItemOperatorResolution', REASON_ADMIN),
+  // All four are operator-only actions. Even reveal is a write: the backend intentionally uses
+  // POST and commits an identity_reveal audit row before returning sensitive identifiers.
+  excludedWrite('recordPostHogErasureEvidence', REASON_ADMIN),
+  excludedWrite('replayPostHogErasure', REASON_ADMIN),
+  excludedWrite('retargetPostHogErasure', REASON_ADMIN),
+  excludedWrite('revealPostHogErasure', REASON_ADMIN),
   excluded('getSystemHealth', REASON_ADMIN),
   excluded('listAdminUsers', REASON_ADMIN),
   excluded('getAdminUserDetail', REASON_ADMIN),
@@ -567,6 +575,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   // operation nobody has added to that list — see that module's doc comment.
   read('getPrivacySettings'),
   read('getUserProfile'),
+  excluded('getPostHogSupportIdentity', 'Server-signed Support identity is consumed only by the authenticated web application'),
   excludedWrite('updatePrivacySettings', REASON_PRIVACY_INAPP, 'household-sharing'),
   excludedWrite('updateUserProfile', 'Profile mutations deferred to follow-up'),
 

@@ -15,7 +15,7 @@ import (
 func TestRevenueCatErasureRollbackCannotDiscardFence(t *testing.T) {
 	pool, id := revenueCatTestDB(t)
 	ctx := context.Background()
-	down, err := os.ReadFile("../../migrations/000210_revenuecat_erasure_fence.down.sql")
+	down, err := os.ReadFile("../../migrations/000216_revenuecat_erasure_fence.down.sql")
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `INSERT INTO revenuecat_customers(user_id,erasure_started_at) VALUES($1,now())`, id)
 	require.NoError(t, err)
@@ -28,7 +28,7 @@ func TestRevenueCatErasureRollbackCannotDiscardFence(t *testing.T) {
 
 func TestRevenueCatErasureRollbackIsIdempotentWhenEmpty(t *testing.T) {
 	pool, _ := revenueCatTestDB(t)
-	down, err := os.ReadFile("../../migrations/000210_revenuecat_erasure_fence.down.sql")
+	down, err := os.ReadFile("../../migrations/000216_revenuecat_erasure_fence.down.sql")
 	require.NoError(t, err)
 	for range 2 {
 		_, err = pool.Exec(context.Background(), string(down))

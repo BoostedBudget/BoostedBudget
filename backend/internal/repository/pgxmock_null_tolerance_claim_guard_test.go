@@ -49,8 +49,8 @@ import (
 // this sweep's own renamed tests or on ordinary "IS NULL" SQL-shape assertions.
 
 var (
-	pgxmockImportRe = regexp.MustCompile(`(?m)"github\.com/pashagolub/pgxmock`)
-	addRowNilRe     = regexp.MustCompile(`AddRow\([^)]*\bnil\b`)
+	pgxmockImportRe       = regexp.MustCompile(`(?m)"github\.com/pashagolub/pgxmock`)
+	addRowNilRe           = regexp.MustCompile(`AddRow\([^)]*\bnil\b`)
 	buildIntegrationTagRe = regexp.MustCompile(`(?m)^//go:build\s+integration\b`)
 
 	// nullToleranceClaimRe matches language asserting that a NULL cell scans/tolerates/survives
@@ -467,4 +467,9 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 // #1652 additionally adds revenuecat_retention_guard_test.go and
 // revenuecat_checkout_repository_test.go: lock/transaction and checkout admission
 // contracts only, with no driver NULL-tolerance claims.
-const pgxmockSweepFileCount = 78
+// 73 -> 74 (#1650): added analytics_authority_repository_test.go, which pins consent/identity
+// locking and fail-closed query behavior. It makes no driver NULL-tolerance claim. No files removed.
+// 74 -> 75 (#1650): added posthog_erasure_outbox_test.go, which asserts transactional statement
+// ordering, encrypted identity capture, and two separated operator confirmations. It makes no
+// driver NULL-tolerance claim. No files removed.
+const pgxmockSweepFileCount = 80

@@ -136,7 +136,9 @@ BEGIN
         institution_id,
         institution_name,
         cursor,
-        last_synced_at
+        last_synced_at,
+        first_transaction_sync_completed_at,
+        transaction_sync_state
     ) VALUES (
         gen_random_uuid(),
         v_user_id,
@@ -145,11 +147,18 @@ BEGIN
         'ins_e2e_test',
         'E2E Test Bank',
         NULL,
-        NOW()
+        NOW(),
+        NOW(),
+        'completed'
     )
     ON CONFLICT (user_id, item_id) DO UPDATE SET
         institution_name = EXCLUDED.institution_name,
-        last_synced_at = NOW()
+        last_synced_at = NOW(),
+        first_transaction_sync_completed_at = COALESCE(
+            linked_items.first_transaction_sync_completed_at,
+            EXCLUDED.first_transaction_sync_completed_at
+        ),
+        transaction_sync_state = 'completed'
     RETURNING id INTO v_linked_item_id;
 
     -- =============================================================================

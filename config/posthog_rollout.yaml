@@ -1,0 +1,110 @@
+# Desired PostHog project state. It is validated in CI but is not applied automatically.
+# Operator steps and evidence requirements live in docs/operations/posthog-rollout.md.
+schema_version: 1
+
+project_isolation:
+  required: true
+  environments:
+    - name: staging
+      project_ref: boostedbudget-staging
+      app_origin: https://staging.boostedbudget.com
+      ingest_host: https://us.i.posthog.com
+      ui_host: https://us.posthog.com
+    - name: production
+      project_ref: boostedbudget-production
+      app_origin: https://boostedbudget.com
+      ingest_host: https://us.i.posthog.com
+      ui_host: https://us.posthog.com
+
+project_controls:
+  timezone: UTC
+  discard_client_ip: true
+  allowed_domains_exact: true
+  autocapture: false
+  session_replay: false
+  web_analytics: false
+  error_tracking: false
+  experiments: false
+  feature_flags: false
+  logs: false
+  tracing: false
+  support: true
+  project_rendered_widget: false
+  surveys: true
+
+runtime_authority:
+  analytics: consent_required
+  support: authenticated_user_request
+  surveys: authenticated_and_consent_required
+
+# Membership is intentionally not checked in. Product Analytics maintains each project's
+# Clerk-sub list inside PostHog and records the change in the deployment evidence log.
+exclusion_cohort:
+  name: boostedbudget_internal_and_test
+  type: static
+  identifier: clerk_distinct_id
+  owner: Product Analytics
+  update_trigger: staff_or_test_identity_change
+  review_cadence: quarterly
+  identifiers_committed: false
+
+kill_switches:
+  - product: all_browser_products
+    mechanism: remove_project_token_and_redeploy
+  - product: backend_analytics
+    mechanism: remove_project_token_and_restart
+  - product: support
+    mechanism: disable_in_posthog_project
+  - product: surveys
+    mechanism: archive_all_surveys
+
+ingestion_scrubbing:
+  mode: operator_managed_posthog_transformation
+  action: remove_disallowed_properties_from_catalog_events
+  allowed_event_source: config/posthog_events.yaml
+  property_policy: catalog_properties_plus_required_posthog_metadata
+  deployment_order: staging_then_production
+
+dashboards:
+  - id: observed_product_health
+    status: blocked
+    metric_ids:
+      - weekly_observed_value_users
+      - observed_linked_account_activation
+      - observed_w1_retention
+      - observed_w4_retention
+      - consenting_subscription_conversion
+      - feature_adoption
+  - id: mcp_product_health
+    status: ready_to_create
+    metric_ids:
+      - mcp_usage_and_outcomes
+
+native_product_views:
+  - product: support
+    status: manual
+    authenticated_only: true
+  - product: surveys
+    status: manual
+    authenticated_only: true
+
+alerts:
+  - id: mcp_success_rate_degradation
+    metric_id: mcp_usage_and_outcomes
+    status: deferred_until_baseline
+    check_interval: weekly
+    minimum_history_periods: 8
+    minimum_denominator: 100
+    detector: mad
+    simulate_before_enable: true
+
+coverage_gaps:
+  - id: remote_configuration_unapplied
+    severity: blocking
+    status: open
+  - id: legacy_event_schemas_unreviewed
+    severity: measurement
+    status: open
+  - id: planned_metrics_post_deploy_validation
+    severity: measurement
+    status: open

@@ -413,8 +413,10 @@ describe('completeness', () => {
     // +1 from #1637: frontend-only budget plan report, explicitly excluded.
     // +12 from #1652: RevenueCat admin, subscription and webhook surfaces, all excluded.
     // -4 from #1652: the deleted admin trial-grant operation (todo 5) and the three deleted Paddle
-    //   self-service routes preview-update / update / cancel (todo 10). 224 -> 221.
-    expect(ALL_OPERATION_IDS.length).toBe(221)
+    //   self-service routes preview-update / update / cancel (todo 10).
+    // +7 from #1650: Support identity, MCP telemetry, and five PostHog erasure operator
+    //   endpoints, all internal/admin-only and excluded.
+    expect(ALL_OPERATION_IDS.length).toBe(228)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified

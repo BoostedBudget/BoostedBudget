@@ -58,11 +58,11 @@ func TestRevenueCatService_OneConnectionPoolDoesNotDeadlock(t *testing.T) {
  retention_started_at timestamptz, retention_expires_at timestamptz, retention_notice_30d_sent_at timestamptz,
  retention_notice_7d_sent_at timestamptz, plaid_cleanup_pending_at timestamptz, updated_at timestamptz DEFAULT now(), is_deleted boolean DEFAULT false)`)
 	require.NoError(t, err)
-	migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000208_revenuecat_authority.up.sql"))
+	migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000214_revenuecat_authority.up.sql"))
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, string(migration))
 	require.NoError(t, err)
-	erasureMigration, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000210_revenuecat_erasure_fence.up.sql"))
+	erasureMigration, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000216_revenuecat_erasure_fence.up.sql"))
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, string(erasureMigration))
 	require.NoError(t, err)
@@ -165,7 +165,7 @@ func newRCConcurrencyFixture(t *testing.T, url string) rcConcurrencyFixture {
  retention_started_at timestamptz, retention_expires_at timestamptz, retention_notice_30d_sent_at timestamptz,
  retention_notice_7d_sent_at timestamptz, plaid_cleanup_pending_at timestamptz, updated_at timestamptz DEFAULT now(), is_deleted boolean DEFAULT false)`)
 	require.NoError(t, err)
-	for _, name := range []string{"000208_revenuecat_authority.up.sql", "000210_revenuecat_erasure_fence.up.sql"} {
+	for _, name := range []string{"000214_revenuecat_authority.up.sql", "000216_revenuecat_erasure_fence.up.sql"} {
 		migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
 		require.NoError(t, err)
 		_, err = pool.Exec(ctx, string(migration))

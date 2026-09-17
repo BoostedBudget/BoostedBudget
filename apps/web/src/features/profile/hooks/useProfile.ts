@@ -43,15 +43,18 @@ export interface UseProfileOptions {
    * previously the profile was only ever fetched behind `PremiumRoute`.
    */
   enabled?: boolean
+  /** Adds the Clerk identity to the cache key for app-root consumers that survive user switches. */
+  userId?: string
 }
 
 export function useProfile(options: UseProfileOptions = {}): UseProfileResult {
-  const { enabled = true } = options
+  const { enabled = true, userId } = options
   const { data, isLoading, error, refetch: queryRefetch } = useGetUserProfile({
     query: {
       enabled,
       staleTime: 5 * 60 * 1000, // 5 minutes cache
       gcTime: 5 * 60 * 1000,
+      ...(userId ? { queryKey: ['/api/v1/user/profile', userId] } : {}),
     },
   })
 

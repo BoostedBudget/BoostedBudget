@@ -99,7 +99,10 @@ var historyBearingTables = map[string]string{
 	"liability_statements":       "captured statement terms and APRs; the provider reports only the current one",
 	"portfolio_snapshots":        "the per-day portfolio total (value, cost basis, gain/loss); the only record of what a portfolio was worth on a past day",
 	"portfolio_snapshot_repairs": "the audit trail of snapshot repairs",
-	"rule_execution_history":     "what an automation rule did and when",
+	"posthog_erasure_operator_audit": "append-only operator evidence for GDPR erasure: who " +
+		"revealed identifiers, retargeted or replayed an obligation, and which provider surfaces " +
+		"were verified; those facts cannot be reconstructed after the operator action",
+	"rule_execution_history": "what an automation rule did and when",
 	"transaction_annotation_history": "the before/after record of every user category or " +
 		"review-state overwrite on a transaction (#1569 task 6 / #1579); the prior override and " +
 		"the pre-existing reviewed_at survive nowhere else, because the UPDATE that wrote each " +

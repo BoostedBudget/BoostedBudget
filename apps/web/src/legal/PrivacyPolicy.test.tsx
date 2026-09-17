@@ -515,7 +515,8 @@ describe('PrivacyPolicy', () => {
     renderWithRouter(<PrivacyPolicy />)
     // "Do Not Track" appears in both the h3 heading and the paragraph body
     expect(screen.getAllByText(/do not track/i).length).toBeGreaterThan(0)
-    expect(screen.getByText(/no industry/i)).toBeInTheDocument()
+    expect(screen.getByText(/browser analytics remain off/i)).toBeInTheDocument()
+    expect(screen.queryByText(/we do not currently respond/i)).not.toBeInTheDocument()
   })
 
   it('renders data breach notification commitment', () => {
@@ -564,6 +565,19 @@ describe('PrivacyPolicy', () => {
     expect(cookieLinks.some((link) => link.getAttribute('href') === '/legal/cookie-policy')).toBe(true)
   })
 
+  it('documents the fail-closed browser analytics privacy boundary', () => {
+    renderWithRouter(<PrivacyPolicy />)
+    expect(screen.getByText(/pseudonymous product analytics/i)).toBeInTheDocument()
+    expect(screen.getByText(/no posthog analytics persistence or analytics event capture occurs before/i)).toBeInTheDocument()
+    expect(screen.getByText(/authenticated support chat when you choose to contact us/i)).toBeInTheDocument()
+    expect(screen.getByText(/support message content.*sanitized application route/i)).toBeInTheDocument()
+    expect(screen.getByText(/temporary support session identifier.*only after you select support/i)).toBeInTheDocument()
+    expect(screen.getByText(/not included in authenticated requests.*removed on logout.*account switch/i)).toBeInTheDocument()
+    expect(screen.getByText(/production session replay is disabled/i)).toBeInTheDocument()
+    expect(screen.getByText(/do not track.*browser only/i)).toBeInTheDocument()
+    expect(screen.getByText(/tab-scoped sessionStorage/i)).toBeInTheDocument()
+  })
+
   it('renders application-level encryption details (Section 4.2)', () => {
     renderWithRouter(<PrivacyPolicy />)
     // Algorithm name
@@ -582,12 +596,10 @@ describe('PrivacyPolicy', () => {
     expect(screen.getAllByText(/cryptographically derived/i).length).toBeGreaterThan(0)
   })
 
-  // Bumped by #1592: § 8.2 and § 8.4 changed substantively (what deletion destroys, what
-  // survives it, and when the automatic deletion runs), and § 12 commits us to updating this
-  // date when the policy changes.
-  it('renders correct Last Updated date (August 25, 2026)', () => {
+  // Bumped by #1650 because the PostHog Support and Surveys processing disclosures changed.
+  it('renders correct Last Updated date (September 13, 2026)', () => {
     renderWithRouter(<PrivacyPolicy />)
-    expect(screen.getByText(/august 25, 2026/i)).toBeInTheDocument()
+    expect(screen.getByText(/september 13, 2026/i)).toBeInTheDocument()
   })
 
   it('renders household data sharing as a consent-based lawful basis (Section 3.1)', () => {

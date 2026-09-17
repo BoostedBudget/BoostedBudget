@@ -43,7 +43,7 @@ describe('TermsOfService', () => {
 
   it('renders "Last Updated" date', () => {
     renderWithRouter(<TermsOfService />)
-    expect(screen.getByText(/last updated: august 25, 2026/i)).toBeInTheDocument()
+    expect(screen.getByText(/last updated: september 13, 2026/i)).toBeInTheDocument()
   })
 
   it('renders all major sections', () => {

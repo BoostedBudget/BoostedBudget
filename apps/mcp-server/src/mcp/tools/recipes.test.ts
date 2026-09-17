@@ -33,6 +33,14 @@ describe('recipe.list', () => {
     const result = await tools.list({})
     expect(result.content[0]?.text).toContain('No recipes')
   })
+
+  it('marks a backend failure as an MCP error result', async () => {
+    const tools = buildRecipeTools({ invoke: mock(() => Promise.reject(new Error('backend unavailable'))) })
+
+    const result = await tools.list({})
+
+    expect(result.isError).toBe(true)
+  })
 })
 
 describe('recipe.save', () => {
@@ -116,6 +124,14 @@ describe('recipe.run', () => {
     const result = await tools.run({ id: 'r1' })
 
     expect(result.content[0]?.text ?? '').not.toContain('Failed to run recipe')
+  })
+
+  it('marks a backend failure as an MCP error result', async () => {
+    const tools = buildRecipeTools({ invoke: mock(() => Promise.reject(new Error('backend unavailable'))) })
+
+    const result = await tools.run({ id: 'r1' })
+
+    expect(result.isError).toBe(true)
   })
 })
 

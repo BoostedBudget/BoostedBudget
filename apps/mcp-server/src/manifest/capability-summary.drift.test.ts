@@ -125,12 +125,14 @@ describe('capability summary drift (apps/web/src/features/mcp/data/capabilitySum
     // #1652 adds 12 excluded RevenueCat operations; allowed capabilities stay unchanged.
     // #1652 also removes 4 excluded operations: the deleted admin trial-grant operation (todo 5)
     // and the three deleted Paddle self-service routes preview-update / update / cancel (todo 10).
-    // total 225 -> 221, excluded 83 -> 79; allowed/read/write/destructive are untouched.
-    expect(fresh.totalOperations).toBe(221)
+    // #1650 adds seven excluded endpoints: Support identity, MCP telemetry infrastructure, and
+    // five operator-only PostHog erasure endpoints. Exposed capabilities stay unchanged.
+    // total 213 -> 228, excluded 71 -> 86; allowed/read/write/destructive are untouched.
+    expect(fresh.totalOperations).toBe(228)
     expect(fresh.allowedOperations).toBe(142)
     expect(fresh.readOperations).toBe(97)
     expect(fresh.writeOperations).toBe(45)
-    expect(fresh.excludedOperations).toBe(79)
+    expect(fresh.excludedOperations).toBe(86)
     expect(fresh.destructiveWriteOperations).toBe(4)
     expect(fresh.allowedOperations).toBe(fresh.readOperations + fresh.writeOperations)
     expect(fresh.totalOperations).toBe(fresh.allowedOperations + fresh.excludedOperations)

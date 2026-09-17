@@ -11,7 +11,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/merchant"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/plaid/plaid-go/v23/plaid"
 )
@@ -146,6 +148,21 @@ type SyncProposedContributionUpserter interface {
 	UpsertProposedFromTransaction(ctx context.Context, userID, goalID, transactionID string, magnitude float64) error
 }
 
+// TransactionSyncCompletionRecorder atomically finalizes a fully paginated sync and latches the
+// first completion for its linked-item generation. It is intentionally narrower than the full
+// linked-item repository so worker test doubles do not gain unrelated methods.
+type TransactionSyncCompletionRecorder interface {
+	RecordTransactionSyncCompletion(ctx context.Context, id, expectedCursor string, expectedGeneration int64, completedCursor *string) (repository.TransactionSyncCompletionDisposition, error)
+}
+
+type transactionSyncCursorResetter interface {
+	ResetCursorIfUnchanged(ctx context.Context, id, expectedCursor string) error
+}
+
+type transactionSyncCursorAdvancer interface {
+	RecordTransactionSyncProgress(ctx context.Context, id, expectedCursor, nextCursor string) error
+}
+
 // transactionSyncService implements TransactionSyncService
 type transactionSyncService struct {
 	logger                    *slog.Logger
@@ -177,7 +194,9 @@ type transactionSyncService struct {
 	// Issue #1569 Task 5: records account.removed_by_provider when a bank closes an account and
 	// Plaid stops returning it. Optional (nil = no audit entry, same nil-safe shape as every other
 	// setter-injected dependency here); wired by SetAuditLogger.
-	auditLogger AuditLogger
+	auditLogger        AuditLogger
+	analytics          phclient.ProductAnalytics
+	completionRecorder TransactionSyncCompletionRecorder
 }
 
 // NewTransactionSyncService creates a new TransactionSyncService instance
@@ -259,6 +278,34 @@ func (s *transactionSyncService) SetCacheInvalidation(gens *cache.Generations, h
 // method's doc comment. Issue #1569 Task 5.
 func (s *transactionSyncService) SetAuditLogger(al AuditLogger) {
 	s.auditLogger = al
+}
+
+func (s *transactionSyncService) SetProductAnalytics(analytics phclient.ProductAnalytics) {
+	s.analytics = analytics
+}
+
+// SetTransactionSyncProductAnalytics wires the optional typed completion producer without
+// widening the long-standing TransactionSyncService interface implemented by worker test doubles.
+func SetTransactionSyncProductAnalytics(service TransactionSyncService, analytics phclient.ProductAnalytics) {
+	if setter, ok := service.(interface {
+		SetProductAnalytics(phclient.ProductAnalytics)
+	}); ok {
+		setter.SetProductAnalytics(analytics)
+	}
+}
+
+// SetTransactionSyncCompletionRecorder wires the durable completion boundary without widening the
+// long-standing TransactionSyncService interface implemented by worker test doubles.
+func SetTransactionSyncCompletionRecorder(service TransactionSyncService, recorder TransactionSyncCompletionRecorder) {
+	if setter, ok := service.(interface {
+		SetCompletionRecorder(TransactionSyncCompletionRecorder)
+	}); ok {
+		setter.SetCompletionRecorder(recorder)
+	}
+}
+
+func (s *transactionSyncService) SetCompletionRecorder(recorder TransactionSyncCompletionRecorder) {
+	s.completionRecorder = recorder
 }
 
 // bumpCacheForSync invalidates userID's cached analytics (and, when resolvable, their
@@ -417,6 +464,7 @@ func (s *transactionSyncService) SyncTransactions(
 	if linkedItem.Cursor != nil {
 		cursor = *linkedItem.Cursor
 	}
+	preSyncCursor := cursor
 
 	// Step 2: Determine historical depth for first sync
 	// Only applies on FIRST sync (empty cursor). Re-syncs use cursor-based incremental sync.
@@ -457,6 +505,7 @@ func (s *transactionSyncService) SyncTransactions(
 	// "nothing earned yet, leave the stored cursor alone".
 	pendingCursor := ""
 	hasMore := true
+	fullyPaginated := false
 	pageCount := 0
 
 	for hasMore {
@@ -475,8 +524,12 @@ func (s *transactionSyncService) SyncTransactions(
 			}
 			if plaidErr.ErrorType == domain.PlaidErrorInvalidCursor {
 				// Reset cursor to empty string for full re-sync
-				s.logger.Warn("invalid cursor detected, resetting for full re-sync", "item_id", linkedItem.ID)
-				if resetErr := s.linkedItemRepo.UpdateCursor(ctx, linkedItem.ID, ""); resetErr != nil {
+				s.logger.Warn("invalid cursor detected, resetting for full re-sync")
+				resetter, ok := s.linkedItemRepo.(transactionSyncCursorResetter)
+				if !ok {
+					return result, errors.New("failed to reset cursor after INVALID_CURSOR: compare-and-reset repository unavailable")
+				}
+				if resetErr := resetter.ResetCursorIfUnchanged(ctx, linkedItem.ID, preSyncCursor); resetErr != nil {
 					return result, fmt.Errorf("failed to reset cursor after INVALID_CURSOR: %w", resetErr)
 				}
 				// Return error to trigger retry with empty cursor
@@ -613,6 +666,9 @@ func (s *transactionSyncService) SyncTransactions(
 
 		// Check if more pages exist
 		hasMore = resp.GetHasMore()
+		if !hasMore {
+			fullyPaginated = true
+		}
 
 		s.logger.Info("synced page",
 			"page", pageCount,
@@ -789,7 +845,55 @@ func (s *transactionSyncService) SyncTransactions(
 	// fail the sync, so blocking the cursor on them would only cause pointless re-delivery.
 	// pendingCursor is empty when Plaid returned no real cursor this run (see the #1537 blank-cursor
 	// guard) — in that case the stored cursor is left exactly as it was.
-	if pendingCursor != "" {
+	var syncKind phclient.FinancialDataSyncCompletedSyncKind
+	completionRecorded := false
+	if fullyPaginated && s.completionRecorder != nil {
+		var completedCursor *string
+		if pendingCursor != "" {
+			completedCursor = &pendingCursor
+		}
+		disposition, err := s.completionRecorder.RecordTransactionSyncCompletion(
+			ctx, linkedItem.ID, preSyncCursor, linkedItem.TransactionSyncCompletionGeneration, completedCursor,
+		)
+		if err != nil {
+			s.logger.Error("failed to finalize transaction sync completion", "error", err)
+			return result, fmt.Errorf("failed to finalize transaction sync completion: %w", err)
+		}
+		switch disposition {
+		case repository.TransactionSyncCompletionInitial:
+			completionRecorded = true
+			syncKind = phclient.FinancialDataSyncCompletedSyncKindInitial
+		case repository.TransactionSyncCompletionRefresh:
+			completionRecorded = true
+			syncKind = phclient.FinancialDataSyncCompletedSyncKindRefresh
+		case repository.TransactionSyncCompletionSuppressedCutoverUnset:
+			observability.RecordFinancialDataSyncCompletionSuppression(
+				observability.FinancialDataSyncCompletionSuppressionCutoverUnset,
+			)
+		case repository.TransactionSyncCompletionSuppressedPreCutover:
+			observability.RecordFinancialDataSyncCompletionSuppression(
+				observability.FinancialDataSyncCompletionSuppressionPreCutover,
+			)
+		case repository.TransactionSyncCompletionSuppressedLegacyAmbiguous:
+			observability.RecordFinancialDataSyncCompletionSuppression(
+				observability.FinancialDataSyncCompletionSuppressionLegacyAmbiguous,
+			)
+		default:
+			observability.RecordFinancialDataSyncCompletionSuppression(
+				observability.FinancialDataSyncCompletionSuppressionUnknown,
+			)
+			s.logger.Error("transaction sync completion returned an unknown analytics disposition")
+		}
+	} else if pendingCursor != "" && !fullyPaginated {
+		advancer, ok := s.linkedItemRepo.(transactionSyncCursorAdvancer)
+		if !ok {
+			return result, errors.New("failed to persist partial cursor progress: compare-and-advance repository unavailable")
+		}
+		if err := advancer.RecordTransactionSyncProgress(ctx, linkedItem.ID, preSyncCursor, pendingCursor); err != nil {
+			s.logger.Error("failed to persist partial cursor progress", "error", err)
+			return result, fmt.Errorf("failed to persist partial cursor progress: %w", err)
+		}
+	} else if pendingCursor != "" {
 		if err := s.linkedItemRepo.UpdateCursor(ctx, linkedItem.ID, pendingCursor); err != nil {
 			s.logger.Error("failed to advance cursor after storage", "item_id", linkedItem.ID, "error", err)
 			return result, fmt.Errorf("failed to update cursor after storage: %w", err)
@@ -864,6 +968,12 @@ func (s *transactionSyncService) SyncTransactions(
 	// behavior; a no-op sync is still worth invalidating since transfer correlation, savings
 	// progress, and budget sync above may have written even with zero transaction changes).
 	cacheBumpNeeded = true
+
+	if completionRecorded && s.analytics != nil {
+		s.analytics.CaptureEvent(ctx, linkedItem.UserID, phclient.FinancialDataSyncCompletedPayload{
+			SyncKind: syncKind,
+		})
+	}
 
 	return result, nil
 }
@@ -1474,24 +1584,24 @@ func (s *transactionSyncService) detectAndUpsertProposedContributions(ctx contex
 // provider's own pointer cannot.
 //
 // WHERE THE PIECES ARE, so the next reader does not have to search:
-//   1. migration 000168 adds transactions.pending_transaction_id_blind_idx (blind index only -- the
-//      value is never read back, only matched, so no plaintext and no ciphertext is stored);
-//   2. services/plaid_mapper.go MapPlaidTransactionBase populates
-//      domain.Transaction.PendingTransactionID, and BOTH repository write paths derive the blind
-//      index from it -- CreateBatch for `added`, Update for `modified`. Both accept it via COALESCE
-//      so a row can LEARN a pointer that arrives later and a pointer-less re-delivery cannot erase
-//      one; omitting the column from CreateBatch's ON CONFLICT SET clause, which an earlier draft of
-//      this note recommended, would have made the first of those impossible;
-//   3. the annotation move is a data-modifying CTE inside TombstoneByExternalID's single statement,
-//      so it is atomic with the tombstoning and there is no window in which a crash could leave the
-//      annotations on both rows, i.e. double-categorised. (This line used to add "with no
-//      transaction to introduce". T4 wrote that; T6 falsified it five commits later by routing the
-//      statement through runCapturingStatement, which opens one -- see
-//      repository/transaction_annotation_capture.go:~249.);
-//   4. the refusal to overwrite the note asked for is implemented as two predicates: a MANUAL
-//      category already on the twin wins over the pending row's, and tags move only onto a twin that
-//      has none. A twin categorised by a RULE does NOT block the move -- rules run in place before
-//      the twin is ever inserted, so a blank-row-only gate would have refused in the common case.
+//  1. migration 000168 adds transactions.pending_transaction_id_blind_idx (blind index only -- the
+//     value is never read back, only matched, so no plaintext and no ciphertext is stored);
+//  2. services/plaid_mapper.go MapPlaidTransactionBase populates
+//     domain.Transaction.PendingTransactionID, and BOTH repository write paths derive the blind
+//     index from it -- CreateBatch for `added`, Update for `modified`. Both accept it via COALESCE
+//     so a row can LEARN a pointer that arrives later and a pointer-less re-delivery cannot erase
+//     one; omitting the column from CreateBatch's ON CONFLICT SET clause, which an earlier draft of
+//     this note recommended, would have made the first of those impossible;
+//  3. the annotation move is a data-modifying CTE inside TombstoneByExternalID's single statement,
+//     so it is atomic with the tombstoning and there is no window in which a crash could leave the
+//     annotations on both rows, i.e. double-categorised. (This line used to add "with no
+//     transaction to introduce". T4 wrote that; T6 falsified it five commits later by routing the
+//     statement through runCapturingStatement, which opens one -- see
+//     repository/transaction_annotation_capture.go:~249.);
+//  4. the refusal to overwrite the note asked for is implemented as two predicates: a MANUAL
+//     category already on the twin wins over the pending row's, and tags move only onto a twin that
+//     has none. A twin categorised by a RULE does NOT block the move -- rules run in place before
+//     the twin is ever inserted, so a blank-row-only gate would have refused in the common case.
 //
 // ORDERING IS ALREADY IN THIS FUNCTION'S FAVOUR and does not need a second hook for the common
 // case: processTransactions aggregates EVERY page into result.Added/Modified/Removed before storing

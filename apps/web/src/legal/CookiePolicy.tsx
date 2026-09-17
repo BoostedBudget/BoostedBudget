@@ -15,7 +15,7 @@ export function CookiePolicy() {
     <div className="privacy-policy">
       <div className="privacy-policy-container">
         <h1>Cookie Policy</h1>
-        <p className="last-updated">Last Updated: March 29, 2026</p>
+        <p className="last-updated">Last Updated: September 13, 2026</p>
 
         <section>
           <h2>1. What Are Cookies?</h2>
@@ -49,38 +49,54 @@ export function CookiePolicy() {
 
           <h3>2.2 Analytics Cookies (Optional — Requires Consent)</h3>
           <p>
-            We use <strong>PostHog</strong> to collect anonymized analytics data about how users
+            We use <strong>PostHog</strong> to collect pseudonymous analytics data about how users
             interact with BoostedBudget. This helps us identify usability issues, understand which
             features are most valuable, and improve the platform.
           </p>
           <p>
-            Analytics cookies and localStorage are <strong>not set until you opt in</strong> via
-            our consent banner. You can withdraw consent as easily as you gave it.
+            No PostHog analytics persistence or analytics event capture occurs before the applicable
+            consent choice resolves.
+            Signed-out visitors choose through our consent banner; signed-in users choose in
+            Profile → Privacy Settings. Signed-out visitors can reopen Cookie Settings and explicitly
+            withdraw; signed-in users can withdraw in Privacy Settings.
           </p>
           <p>PostHog analytics cookies collect:</p>
           <ul>
-            <li>Pages visited and features used (anonymized)</li>
+            <li>Sanitized route templates and features used (pseudonymous)</li>
             <li>General device and browser information</li>
-            <li>Session duration and interaction patterns</li>
-            <li>Error and performance data</li>
-            <li>Session recordings on error (all form inputs are masked; financial amounts and
-              sensitive data are redacted)</li>
+            <li>Session duration and navigation patterns</li>
+            <li>Production session replay remains disabled</li>
           </ul>
           <p>
-            PostHog uses both cookies and browser <strong>localStorage</strong> for persistence.
-            Both are covered under this consent category.
+            After consent, locally persisted PostHog SDK state is limited to the current tab session.
+            The anonymous consent cookie remains the cross-session authority. Signed-in tabs identify
+            as the same account after server consent resolves. Duplicating a tab may copy sessionStorage,
+            so BoostedBudget clears inherited SDK identity before enabling persistence for that tab.
+          </p>
+          <p>
+            Do Not Track is a browser-only hard stop: when your browser sends DNT, browser analytics
+            stay off even if your saved account preference permits them. Your server consent record
+            remains authoritative for the account, so aggregate browser analytics may undercount DNT users.
           </p>
           <p className="important-note">
             <strong>Privacy note:</strong> PostHog analytics are configured to respect GDPR requirements.
-            Financial amounts, account numbers, and other sensitive data displayed in the app are masked
-            in session recordings and analytics. We do not sell analytics data to third parties.
+            Analytics properties and URLs are sanitized before capture. If session replay is separately
+            enabled in the future with consent, financial amounts, account numbers, and other sensitive
+            displayed data will be masked. We do not sell analytics data to third parties.
+          </p>
+          <p>
+            Authenticated Support chat is a separate, user-requested service and is not an analytics
+            cookie. It loads only inside the signed-in application after our server verifies your
+            account identity. PostHog Surveys load only for signed-in users who have granted analytics
+            consent; BoostedBudget permits rating and closed-choice questions and does not display
+            free-text surveys.
           </p>
         </section>
 
         <section>
           <h2>3. Managing Your Cookie Preferences</h2>
           <p>
-            You have full control over optional cookies. You can change your preferences at any time:
+            You have control over optional cookies through the controls available for your session:
           </p>
           <ul>
             <li>
@@ -93,7 +109,9 @@ export function CookiePolicy() {
             </li>
             <li>
               <strong>Browser Settings:</strong> You can also control cookies through your browser
-              settings, though blocking necessary cookies will prevent BoostedBudget from working.
+              settings. Use BoostedBudget&apos;s Cookie Settings control for an immediate signed-out
+              analytics withdrawal broadcast; blocking necessary cookies will prevent the Service
+              from working.
             </li>
           </ul>
           <p>
@@ -134,7 +152,10 @@ export function CookiePolicy() {
             <li><strong>Session cookies:</strong> Deleted when you close your browser</li>
             <li><strong>Authentication cookies:</strong> Up to 30 days (or until you log out)</li>
             <li><strong>Cookie consent preferences:</strong> 365 days</li>
-            <li><strong>Analytics cookies:</strong> Up to 1 year (PostHog default)</li>
+            <li>
+              <strong>PostHog analytics state:</strong> No longer than the current tab session;
+              cleared sooner on reload or an authority change
+            </li>
           </ul>
         </section>
 

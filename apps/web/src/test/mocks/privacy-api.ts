@@ -4,9 +4,26 @@
 import { mock } from 'bun:test'
 import * as RealPrivacyModule from '@boostedbudget/api-client/endpoints/privacy/privacy'
 
+type MockPrivacySettings = Record<string, boolean>
+
+interface MockPrivacyQueryOptions {
+  query?: {
+    enabled?: boolean
+    queryKey?: readonly unknown[]
+  }
+}
+
+interface MockPrivacyQueryResult {
+  data?: MockPrivacySettings
+  error: Error | null
+  isFetching?: boolean
+  isLoading: boolean
+  refetch: () => Promise<unknown>
+}
+
 // === useGetPrivacySettings ===
-export const mockRefetchPrivacySettings = mock(() => Promise.resolve())
-export const mockUseGetPrivacySettings = mock(() => ({
+export const mockRefetchPrivacySettings = mock((): Promise<unknown> => Promise.resolve())
+export const mockUseGetPrivacySettings = mock((_options?: MockPrivacyQueryOptions): MockPrivacyQueryResult => ({
   data: {
     analytics_enabled: true,
     data_sharing_enabled: false,
@@ -18,9 +35,18 @@ export const mockUseGetPrivacySettings = mock(() => ({
 }))
 
 // === useUpdatePrivacySettings ===
-export const mockUpdatePrivacySettingsMutateAsync = mock(() => Promise.resolve())
+export const mockUpdatePrivacySettingsMutateAsync = mock((_variables?: unknown): Promise<MockPrivacySettings> => Promise.resolve({}))
 export const mockUpdatePrivacySettingsMutate = mock(() => {})
-export const mockUseUpdatePrivacySettings = mock(() => ({
+export const mockUseUpdatePrivacySettings = mock((): {
+  data: MockPrivacySettings | null
+  error: Error | null
+  isError: boolean
+  isPending: boolean
+  isSuccess: boolean
+  mutate: typeof mockUpdatePrivacySettingsMutate
+  mutateAsync: typeof mockUpdatePrivacySettingsMutateAsync
+  reset: () => void
+} => ({
   mutate: mockUpdatePrivacySettingsMutate,
   mutateAsync: mockUpdatePrivacySettingsMutateAsync,
   isPending: false,

@@ -80,6 +80,7 @@ var uniqueOptsByKind = map[string]func() *queue.UniqueOpts{
 	"account_deletion":         AccountDeletionUniqueOpts,
 	"scheduled_deletion_check": ScheduledDeletionCheckUniqueOpts,
 	"retention_cleanup_check":  RetentionCleanupCheckUniqueOpts,
+	"posthog_erasure":          PostHogErasureUniqueOpts,
 
 	// Subscription / billing kinds
 	"revenuecat_sync":                   RevenueCatSyncUniqueOpts,
