@@ -42,6 +42,26 @@ func (s *RevenueCatService) captureOperation(ctx context.Context, op domain.Reve
 	}
 }
 
+// captureAdminOverride emits the target-user half of the admin tier-change stream. It is called
+// only from RequestGrant, which requires a non-empty actor and is reached only from the admin
+// handler, so it is inherently scoped to admin-initiated operations — a system-initiated
+// operation (bootstrap, comp expiry, webhook-driven lapse) never reaches this call site. The
+// acting admin is deliberately absent from the properties: the unsuffixed frontend twin carries
+// the acting admin as its subject, and the two must not be combined.
+func (s *RevenueCatService) captureAdminOverride(ctx context.Context, op domain.RevenueCatOperation, tier string) {
+	if s.analytics == nil {
+		return
+	}
+	event := phclient.EventAdminSubscriptionOverrideAppliedServer
+	if op.Revoke {
+		event = phclient.EventAdminSubscriptionOverrideRemovedServer
+	}
+	s.analytics.CaptureIfConsented(ctx, op.UserID, event, map[string]interface{}{
+		"tier":       tier,
+		"had_expiry": op.ExpiresAt != nil,
+	})
+}
+
 func NewRevenueCatService(repo repository.RevenueCatRepository, provider RevenueCatProvider, profiles RevenueCatProfileReader) *RevenueCatService {
 	return &RevenueCatService{repo: repo, provider: provider, profiles: profiles}
 }
@@ -248,6 +268,7 @@ func (s *RevenueCatService) RequestGrant(ctx context.Context, id, class, tier st
 	err := s.repo.RequestOperation(ctx, &op)
 	if err == nil {
 		s.captureOperation(ctx, op, phclient.EventRevenueCatOperationQueued)
+		s.captureAdminOverride(ctx, op, tier)
 	}
 	return op, err
 }

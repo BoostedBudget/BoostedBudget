@@ -42,15 +42,39 @@ func TestRevenueCatAnalyticsDistinguishesQueuedFromAppliedAndOmitsReason(t *test
 	s.SetGDPRAnalytics(phclient.NewGDPRClient(a, &rcAnalyticsConsent{allowed: true}, slog.Default()))
 	op, err := s.RequestGrant(context.Background(), "u", "comp", "premium", nil, false, "admin", "private sensitive explanation")
 	require.NoError(t, err)
-	require.Equal(t, []string{phclient.EventRevenueCatOperationQueued}, a.events)
+	require.Equal(t, []string{phclient.EventRevenueCatOperationQueued, phclient.EventAdminSubscriptionOverrideAppliedServer}, a.events)
 	require.NoError(t, s.ProcessOperation(context.Background(), "u", op.ID))
-	require.Equal(t, []string{phclient.EventRevenueCatOperationQueued, phclient.EventRevenueCatOperationApplied}, a.events)
+	require.Equal(t, []string{phclient.EventRevenueCatOperationQueued, phclient.EventAdminSubscriptionOverrideAppliedServer, phclient.EventRevenueCatOperationApplied}, a.events)
 	require.NoError(t, s.ProcessOperation(context.Background(), "u", op.ID))
-	require.Len(t, a.events, 2)
+	require.Len(t, a.events, 3)
 	for _, p := range a.properties {
 		require.NotContains(t, p, "reason")
 		require.NotContains(t, p, "actor_id")
 	}
+}
+
+func TestRevenueCatAdminOverrideIsScopedToAdminInitiatedGrants(t *testing.T) {
+	r := &rcTestStore{ops: map[string]domain.RevenueCatOperation{}}
+	s := NewRevenueCatService(r, &rcTestProvider{}, rcTestProfile{})
+	a := &rcAnalytics{}
+	s.SetGDPRAnalytics(phclient.NewGDPRClient(a, &rcAnalyticsConsent{allowed: true}, slog.Default()))
+
+	op, err := s.RequestGrant(context.Background(), "target-user", "comp", "premium", nil, false, "acting-admin", "private reason")
+	require.NoError(t, err)
+	require.Equal(t, []string{phclient.EventRevenueCatOperationQueued, phclient.EventAdminSubscriptionOverrideAppliedServer}, a.events)
+	require.Equal(t, map[string]interface{}{"tier": "premium", "had_expiry": false}, a.properties[1])
+	require.NotContains(t, a.properties[1], "actor_id")
+	require.NotContains(t, a.properties[1], "reason")
+
+	// ProcessOperation is the shared sink for every operation, including system-initiated ones.
+	// It must never emit the admin-override event.
+	require.NoError(t, s.ProcessOperation(context.Background(), "target-user", op.ID))
+	require.Equal(t, []string{phclient.EventRevenueCatOperationApplied}, a.events[2:])
+
+	// A revoke emits the removed variant.
+	_, err = s.RequestGrant(context.Background(), "target-user", "comp", "premium", nil, true, "acting-admin", "private reason")
+	require.NoError(t, err)
+	require.Equal(t, phclient.EventAdminSubscriptionOverrideRemovedServer, a.events[len(a.events)-1])
 }
 
 func TestRevenueCatAnalyticsChecksTargetConsentForEveryOperationEvent(t *testing.T) {
@@ -77,8 +101,8 @@ func TestRevenueCatAnalyticsChecksTargetConsentForEveryOperationEvent(t *testing
 			}
 			err = s.ProcessOperation(ctx, "target-user", op.ID)
 			require.Equal(t, tc.failed, err != nil)
-			require.Equal(t, []string{"target-user", "target-user"}, consent.users)
-			require.Equal(t, []context.Context{ctx, ctx}, consent.contexts)
+			require.Equal(t, []string{"target-user", "target-user", "target-user"}, consent.users)
+			require.Equal(t, []context.Context{ctx, ctx, ctx}, consent.contexts)
 			if !tc.allowed || tc.consentErr != nil {
 				require.Empty(t, a.events)
 				return
@@ -87,8 +111,8 @@ func TestRevenueCatAnalyticsChecksTargetConsentForEveryOperationEvent(t *testing
 			if tc.failed {
 				event = phclient.EventRevenueCatOperationFailed
 			}
-			require.Equal(t, []string{phclient.EventRevenueCatOperationQueued, event}, a.events)
-			require.Equal(t, []string{"target-user", "target-user"}, a.users)
+			require.Equal(t, []string{phclient.EventRevenueCatOperationQueued, phclient.EventAdminSubscriptionOverrideAppliedServer, event}, a.events)
+			require.Equal(t, []string{"target-user", "target-user", "target-user"}, a.users)
 		})
 	}
 }
