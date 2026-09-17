@@ -804,9 +804,3 @@ export function useGetUserRuleExecutions<TData = Awaited<ReturnType<typeof getUs
 
   return withQueryKey(query, queryOptions.queryKey);
 }
-
-
-
-
-
-

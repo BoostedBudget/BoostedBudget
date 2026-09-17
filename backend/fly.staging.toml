@@ -58,6 +58,11 @@ kill_timeout = 30
   # - PADDLE_WEBHOOK_SECRET
   # - ENCRYPTION_KEY
   # - POSTHOG_API_KEY (PostHog Cloud US - project 357017)
+  # - POSTHOG_SECRET_API_TOKEN (server-only Support identity-verification HMAC key)
+  # - POSTHOG_PERSONAL_API_KEY (server-only, person:write/person:read; durable GDPR erasure)
+  # - POSTHOG_PROJECT_ID (staging project only; never share production's target)
+  # - POSTHOG_PRIVATE_HOST (https://us.posthog.com or https://eu.posthog.com)
+  # - POSTHOG_SYNC_COMPLETION_CUTOVER_AT (RFC3339; set only after pre-cutover pods drain)
   # - SENTRY_DSN (Issue #1531 gap round 2: if unset, Error-level logs — including the rate-limiter
   #   fallback-activation log, "the metric that actually matters" per Issue #1531 — never reach
   #   Sentry and nothing pages. main.go logs a startup ERROR when this is unset in

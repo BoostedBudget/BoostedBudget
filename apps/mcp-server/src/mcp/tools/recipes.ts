@@ -185,7 +185,7 @@ export function buildRecipeTools(proxy: HostProxy): RecipeTools {
         return { content: [{ type: 'text', text: `Saved recipes:\n${lines.join('\n')}\nFull recipe: readExecute({ calls: [{ operationId: "getMCPRecipe", pathParams: { id: "<recipe id>" }, detail: "full" }] }).` }] }
       } catch (err) {
         const msg = err instanceof HostProxyError ? err.message : 'Failed to list recipes'
-        return { content: [{ type: 'text', text: `Error: ${msg}` }] }
+        return { content: [{ type: 'text', text: `Error: ${msg}` }], isError: true }
       }
     },
 
@@ -278,7 +278,7 @@ export function buildRecipeTools(proxy: HostProxy): RecipeTools {
         return { content: [{ type: 'text', text }] }
       } catch (err) {
         const msg = err instanceof HostProxyError ? err.message : 'Failed to run recipe'
-        return { content: [{ type: 'text', text: `Error: ${msg}` }] }
+        return { content: [{ type: 'text', text: `Error: ${msg}` }], isError: true }
       }
     },
 

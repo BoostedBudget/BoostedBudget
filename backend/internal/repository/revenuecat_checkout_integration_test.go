@@ -17,7 +17,7 @@ import (
 func TestRevenueCatCheckoutConcurrencyAndReleaseOwnership(t *testing.T) {
 	pool, id := revenueCatTestDB(t)
 	ctx := context.Background()
-	migration, err := os.ReadFile("../../migrations/000209_revenuecat_checkout_intents.up.sql")
+	migration, err := os.ReadFile("../../migrations/000215_revenuecat_checkout_intents.up.sql")
 	require.NoError(t, err)
 	for range 2 {
 		_, err = pool.Exec(ctx, string(migration))
@@ -69,9 +69,9 @@ func TestRevenueCatCheckoutConcurrencyAndReleaseOwnership(t *testing.T) {
 func TestRevenueCatCheckoutRollbackIsIdempotentWhenEmpty(t *testing.T) {
 	pool, _ := revenueCatTestDB(t)
 	ctx := context.Background()
-	up, err := os.ReadFile("../../migrations/000209_revenuecat_checkout_intents.up.sql")
+	up, err := os.ReadFile("../../migrations/000215_revenuecat_checkout_intents.up.sql")
 	require.NoError(t, err)
-	down, err := os.ReadFile("../../migrations/000209_revenuecat_checkout_intents.down.sql")
+	down, err := os.ReadFile("../../migrations/000215_revenuecat_checkout_intents.down.sql")
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, string(up))
 	require.NoError(t, err)

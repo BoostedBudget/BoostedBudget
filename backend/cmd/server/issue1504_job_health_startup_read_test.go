@@ -36,6 +36,7 @@ type stubJobHealthRepo struct {
 	plaidOldest  time.Duration
 	residueCount int
 	residueAge   time.Duration
+	deadLetters  int
 	errAll       error
 }
 
@@ -51,6 +52,10 @@ func (s *stubJobHealthRepo) GetDeletionResidueStats(context.Context) (int, time.
 	return s.residueCount, s.residueAge, s.errAll
 }
 
+func (s *stubJobHealthRepo) GetDeadLetterQueueSize(context.Context) (int, error) {
+	return s.deadLetters, s.errAll
+}
+
 // resetJobHealthGauges returns every gauge this collector feeds to its UNPUBLISHED state, so each
 // test starts from "nothing has measured this" rather than from a previous test's reading. Without
 // this the absence assertions below would be satisfiable by test ordering.
@@ -62,6 +67,7 @@ func resetJobHealthGauges(t *testing.T) {
 		observability.PlaidCleanupOldestOutstandingSeconds.DeleteLabelValues()
 		observability.DeletionResidueRecords.DeleteLabelValues()
 		observability.DeletionResidueNewestSeconds.DeleteLabelValues()
+		observability.DeadLetterQueueSize.DeleteLabelValues()
 	}
 	reset()
 	t.Cleanup(reset)
@@ -80,6 +86,7 @@ func TestStartJobHealthMetricsCollector_PublishesAMeasurementBeforeTheFirstTick(
 		plaidOldest:  3 * time.Hour,
 		residueCount: 3,
 		residueAge:   45 * time.Second,
+		deadLetters:  7,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -100,6 +107,7 @@ func TestStartJobHealthMetricsCollector_PublishesAMeasurementBeforeTheFirstTick(
 	assert.Equal(t, float64(2), testutil.ToFloat64(observability.PlaidCleanupOutstandingUsers))
 	assert.Equal(t, float64(3*60*60), testutil.ToFloat64(observability.PlaidCleanupOldestOutstandingSeconds))
 	assert.Equal(t, float64(90*60), testutil.ToFloat64(observability.RevenueCatOldestExpiredCompGrantSeconds))
+	assert.Equal(t, float64(7), testutil.ToFloat64(observability.DeadLetterQueueSize))
 }
 
 // ⚠ THE SIBLING THAT MAKES THE TEST ABOVE FAIL IN BOTH DIRECTIONS. A genuinely clean database must
@@ -118,6 +126,7 @@ func TestStartJobHealthMetricsCollector_ACleanDatabaseStillPublishesZero(t *test
 		"a measured zero must be published — otherwise nothing can ever tell 'clean' from 'not looked'")
 	assert.Equal(t, float64(0), testutil.ToFloat64(observability.DeletionResidueRecords))
 	assert.Equal(t, float64(0), testutil.ToFloat64(observability.PlaidCleanupOutstandingUsers))
+	assert.Equal(t, float64(0), testutil.ToFloat64(observability.DeadLetterQueueSize))
 }
 
 // ⚠ AND A FAILED STARTUP READ MUST NOT PUBLISH A ZERO EITHER. This is the half that a plain Gauge
@@ -154,6 +163,7 @@ func TestStartJobHealthMetricsCollector_AFailedStartupReadPublishesNothing(t *te
 	assert.Equal(t, 0, testutil.CollectAndCount(observability.DeletionResidueNewestSeconds))
 	assert.Equal(t, 0, testutil.CollectAndCount(observability.PlaidCleanupOutstandingUsers))
 	assert.Equal(t, 0, testutil.CollectAndCount(observability.RevenueCatOldestExpiredCompGrantSeconds))
+	assert.Equal(t, 0, testutil.CollectAndCount(observability.DeadLetterQueueSize))
 }
 
 // writerFunc adapts a function to io.Writer so the test can observe slog output without a buffer and

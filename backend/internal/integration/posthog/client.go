@@ -2,6 +2,7 @@ package posthog
 
 import (
 	"log/slog"
+	"time"
 
 	posthoggo "github.com/posthog/posthog-go"
 )
@@ -9,8 +10,20 @@ import (
 // Client wraps the posthog-go client and implements the Analytics interface.
 // Returns nil from NewClient when apiKey is empty — all methods are nil-safe.
 type Client struct {
-	inner  posthoggo.Client
+	inner  enqueueCloser
 	logger *slog.Logger
+}
+
+type enqueueCloser interface {
+	Enqueue(posthoggo.Message) error
+	Close() error
+}
+
+type deliveryCallback struct{}
+
+func (deliveryCallback) Success(posthoggo.APIMessage) {}
+func (deliveryCallback) Failure(posthoggo.APIMessage, error) {
+	analyticsDeliveryFailuresTotal.WithLabelValues("delivery").Inc()
 }
 
 // NewClient creates a PostHog client. Returns nil if apiKey is empty (disabled).
@@ -21,8 +34,13 @@ func NewClient(apiKey, host string, logger *slog.Logger) *Client {
 	if host == "" {
 		host = "https://us.i.posthog.com"
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	inner, err := posthoggo.NewWithConfig(apiKey, posthoggo.Config{
-		Endpoint: host,
+		Endpoint:        host,
+		Callback:        deliveryCallback{},
+		ShutdownTimeout: 5 * time.Second,
 	})
 	if err != nil {
 		logger.Error("failed to initialize PostHog client", "error", err)
@@ -41,7 +59,8 @@ func (c *Client) Capture(distinctID, event string, properties map[string]interfa
 		Event:      event,
 		Properties: posthoggo.Properties(properties),
 	}); err != nil {
-		c.logger.Error("posthog capture failed", "event", event, "error", err)
+		analyticsDeliveryFailuresTotal.WithLabelValues("enqueue").Inc()
+		c.logger.Error("posthog capture enqueue failed", "event", boundedEventLabel(EventName(event)), "error", err)
 	}
 }
 
@@ -64,6 +83,7 @@ func (c *Client) Close() {
 		return
 	}
 	if err := c.inner.Close(); err != nil {
+		analyticsDeliveryFailuresTotal.WithLabelValues("shutdown").Inc()
 		c.logger.Error("posthog close failed", "error", err)
 	}
 }

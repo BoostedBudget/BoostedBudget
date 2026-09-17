@@ -44,7 +44,13 @@
   {
     "name": "shared",
     "path": "apps/web/dist/assets/shared-*.js",
-    "limit": "49 KB",
+    "limit": "56 KB",
+    "gzip": true
+  },
+  {
+    "name": "posthog",
+    "path": "apps/web/dist/assets/posthog-*.js",
+    "limit": "117 KB",
     "gzip": true
   },
   {

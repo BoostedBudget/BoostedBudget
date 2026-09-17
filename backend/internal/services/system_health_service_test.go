@@ -90,6 +90,8 @@ type MockJobHealthRepository struct {
 	mock.Mock
 }
 
+func (*MockJobHealthRepository) GetDeadLetterQueueSize(context.Context) (int, error) { return 0, nil }
+
 func (m *MockJobHealthRepository) GetOldestExpiredCompGrantAge(ctx context.Context) (time.Duration, error) {
 	args := m.Called(ctx)
 	return args.Get(0).(time.Duration), args.Error(1)

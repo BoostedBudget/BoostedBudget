@@ -141,6 +141,10 @@ func NewReadOnlyMiddleware(checker HouseholdCoverageChecker) func(ctx huma.Conte
 			next(ctx)
 			return
 		}
+		if IsReadEquivalentOperation(ctx.Operation()) {
+			next(ctx)
+			return
+		}
 
 		// For mutating methods, check the effective subscription status.
 		effectiveStatus, ok := ctx.Context().Value(inputs.EffectiveSubscriptionStatusKey).(string)

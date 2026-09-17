@@ -192,6 +192,17 @@ func TestJobHealthRepository_GetDeletionResidueStats_QueryError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestJobHealthRepository_GetDeadLetterQueueSizeCountsOnlyUnresolvedRows(t *testing.T) {
+	mockDB, repo := setupJobHealthMockDB(t)
+	mockDB.ExpectQuery("SELECT COUNT.*FROM dead_letter_jobs.*NOT.*retried_at IS NOT NULL").
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(7)))
+
+	count, err := repo.GetDeadLetterQueueSize(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 7, count)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
 // TestJobHealthRepository_DeletionResidueStatsQuery_UsesTheWriterSharedPrefix is the drift guard, and
 // it runs without a database so it cannot be skipped. The read predicate and the write's action are
 // the same Go constant; a second hand-typed literal here is exactly how a gauge comes to report zero

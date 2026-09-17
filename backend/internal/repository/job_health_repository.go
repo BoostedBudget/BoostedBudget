@@ -11,8 +11,13 @@ import (
 // internal/observability.RecordJobSuccess, the complementary generic last-success heartbeat every
 // periodic worker's Work() reports to on its success path).
 type JobHealthRepository interface {
+	// GetDeadLetterQueueSize returns the current unresolved queue depth. Resolved replays do not
+	// remain operational work merely because their retained audit row still exists.
+	GetDeadLetterQueueSize(ctx context.Context) (int, error)
+
 	// GetOldestExpiredCompGrantAge returns how long the OLDEST expired comp_* grant has been
 	// sitting in RevenueCat's stored projection (revenuecat_customers.grants): zero when there are
+	// none.
 	// none.
 	//
 	// This is the RevenueCat analogue of the retired legacy-column gauge (#1652 todo 4). The
@@ -149,6 +154,18 @@ const oldestExpiredCompGrantAgeQuery = `
 	  AND g->>'expires_at' IS NOT NULL
 	  AND (g->>'expires_at')::timestamptz < NOW()
 `
+
+func (r *jobHealthRepository) GetDeadLetterQueueSize(ctx context.Context) (int, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM dead_letter_jobs
+		WHERE NOT ` + replayResolvedPredicate
+	var count int64
+	if err := r.db.QueryRow(ctx, query).Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to query unresolved dead letter queue size: %w", err)
+	}
+	return int(count), nil
+}
 
 func (r *jobHealthRepository) GetOldestExpiredCompGrantAge(ctx context.Context) (time.Duration, error) {
 	var ageSeconds float64

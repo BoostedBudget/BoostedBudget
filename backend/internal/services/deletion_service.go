@@ -1503,9 +1503,6 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 					slog.Default().Info("deletion Paddle cancel deferred — side-effect claim held by another flow",
 						"user_id", userID)
 				}
-				if s.analytics != nil {
-					s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "cancel_subscription"})
-				}
 				return issued, fmt.Errorf("cancel Paddle subscription %s: %w", *user.PaddleSubscriptionID, err)
 			}
 		}
@@ -1531,9 +1528,6 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 		}
 		issued.customerArchive = true
 		if err := s.paddleCleanupSvc.ArchiveAndAnonymizeCustomer(ctx, *user.PaddleCustomerID, anonymizedEmail); err != nil {
-			if s.analytics != nil {
-				s.analytics.Capture(userID, phclient.EventPaddleCleanupFailed, map[string]interface{}{"step": "archive_customer"})
-			}
 			return issued, fmt.Errorf("archive Paddle customer %s: %w", *user.PaddleCustomerID, err)
 		}
 	}

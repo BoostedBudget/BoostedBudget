@@ -1,4 +1,4 @@
-import { useEffect, useRef, Suspense, lazy } from 'react'
+import { useEffect, useRef, useState, Suspense, lazy } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router'
 import { useAuth } from '@clerk/react-router'
 import { useRevenueCatIdentity } from './features/billing/hooks/useRevenueCatCheckout'
@@ -7,8 +7,6 @@ import { useCookieState } from './shared/hooks/useCookieState'
 import {
   CookieConsent,
   type CookieConsentSettings,
-  cookieToPrivacySettings,
-  privacySettingsToCookie,
   COOKIE_CONSENT_NAME,
   COOKIE_CONSENT_VERSION,
   type CookieConsentData
@@ -54,8 +52,6 @@ const HouseholdOverCapacityBanner = lazy(() =>
 )
 import { SubscriptionManagementSkeleton } from './features/billing/components/SubscriptionManagementSkeleton'
 import { SubscriptionErrorState } from './features/billing/components/SubscriptionErrorState'
-import { useUpdatePrivacySettings } from '@boostedbudget/api-client/endpoints/privacy/privacy'
-import type { PrivacySettings as PrivacySettingsType } from './features/profile/types'
 import { LandingPage } from './features/landing'
 // #1601: concrete modules, NOT the './features/admin' barrel. That barrel re-exports every
 // admin page (AdminDashboardPage, UsersPage, HealthDashboardPage, WebhooksPage,
@@ -69,6 +65,17 @@ import { NotFoundPage } from './features/not-found/NotFoundPage'
 // #1601 — see the AppFooter import note above for why this is lazy.
 const Header = lazy(() =>
   import('./components/layout/Header').then((m) => ({ default: m.Header }))
+)
+
+// #1650 — lazy for the same reason as Header, plus one more: this component's
+// static import graph reaches posthog-js through shared/posthog/engagement, and
+// the SDK is consent-gated and not needed for first paint. It renders null for
+// anonymous users, so gating the render on isAuthenticated below is
+// behavior-preserving while keeping the SDK off the landing route.
+const AuthenticatedPostHogExperiences = lazy(() =>
+  import('./shared/posthog/AuthenticatedPostHogExperiences').then((m) => ({
+    default: m.AuthenticatedPostHogExperiences,
+  }))
 )
 
 // Reserves the header's exact box so the lazy boundary cannot cause layout shift: Header's root
@@ -91,9 +98,20 @@ export function HeaderPlaceholder() {
 }
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useTheme } from './shared/theme'
-import { posthog } from './shared/lib/posthog'
+import {
+  grantProductAnalytics,
+  withdrawProductAnalytics,
+} from './shared/lib/posthog'
 import { devLog } from './shared/lib/devLog'
 import { usePostHogIdentify } from './shared/hooks/usePostHogIdentify'
+import {
+  isPostHogEngagementRoute,
+  POSTHOG_ENGAGEMENT_ROUTES,
+} from './shared/posthog/routes'
+import {
+  useConsentAwarePageViews,
+  type PageViewDependencies,
+} from './shared/hooks/useConsentAwarePageViews'
 import { PageSkeleton } from './shared/components/PageSkeleton'
 
 // Redirect that forwards any extra query params from the old route to the new one.
@@ -202,18 +220,27 @@ const DeadLetterPage = lazy(() =>
   import('./features/admin').then(m => ({ default: m.DeadLetterPage }))
 )
 
-function App() {
+interface AppProps {
+  analyticsPageViews?: PageViewDependencies
+}
+
+function App({ analyticsPageViews }: AppProps = {}) {
   const { isSignedIn: isAuthenticated } = useAuth()
   const location = useLocation()
   const { resolvedTheme } = useTheme()
-  const [, setConsentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
+  const [consentCookie] = useCookieState<CookieConsentData>(COOKIE_CONSENT_NAME)
   const lastScrolledLocationKeyRef = useRef<string | null>(null)
 
-  usePostHogIdentify()
-
-  useEffect(() => {
-    posthog.capture('$pageview')
-  }, [location.pathname])
+  const [anonymousAnalyticsConsent, setAnonymousAnalyticsConsent] = useState<boolean | null>(() => (
+    consentCookie?.version === COOKIE_CONSENT_VERSION
+      ? consentCookie.consents.analytics
+      : null
+  ))
+  usePostHogIdentify(anonymousAnalyticsConsent)
+  useConsentAwarePageViews(
+    `${location.pathname}${location.search}${location.hash}`,
+    analyticsPageViews,
+  )
 
   // Issue #1411 (B1 fix): react-router's <Link> only performs client-side navigation
   // (history.pushState) — it never scrolls to a URL fragment. Without this effect,
@@ -270,56 +297,20 @@ function App() {
     return () => window.clearInterval(intervalId)
   }, [location.pathname, location.hash, location.key])
 
-  // Use generated mutation hook for privacy settings
-  const updatePrivacyMutation = useUpdatePrivacySettings()
-
   const isLandingPage = location.pathname === '/' && !isAuthenticated
 
   useRevenueCatIdentity()
 
-  const updateConsentCookie = (consents: CookieConsentSettings) => {
-    const expires = new Date()
-    expires.setDate(expires.getDate() + 365) // 1 year
-
-    const consentData: CookieConsentData = {
-      consents,
-      timestamp: new Date().toISOString(),
-      version: COOKIE_CONSENT_VERSION,
-    }
-
-    setConsentCookie(consentData, {
-      path: '/',
-      expires,
-      sameSite: 'strict',
-      secure: window.location.protocol === 'https:',
-    })
-  }
-
-  const handleConsentChange = async (consents: CookieConsentSettings) => {
+  const handleConsentChange = (
+    consents: CookieConsentSettings,
+    source: 'stored' | 'explicit',
+  ) => {
     devLog('Cookie consents updated:', consents)
-
-    if (consents.analytics) {
-      posthog.opt_in_capturing()
-    } else {
-      posthog.opt_out_capturing()
-    }
-
-    if (isAuthenticated) {
-      try {
-        const privacyUpdate = cookieToPrivacySettings(consents)
-        await updatePrivacyMutation.mutateAsync({ data: privacyUpdate })
-        devLog('Cookie consent synced to backend')
-      } catch (error) {
-        console.error('Failed to sync cookie consent to backend:', error)
-      }
-    }
-  }
-
-  const handlePrivacySettingsChange = (settings: PrivacySettingsType) => {
-    devLog('Privacy settings updated:', settings)
-    const cookieSettings = privacySettingsToCookie(settings)
-    updateConsentCookie(cookieSettings)
-    devLog('Privacy settings synced to cookie')
+    if (isAuthenticated) return
+    setAnonymousAnalyticsConsent(consents.analytics)
+    if (source === 'stored') return
+    if (consents.analytics) grantProductAnalytics('anonymous')
+    else withdrawProductAnalytics('anonymous')
   }
 
   return (
@@ -355,7 +346,7 @@ function App() {
               element={<Navigate to="/dashboard" replace />}
             />
             <Route
-              path="/dashboard"
+              path={POSTHOG_ENGAGEMENT_ROUTES.dashboard}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -380,7 +371,7 @@ function App() {
               }
             />
             <Route
-              path="/accounts"
+              path={POSTHOG_ENGAGEMENT_ROUTES.accounts}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -392,7 +383,7 @@ function App() {
               }
             />
             <Route
-              path="/accounts/reconnect"
+              path={POSTHOG_ENGAGEMENT_ROUTES.reconnectAccount}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -404,7 +395,7 @@ function App() {
               }
             />
             <Route
-              path="/accounts/:accountId"
+              path={POSTHOG_ENGAGEMENT_ROUTES.account}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -416,7 +407,7 @@ function App() {
               }
             />
             <Route
-              path="/transactions"
+              path={POSTHOG_ENGAGEMENT_ROUTES.transactions}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -428,7 +419,7 @@ function App() {
               }
             />
             <Route
-              path="/review"
+              path={POSTHOG_ENGAGEMENT_ROUTES.review}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -443,7 +434,7 @@ function App() {
             <Route path="/reports" element={<ForwardSearch to="/insights?tab=spending" />} />
             <Route path="/net-worth" element={<ForwardSearch to="/insights?tab=net-worth" />} />
             <Route
-              path="/insights"
+              path={POSTHOG_ENGAGEMENT_ROUTES.insights}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -458,7 +449,7 @@ function App() {
             <Route path="/savings" element={<ForwardSearch to="/planning?tab=savings" />} />
             <Route path="/budgets" element={<ForwardSearch to="/planning?tab=budgets" />} />
             <Route
-              path="/planning"
+              path={POSTHOG_ENGAGEMENT_ROUTES.planning}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -470,7 +461,7 @@ function App() {
               }
             />
             <Route
-              path="/budgets/:budgetId"
+              path={POSTHOG_ENGAGEMENT_ROUTES.budget}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -482,7 +473,7 @@ function App() {
               }
             />
             <Route
-              path="/auto-categorization"
+              path={POSTHOG_ENGAGEMENT_ROUTES.autoCategorization}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -494,7 +485,7 @@ function App() {
               }
             />
             <Route
-              path="/boosts"
+              path={POSTHOG_ENGAGEMENT_ROUTES.boosts}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -506,7 +497,7 @@ function App() {
               }
             />
             <Route
-              path="/boosts/new"
+              path={POSTHOG_ENGAGEMENT_ROUTES.newBoost}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -518,7 +509,7 @@ function App() {
               }
             />
             <Route
-              path="/boosts/:id"
+              path={POSTHOG_ENGAGEMENT_ROUTES.boost}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -530,7 +521,7 @@ function App() {
               }
             />
             <Route
-              path="/boosts/:id/edit"
+              path={POSTHOG_ENGAGEMENT_ROUTES.editBoost}
               element={
                 <ProtectedRoute>
                   <PremiumRoute>
@@ -542,11 +533,11 @@ function App() {
               }
             />
             <Route
-              path="/profile"
+              path={POSTHOG_ENGAGEMENT_ROUTES.profile}
               element={
                 <ProtectedRoute>
                   <Suspense fallback={<PageSkeleton />}>
-                    <ProfilePage onPrivacySettingsChange={handlePrivacySettingsChange} />
+                    <ProfilePage />
                   </Suspense>
                 </ProtectedRoute>
               }
@@ -558,7 +549,7 @@ function App() {
             <Route path="/pricing" element={<Suspense fallback={<PageSkeleton />}><PricingPage /></Suspense>} />
             <Route path="/mcp" element={<Suspense fallback={<PageSkeleton />}><McpPage /></Suspense>} />
             <Route
-              path="/billing/manage"
+              path={POSTHOG_ENGAGEMENT_ROUTES.billingManage}
               element={
                 <ProtectedRoute>
                   <ErrorBoundary
@@ -577,7 +568,7 @@ function App() {
               }
             />
             <Route
-              path="/billing/success"
+              path={POSTHOG_ENGAGEMENT_ROUTES.billingSuccess}
               element={
                 <ProtectedRoute>
                   <Suspense fallback={<PageSkeleton />}>
@@ -626,7 +617,12 @@ function App() {
 
       <AppFooter />
 
-      <CookieConsent onConsentChange={handleConsentChange} />
+      {!isAuthenticated && <CookieConsent onConsentChange={handleConsentChange} />}
+      {isAuthenticated && (
+        <Suspense fallback={null}>
+          <AuthenticatedPostHogExperiences routeEligible={isPostHogEngagementRoute(location.pathname)} />
+        </Suspense>
+      )}
       <Toaster position="bottom-right" richColors theme={resolvedTheme} />
     </div>
   )

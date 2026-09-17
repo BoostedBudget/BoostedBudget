@@ -9,7 +9,10 @@ import {
 } from './types';
 
 interface CookieConsentProps {
-  onConsentChange?: (consents: CookieConsentSettings) => void;
+  onConsentChange?: (
+    consents: CookieConsentSettings,
+    source: 'stored' | 'explicit',
+  ) => void;
 }
 
 const DEFAULT_CONSENTS: CookieConsentSettings = {
@@ -34,11 +37,11 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
     // Check if user has already provided consent
     if (!consentData || consentData.version !== COOKIE_CONSENT_VERSION) {
       // Show banner if no consent or version mismatch
-       
       setShowBanner(true);
     } else {
       // Apply existing consents
-      onConsentChange?.(consentData.consents);
+      setCustomConsents(consentData.consents);
+      onConsentChange?.(consentData.consents, 'stored');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -58,7 +61,8 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
     });
 
     setShowBanner(false);
-    onConsentChange?.(consents);
+    setCustomConsents(consents);
+    onConsentChange?.(consents, 'explicit');
   };
 
   const handleAcceptAll = () => {
@@ -91,7 +95,20 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
   };
 
   if (!showBanner) {
-    return null;
+    return (
+      <button
+        type="button"
+        className="fixed bottom-4 left-4 z-[9998] rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground shadow-md hover:bg-accent focus:outline-none focus:ring-2 focus:ring-primary"
+        onClick={() => {
+          setCustomConsents(consentData?.consents ?? DEFAULT_CONSENTS);
+          setShowDetails(true);
+          setShowBanner(true);
+        }}
+        aria-label="Cookie Settings"
+      >
+        Cookie Settings
+      </button>
+    );
   }
 
   const btnPrimary = 'px-6 py-3 rounded-md text-base font-medium cursor-pointer border-none bg-primary text-primary-foreground hover:bg-primary/90 transition-all focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2'
@@ -181,7 +198,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
                 </div>
                 <p className="m-0 text-sm text-muted-foreground leading-relaxed">
                   Help us understand how visitors interact with our website by collecting
-                  and reporting information anonymously via PostHog.
+                  pseudonymous usage patterns through PostHog only after you choose analytics.
                 </p>
               </div>
 
@@ -207,7 +224,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
         )}
 
         <p className="mt-4 mb-0 text-[0.85rem] text-muted-foreground text-center pt-4 border-t border-border">
-          By using BoostedBudget, you agree to our use of cookies.{' '}
+          Optional cookies remain off until you choose them.{' '}
           <a href="/legal/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-primary underline hover:no-underline">
             Privacy Policy
           </a>{' '}
