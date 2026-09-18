@@ -77,6 +77,23 @@ func (c *Client) Identify(distinctID string, properties map[string]interface{}) 
 	}
 }
 
+// EmitPersonPropertyUnset removes the named person properties from the PostHog person profile.
+// It rides the same $set event PostHog reserves for person-property updates, carrying the keys in
+// a top-level $unset array. No-op when client is nil.
+func (c *Client) EmitPersonPropertyUnset(distinctID string, keys []string) {
+	if c == nil {
+		return
+	}
+	if err := c.inner.Enqueue(posthoggo.Capture{
+		DistinctId: distinctID,
+		Event:      "$set",
+		Properties: posthoggo.Properties{"$unset": keys},
+	}); err != nil {
+		analyticsDeliveryFailuresTotal.WithLabelValues("enqueue").Inc()
+		c.logger.Error("posthog person-property unset enqueue failed", "error", err)
+	}
+}
+
 // Close flushes buffered events and closes the client. No-op when client is nil.
 func (c *Client) Close() {
 	if c == nil {

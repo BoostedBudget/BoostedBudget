@@ -2,6 +2,7 @@ package operations
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -60,8 +61,22 @@ func (h *PrivacyHandler) GetPrivacySettings(ctx context.Context, input *GetPriva
 // UpdatePrivacySettings handles PUT /api/v1/user/privacy requests.
 // Updates the authenticated user's privacy settings with GDPR validation.
 func (h *PrivacyHandler) UpdatePrivacySettings(ctx context.Context, input *UpdatePrivacySettingsInput) (*UpdatePrivacySettingsOutput, error) {
-	settings, err := h.service.UpdatePrivacySettings(ctx, input.UserID, &input.Body)
+	// Fail closed: the PostHog person identity is the Clerk subject, so a request that reached the
+	// handler without one is refused rather than updating settings whose opt-out plumbing cannot
+	// name the person to update.
+	clerkSubject, ok := ctx.Value(inputs.ClerkUserIDKey).(string)
+	if !ok || clerkSubject == "" {
+		return nil, huma.Error401Unauthorized("User not authenticated")
+	}
+
+	settings, err := h.service.UpdatePrivacySettings(ctx, input.UserID, clerkSubject, &input.Body)
 	if err != nil {
+		// Dedicated branch, deliberately ABOVE the necessary_consent branch below: the merged-state
+		// invariant (interaction capture requires analytics consent) is a semantic refusal — 422 —
+		// not a malformed field (400) and not a server fault (500).
+		if errors.Is(err, domain.ErrInteractionCaptureRequiresAnalytics) {
+			return nil, huma.Error422UnprocessableEntity(err.Error())
+		}
 		// Handle specific GDPR validation errors
 		if strings.Contains(err.Error(), "necessary_consent") {
 			return nil, huma.Error400BadRequest(err.Error())

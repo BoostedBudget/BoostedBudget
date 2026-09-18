@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"sort"
 	"testing"
@@ -77,7 +78,8 @@ func TestPrivacySettings_JSONHasNoAdvertisingConsentKey(t *testing.T) {
 
 	want := []string{
 		"created_at", "data_sharing_enabled", "gdpr_analytics_consent",
-		"gdpr_consent_timestamp", "gdpr_necessary_consent", "id",
+		"gdpr_consent_timestamp", "gdpr_interaction_capture_consent",
+		"gdpr_necessary_consent", "id", "identified_diagnostics_enabled",
 		"include_in_aggregate_stats", "marketing_emails_enabled",
 		"product_updates_enabled", "security_alerts_enabled",
 		"updated_at", "user_id",
@@ -270,6 +272,165 @@ func TestPrivacySettings_IncludeInAggregateStats(t *testing.T) {
 		req.ApplyTo(settings)
 		if !settings.IncludeInAggregateStats {
 			t.Error("IncludeInAggregateStats should remain true when not in update request")
+		}
+	})
+}
+
+// TestNewPrivacySettings_AnalyticsPurposesDefaults pins the two #1683 purpose defaults:
+// identified diagnostics is opt-OUT (true, mirroring include_in_aggregate_stats) and
+// interaction capture is opt-IN (false).
+func TestNewPrivacySettings_AnalyticsPurposesDefaults(t *testing.T) {
+	settings := NewPrivacySettings("user-1683")
+
+	if !settings.IdentifiedDiagnosticsEnabled {
+		t.Error("IdentifiedDiagnosticsEnabled should default to true (opt-out model)")
+	}
+	if settings.GDPRInteractionCaptureConsent {
+		t.Error("GDPRInteractionCaptureConsent should default to false (opt-in model)")
+	}
+}
+
+// TestPrivacySettings_Validate pins the MERGED-state invariant that interaction capture cannot be
+// enabled while analytics consent is withheld. UpdatePrivacySettingsRequest.Validate cannot see
+// merged state, so this method exists for the service to run after ApplyTo.
+func TestPrivacySettings_Validate(t *testing.T) {
+	tests := []struct {
+		name        string
+		interaction bool
+		analytics   bool
+		wantErr     bool
+	}{
+		{name: "interaction=true requires analytics", interaction: true, analytics: false, wantErr: true},
+		{name: "interaction=true with analytics=true is valid", interaction: true, analytics: true, wantErr: false},
+		{name: "both false is valid", interaction: false, analytics: false, wantErr: false},
+		{name: "analytics only is valid", interaction: false, analytics: true, wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			settings := NewPrivacySettings("user-1683")
+			settings.GDPRInteractionCaptureConsent = tt.interaction
+			settings.GDPRAnalyticsConsent = tt.analytics
+
+			err := settings.Validate()
+
+			if tt.wantErr {
+				if !errors.Is(err, ErrInteractionCaptureRequiresAnalytics) {
+					t.Fatalf("Validate() = %v, want ErrInteractionCaptureRequiresAnalytics", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate() = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestUpdatePrivacySettingsRequest_ApplyTo_Cascade pins the delta-triggered downgrade cascade:
+// an explicit analytics=false that does NOT touch interaction capture downgrades interaction
+// capture too; anything else leaves interaction capture alone. Identified diagnostics is never
+// part of the cascade.
+func TestUpdatePrivacySettingsRequest_ApplyTo_Cascade(t *testing.T) {
+	t.Run("analytics=false alone downgrades interaction, identified diagnostics untouched", func(t *testing.T) {
+		settings := NewPrivacySettings("user-1683")
+		settings.GDPRAnalyticsConsent = true
+		settings.GDPRInteractionCaptureConsent = true
+		settings.IdentifiedDiagnosticsEnabled = true
+
+		req := &UpdatePrivacySettingsRequest{GDPRAnalyticsConsent: boolPtr(false)}
+		req.ApplyTo(settings)
+
+		if settings.GDPRInteractionCaptureConsent {
+			t.Error("interaction capture must be downgraded when analytics is withdrawn alone")
+		}
+		if !settings.IdentifiedDiagnosticsEnabled {
+			t.Error("identified diagnostics is not part of the cascade and must stay true")
+		}
+	})
+
+	t.Run("request touching interaction capture is never cascaded", func(t *testing.T) {
+		settings := NewPrivacySettings("user-1683")
+		settings.GDPRAnalyticsConsent = true
+		settings.GDPRInteractionCaptureConsent = true
+
+		req := &UpdatePrivacySettingsRequest{
+			GDPRAnalyticsConsent:          boolPtr(false),
+			GDPRInteractionCaptureConsent: boolPtr(true),
+		}
+		req.ApplyTo(settings)
+
+		if !settings.GDPRInteractionCaptureConsent {
+			t.Error("cascade must not fire when the request explicitly set interaction capture")
+		}
+	})
+
+	t.Run("no analytics delta does not cascade but applies the new fields", func(t *testing.T) {
+		settings := NewPrivacySettings("user-1683")
+		settings.GDPRAnalyticsConsent = true
+		settings.GDPRInteractionCaptureConsent = true
+
+		req := &UpdatePrivacySettingsRequest{
+			IdentifiedDiagnosticsEnabled: boolPtr(false),
+		}
+		req.ApplyTo(settings)
+
+		if !settings.GDPRInteractionCaptureConsent {
+			t.Error("cascade must fire only on the analytics=false delta")
+		}
+		if settings.IdentifiedDiagnosticsEnabled {
+			t.Error("identified diagnostics must be applied when the request sets it")
+		}
+	})
+}
+
+// TestUpdatePrivacySettingsRequest_ThreeRequestShapes pins the three deterministic outcomes of
+// the cascade + Validate rule, on the MERGED state, exactly as the service consumes them.
+func TestUpdatePrivacySettingsRequest_ThreeRequestShapes(t *testing.T) {
+	t.Run("shape 1: one request with analytics=false + interaction=true contradicts itself (422)", func(t *testing.T) {
+		settings := NewPrivacySettings("user-1683")
+		settings.GDPRAnalyticsConsent = true
+		settings.GDPRInteractionCaptureConsent = true
+
+		req := &UpdatePrivacySettingsRequest{
+			GDPRAnalyticsConsent:          boolPtr(false),
+			GDPRInteractionCaptureConsent: boolPtr(true),
+		}
+		req.ApplyTo(settings)
+
+		if !errors.Is(settings.Validate(), ErrInteractionCaptureRequiresAnalytics) {
+			t.Fatalf("merged state must be rejected: interaction=%v analytics=%v",
+				settings.GDPRInteractionCaptureConsent, settings.GDPRAnalyticsConsent)
+		}
+	})
+
+	t.Run("shape 2: analytics=false alone silently downgrades a pre-existing interaction grant", func(t *testing.T) {
+		settings := NewPrivacySettings("user-1683")
+		settings.GDPRAnalyticsConsent = true
+		settings.GDPRInteractionCaptureConsent = true
+
+		req := &UpdatePrivacySettingsRequest{GDPRAnalyticsConsent: boolPtr(false)}
+		req.ApplyTo(settings)
+
+		if settings.GDPRInteractionCaptureConsent {
+			t.Fatal("cascade must downgrade interaction capture")
+		}
+		if err := settings.Validate(); err != nil {
+			t.Fatalf("merged state must be valid after the cascade, got %v", err)
+		}
+	})
+
+	t.Run("shape 3: interaction=true alone while analytics is already false (422)", func(t *testing.T) {
+		settings := NewPrivacySettings("user-1683")
+		settings.GDPRAnalyticsConsent = false
+		settings.GDPRInteractionCaptureConsent = false
+
+		req := &UpdatePrivacySettingsRequest{GDPRInteractionCaptureConsent: boolPtr(true)}
+		req.ApplyTo(settings)
+
+		if !errors.Is(settings.Validate(), ErrInteractionCaptureRequiresAnalytics) {
+			t.Fatalf("merged state must be rejected: interaction=%v analytics=%v",
+				settings.GDPRInteractionCaptureConsent, settings.GDPRAnalyticsConsent)
 		}
 	})
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
@@ -29,7 +30,7 @@ func (m *mockPrivacyService) GetPrivacySettings(ctx context.Context, userID stri
 	return m.settings, nil
 }
 
-func (m *mockPrivacyService) UpdatePrivacySettings(ctx context.Context, userID string, req *domain.UpdatePrivacySettingsRequest) (*domain.PrivacySettings, error) {
+func (m *mockPrivacyService) UpdatePrivacySettings(ctx context.Context, userID, clerkSubject string, req *domain.UpdatePrivacySettingsRequest) (*domain.PrivacySettings, error) {
 	if m.updateErr != nil {
 		return nil, m.updateErr
 	}
@@ -109,7 +110,8 @@ func TestUpdatePrivacySettings_Success(t *testing.T) {
 		GDPRAnalyticsConsent: &analyticsConsent,
 	}
 
-	output, err := handler.UpdatePrivacySettings(context.Background(), input)
+	ctx := context.WithValue(context.Background(), inputs.ClerkUserIDKey, "user_clerk_123")
+	output, err := handler.UpdatePrivacySettings(ctx, input)
 
 	require.NoError(t, err)
 	require.NotNil(t, output)
@@ -131,7 +133,8 @@ func TestUpdatePrivacySettings_NecessaryConsentError(t *testing.T) {
 		GDPRNecessaryConsent: &necessaryConsent,
 	}
 
-	output, err := handler.UpdatePrivacySettings(context.Background(), input)
+	ctx := context.WithValue(context.Background(), inputs.ClerkUserIDKey, "user_clerk_123")
+	output, err := handler.UpdatePrivacySettings(ctx, input)
 
 	assert.Nil(t, output)
 	require.Error(t, err)
@@ -150,10 +153,72 @@ func TestUpdatePrivacySettings_GenericError(t *testing.T) {
 		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
 	}
 
+	ctx := context.WithValue(context.Background(), inputs.ClerkUserIDKey, "user_clerk_123")
+	output, err := handler.UpdatePrivacySettings(ctx, input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+}
+
+// TestUpdatePrivacySettings_InteractionCaptureRequiresAnalytics_Returns422 pins the dedicated
+// 422 mapping: a merged state that enables interaction capture without analytics consent is a
+// semantic refusal (422), not the necessary_consent 400 and not a 500.
+func TestUpdatePrivacySettings_InteractionCaptureRequiresAnalytics_Returns422(t *testing.T) {
+	mockService := &mockPrivacyService{
+		updateErr: domain.ErrInteractionCaptureRequiresAnalytics,
+	}
+
+	handler := NewPrivacyHandler(mockService)
+
+	interactionConsent := true
+	analyticsConsent := false
+	input := &UpdatePrivacySettingsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body = domain.UpdatePrivacySettingsRequest{
+		GDPRInteractionCaptureConsent: &interactionConsent,
+		GDPRAnalyticsConsent:          &analyticsConsent,
+	}
+
+	ctx := context.WithValue(context.Background(), inputs.ClerkUserIDKey, "user_clerk_123")
+	output, err := handler.UpdatePrivacySettings(ctx, input)
+
+	assert.Nil(t, output)
+	require.Error(t, err)
+
+	var statusErr huma.StatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusUnprocessableEntity, statusErr.GetStatus())
+	assert.NotEqual(t, http.StatusBadRequest, statusErr.GetStatus())
+	assert.NotEqual(t, http.StatusInternalServerError, statusErr.GetStatus())
+}
+
+// TestUpdatePrivacySettings_MissingClerkSubject_Returns401 pins the fail-closed subject check: a
+// request that reached the handler without a Clerk subject must be refused BEFORE any service
+// call, rather than silently skipping the PostHog person-property plumbing.
+func TestUpdatePrivacySettings_MissingClerkSubject_Returns401(t *testing.T) {
+	mockService := &mockPrivacyService{
+		settings: createTestPrivacySettings(),
+	}
+
+	handler := NewPrivacyHandler(mockService)
+
+	analyticsConsent := true
+	input := &UpdatePrivacySettingsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-123"},
+	}
+	input.Body = domain.UpdatePrivacySettingsRequest{
+		GDPRAnalyticsConsent: &analyticsConsent,
+	}
+
 	output, err := handler.UpdatePrivacySettings(context.Background(), input)
 
 	assert.Nil(t, output)
 	require.Error(t, err)
+
+	var statusErr huma.StatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusUnauthorized, statusErr.GetStatus())
 }
 
 // TestPrivacyRouteRegistration tests that routes are properly registered.
