@@ -1,33 +1,43 @@
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useUser } from '@clerk/react-router'
 import { useGetPrivacySettings } from '@boostedbudget/api-client/endpoints/privacy/privacy'
-import { useProfile } from '@/features/profile/hooks/useProfile'
 import { privacySettingsQueryKey } from '../privacy/privacyQueryKey'
+import { resolveAnalyticsAuthority } from '../analytics/resolveAnalyticsAuthority'
+import type { AnalyticsPurposes } from '../lib/analyticsLifecycle'
 import {
   applyProductAnalyticsAuthority,
-  denyProductAnalytics,
+  getAnalyticsLifecycleSnapshot,
   listenForAnalyticsWithdrawal,
-  setProductAnalyticsScope,
-  setProductAnalyticsPersonProperties,
   setAnalyticsLifecyclePending,
+  setProductAnalyticsPersonProperties,
+  setProductAnalyticsScope,
+  subscribeToAnalyticsLifecycle,
 } from '../lib/posthog'
 
 export interface AnalyticsLifecycle {
-  applyAuthority: typeof applyProductAnalyticsAuthority
-  deny: typeof denyProductAnalytics
+  apply: typeof applyProductAnalyticsAuthority
+  getSnapshot: typeof getAnalyticsLifecycleSnapshot
   listenForWithdrawal: typeof listenForAnalyticsWithdrawal
-  setScope: typeof setProductAnalyticsScope
   setPending: typeof setAnalyticsLifecyclePending
   setPersonProperties: typeof setProductAnalyticsPersonProperties
+  setScope: typeof setProductAnalyticsScope
+  subscribe: typeof subscribeToAnalyticsLifecycle
 }
 
 const defaultLifecycle: AnalyticsLifecycle = {
-  applyAuthority: applyProductAnalyticsAuthority,
-  deny: denyProductAnalytics,
+  apply: applyProductAnalyticsAuthority,
+  getSnapshot: getAnalyticsLifecycleSnapshot,
   listenForWithdrawal: listenForAnalyticsWithdrawal,
-  setScope: setProductAnalyticsScope,
   setPending: setAnalyticsLifecyclePending,
   setPersonProperties: setProductAnalyticsPersonProperties,
+  setScope: setProductAnalyticsScope,
+  subscribe: subscribeToAnalyticsLifecycle,
+}
+
+const NO_ANONYMOUS_PURPOSES: AnalyticsPurposes = {
+  analytics: false,
+  identifiedDiagnostics: false,
+  interactionCapture: false,
 }
 
 /**
@@ -42,6 +52,7 @@ export function usePostHogIdentify(
   const { user, isLoaded } = useUser()
   const userId = user?.id
   const appliedAuthority = useRef<string | null>(null)
+  const [withdrawn, setWithdrawn] = useState(() => lifecycle.getSnapshot().withdrawn)
   const privacy = useGetPrivacySettings({
     query: {
       enabled: Boolean(userId),
@@ -49,12 +60,13 @@ export function usePostHogIdentify(
       retry: false,
     },
   })
-  const { user: profile, loading: profileLoading } = useProfile({
-    enabled: Boolean(userId),
-    userId,
-  })
 
   useEffect(() => lifecycle.listenForWithdrawal(), [lifecycle])
+
+  useEffect(
+    () => lifecycle.subscribe(snapshot => setWithdrawn(snapshot.withdrawn)),
+    [lifecycle],
+  )
 
   useLayoutEffect(() => {
     if (!isLoaded) {
@@ -66,11 +78,14 @@ export function usePostHogIdentify(
     lifecycle.setScope(scope)
 
     if (!userId) {
-      const authority = `anonymous:${anonymousAnalyticsConsent === true ? 'granted' : 'denied'}`
-      if (appliedAuthority.current === authority) return
-      appliedAuthority.current = authority
-      if (anonymousAnalyticsConsent === true) lifecycle.applyAuthority(scope)
-      else lifecycle.deny()
+      const purposes: AnalyticsPurposes = {
+        ...NO_ANONYMOUS_PURPOSES,
+        analytics: anonymousAnalyticsConsent === true,
+      }
+      const authorityKey = JSON.stringify({ scope, purposes, withdrawn })
+      if (appliedAuthority.current === authorityKey) return
+      appliedAuthority.current = authorityKey
+      void lifecycle.apply(resolveAnalyticsAuthority({ scope, purposes }))
       return
     }
 
@@ -81,19 +96,21 @@ export function usePostHogIdentify(
     }
 
     const granted = privacy.error == null && privacy.data?.gdpr_analytics_consent === true
-    const authority = `${userId}:${granted ? 'granted' : 'denied'}`
-    if (appliedAuthority.current === authority) return
-    appliedAuthority.current = authority
-
-    if (!granted) {
-      lifecycle.deny()
-      return
+    const purposes: AnalyticsPurposes = {
+      analytics: granted,
+      identifiedDiagnostics: privacy.data?.identified_diagnostics_enabled === true,
+      interactionCapture: privacy.data?.gdpr_interaction_capture_consent === true,
     }
-
-    lifecycle.applyAuthority(scope, userId, {
-      subscription_tier: user.publicMetadata?.subscription_tier,
-      primary_region: user.publicMetadata?.primary_region,
-    })
+    const authorityKey = JSON.stringify({ scope, purposes, withdrawn })
+    if (appliedAuthority.current === authorityKey) return
+    appliedAuthority.current = authorityKey
+    void lifecycle.apply(resolveAnalyticsAuthority({
+      scope,
+      purposes,
+      distinctId: userId,
+      firstName: user?.firstName,
+      fullName: user?.fullName,
+    }))
   }, [
     anonymousAnalyticsConsent,
     isLoaded,
@@ -104,23 +121,6 @@ export function usePostHogIdentify(
     privacy.isLoading,
     user,
     userId,
-  ])
-
-  useEffect(() => {
-    if (!userId || profileLoading || !profile) return
-    lifecycle.setPersonProperties({
-      subscription_tier: profile.effective_tier,
-      subscription_status_effective: profile.effective_status,
-      is_comped: profile.is_comped,
-    })
-  }, [
-    lifecycle,
-    privacy.data,
-    privacy.error,
-    privacy.isFetching,
-    privacy.isLoading,
-    profile,
-    profileLoading,
-    userId,
+    withdrawn,
   ])
 }

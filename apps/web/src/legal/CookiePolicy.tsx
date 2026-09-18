@@ -65,7 +65,8 @@ export function CookiePolicy() {
             <li>Sanitized route templates and features used (pseudonymous)</li>
             <li>General device and browser information</li>
             <li>Session duration and navigation patterns</li>
-            <li>Production session replay remains disabled</li>
+            <li>Session recording and heatmaps, only if you separately grant interaction-capture
+              consent; recorded text and element attributes are masked</li>
           </ul>
           <p>
             After consent, locally persisted PostHog SDK state is limited to the current tab session.
@@ -80,9 +81,10 @@ export function CookiePolicy() {
           </p>
           <p className="important-note">
             <strong>Privacy note:</strong> PostHog analytics are configured to respect GDPR requirements.
-            Analytics properties and URLs are sanitized before capture. If session replay is separately
-            enabled in the future with consent, financial amounts, account numbers, and other sensitive
-            displayed data will be masked. We do not sell analytics data to third parties.
+            Analytics properties and URLs are sanitized before capture. Session replay and heatmaps are
+            separately consent-gated and merge disabled; when you grant interaction-capture consent,
+            recorded text and element attributes are masked, and financial amounts, account numbers, and
+            other sensitive displayed data are protected. We do not sell analytics data to third parties.
           </p>
           <p>
             Authenticated Support chat is a separate, user-requested service and is not an analytics

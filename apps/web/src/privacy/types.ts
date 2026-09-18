@@ -5,7 +5,8 @@
 export interface CookieConsentSettings {
   necessary: boolean;      // Always true (required for app functionality)
   analytics: boolean;      // PostHog analytics consent
-  advertising: boolean;    // Advertising consent
+  advertising: boolean;    // Retained for cookie-version compatibility; server concept removed
+  interactionCapture?: boolean; // Session-replay / interaction enrichment consent; absent on pre-existing v2.0 cookies
 }
 
 export interface CookieConsentData {

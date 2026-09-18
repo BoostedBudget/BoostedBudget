@@ -675,3 +675,133 @@ func TestOtherReceiverMiddlewareIsExemptedOnlyWhenSafe(t *testing.T) {
 		}
 	})
 }
+
+// --- #1683 Task 4: request-audit middleware ordering on the Echo chain --------------------------
+//
+// #1683 adds middleware.RequestAudit(), an ECHO middleware (e.Use) that captures the client IP for
+// audit rows. Its IP rule is trustworthy ONLY when CloudflareOnly has already run and recorded
+// GateStatusPassed, so the ordering is load-bearing in the same way CloudflareOnly-before-
+// IPRateLimiter is: registered first, RequestAudit would observe GateStatusUnknown for every
+// request and silently record no IP at all. The #1560 scan above watches humaAPI.UseMiddleware
+// (the Huma chain); this is the Echo chain, so it needs its own check.
+
+// echoUseCall is one `e.Use(...)` argument (or one argument of one) on the Echo chain.
+type echoUseCall struct {
+	line int
+	arg  string
+}
+
+// requestAuditOrderingViolations reports the ordering problems request-audit middleware installs
+// can have: missing CloudflareOnly, missing/duplicated RequestAudit, or RequestAudit registered
+// BEFORE CloudflareOnly. Extracted so a fixture with the wrong order can drive it.
+func requestAuditOrderingViolations(calls []echoUseCall) []string {
+	var cfLine, auditLine, auditCount int
+	for _, c := range calls {
+		switch {
+		case strings.Contains(c.arg, "middleware.CloudflareOnly"):
+			cfLine = c.line
+		case strings.Contains(c.arg, "middleware.RequestAudit"):
+			auditLine = c.line
+			auditCount++
+		}
+	}
+	var out []string
+	if cfLine == 0 {
+		out = append(out, "main.go: no e.Use(middleware.CloudflareOnly(...)) call found — the gate "+
+			"RequestAudit's IP rule depends on is not installed on the Echo chain")
+	}
+	switch {
+	case auditCount == 0:
+		out = append(out, "main.go: no e.Use(middleware.RequestAudit()) call found — #1683's "+
+			"request-audit middleware is not installed")
+	case auditCount > 1:
+		out = append(out, "main.go: e.Use(middleware.RequestAudit()) appears more than once — "+
+			"duplicate middleware install")
+	}
+	if cfLine != 0 && auditLine != 0 && auditLine < cfLine {
+		out = append(out, "main.go: RequestAudit (line "+strconv.Itoa(auditLine)+") is registered "+
+			"BEFORE CloudflareOnly (line "+strconv.Itoa(cfLine)+") — GateStatusFrom would always "+
+			"read GateStatusUnknown and every audit row would silently record no IP")
+	}
+	return out
+}
+
+// TestRequestAuditMiddlewareOrdering pins the real main.go: RequestAudit is installed on the Echo
+// chain, exactly once, AFTER CloudflareOnly.
+func TestRequestAuditMiddlewareOrdering(t *testing.T) {
+	raw, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	src := string(raw)
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "main.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+
+	var calls []echoUseCall
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Use" {
+			return true
+		}
+		recv, ok := sel.X.(*ast.Ident)
+		if !ok || recv.Name != "e" {
+			return true
+		}
+		for _, a := range call.Args {
+			start, end := fset.Position(a.Pos()).Offset, fset.Position(a.End()).Offset
+			if start < 0 || end > len(src) || start > end {
+				continue
+			}
+			calls = append(calls, echoUseCall{
+				line: fset.Position(call.Pos()).Line,
+				arg:  strings.TrimSpace(src[start:end]),
+			})
+		}
+		return true
+	})
+
+	for _, v := range requestAuditOrderingViolations(calls) {
+		t.Error(v)
+	}
+}
+
+// TestRequestAuditOrderingViolations_FailClosed drives the extracted check from fixtures: the
+// guard must FAIL on the wrong order and on a missing install, not merely pass on correct code.
+func TestRequestAuditOrderingViolations_FailClosed(t *testing.T) {
+	t.Run("reversed order fails", func(t *testing.T) {
+		got := requestAuditOrderingViolations([]echoUseCall{
+			{line: 1, arg: "middleware.RequestAudit()"},
+			{line: 2, arg: "middleware.CloudflareOnly(cfCIDRRef, cfg.CFOriginSecret, cfg.Environment)"},
+		})
+		if len(got) == 0 {
+			t.Error("reversed order produced no violation — the guard would stay green while every " +
+				"audit row silently records no IP")
+		}
+	})
+	t.Run("missing RequestAudit fails", func(t *testing.T) {
+		got := requestAuditOrderingViolations([]echoUseCall{
+			{line: 1, arg: "middleware.CloudflareOnly(cfCIDRRef, cfg.CFOriginSecret, cfg.Environment)"},
+		})
+		if len(got) == 0 {
+			t.Error("a missing RequestAudit install produced no violation")
+		}
+	})
+	t.Run("duplicate RequestAudit fails", func(t *testing.T) {
+		got := requestAuditOrderingViolations([]echoUseCall{
+			{line: 1, arg: "middleware.CloudflareOnly(x)"},
+			{line: 2, arg: "middleware.RequestAudit()"},
+			{line: 3, arg: "middleware.RequestAudit()"},
+		})
+		if len(got) == 0 {
+			t.Error("a duplicate RequestAudit install produced no violation")
+		}
+	})
+}

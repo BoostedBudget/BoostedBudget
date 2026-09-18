@@ -187,8 +187,7 @@ func TestRegisterUser_Success(t *testing.T) {
 	// Expect privacy settings creation
 	mockPrivacyRepo.On("Create", ctx, mock.MatchedBy(func(p *domain.PrivacySettings) bool {
 		return p.GDPRNecessaryConsent == true &&
-			p.GDPRAnalyticsConsent == false &&
-			p.GDPRAdvertisingConsent == false
+			p.GDPRAnalyticsConsent == false
 	})).Return(nil)
 
 	// Service with nil audit logger and nil db (not testing audit logging or transactions)

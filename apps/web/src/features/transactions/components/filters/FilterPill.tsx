@@ -22,7 +22,7 @@ export function FilterPill({ label, value, onRemove }: FilterPillProps) {
   return (
     <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium bg-info/10 text-info rounded-full border border-info/20">
       <span className="text-info/70">{label}:</span>
-      <span className="max-w-[150px] truncate">{value}</span>
+      <span data-ph-mask className="max-w-[150px] truncate">{value}</span>
       <button
         type="button"
         onClick={onRemove}

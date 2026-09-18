@@ -1,11 +1,13 @@
 # PostHog PII Masking Policy
 
-PostHog has **three independent leakage paths**. `data-ph-mask` only covers the first:
+PostHog has **five independent leakage paths**. `data-ph-mask` covers the first; the others are
+closed by client configuration, URL sanitization, and the `before_send` denylist:
 
 | Path | Mechanism | How we protect it |
 |---|---|---|
-| Session replay — DOM text | `maskTextSelector: '[data-ph-mask]'` | Wrap PII elements; DataTable `maskedColumnIds` |
-| Session replay — DOM attributes | Attributes recorded verbatim | Never put PII in `aria-label`, `title`, `placeholder`, `alt` |
+| Session replay — DOM text | `maskTextSelector: '*'` (default-deny) with `maskTextFn` un-masking `[data-ph-unmask]` | Wrap PII elements; DataTable `maskedColumnIds`; `data-ph-mask` markers are defence-in-depth under the global mask |
+| Session replay — DOM attributes | `maskAllElementAttributes: true` masks recorded attribute values | Session-replay masking covers element attributes: `session_recording.maskAllElementAttributes: true` is forwarded to rrweb (probe-verified at the pinned SDK version); keep `aria-label`s de-PII'd regardless |
+| Heatmap click data — URL keys | `$$heatmap` keys `$heatmap_data` by `location.href`, so a URL carrying PII leaks in the event key | `sanitizeValue` remaps each `$heatmap_data` key through `sanitizeAnalyticsUrl` and drops `isSensitiveAnalyticsPath` entries before capture |
 | Autocapture event properties | `$el_text` captured on clicks/changes | `autocapture: false` in posthog config |
 | `trackEvent` custom properties | Passed explicitly by caller | `before_send` denylist; pass IDs not names |
 
@@ -13,9 +15,9 @@ PostHog has **three independent leakage paths**. `data-ph-mask` only covers the 
 
 ## How session-replay masking works
 
-`posthog-js` is initialised with `maskTextSelector: '[data-ph-mask]'` and `maskAllInputs: true`. Before any payload leaves the browser, PostHog replaces the **text content** of matching elements with `****`. The live DOM is unchanged — only the recorded stream is affected.
+`posthog-js` is initialised with `maskTextSelector: '*'` (default-deny) and `maskAllInputs: true`, plus a `maskTextFn` that un-masks `[data-ph-unmask]`. Before any payload leaves the browser, PostHog replaces the **text content** of masked elements with `****`. The live DOM is unchanged — only the recorded stream is affected.
 
-`data-ph-mask` is applied at the `<td>` level by `DataTable` (via `maskedColumnIds`), or inline on `<span>` / `<div>` wrappers for card/modal content. It does **not** mask element *attributes* — see the ARIA/attribute rule below.
+`data-ph-mask` is applied at the `<td>` level by `DataTable` (via `maskedColumnIds`), or inline on `<span>` / `<div>` wrappers for card/modal content. Element *attributes* are covered by `maskAllElementAttributes: true`; see the ARIA/attribute rule below for why structural labels remain required.
 
 ## How autocapture is handled
 
@@ -139,7 +141,7 @@ Radix Dialog content renders in a portal but typically inherits `data-ph-mask` f
 
 - **ARIA labels with PII**: `aria-label="Balance: $1,234"` is recorded verbatim in session replays. Use structural labels: `aria-label="Account balance"`.
 - **`title` / `placeholder` / `alt` with PII**: Same reason. Use generic labels.
-- **The attribute rule, in full**: any value interpolated into `aria-label`, `title`, `alt`, or `placeholder` is recorded **verbatim** by session replay — `data-ph-mask` only strips *text content*, never attributes, and there is no attribute-masking mechanism to reach for instead. The only fix is to make the attribute value itself free of PII — a structural/generic label, not a masked one. Two worked examples in this tree now share both the same `aria-labelledby` → masked `sr-only` span *mechanism* **and** the same opaque-id source:
+- **The attribute rule, in full**: any value interpolated into `aria-label`, `title`, `alt`, or `placeholder` is recorded by session replay unless masked by `maskAllElementAttributes: true` — `data-ph-mask` itself only strips *text content*, never attributes, and attribute masking is defence-in-depth, not a substitute for a structural label. The durable fix is to make the attribute value itself free of PII — a structural/generic label, not a masked one. Two worked examples in this tree now share both the same `aria-labelledby` → masked `sr-only` span *mechanism* **and** the same opaque-id source:
   - `AccountCard.tsx` (`aria-labelledby`, not `aria-label`): the link points at a same-page `<span id={useId()} data-ph-mask>` whose *text* carries the account type and mask digits, and that text is masked normally. The `id` attribute and the `aria-labelledby` reference to it are both an opaque `useId()` value, never source-derived — this branch (commit `48d69253`) had introduced `account.id` into both of those attributes, and that has been corrected here in favour of `useId()`. The link's `href` (`to={`/accounts/${account.id}`}`) is the **one** remaining place `account.id` appears in attribute text, and it predates this branch: routing depends on the id being in the URL, and reworking account URLs to avoid that is an out-of-scope routing change, not a TODO to pick up here. There is a real tension worth naming there: `account_id` is itself a `PII_PROPERTY_DENYLIST` entry in `piiScrubbing.ts` (redacted from analytics event properties), yet it appears in this one plain attribute (`href`). That is accepted for `href` specifically, not for the `id`/`aria-labelledby` pair, which no longer needs the trade-off at all.
   - `IncomeSourceItem.tsx`'s `getRemoveLabelText` (`aria-labelledby`, not `aria-label`): the value (e.g. a tag name) is interpolated into a label string, but that string is never placed in an attribute — it's rendered as the *text* of a same-page `<span id={useId()} className="sr-only" data-ph-mask>`, referenced by the remove button's `aria-labelledby`. The `id` attribute itself is always an opaque `useId()` value, never source-derived, so the button's own attributes never carry the interpolated value; the value is free to appear in the *computed accessible name* because that name is resolved from masked text, not read from an attribute.
 - **URL search params with PII**: PostHog records the full URL. Don't push merchant names, account nicknames, or amounts into URL state.

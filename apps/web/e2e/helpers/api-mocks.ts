@@ -42,7 +42,6 @@ export async function mockAuthDependencies(
     user_id: 'user-123',
     gdpr_necessary_consent: true,
     gdpr_analytics_consent: false,
-    gdpr_advertising_consent: false,
     gdpr_consent_timestamp: '2026-01-01T00:00:00Z',
     marketing_emails_enabled: false,
     product_updates_enabled: true,
@@ -58,7 +57,7 @@ export async function mockAuthDependencies(
     if (method === 'PUT') {
       const updates = route.request().postDataJSON() as Record<string, unknown> | null
       for (const field of [
-        'gdpr_necessary_consent', 'gdpr_analytics_consent', 'gdpr_advertising_consent',
+        'gdpr_necessary_consent', 'gdpr_analytics_consent',
         'marketing_emails_enabled', 'product_updates_enabled', 'security_alerts_enabled',
         'data_sharing_enabled', 'include_in_aggregate_stats',
       ] as const) {
