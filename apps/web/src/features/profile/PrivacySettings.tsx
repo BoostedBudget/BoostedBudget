@@ -6,8 +6,8 @@ import {
   useUpdatePrivacySettings,
 } from '@boostedbudget/api-client/endpoints/privacy/privacy'
 import {
+  clearProductAnalyticsWithdrawal,
   getAnalyticsLifecycleSnapshot,
-  grantProductAnalytics,
   withdrawProductAnalytics,
 } from '../../shared/lib/posthog'
 import type { PrivacySettings as PrivacySettingsType, UpdatePrivacySettingsRequest } from './types'
@@ -23,13 +23,13 @@ interface PrivacySettingsProps {
 }
 
 interface AnalyticsActions {
-  grant: typeof grantProductAnalytics
+  clearWithdrawal: typeof clearProductAnalyticsWithdrawal
   getSnapshot: typeof getAnalyticsLifecycleSnapshot
   withdraw: typeof withdrawProductAnalytics
 }
 
 const defaultAnalyticsActions: AnalyticsActions = {
-  grant: grantProductAnalytics,
+  clearWithdrawal: clearProductAnalyticsWithdrawal,
   getSnapshot: getAnalyticsLifecycleSnapshot,
   withdraw: withdrawProductAnalytics,
 }
@@ -137,10 +137,7 @@ export function PrivacySettings({
 
   function grantAnalytics(): void {
     if (!user) return
-    analyticsActions.grant(user.id, user.id, {
-      subscription_tier: user.publicMetadata?.subscription_tier,
-      primary_region: user.publicMetadata?.primary_region,
-    })
+    analyticsActions.clearWithdrawal(user.id)
   }
 
   async function reconcileFailedWithdrawal(): Promise<void> {

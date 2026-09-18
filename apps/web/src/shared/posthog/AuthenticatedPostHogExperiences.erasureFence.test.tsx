@@ -61,7 +61,7 @@ test('an open Support client is deactivated when authority revalidation is fence
       isLoading: false,
       isError: identityError,
     }),
-    useAnalyticsSnapshot: () => ({ generation: 1, state: 'denied', scope: 'clerk_subject' }),
+    useAnalyticsSnapshot: () => ({ generation: 1, state: 'denied', scope: 'clerk_subject', withdrawn: false }),
   }
 
   const view = render(
@@ -110,7 +110,7 @@ test('an open Support client is torn down when the erasure fence activates', asy
       isLoading: false,
       isError: identityError,
     }),
-    useAnalyticsSnapshot: () => ({ generation: 1, state: 'denied', scope: 'clerk_subject' }),
+    useAnalyticsSnapshot: () => ({ generation: 1, state: 'denied', scope: 'clerk_subject', withdrawn: false }),
   }
 
   const view = render(
@@ -155,7 +155,7 @@ test('a background Support client revalidates before it can resume visibly', asy
       isError: false,
       refetch,
     }),
-    useAnalyticsSnapshot: () => ({ generation: 1, state: 'denied', scope: 'clerk_subject' }),
+    useAnalyticsSnapshot: () => ({ generation: 1, state: 'denied', scope: 'clerk_subject', withdrawn: false }),
   }
   render(<AuthenticatedPostHogExperiences controller={controller} dependencies={dependencies} />)
   await userEvent.click(screen.getByRole('button', { name: 'Support' }))
