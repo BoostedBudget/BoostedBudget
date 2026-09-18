@@ -3309,6 +3309,38 @@ func refreshJobHealthMetrics(ctx context.Context, repo repository.JobHealthRepos
 		observability.DeletionResidueRecords.WithLabelValues().Set(float64(residueCount))
 		observability.DeletionResidueNewestSeconds.WithLabelValues().Set(residueNewestAge.Seconds())
 	}
+
+	// #1652 todo 12: the RevenueCat backlog stock. All four reads are query-derived gauges, kept
+	// separate from the flow counters recorded at their event sites. Same error isolation as above:
+	// a failed read publishes nothing, so absent() distinguishes "nobody looked" from "looked, and
+	// it is zero".
+	inboxPending, inboxOldest, err := repo.GetRevenueCatWebhookInboxStats(ctx)
+	if err != nil {
+		logger.Warn("failed to refresh RevenueCat webhook inbox gauges", "error", err)
+	} else {
+		observability.PublishRevenueCatWebhookInbox(inboxPending, inboxOldest.Seconds())
+	}
+
+	opsPending, opsErrored, opsOldest, err := repo.GetRevenueCatOperationsStats(ctx)
+	if err != nil {
+		logger.Warn("failed to refresh RevenueCat operations-queue gauges", "error", err)
+	} else {
+		observability.PublishRevenueCatOperations(opsPending, opsErrored, opsOldest.Seconds())
+	}
+
+	compOutstanding, err := repo.GetRevenueCatCompGrantsOutstanding(ctx)
+	if err != nil {
+		logger.Warn("failed to refresh RevenueCat outstanding comp-grant gauge", "error", err)
+	} else {
+		observability.PublishRevenueCatCompGrantsOutstanding(compOutstanding)
+	}
+
+	refreshOverdue, err := repo.GetRevenueCatRefreshOverdueUsers(ctx)
+	if err != nil {
+		logger.Warn("failed to refresh RevenueCat overdue-refresh gauge", "error", err)
+	} else {
+		observability.PublishRevenueCatRefreshOverdueUsers(refreshOverdue)
+	}
 }
 
 func boolStatus(configured bool) string {

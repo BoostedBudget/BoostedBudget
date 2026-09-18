@@ -18,9 +18,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue/jobs"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -294,4 +297,43 @@ func TestRevenueCatWebhookAnalyticsUnconfiguredIsNoOp(t *testing.T) {
 	require.Equal(t, "queued", got.Body.Status)
 	require.Equal(t, 1, inbox.writes)
 	require.Len(t, q.args, 1)
+}
+
+// TestRevenueCatWebhookRecordsBoundedIngestionMetrics drives the real handler and asserts the
+// operational counters move with the right bounded labels: a NEW accepted receipt counts once (a
+// deduped redelivery does not), and a rejection lands in the fixed reason class for where it
+// happened — never a raw error string or the request path.
+func TestRevenueCatWebhookRecordsBoundedIngestionMetrics(t *testing.T) {
+	receivedPair := observability.RevenueCatWebhookReceivedTotal.WithLabelValues("INITIAL_PURCHASE")
+	beforeReceived := testutil.ToFloat64(receivedPair)
+
+	h, _, _ := newRCWebhookTestHandler()
+	body := `{"event":{"id":"metrics-event","type":"INITIAL_PURCHASE","app_user_id":"user_clerk"}}`
+	_, err := h.Handle(context.Background(), rcSignedWebhook(body))
+	require.NoError(t, err)
+	assert.Equal(t, beforeReceived+1, testutil.ToFloat64(receivedPair))
+
+	_, err = h.Handle(context.Background(), rcSignedWebhook(body))
+	require.NoError(t, err)
+	assert.Equal(t, beforeReceived+1, testutil.ToFloat64(receivedPair),
+		"a deduped redelivery is provider retry pressure, not throughput, and must not count")
+
+	failPair := observability.RevenueCatWebhookFailedTotal.WithLabelValues(
+		observability.RevenueCatLabelOther, observability.RevenueCatWebhookReasonInvalidSignature)
+	beforeFail := testutil.ToFloat64(failPair)
+	bad := rcSignedWebhook(body)
+	bad.Authorization = "wrong"
+	_, err = h.Handle(context.Background(), bad)
+	require.Error(t, err)
+	assert.Equal(t, beforeFail+1, testutil.ToFloat64(failPair))
+
+	unresolvedPair := observability.RevenueCatWebhookFailedTotal.WithLabelValues(
+		"EXPIRATION", observability.RevenueCatWebhookReasonUnresolvedCustomer)
+	beforeUnresolved := testutil.ToFloat64(unresolvedPair)
+	_, err = h.Handle(context.Background(), rcSignedWebhook(`{"event":{"id":"metrics-unresolved","type":"EXPIRATION","app_user_id":"unknown"}}`))
+	require.Error(t, err)
+	assert.Equal(t, beforeUnresolved+1, testutil.ToFloat64(unresolvedPair))
+
+	assert.Greater(t, testutil.CollectAndCount(observability.RevenueCatWebhookProcessingDurationSeconds), 0,
+		"the ingestion duration must be observed for an accepted delivery")
 }

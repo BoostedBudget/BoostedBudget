@@ -11,13 +11,14 @@ import (
 	"github.com/jackc/pgx/v5"
 	appcrypto "github.com/maxnussbaum/BoostedBudget/internal/crypto"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 type RevenueCatSession interface {
 	Read(context.Context) (domain.RevenueCatState, error)
 	Save(context.Context, domain.RevenueCatState) error
 	Operation(context.Context, string) (domain.RevenueCatOperation, error)
-	FinishOperation(context.Context, string, string, string) error
+	FinishOperation(context.Context, string, string, string, string) error
 }
 type RevenueCatRepository interface {
 	Read(context.Context, string) (domain.RevenueCatState, error)
@@ -246,12 +247,32 @@ func scanRevenueCatOperation(row pgx.Row) (domain.RevenueCatOperation, error) {
 func (s *revenueCatSession) Operation(ctx context.Context, id string) (domain.RevenueCatOperation, error) {
 	return scanRevenueCatOperation(s.q.QueryRow(ctx, `SELECT `+revenueCatOperationColumns+` FROM revenuecat_operations WHERE id=$1 AND user_id=$2`, id, s.userID))
 }
-func (s *revenueCatSession) FinishOperation(ctx context.Context, id, stage, message string) error {
-	_, err := s.q.Exec(ctx, `UPDATE revenuecat_operations SET stage=$3,last_error=$4,attempts=attempts+1 WHERE id=$1 AND user_id=$2 AND stage='pending'`, id, s.userID, stage, message)
-	if err == nil && stage == "applied" {
-		_, err = s.q.Exec(ctx, `UPDATE revenuecat_customers SET next_refresh_at=clock_timestamp() WHERE user_id=$1`, s.userID)
+
+// FinishOperation is the operation write site, and the operation FLOW counters are incremented
+// here rather than derived from a query: `applied` on a successful application, `failure` whenever
+// a last_error is recorded (there is no `failed` stage — a failure stays pending and is retried).
+// `class` is carried by the caller purely for those labels; it is not part of the UPDATE, so the
+// SQL and its argument list are unchanged.
+func (s *revenueCatSession) FinishOperation(ctx context.Context, id, stage, message, class string) error {
+	tag, err := s.q.Exec(ctx, `UPDATE revenuecat_operations SET stage=$3,last_error=$4,attempts=attempts+1 WHERE id=$1 AND user_id=$2 AND stage='pending'`, id, s.userID, stage, message)
+	if err != nil {
+		return err
 	}
-	return err
+	// A row that was not pending was never applied or failed here; counting it would overstate
+	// both flows. The caller already guards on stage, so this is defense in depth.
+	if tag.RowsAffected() == 0 {
+		return nil
+	}
+	if stage == "applied" {
+		if _, err = s.q.Exec(ctx, `UPDATE revenuecat_customers SET next_refresh_at=clock_timestamp() WHERE user_id=$1`, s.userID); err != nil {
+			return err
+		}
+		observability.RecordRevenueCatGrantApplied(class)
+	}
+	if message != "" {
+		observability.RecordRevenueCatOperationFailure(class)
+	}
+	return nil
 }
 func (r *revenueCatRepository) ListOperations(ctx context.Context, id string) ([]domain.RevenueCatOperation, error) {
 	return r.operations(ctx, `SELECT `+revenueCatOperationColumns+` FROM revenuecat_operations WHERE user_id=$1 ORDER BY created_at DESC,id DESC`, id)

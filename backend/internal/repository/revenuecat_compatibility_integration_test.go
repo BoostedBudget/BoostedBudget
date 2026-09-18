@@ -58,7 +58,7 @@ func TestRevenueCatCompatibilityProjectionRetentionEpisodes(t *testing.T) {
 	read()
 	require.Equal(t, "active", status)
 	require.Nil(t, start)
-	require.NoError(t, repo.WithCustomer(ctx, id, func(s RevenueCatSession) error { return s.FinishOperation(ctx, op.ID, "applied", "") }))
+	require.NoError(t, repo.WithCustomer(ctx, id, func(s RevenueCatSession) error { return s.FinishOperation(ctx, op.ID, "applied", "", op.Class) }))
 	due, err := repo.ListDue(ctx, time.Now().Add(time.Second), 100)
 	require.NoError(t, err)
 	require.Contains(t, due, id)

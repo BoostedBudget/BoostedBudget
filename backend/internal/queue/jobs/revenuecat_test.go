@@ -10,8 +10,19 @@ import (
 	rc "github.com/maxnussbaum/BoostedBudget/internal/integration/revenuecat"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
 )
+
+// newTestRevenueCatSyncJob mirrors the convention every other worker test in this package follows:
+// a real JobRow, because Work records the generic jobs_completed_total / job_duration_seconds pair
+// from job.Kind and job.Queue.
+func newTestRevenueCatSyncJob(args RevenueCatSyncArgs) *river.Job[RevenueCatSyncArgs] {
+	return &river.Job[RevenueCatSyncArgs]{
+		JobRow: &rivertype.JobRow{ID: 1, Kind: "revenuecat_sync", Queue: "revenuecat", Attempt: 1},
+		Args:   args,
+	}
+}
 
 type revenueCatWorkerService struct {
 	refreshes, operations int
@@ -40,7 +51,7 @@ func (r *revenueCatWebhookRecorder) CompleteWebhook(_ context.Context, _ string,
 func TestRevenueCatSyncWorkerRefreshesInsteadOfApplyingEventPayload(t *testing.T) {
 	svc, recorder := &revenueCatWorkerService{}, &revenueCatWebhookRecorder{}
 	w := NewRevenueCatSyncWorker(svc, recorder)
-	err := w.Work(context.Background(), &river.Job[RevenueCatSyncArgs]{Args: RevenueCatSyncArgs{UserID: "user", EventID: "event"}})
+	err := w.Work(context.Background(), newTestRevenueCatSyncJob(RevenueCatSyncArgs{UserID: "user", EventID: "event"}))
 	require.NoError(t, err)
 	require.Equal(t, 1, svc.refreshes)
 	require.Zero(t, svc.operations)
@@ -50,7 +61,7 @@ func TestRevenueCatSyncWorkerRefreshesInsteadOfApplyingEventPayload(t *testing.T
 func TestRevenueCatSyncWorkerProcessesDurableOperation(t *testing.T) {
 	svc := &revenueCatWorkerService{}
 	w := NewRevenueCatSyncWorker(svc, nil)
-	err := w.Work(context.Background(), &river.Job[RevenueCatSyncArgs]{Args: RevenueCatSyncArgs{UserID: "user", OperationID: "operation"}})
+	err := w.Work(context.Background(), newTestRevenueCatSyncJob(RevenueCatSyncArgs{UserID: "user", OperationID: "operation"}))
 	require.NoError(t, err)
 	require.Equal(t, 1, svc.operations)
 	require.Zero(t, svc.refreshes)
@@ -60,13 +71,13 @@ func TestRevenueCatSyncWorkerHonorsRetryAfterAndDoesNotMarkApplied(t *testing.T)
 	svc := &revenueCatWorkerService{err: &rc.HTTPError{StatusCode: 429, RetryAfter: 90 * time.Second}}
 	recorder := &revenueCatWebhookRecorder{}
 	w := NewRevenueCatSyncWorker(svc, recorder)
-	err := w.Work(context.Background(), &river.Job[RevenueCatSyncArgs]{Args: RevenueCatSyncArgs{UserID: "user", EventID: "event"}})
+	err := w.Work(context.Background(), newTestRevenueCatSyncJob(RevenueCatSyncArgs{UserID: "user", EventID: "event"}))
 	var snooze *river.JobSnoozeError
 	require.True(t, errors.As(err, &snooze))
 	require.Equal(t, 90*time.Second, snooze.Duration)
 	require.Equal(t, []string{"rate_limited"}, recorder.messages)
 	recorder.err = errors.New("database unavailable")
-	err = w.Work(context.Background(), &river.Job[RevenueCatSyncArgs]{Args: RevenueCatSyncArgs{UserID: "user", EventID: "event"}})
+	err = w.Work(context.Background(), newTestRevenueCatSyncJob(RevenueCatSyncArgs{UserID: "user", EventID: "event"}))
 	require.True(t, errors.As(err, &snooze), "recording failure must not shorten provider backoff")
 	require.Equal(t, 90*time.Second, snooze.Duration)
 }
@@ -75,7 +86,7 @@ func TestRevenueCatSyncWorkerRejectsAmbiguousArguments(t *testing.T) {
 	svc := &revenueCatWorkerService{}
 	w := NewRevenueCatSyncWorker(svc, nil)
 	for _, args := range []RevenueCatSyncArgs{{}, {UserID: "user", OperationID: "op", EventID: "event"}} {
-		require.Error(t, w.Work(context.Background(), &river.Job[RevenueCatSyncArgs]{Args: args}))
+		require.Error(t, w.Work(context.Background(), newTestRevenueCatSyncJob(args)))
 	}
 	require.Zero(t, svc.refreshes)
 	require.Zero(t, svc.operations)

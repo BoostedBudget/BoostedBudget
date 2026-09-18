@@ -12,6 +12,12 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 func TestEnsureCustomerCreatesOrConfirmsExisting(t *testing.T) {
@@ -387,4 +393,41 @@ func TestSubscriptionEnvironmentPersistsAcrossPagination(t *testing.T) {
 	if _, err := NewClient(Config{ProjectID: "proj", SecretAPIKey: "key", Environment: "invalid"}); err == nil {
 		t.Fatal("invalid environment accepted")
 	}
+}
+
+// TestClientRecordsRevenueCatAPIMetricsWithBoundedLabels is the client-side half of "every metric
+// has a live call site AND a test": it drives the real client and asserts the counters move, and
+// that the operation label is the bounded method name rather than the request path (which embeds
+// the customer id).
+func TestClientRecordsRevenueCatAPIMetricsWithBoundedLabels(t *testing.T) {
+	successPair := observability.RevenueCatAPIRequestsTotal.WithLabelValues(
+		observability.RevenueCatOperationFetchEntitlements, observability.RevenueCatAPIStatusSuccess)
+	beforeSuccess := testutil.ToFloat64(successPair)
+
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/entitlements") {
+			_, _ = fmt.Fprint(w, `{"object":"list","items":[{"id":"one","lookup_key":"paid_premium"}],"next_page":null}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"object":"list","items":[],"next_page":null}`)
+	})
+	_, err := c.FetchEntitlements(context.Background(), "user")
+	require.NoError(t, err)
+	assert.Equal(t, beforeSuccess+1, testutil.ToFloat64(successPair))
+	assert.Greater(t, testutil.CollectAndCount(observability.RevenueCatAPIRequestDurationSeconds), 0,
+		"the operation duration must be observed at the same call site")
+
+	limitedPair := observability.RevenueCatAPIRequestsTotal.WithLabelValues(
+		observability.RevenueCatOperationFetchSubscriptions, observability.RevenueCatAPIStatusRateLimited)
+	beforeLimited := testutil.ToFloat64(limitedPair)
+	beforeRateLimited := testutil.ToFloat64(observability.RevenueCatAPIRateLimitedTotal)
+
+	limited := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	_, err = limited.FetchSubscriptions(context.Background(), "user")
+	require.Error(t, err)
+	assert.Equal(t, beforeLimited+1, testutil.ToFloat64(limitedPair))
+	assert.Equal(t, beforeRateLimited+1, testutil.ToFloat64(observability.RevenueCatAPIRateLimitedTotal))
 }

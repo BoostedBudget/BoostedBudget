@@ -108,6 +108,25 @@ func (m *MockJobHealthRepository) GetDeletionResidueStats(ctx context.Context) (
 	return args.Int(0), args.Get(1).(time.Duration), args.Error(2)
 }
 
+// The four RevenueCat backlog reads (#1652 todo 12) feed the Prometheus collector, not the
+// /admin/health response, so they are zero-returning stubs: the service never calls them and a
+// `.Maybe()` expectation would only add noise.
+func (*MockJobHealthRepository) GetRevenueCatWebhookInboxStats(context.Context) (int, time.Duration, error) {
+	return 0, 0, nil
+}
+
+func (*MockJobHealthRepository) GetRevenueCatOperationsStats(context.Context) (int, int, time.Duration, error) {
+	return 0, 0, 0, nil
+}
+
+func (*MockJobHealthRepository) GetRevenueCatCompGrantsOutstanding(context.Context) (int, error) {
+	return 0, nil
+}
+
+func (*MockJobHealthRepository) GetRevenueCatRefreshOverdueUsers(context.Context) (int, error) {
+	return 0, nil
+}
+
 // Mock pool for database checks
 type MockPool struct {
 	mock.Mock
