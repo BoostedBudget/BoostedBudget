@@ -36,7 +36,9 @@ export interface UpdatePrivacySettingsRequest {
   readonly $schema?: string;
   data_sharing_enabled?: boolean;
   gdpr_analytics_consent?: boolean;
+  gdpr_interaction_capture_consent?: boolean;
   gdpr_necessary_consent?: boolean;
+  identified_diagnostics_enabled?: boolean;
   include_in_aggregate_stats?: boolean;
   marketing_emails_enabled?: boolean;
   product_updates_enabled?: boolean;

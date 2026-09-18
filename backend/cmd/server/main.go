@@ -785,7 +785,16 @@ func main() {
 			DB:           db,
 			JobQueue:     nil, // Set after jobQueue is created via SetJobQueue
 		})
-		privacyService := services.NewPrivacyService(privacyRepo)
+		// #1683 Task 5: the privacy write path is transactional (locked read-modify-write + audit in
+		// the same tx) and emits the identified-diagnostics opt-out post-commit. phClient may be a
+		// typed nil when no PostHog API key is configured — its nil-receiver guard makes that a no-op.
+		privacyService := services.NewPrivacyService(
+			privacyRepo,
+			repository.NewAuditLogMetadataRepository(db),
+			db,
+			phClient,
+			middleware.RequestAuditFrom,
+		)
 		dataExportService := services.NewDataExportService(dataExportRepo)
 		dataExportService.SetAnalytics(analyticsGateway)
 		transactionService := services.NewTransactionService(transactionRepo, customCategoryRepo)
