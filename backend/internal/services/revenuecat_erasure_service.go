@@ -104,7 +104,7 @@ func (s *RevenueCatErasureService) Subscriptions(ctx context.Context, id string)
 	return subs, nil
 }
 func (s *RevenueCatErasureService) Erase(ctx context.Context, id string, gate func(context.Context) (bool, error)) error {
-	customer, err := s.authority.customerID(ctx, id)
+	customer, _, err := s.authority.customerID(ctx, id)
 	if err != nil {
 		return err
 	}

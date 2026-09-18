@@ -136,9 +136,14 @@ func (s *RevenueCatService) Refresh(ctx context.Context, id string) (domain.Reve
 func (s *RevenueCatService) refresh(ctx context.Context, id string, force bool, requested time.Time, erasure ...bool) (domain.RevenueCatState, error) {
 	var state domain.RevenueCatState
 	var remoteErr error
+	refreshed := false
 	// ProfileRepository uses the pool. Never acquire a second connection while
 	// holding the customer transaction: even a one-connection pool must progress.
-	customer, identityErr := s.customerID(ctx, id)
+	customer, user, identityErr := s.customerID(ctx, id)
+	priorStatus := ""
+	if user != nil {
+		priorStatus = user.SubscriptionStatus
+	}
 	err := s.repo.WithCustomer(ctx, id, func(session repository.RevenueCatSession) error {
 		var err error
 		state, err = session.Read(ctx)
@@ -163,26 +168,57 @@ func (s *RevenueCatService) refresh(ctx context.Context, id string, force bool, 
 				return session.Save(ctx, state)
 			}
 		}
+		refreshed = true
 		remoteErr = s.refreshLocked(ctx, session, customer, &state, erasure...)
 		return nil // persist sanitized failure and prior confirmed snapshot, even on provider error.
 	})
 	if err != nil {
 		return state, err
 	}
+	if refreshed {
+		s.captureAccessTransition(ctx, id, priorStatus, state, len(erasure) > 0)
+	}
 	return state, remoteErr
 }
-func (s *RevenueCatService) customerID(ctx context.Context, id string) (string, error) {
+func (s *RevenueCatService) customerID(ctx context.Context, id string) (string, *domain.User, error) {
 	if s.provider == nil {
-		return "", errors.New("RevenueCat provider is not configured")
+		return "", nil, errors.New("RevenueCat provider is not configured")
 	}
 	user, err := s.profiles.GetUserByID(ctx, id)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if user == nil || user.ClerkUserID == "" || user.IsDeleted {
-		return "", errors.New("RevenueCat customer identity unavailable")
+		return "", nil, errors.New("RevenueCat customer identity unavailable")
 	}
-	return user.ClerkUserID, nil
+	return user.ClerkUserID, user, nil
+}
+
+// captureAccessTransition emits the access-loss and retention-armed pair when a refresh flips a
+// previously granting user (active/trial/trialing) to an inactive projection. It is a pure side
+// effect — resolution and persistence are identical whether or not analytics is configured. The
+// prior status comes from the persisted users row, so a repeated inactive refresh does not re-fire.
+// A user being erased never emits: the authority query would drop it anyway, and attempting it
+// would recreate the PostHog person the erasure outbox just deleted.
+func (s *RevenueCatService) captureAccessTransition(ctx context.Context, id, priorStatus string, state domain.RevenueCatState, erasureRequested bool) {
+	if s.analytics == nil || erasureRequested || state.ErasureStartedAt != nil {
+		return
+	}
+	if priorStatus == "" || priorStatus == "inactive" {
+		return
+	}
+	access, err := state.ResolveAccess(time.Now())
+	if err != nil || access.Status != "inactive" {
+		return
+	}
+	s.analytics.CaptureEvent(ctx, id, phclient.RevenueCatAccessInactivePayload{
+		PendingOperations: int64(state.PendingOperations),
+	})
+	if priorStatus == "active" || priorStatus == "trial" || priorStatus == "trialing" {
+		s.analytics.CaptureEvent(ctx, id, phclient.RevenueCatRetentionArmedPayload{
+			DeferredForPendingOperations: state.PendingOperations > 0,
+		})
+	}
 }
 func (s *RevenueCatService) refreshLocked(ctx context.Context, session repository.RevenueCatSession, customer string, state *domain.RevenueCatState, erasure ...bool) error {
 	grants, err := s.provider.FetchEntitlements(ctx, customer)
@@ -312,7 +348,7 @@ func (s *RevenueCatService) RequestGrant(ctx context.Context, id, class, tier st
 func (s *RevenueCatService) ProcessOperation(ctx context.Context, userID, operationID string) error {
 	var workErr error
 	var attempted *domain.RevenueCatOperation
-	customer, identityErr := s.customerID(ctx, userID)
+	customer, _, identityErr := s.customerID(ctx, userID)
 	err := s.repo.WithCustomer(ctx, userID, func(session repository.RevenueCatSession) error {
 		op, err := session.Operation(ctx, operationID)
 		if err != nil {

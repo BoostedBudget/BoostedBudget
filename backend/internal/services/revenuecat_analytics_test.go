@@ -6,9 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
+	rc "github.com/maxnussbaum/BoostedBudget/internal/integration/revenuecat"
 	"github.com/stretchr/testify/require"
 )
 
@@ -147,4 +149,108 @@ func TestRevenueCatAnalyticsUnconfiguredIsNoOp(t *testing.T) {
 	op, err := s.RequestGrant(context.Background(), "target", "comp", "premium", nil, false, "admin", "reason")
 	require.NoError(t, err)
 	require.NoError(t, s.ProcessOperation(context.Background(), "target", op.ID))
+}
+
+// rcStatusProfile returns a real user row carrying a persisted subscription_status, so the
+// service can distinguish a genuine active→inactive transition from a repeated inactive refresh.
+type rcStatusProfile struct{ status string }
+
+func (p rcStatusProfile) GetUserByID(context.Context, string) (*domain.User, error) {
+	return &domain.User{ID: "local-uuid", ClerkUserID: "clerk_identity", SubscriptionStatus: p.status}, nil
+}
+
+func newRCGatewayServiceWithStore(authority *rcGatewayAuthority, store *rcTestStore, provider *rcTestProvider, status string) (*RevenueCatService, *rcGatewayTransport) {
+	transport := &rcGatewayTransport{}
+	service := NewRevenueCatService(store, provider, rcStatusProfile{status: status})
+	service.SetAnalytics(phclient.NewGateway(transport, authority, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	return service, transport
+}
+
+// rcForbiddenAccessKeys are the identifiers/reasons the access-resolution events must never carry.
+var rcForbiddenAccessKeys = []string{
+	"reason", "actor_id", "email", "amount", "account_id", "transaction_id",
+	"item_id", "customer_id", "plaid_item_id", "user_id", "tier",
+}
+
+// TestRevenueCatAccessInactiveAndRetentionArmedThroughRealGateway drives a genuine active→inactive
+// access-resolution flip through the REAL Gateway + AuthorityResolver. A mock would bypass contract
+// validation, so a wrong contract would silently drop and this test would not catch it.
+func TestRevenueCatAccessInactiveAndRetentionArmedThroughRealGateway(t *testing.T) {
+	expired := time.Now().Add(-time.Hour)
+	store := &rcTestStore{state: domain.RevenueCatState{AccessUpdatedAt: time.Now().Add(-time.Hour)}}
+	provider := &rcTestProvider{grants: []rc.Entitlement{{LookupKey: "trial_premium", ExpiresAt: &expired}}}
+	s, transport := newRCGatewayServiceWithStore(&rcGatewayAuthority{allowed: true, subject: "canonical-subject"}, store, provider, "active")
+
+	_, err := s.Refresh(context.Background(), "target-user")
+	require.NoError(t, err)
+	require.Equal(t,
+		[]string{phclient.EventRevenueCatAccessInactive, phclient.EventRevenueCatRetentionArmed},
+		rcCapturedNames(transport),
+		"a persisted active→inactive flip must emit the access outcome first, then the arming")
+	require.Equal(t, map[string]interface{}{"pending_operations": int64(0)}, transport.captures[0].props)
+	require.Equal(t, map[string]interface{}{"deferred_for_pending_operations": false}, transport.captures[1].props)
+	for _, capture := range transport.captures {
+		require.Equal(t, "canonical-subject", capture.subject)
+		for _, forbidden := range rcForbiddenAccessKeys {
+			require.NotContains(t, capture.props, forbidden)
+		}
+	}
+}
+
+// TestRevenueCatAccessStaysActiveWithFutureExpiryEmitsNothing is the failure QA: a future
+// ExpiresAt must keep the user active, so neither the retention-armed nor the access-inactive
+// event may fire.
+func TestRevenueCatAccessStaysActiveWithFutureExpiryEmitsNothing(t *testing.T) {
+	future := time.Now().Add(24 * time.Hour)
+	store := &rcTestStore{state: domain.RevenueCatState{AccessUpdatedAt: time.Now().Add(-time.Hour)}}
+	provider := &rcTestProvider{grants: []rc.Entitlement{{LookupKey: "trial_premium", ExpiresAt: &future}}}
+	s, transport := newRCGatewayServiceWithStore(&rcGatewayAuthority{allowed: true, subject: "canonical-subject"}, store, provider, "active")
+
+	_, err := s.Refresh(context.Background(), "target-user")
+	require.NoError(t, err)
+	require.Empty(t, transport.captures, "an unexpired grant must not arm retention or emit access loss")
+}
+
+// TestRevenueCatRepeatedInactiveRefreshDoesNotReEmit pins the transition semantics: a user already
+// persisted inactive must not re-fire the events on a later refresh.
+func TestRevenueCatRepeatedInactiveRefreshDoesNotReEmit(t *testing.T) {
+	store := &rcTestStore{state: domain.RevenueCatState{AccessUpdatedAt: time.Now().Add(-time.Hour)}}
+	provider := &rcTestProvider{}
+	s, transport := newRCGatewayServiceWithStore(&rcGatewayAuthority{allowed: true, subject: "canonical-subject"}, store, provider, "inactive")
+
+	_, err := s.Refresh(context.Background(), "target-user")
+	require.NoError(t, err)
+	require.Empty(t, transport.captures, "an already-inactive user must not re-emit the transition")
+}
+
+// TestRevenueCatErasureRefreshEmitsNoAccessEvents pins the consent/erasure boundary: a user being
+// erased never produces a product event (the authority query would drop it, and it would recreate
+// the person the erasure outbox just deleted).
+func TestRevenueCatErasureRefreshEmitsNoAccessEvents(t *testing.T) {
+	now := time.Now()
+	store := &rcTestStore{state: domain.RevenueCatState{AccessUpdatedAt: now.Add(-time.Hour), ErasureStartedAt: &now}}
+	provider := &rcTestProvider{}
+	s, transport := newRCGatewayServiceWithStore(&rcGatewayAuthority{allowed: true, subject: "canonical-subject"}, store, provider, "active")
+
+	_, err := s.Refresh(context.Background(), "target-user")
+	require.NoError(t, err)
+	require.Empty(t, transport.captures, "a user being erased must never emit a product event")
+}
+
+// TestRevenueCatPendingOperationDefersArming pins the persistence guard mirror: a queued pending
+// operation makes the repository's users UPDATE a no-op, so the arming event must report the
+// deferral rather than silently claiming the clock was armed.
+func TestRevenueCatPendingOperationDefersArming(t *testing.T) {
+	expired := time.Now().Add(-time.Hour)
+	store := &rcTestStore{state: domain.RevenueCatState{AccessUpdatedAt: time.Now().Add(-time.Hour), PendingOperations: 1}}
+	provider := &rcTestProvider{grants: []rc.Entitlement{{LookupKey: "trial_premium", ExpiresAt: &expired}}}
+	s, transport := newRCGatewayServiceWithStore(&rcGatewayAuthority{allowed: true, subject: "canonical-subject"}, store, provider, "active")
+
+	_, err := s.Refresh(context.Background(), "target-user")
+	require.NoError(t, err)
+	require.Equal(t,
+		[]string{phclient.EventRevenueCatAccessInactive, phclient.EventRevenueCatRetentionArmed},
+		rcCapturedNames(transport))
+	require.Equal(t, map[string]interface{}{"pending_operations": int64(1)}, transport.captures[0].props)
+	require.Equal(t, map[string]interface{}{"deferred_for_pending_operations": true}, transport.captures[1].props)
 }

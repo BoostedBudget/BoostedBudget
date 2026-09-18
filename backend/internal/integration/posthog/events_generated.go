@@ -49,12 +49,18 @@ const (
 	EventPaddleCleanupFailed     = "paddle_cleanup_failed"
 	EventPaymentFailed           = "payment_failed"
 	EventPaymentSucceeded        = "payment_succeeded"
+	// EventRevenueCatAccessInactive Fires when a RevenueCat access-resolution refresh flips a previously granting user (active/trial/trialing) to an inactive projection. pending_operations is the count of queued RevenueCat operations at resolution; a non-zero value means the inactive projection was not persisted because a pending operation deferred it. Never carries the reason, the acting admin, or any Plaid/customer identifier.
+	EventRevenueCatAccessInactive = "revenuecat_access_inactive"
 	// EventRevenueCatOperationApplied Fires after a queued RevenueCat operation is applied to the target user's access; properties are the bounded grant class, entitlement key, and revoke flag only.
 	EventRevenueCatOperationApplied = "revenuecat_operation_applied"
 	// EventRevenueCatOperationFailed Fires when a queued RevenueCat operation fails and remains pending for retry; properties are the bounded grant class, entitlement key, and revoke flag only.
 	EventRevenueCatOperationFailed = "revenuecat_operation_failed"
 	// EventRevenueCatOperationQueued Fires when an admin-initiated RevenueCat grant or revoke is queued for the target user; properties are the bounded grant class, entitlement key, and revoke flag only, never the reason or the acting admin.
 	EventRevenueCatOperationQueued = "revenuecat_operation_queued"
+	// EventRevenueCatPlaidCleanupDisconnected Fires from the retention-cleanup disconnect pass when the safety net actually disconnects a read-only user's Plaid items after the grace window. marker_cleared reports whether the plaid_cleanup_pending_at episode marker was cleared afterwards; false means the items are disconnected but the marker is stuck. Never carries a Plaid item id or any other identifier.
+	EventRevenueCatPlaidCleanupDisconnected = "revenuecat_plaid_cleanup_disconnected"
+	// EventRevenueCatRetentionArmed Fires alongside revenuecat_access_inactive when that transition arms the retention/Plaid-cleanup safety net (retention clock + plaid_cleanup_pending_at stamped). deferred_for_pending_operations is true when a pending RevenueCat operation prevented the arming write from persisting. Carries no reason, actor, or identifier.
+	EventRevenueCatRetentionArmed = "revenuecat_retention_armed"
 	// EventRevenueCatWebhookAccessChanged Fires when a newly accepted RevenueCat webhook delivery's event type indicates the target user's entitlement state changed: a grant was applied or access was revoked. Carries only the bounded RevenueCat event type and the grant/revoke direction, never the webhook body, a customer id or an email; duplicates and non-entitlement deliveries emit nothing.
 	EventRevenueCatWebhookAccessChanged  = "revenuecat_webhook_access_changed"
 	EventSavingsGoalProgressBasisChanged = "savings_goal_progress_basis_changed"
@@ -208,6 +214,18 @@ func (p MCPToolCompletedPayload) Properties() map[string]interface{} {
 	}
 }
 
+type RevenueCatAccessInactivePayload struct {
+	PendingOperations int64 `json:"pending_operations"`
+}
+
+func (RevenueCatAccessInactivePayload) isGeneratedEvent()    {}
+func (RevenueCatAccessInactivePayload) EventName() EventName { return EventRevenueCatAccessInactive }
+func (p RevenueCatAccessInactivePayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"pending_operations": p.PendingOperations,
+	}
+}
+
 type RevenueCatOperationAppliedClass string
 
 const (
@@ -309,6 +327,32 @@ func (p RevenueCatOperationQueuedPayload) Properties() map[string]interface{} {
 		"class":       p.Class,
 		"entitlement": p.Entitlement,
 		"revoke":      p.Revoke,
+	}
+}
+
+type RevenueCatPlaidCleanupDisconnectedPayload struct {
+	MarkerCleared bool `json:"marker_cleared"`
+}
+
+func (RevenueCatPlaidCleanupDisconnectedPayload) isGeneratedEvent() {}
+func (RevenueCatPlaidCleanupDisconnectedPayload) EventName() EventName {
+	return EventRevenueCatPlaidCleanupDisconnected
+}
+func (p RevenueCatPlaidCleanupDisconnectedPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"marker_cleared": p.MarkerCleared,
+	}
+}
+
+type RevenueCatRetentionArmedPayload struct {
+	DeferredForPendingOperations bool `json:"deferred_for_pending_operations"`
+}
+
+func (RevenueCatRetentionArmedPayload) isGeneratedEvent()    {}
+func (RevenueCatRetentionArmedPayload) EventName() EventName { return EventRevenueCatRetentionArmed }
+func (p RevenueCatRetentionArmedPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"deferred_for_pending_operations": p.DeferredForPendingOperations,
 	}
 }
 
@@ -577,6 +621,14 @@ var generatedEventContracts = map[EventName]EventContract{
 		LegacyPropertiesUnreviewed: true,
 		Properties:                 map[string]PropertyContract{},
 	},
+	EventRevenueCatAccessInactive: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"pending_operations": {Kind: "integer", Required: true, Values: []string{}, Minimum: 0, Maximum: nil},
+		},
+	},
 	EventRevenueCatOperationApplied: {
 		Consent:                    "analytics_required",
 		Status:                     "active",
@@ -605,6 +657,22 @@ var generatedEventContracts = map[EventName]EventContract{
 			"class":       {Kind: "string", Required: true, Values: []string{"comp", "trial"}, Minimum: nil, Maximum: nil},
 			"entitlement": {Kind: "string", Required: true, Values: []string{"comp_premium", "comp_household_2", "comp_household_3", "comp_household_4", "comp_household_5", "trial_premium"}, Minimum: nil, Maximum: nil},
 			"revoke":      {Kind: "boolean", Required: true, Values: []string{}, Minimum: nil, Maximum: nil},
+		},
+	},
+	EventRevenueCatPlaidCleanupDisconnected: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"marker_cleared": {Kind: "boolean", Required: true, Values: []string{}, Minimum: nil, Maximum: nil},
+		},
+	},
+	EventRevenueCatRetentionArmed: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"deferred_for_pending_operations": {Kind: "boolean", Required: true, Values: []string{}, Minimum: nil, Maximum: nil},
 		},
 	},
 	EventRevenueCatWebhookAccessChanged: {
