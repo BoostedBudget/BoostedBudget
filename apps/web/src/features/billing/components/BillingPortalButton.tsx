@@ -1,4 +1,6 @@
 import { Button } from '@/components/ui/button'
+import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
 
 interface BillingPortalButtonProps {
   billingPortalUrl: string | undefined
@@ -21,6 +23,8 @@ export function BillingPortalButton({
   label = 'Manage subscription',
   error,
 }: BillingPortalButtonProps) {
+  const trackEvent = useTrackEvent()
+
   if (error) {
     return (
       <div
@@ -34,7 +38,7 @@ export function BillingPortalButton({
 
   if (isLoadingPortal) {
     return (
-      <Button disabled variant="outline" className="w-full mt-2">
+      <Button disabled variant="outline" className="w-full mt-2" data-ph-mask>
         Loading...
       </Button>
     )
@@ -42,7 +46,7 @@ export function BillingPortalButton({
 
   if (!billingPortalUrl) {
     return (
-      <Button disabled variant="outline" className="w-full mt-2">
+      <Button disabled variant="outline" className="w-full mt-2" data-ph-mask>
         {label}
       </Button>
     )
@@ -50,7 +54,13 @@ export function BillingPortalButton({
 
   return (
     <Button asChild variant="outline" className="w-full mt-2">
-      <a href={billingPortalUrl} target="_blank" rel="noopener noreferrer">
+      <a
+        href={billingPortalUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        data-ph-mask
+        onClick={() => trackEvent(ANALYTICS_EVENTS.SUBSCRIPTION_MANAGED)}
+      >
         {label}
       </a>
     </Button>

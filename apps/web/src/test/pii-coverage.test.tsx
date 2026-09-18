@@ -54,6 +54,12 @@ import {
 } from '@/test/mocks/savings-goals-api'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 import {
+  mockUseGetCurrentSubscription,
+  mockUseGetBillingPortalUrl,
+  mockUseGetSubscriptionTiers,
+} from '@/test/mocks/subscription-api'
+import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
+import {
   mockUseGetSpendingByMerchant,
   mockUseGetSpendingByCategory,
   mockUseGetCashFlowSummary,
@@ -161,6 +167,7 @@ const { NetWorthSparkline } = await import('@/features/dashboard/components/NetW
 
 const { CurrentSubscriptionDisplay } = await import('@/features/billing/components/CurrentSubscriptionDisplay')
 const { SubscriptionOverrideModal } = await import('@/features/admin/components/SubscriptionOverrideModal')
+const { SubscriptionManagementPage } = await import('@/features/billing/SubscriptionManagementPage')
 
 const { AutoCategorizationRuleTable } = await import(
   '@/features/auto-categorization/components/AutoCategorizationRuleTable'
@@ -1214,6 +1221,51 @@ describe('PII coverage — Round 8: billing components (personal charge surfaces
     // The subscription amount (user's actual charge) must sit inside a data-ph-mask element;
     // the aria-label containing the amount must not expose it unmasked (pii-masking.ts:80-94
     // scans attributes verbatim, not skipping masked ancestors for attributes).
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
+  })
+})
+
+describe('PII coverage — billing management page (RevenueCat pivot, #1652 todo 11)', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseGetCurrentSubscription.mockReturnValue({
+      data: {
+        status: 'trialing',
+        subscription_id: 'sub_rc_1',
+        tier: 'premium',
+        billing_interval: 'month',
+        amount: '8.99',
+        currency: 'USD',
+        trial_days_remaining: 5,
+        trial_ends_at: '2026-10-01T00:00:00Z',
+      },
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve({ data: undefined, error: null }),
+    } as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+    mockUseGetSubscriptionTiers.mockReturnValue({
+      data: { tiers: mockSubscriptionTiersResponse.tiers },
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    } as unknown as ReturnType<typeof mockUseGetSubscriptionTiers>)
+    mockUseGetBillingPortalUrl.mockReturnValue({
+      data: { portal_url: 'https://portal.paddle.com/123' },
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    } as unknown as ReturnType<typeof mockUseGetBillingPortalUrl>)
+    mockUseGetUserProfile.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    } as unknown as ReturnType<typeof mockUseGetUserProfile>)
+  })
+
+  test('masks the trialing "you will be charged" amount outside a DataTable column', async () => {
+    render(<SubscriptionManagementPage />, { wrapper: createWrapper() })
+    await waitFor(() => expect(document.body.textContent ?? '').toContain('8.99'))
     expect(scanForUnmaskedPII(document.body, [])).toEqual([])
   })
 })

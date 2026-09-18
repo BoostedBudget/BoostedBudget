@@ -1,7 +1,4 @@
-import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
-import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
-import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { CreditCard, Gift } from 'lucide-react'
 import { useSubscriptionManagement } from './hooks/useSubscriptionManagement'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
@@ -104,7 +101,6 @@ export function SubscriptionManagementPage() {
 
 function SubscriptionManagementContent() {
   const navigate = useNavigate()
-  const trackEvent = useTrackEvent()
   const {
     subscription,
     isLoadingSubscription,
@@ -119,11 +115,6 @@ function SubscriptionManagementContent() {
   } = useSubscriptionManagement()
 
   const { tiers, loading: tiersLoading } = useSubscriptionTiers()
-
-  // Track page view on mount
-  useEffect(() => {
-    trackEvent(ANALYTICS_EVENTS.SUBSCRIPTION_MANAGED)
-  }, [trackEvent])
 
   if (isLoadingSubscription || tiersLoading) {
     return <SubscriptionManagementSkeleton />
@@ -272,7 +263,7 @@ function SubscriptionManagementContent() {
 
         <div className="rounded-lg bg-card p-6 shadow-sm space-y-2">
           <p className="text-sm text-muted-foreground">Your plan will automatically activate after your trial ends.</p>
-          <p className="text-sm text-muted-foreground">You'll be charged {subscription.currency} {actualAmount}/{billingPeriod} starting on {trialEndDate}.</p>
+          <p className="text-sm text-muted-foreground">You'll be charged <span data-ph-mask>{`${subscription.currency} ${actualAmount}/${billingPeriod}`}</span> starting on {trialEndDate}.</p>
         </div>
 
         {manageSubscription}
