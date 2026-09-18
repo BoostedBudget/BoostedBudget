@@ -38,7 +38,7 @@ test('privacy GET and PUT return the flat contract and retain only supported boo
     created_at: expect.any(String), updated_at: expect.any(String),
     gdpr_consent_timestamp: expect.any(String),
     gdpr_necessary_consent: true, gdpr_analytics_consent: false,
-    gdpr_advertising_consent: false, data_sharing_enabled: false,
+    data_sharing_enabled: false,
     include_in_aggregate_stats: true, marketing_emails_enabled: false,
     product_updates_enabled: true, security_alerts_enabled: true,
   } satisfies { [Field in keyof PrivacySettings]: unknown }
@@ -46,7 +46,7 @@ test('privacy GET and PUT return the flat contract and retain only supported boo
 
   const updates = {
     gdpr_necessary_consent: true, gdpr_analytics_consent: true,
-    gdpr_advertising_consent: true, data_sharing_enabled: true,
+    data_sharing_enabled: true,
     include_in_aggregate_stats: false, marketing_emails_enabled: true,
     product_updates_enabled: false, security_alerts_enabled: false,
   }

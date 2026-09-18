@@ -19644,11 +19644,6 @@
           "required": true
         },
         {
-          "name": "gdpr_advertising_consent",
-          "type": "boolean",
-          "required": true
-        },
-        {
           "name": "gdpr_analytics_consent",
           "type": "boolean",
           "required": true
@@ -19703,7 +19698,6 @@
       ],
       "compactResponseBody": [
         "data_sharing_enabled",
-        "gdpr_advertising_consent",
         "gdpr_analytics_consent",
         "gdpr_consent_timestamp",
         "gdpr_necessary_consent",
@@ -19728,10 +19722,6 @@
       "requestBody": [
         {
           "name": "data_sharing_enabled",
-          "type": "boolean"
-        },
-        {
-          "name": "gdpr_advertising_consent",
           "type": "boolean"
         },
         {

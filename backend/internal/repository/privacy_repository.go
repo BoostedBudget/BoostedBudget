@@ -45,7 +45,7 @@ func NewPrivacyRepository(db DB) PrivacyRepository {
 func (r *privacyRepository) GetByUserID(ctx context.Context, userID string) (*domain.PrivacySettings, error) {
 	query := `
 		SELECT id, user_id, gdpr_necessary_consent, gdpr_analytics_consent,
-		       gdpr_advertising_consent, gdpr_consent_timestamp,
+		       gdpr_consent_timestamp,
 		       marketing_emails_enabled, product_updates_enabled,
 		       security_alerts_enabled, data_sharing_enabled,
 		       include_in_aggregate_stats,
@@ -60,7 +60,6 @@ func (r *privacyRepository) GetByUserID(ctx context.Context, userID string) (*do
 		&settings.UserID,
 		&settings.GDPRNecessaryConsent,
 		&settings.GDPRAnalyticsConsent,
-		&settings.GDPRAdvertisingConsent,
 		&settings.GDPRConsentTimestamp,
 		&settings.MarketingEmailsEnabled,
 		&settings.ProductUpdatesEnabled,
@@ -97,18 +96,18 @@ func (r *privacyRepository) Create(ctx context.Context, settings *domain.Privacy
 	query := `
 		INSERT INTO privacy_settings (
 			id, user_id, gdpr_necessary_consent, gdpr_analytics_consent,
-			gdpr_advertising_consent, gdpr_consent_timestamp,
+			gdpr_consent_timestamp,
 			marketing_emails_enabled, product_updates_enabled,
 			security_alerts_enabled, data_sharing_enabled,
 			include_in_aggregate_stats,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4,
-			$5, $6,
-			$7, $8,
-			$9, $10,
-			$11,
-			$12, $13
+			$5,
+			$6, $7,
+			$8, $9,
+			$10,
+			$11, $12
 		)
 	`
 
@@ -117,7 +116,6 @@ func (r *privacyRepository) Create(ctx context.Context, settings *domain.Privacy
 		settings.UserID,
 		settings.GDPRNecessaryConsent,
 		settings.GDPRAnalyticsConsent,
-		settings.GDPRAdvertisingConsent,
 		settings.GDPRConsentTimestamp,
 		settings.MarketingEmailsEnabled,
 		settings.ProductUpdatesEnabled,
@@ -151,18 +149,18 @@ func (r *privacyRepository) CreateTx(ctx context.Context, tx pgx.Tx, settings *d
 	query := `
 		INSERT INTO privacy_settings (
 			id, user_id, gdpr_necessary_consent, gdpr_analytics_consent,
-			gdpr_advertising_consent, gdpr_consent_timestamp,
+			gdpr_consent_timestamp,
 			marketing_emails_enabled, product_updates_enabled,
 			security_alerts_enabled, data_sharing_enabled,
 			include_in_aggregate_stats,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4,
-			$5, $6,
-			$7, $8,
-			$9, $10,
-			$11,
-			$12, $13
+			$5,
+			$6, $7,
+			$8, $9,
+			$10,
+			$11, $12
 		)
 	`
 
@@ -171,7 +169,6 @@ func (r *privacyRepository) CreateTx(ctx context.Context, tx pgx.Tx, settings *d
 		settings.UserID,
 		settings.GDPRNecessaryConsent,
 		settings.GDPRAnalyticsConsent,
-		settings.GDPRAdvertisingConsent,
 		settings.GDPRConsentTimestamp,
 		settings.MarketingEmailsEnabled,
 		settings.ProductUpdatesEnabled,
@@ -199,21 +196,19 @@ func (r *privacyRepository) Update(ctx context.Context, settings *domain.Privacy
 		UPDATE privacy_settings
 		SET gdpr_necessary_consent = $1,
 		    gdpr_analytics_consent = $2,
-		    gdpr_advertising_consent = $3,
-		    gdpr_consent_timestamp = $4,
-		    marketing_emails_enabled = $5,
-		    product_updates_enabled = $6,
-		    security_alerts_enabled = $7,
-		    data_sharing_enabled = $8,
-		    include_in_aggregate_stats = $9,
-		    updated_at = $10
-		WHERE user_id = $11
+		    gdpr_consent_timestamp = $3,
+		    marketing_emails_enabled = $4,
+		    product_updates_enabled = $5,
+		    security_alerts_enabled = $6,
+		    data_sharing_enabled = $7,
+		    include_in_aggregate_stats = $8,
+		    updated_at = $9
+		WHERE user_id = $10
 	`
 
 	ct, err := r.db.Exec(ctx, query,
 		settings.GDPRNecessaryConsent,
 		settings.GDPRAnalyticsConsent,
-		settings.GDPRAdvertisingConsent,
 		settings.GDPRConsentTimestamp,
 		settings.MarketingEmailsEnabled,
 		settings.ProductUpdatesEnabled,

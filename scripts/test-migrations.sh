@@ -818,7 +818,13 @@ apply_migrations() {
 # ⚠ STILL OUT OF SCOPE, and named so it stays deliberate rather than forgotten: row-CONTENT diffs.
 # An UPDATE that rewrites the same rows with a different value on each execution changes no counts
 # and passes every check in this file.
-REPLAY_RANGE_START_MIGRATION="000149"
+# ⚠ Moved 000149 → 000215 for issue #1683: migration 000214 drops a column
+# (gdpr_advertising_consent), which assert_replay_range_has_no_destructive_ddl below
+# correctly refuses to replay against the final schema. The guard's own remedy is to
+# move this start past the offending file; 000214 is the newest migration, so the
+# replay range is now empty. 000214 is still exercised by the empty-DB double-apply
+# idempotency pass and by test_rollback's up→down→up cycle.
+REPLAY_RANGE_START_MIGRATION="000215"
 
 # Lists this run's ABS_MIGRATIONS_DIR *.up.sql files whose zero-padded numeric prefix is >=
 # REPLAY_RANGE_START_MIGRATION, sorted ascending. String comparison (not arithmetic) deliberately:

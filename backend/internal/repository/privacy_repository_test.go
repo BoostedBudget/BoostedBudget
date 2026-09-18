@@ -37,14 +37,14 @@ func TestGetPrivacySettingsByUserID_Success(t *testing.T) {
 	// Expected privacy settings data
 	rows := pgxmock.NewRows([]string{
 		"id", "user_id", "gdpr_necessary_consent", "gdpr_analytics_consent",
-		"gdpr_advertising_consent", "gdpr_consent_timestamp",
+		"gdpr_consent_timestamp",
 		"marketing_emails_enabled", "product_updates_enabled",
 		"security_alerts_enabled", "data_sharing_enabled",
 		"include_in_aggregate_stats",
 		"created_at", "updated_at",
 	}).AddRow(
 		settingsID, userID, true, false,
-		false, now,
+		now,
 		false, true,
 		true, false,
 		true,
@@ -53,7 +53,7 @@ func TestGetPrivacySettingsByUserID_Success(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, gdpr_necessary_consent, gdpr_analytics_consent,
-		       gdpr_advertising_consent, gdpr_consent_timestamp,
+		       gdpr_consent_timestamp,
 		       marketing_emails_enabled, product_updates_enabled,
 		       security_alerts_enabled, data_sharing_enabled,
 		       include_in_aggregate_stats,
@@ -72,7 +72,6 @@ func TestGetPrivacySettingsByUserID_Success(t *testing.T) {
 	assert.Equal(t, userID, settings.UserID)
 	assert.True(t, settings.GDPRNecessaryConsent)
 	assert.False(t, settings.GDPRAnalyticsConsent)
-	assert.False(t, settings.GDPRAdvertisingConsent)
 	assert.False(t, settings.MarketingEmailsEnabled)
 	assert.True(t, settings.ProductUpdatesEnabled)
 	assert.True(t, settings.SecurityAlertsEnabled)
@@ -91,7 +90,7 @@ func TestGetPrivacySettingsByUserID_NotFound(t *testing.T) {
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, gdpr_necessary_consent, gdpr_analytics_consent,
-		       gdpr_advertising_consent, gdpr_consent_timestamp,
+		       gdpr_consent_timestamp,
 		       marketing_emails_enabled, product_updates_enabled,
 		       security_alerts_enabled, data_sharing_enabled,
 		       include_in_aggregate_stats,
@@ -122,25 +121,24 @@ func TestCreatePrivacySettings_Success(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO privacy_settings (
 			id, user_id, gdpr_necessary_consent, gdpr_analytics_consent,
-			gdpr_advertising_consent, gdpr_consent_timestamp,
+			gdpr_consent_timestamp,
 			marketing_emails_enabled, product_updates_enabled,
 			security_alerts_enabled, data_sharing_enabled,
 			include_in_aggregate_stats,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4,
-			$5, $6,
-			$7, $8,
-			$9, $10,
-			$11,
-			$12, $13
+			$5,
+			$6, $7,
+			$8, $9,
+			$10,
+			$11, $12
 		)
 	`)).WithArgs(
 		pgxmock.AnyArg(), // ID (generated UUID)
 		userID,
 		true,             // necessary consent
 		false,            // analytics consent
-		false,            // advertising consent
 		pgxmock.AnyArg(), // consent timestamp
 		false,            // marketing emails
 		true,             // product updates
@@ -175,7 +173,6 @@ func TestUpdatePrivacySettings_Success(t *testing.T) {
 		UserID:                 userID,
 		GDPRNecessaryConsent:   true,
 		GDPRAnalyticsConsent:   true, // Updated
-		GDPRAdvertisingConsent: true, // Updated
 		GDPRConsentTimestamp:   now,
 		MarketingEmailsEnabled: true, // Updated
 		ProductUpdatesEnabled:  true,
@@ -189,19 +186,17 @@ func TestUpdatePrivacySettings_Success(t *testing.T) {
 		UPDATE privacy_settings
 		SET gdpr_necessary_consent = $1,
 		    gdpr_analytics_consent = $2,
-		    gdpr_advertising_consent = $3,
-		    gdpr_consent_timestamp = $4,
-		    marketing_emails_enabled = $5,
-		    product_updates_enabled = $6,
-		    security_alerts_enabled = $7,
-		    data_sharing_enabled = $8,
-		    include_in_aggregate_stats = $9,
-		    updated_at = $10
-		WHERE user_id = $11
+		    gdpr_consent_timestamp = $3,
+		    marketing_emails_enabled = $4,
+		    product_updates_enabled = $5,
+		    security_alerts_enabled = $6,
+		    data_sharing_enabled = $7,
+		    include_in_aggregate_stats = $8,
+		    updated_at = $9
+		WHERE user_id = $10
 	`)).WithArgs(
 		true,             // necessary
 		true,             // analytics
-		true,             // advertising
 		pgxmock.AnyArg(), // consent timestamp
 		true,             // marketing
 		true,             // product updates
@@ -233,17 +228,15 @@ func TestUpdatePrivacySettings_NotFound(t *testing.T) {
 		UPDATE privacy_settings
 		SET gdpr_necessary_consent = $1,
 		    gdpr_analytics_consent = $2,
-		    gdpr_advertising_consent = $3,
-		    gdpr_consent_timestamp = $4,
-		    marketing_emails_enabled = $5,
-		    product_updates_enabled = $6,
-		    security_alerts_enabled = $7,
-		    data_sharing_enabled = $8,
-		    include_in_aggregate_stats = $9,
-		    updated_at = $10
-		WHERE user_id = $11
+		    gdpr_consent_timestamp = $3,
+		    marketing_emails_enabled = $4,
+		    product_updates_enabled = $5,
+		    security_alerts_enabled = $6,
+		    data_sharing_enabled = $7,
+		    include_in_aggregate_stats = $8,
+		    updated_at = $9
+		WHERE user_id = $10
 	`)).WithArgs(
-		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
 		pgxmock.AnyArg(),
@@ -279,25 +272,24 @@ func TestPrivacyRepository_IncludeInAggregateStats(t *testing.T) {
 		mock.ExpectExec(regexp.QuoteMeta(`
 		INSERT INTO privacy_settings (
 			id, user_id, gdpr_necessary_consent, gdpr_analytics_consent,
-			gdpr_advertising_consent, gdpr_consent_timestamp,
+			gdpr_consent_timestamp,
 			marketing_emails_enabled, product_updates_enabled,
 			security_alerts_enabled, data_sharing_enabled,
 			include_in_aggregate_stats,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4,
-			$5, $6,
-			$7, $8,
-			$9, $10,
-			$11,
-			$12, $13
+			$5,
+			$6, $7,
+			$8, $9,
+			$10,
+			$11, $12
 		)
 	`)).WithArgs(
 			pgxmock.AnyArg(), // ID
 			userID,
 			true,             // necessary
 			false,            // analytics
-			false,            // advertising
 			pgxmock.AnyArg(), // consent timestamp
 			false,            // marketing
 			true,             // product updates
@@ -324,14 +316,14 @@ func TestPrivacyRepository_IncludeInAggregateStats(t *testing.T) {
 
 		rows := pgxmock.NewRows([]string{
 			"id", "user_id", "gdpr_necessary_consent", "gdpr_analytics_consent",
-			"gdpr_advertising_consent", "gdpr_consent_timestamp",
+			"gdpr_consent_timestamp",
 			"marketing_emails_enabled", "product_updates_enabled",
 			"security_alerts_enabled", "data_sharing_enabled",
 			"include_in_aggregate_stats",
 			"created_at", "updated_at",
 		}).AddRow(
 			settingsID, userID, true, false,
-			false, now,
+			now,
 			false, true,
 			true, false,
 			false, // include_in_aggregate_stats explicitly false
@@ -340,7 +332,7 @@ func TestPrivacyRepository_IncludeInAggregateStats(t *testing.T) {
 
 		mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, user_id, gdpr_necessary_consent, gdpr_analytics_consent,
-		       gdpr_advertising_consent, gdpr_consent_timestamp,
+		       gdpr_consent_timestamp,
 		       marketing_emails_enabled, product_updates_enabled,
 		       security_alerts_enabled, data_sharing_enabled,
 		       include_in_aggregate_stats,
@@ -371,7 +363,6 @@ func TestUpdatePrivacySettings_UpdatesTimestamp(t *testing.T) {
 
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE privacy_settings`)).
 		WithArgs(
-			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),
 			pgxmock.AnyArg(),

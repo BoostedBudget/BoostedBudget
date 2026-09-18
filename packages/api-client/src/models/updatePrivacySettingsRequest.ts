@@ -35,7 +35,6 @@ export interface UpdatePrivacySettingsRequest {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   data_sharing_enabled?: boolean;
-  gdpr_advertising_consent?: boolean;
   gdpr_analytics_consent?: boolean;
   gdpr_necessary_consent?: boolean;
   include_in_aggregate_stats?: boolean;
