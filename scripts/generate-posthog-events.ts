@@ -21,7 +21,7 @@ const LEGACY_EXCEPTIONS = new Set([
 ])
 const EVENT_NAME = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/
 const PROPERTY_NAME = /^[a-z][A-Za-z0-9]*(?:_[a-z0-9]+)*$/
-const VENDOR_EVENT_NAME = /^\$[a-z][a-z0-9_]*$/
+const VENDOR_EVENT_NAME = /^\$[a-z][a-z0-9_]*$|^\$\$[a-z][a-z0-9_]*$/
 const CATALOG_SENSITIVE_KEY =
   /(^|_)(account_number|category|contribution_id|goal_id|job_id|name|token|transaction_id|value)($|_)/
 const TS_SYMBOL = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$/

@@ -272,6 +272,30 @@ describe('event catalog validation', () => {
     expect(() => validateEventCatalog(catalog)).toThrow(/reserved|custom/i)
   })
 
+  test('accepts vendor names with exactly one or two dollar prefixes, never more', () => {
+    const catalog = validEventCatalog()
+    catalog.events.push({
+      ...activeEvent(),
+      contract_id: 'vendor_posthog_heatmap',
+      name: '$$heatmap',
+      kind: 'vendor_reserved',
+      symbols: { typescript: [], go: [] },
+      properties: {},
+    } as any)
+    expect(validateEventCatalog(catalog).events).toHaveLength(3)
+
+    const triple = validEventCatalog()
+    triple.events.push({
+      ...activeEvent(),
+      contract_id: 'vendor_posthog_bad',
+      name: '$$$bad',
+      kind: 'vendor_reserved',
+      symbols: { typescript: [], go: [] },
+      properties: {},
+    } as any)
+    expect(() => validateEventCatalog(triple)).toThrow(/vendor-reserved/i)
+  })
+
   test('requires every string property to be bounded unless legacy explicitly documents the exception', () => {
     const catalog = validEventCatalog()
     const legacy = catalog.events[1] as any
