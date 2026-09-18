@@ -196,7 +196,7 @@ describe('posthog config', () => {
       disable_conversations: true,
       disable_web_experiments: true,
       disable_product_tours: true,
-      disable_external_dependency_loading: true,
+      disable_external_dependency_loading: false,
       capture_heatmaps: false,
       capture_dead_clicks: false,
       capture_performance: true,
@@ -204,7 +204,7 @@ describe('posthog config', () => {
       save_referrer: false,
       save_campaign_params: false,
       custom_campaign_params: [],
-      advanced_disable_flags: true,
+      advanced_disable_flags: false,
       persistence: 'sessionStorage',
       reuseAnonymousId: true,
       request_batching: false,
@@ -252,8 +252,10 @@ describe('posthog config', () => {
 
     expect(Object.keys(cfg.session_recording ?? {}).sort()).toEqual([
       'blockSelector',
+      'maskAllElementAttributes',
       'maskAllInputs',
       'maskCapturedNetworkRequestFn',
+      'maskTextFn',
       'maskTextSelector',
       'recordBody',
       'recordHeaders',
@@ -1415,5 +1417,17 @@ describe('posthog heatmap route gating', () => {
     await applyProductAnalyticsAuthority(anonymousAuthority);
 
     expect(mockPosthogSetConfig).toHaveBeenLastCalledWith({ capture_heatmaps: false });
+  });
+
+  test('turns heatmaps off when setRoute records a sensitive route while already granted', async () => {
+    // The granted precondition is established FIRST so the assertion below can only be
+    // satisfied by setRoute's own internal granted-state gate — not by the grant path.
+    setProductAnalyticsScope('anonymous');
+    await applyProductAnalyticsAuthority(anonymousAuthority);
+    mockPosthogSetConfig.mockClear();
+
+    setRoute('/billing/manage');
+
+    expect(mockPosthogSetConfig).toHaveBeenCalledWith({ capture_heatmaps: false });
   });
 });
