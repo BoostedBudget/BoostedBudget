@@ -19,11 +19,13 @@ const (
 	EventDeletionRequested   = "deletion_requested"
 	EventEmailChanged        = "email_changed"
 	// EventFinancialDataSyncCompleted Fires best-effort only after a fully paginated Plaid transaction sync atomically commits its durable completion latch and final cursor; the per-linked-item latch classifies the first full catch-up as initial and every later completion or invalid-cursor recovery as refresh, while a one-time rollout-ambiguous legacy completion is conservatively suppressed.
-	EventFinancialDataSyncCompleted    = "financial_data_sync_completed"
-	EventHouseholdAccountHidden        = "household_account_hidden"
-	EventHouseholdAccountShared        = "household_account_shared"
-	EventHouseholdCreated              = "household_created"
-	EventHouseholdDisbanded            = "household_disbanded"
+	EventFinancialDataSyncCompleted = "financial_data_sync_completed"
+	EventHouseholdAccountHidden     = "household_account_hidden"
+	EventHouseholdAccountShared     = "household_account_shared"
+	EventHouseholdCreated           = "household_created"
+	EventHouseholdDisbanded         = "household_disbanded"
+	// EventHouseholdEntitlementProjected Fires when a RevenueCat-driven household entitlement projection is materialized for a joining member: the household's resolved tier, the occupied seat count after the join, and the tier's included seat limit. Emitted only after the membership transaction commits, so a rejected or rolled-back join emits nothing. Never carries a member id, household id, email, or amount.
+	EventHouseholdEntitlementProjected = "household_entitlement_projected"
 	EventHouseholdForceDisbanded       = "household_force_disbanded"
 	EventHouseholdInviteAccepted       = "household_invite_accepted"
 	EventHouseholdInviteSent           = "household_invite_sent"
@@ -31,7 +33,7 @@ const (
 	EventHouseholdMemberLeft           = "household_member_left"
 	EventHouseholdMemberRemoved        = "household_member_removed"
 	EventHouseholdMembershipPurged     = "household_membership_purged"
-	// EventHouseholdOverCapacityEntered Fires only on the subscription-webhook fast path when active members first exceed the owner's seat limit; the daily backstop flags and clears state without analytics.
+	// EventHouseholdOverCapacityEntered Fires when a household first enters over-capacity grace — active members exceed the owner's seat limit. Emitted from the subscription-webhook fast path and, reusing the same event, from the authoritative daily backstop when it discovers an entry the fast path missed. active_count and seat_limit are the occupied seats and the owner's included seat limit at entry; never a household or member identifier.
 	EventHouseholdOverCapacityEntered = "household_over_capacity_entered"
 	// EventInvalidSignatureWebhookRejected Defense-in-depth signal for a worker or replay path refusing a signature-invalid webhook row that ingress should never persist.
 	EventInvalidSignatureWebhookRejected = "invalid_signature_webhook_rejected"
@@ -160,6 +162,50 @@ func (FinancialDataSyncCompletedPayload) EventName() EventName {
 func (p FinancialDataSyncCompletedPayload) Properties() map[string]interface{} {
 	return map[string]interface{}{
 		"sync_kind": p.SyncKind,
+	}
+}
+
+type HouseholdEntitlementProjectedTier string
+
+const (
+	HouseholdEntitlementProjectedTierPremium    HouseholdEntitlementProjectedTier = "premium"
+	HouseholdEntitlementProjectedTierHousehold2 HouseholdEntitlementProjectedTier = "household_2"
+	HouseholdEntitlementProjectedTierHousehold3 HouseholdEntitlementProjectedTier = "household_3"
+	HouseholdEntitlementProjectedTierHousehold4 HouseholdEntitlementProjectedTier = "household_4"
+	HouseholdEntitlementProjectedTierHousehold5 HouseholdEntitlementProjectedTier = "household_5"
+)
+
+type HouseholdEntitlementProjectedPayload struct {
+	Tier          HouseholdEntitlementProjectedTier `json:"tier"`
+	SeatCount     int64                             `json:"seat_count"`
+	SeatsIncluded int64                             `json:"seats_included"`
+}
+
+func (HouseholdEntitlementProjectedPayload) isGeneratedEvent() {}
+func (HouseholdEntitlementProjectedPayload) EventName() EventName {
+	return EventHouseholdEntitlementProjected
+}
+func (p HouseholdEntitlementProjectedPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"tier":           p.Tier,
+		"seat_count":     p.SeatCount,
+		"seats_included": p.SeatsIncluded,
+	}
+}
+
+type HouseholdOverCapacityEnteredPayload struct {
+	ActiveCount int64 `json:"active_count"`
+	SeatLimit   int64 `json:"seat_limit"`
+}
+
+func (HouseholdOverCapacityEnteredPayload) isGeneratedEvent() {}
+func (HouseholdOverCapacityEnteredPayload) EventName() EventName {
+	return EventHouseholdOverCapacityEntered
+}
+func (p HouseholdOverCapacityEnteredPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"active_count": p.ActiveCount,
+		"seat_limit":   p.SeatLimit,
 	}
 }
 
@@ -614,6 +660,16 @@ var generatedEventContracts = map[EventName]EventContract{
 		LegacyPropertiesUnreviewed: true,
 		Properties:                 map[string]PropertyContract{},
 	},
+	EventHouseholdEntitlementProjected: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"tier":           {Kind: "string", Required: true, Values: []string{"premium", "household_2", "household_3", "household_4", "household_5"}, Minimum: nil, Maximum: nil},
+			"seat_count":     {Kind: "integer", Required: true, Values: []string{}, Minimum: 1, Maximum: 5},
+			"seats_included": {Kind: "integer", Required: true, Values: []string{}, Minimum: 1, Maximum: 5},
+		},
+	},
 	EventHouseholdForceDisbanded: {
 		Consent:                    "analytics_required",
 		Status:                     "legacy",
@@ -658,9 +714,12 @@ var generatedEventContracts = map[EventName]EventContract{
 	},
 	EventHouseholdOverCapacityEntered: {
 		Consent:                    "analytics_required",
-		Status:                     "legacy",
-		LegacyPropertiesUnreviewed: true,
-		Properties:                 map[string]PropertyContract{},
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"active_count": {Kind: "integer", Required: true, Values: []string{}, Minimum: 0, Maximum: nil},
+			"seat_limit":   {Kind: "integer", Required: true, Values: []string{}, Minimum: 0, Maximum: nil},
+		},
 	},
 	EventInvalidSignatureWebhookRejected: {
 		Consent:                    "analytics_required",

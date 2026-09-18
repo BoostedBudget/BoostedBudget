@@ -263,6 +263,9 @@ type HouseholdService interface {
 	ResolveScope(ctx context.Context, requestingUserID, scopeParam string) (*domain.HouseholdScope, error)
 
 	SetAnalytics(a phclient.Analytics)
+	// SetProductAnalytics wires the consent-aware Gateway for generated product events
+	// (currently the household entitlement projection). Nil-safe, like SetAnalytics.
+	SetProductAnalytics(a phclient.ProductAnalytics)
 	// SetMemberProfileResolver wires optional (nil-safe) Clerk name/avatar enrichment for
 	// ListMembers. #1367 — Phase 3 Round 2 (GT-3).
 	SetMemberProfileResolver(r MemberProfileResolver)
@@ -292,7 +295,11 @@ type householdService struct {
 	emailService    EmailService
 	enc             *appcrypto.FieldEncryptor
 	analytics       phclient.Analytics
-	memberProfiles  MemberProfileResolver
+	// productAnalytics is the consent-aware Gateway used for generated product events. Kept
+	// separate from analytics (the legacy raw shape) so the existing household events are
+	// untouched; nil-safe, so an unwired value makes every capture a no-op.
+	productAnalytics phclient.ProductAnalytics
+	memberProfiles   MemberProfileResolver
 
 	// cacheGens mints/bumps generation tokens for household writes that affect users OTHER
 	// than the acting HTTP caller (Issue #1531 Task 10b-2b) — nil when cache invalidation is
@@ -342,6 +349,12 @@ func NewHouseholdService(
 // SetAnalytics wires in the optional, nil-safe PostHog analytics client.
 func (s *householdService) SetAnalytics(a phclient.Analytics) {
 	s.analytics = a
+}
+
+// SetProductAnalytics wires the consent-aware Gateway used for generated product events.
+// Nil-safe: an unset value makes every CaptureEvent a no-op, mirroring SetAnalytics.
+func (s *householdService) SetProductAnalytics(a phclient.ProductAnalytics) {
+	s.productAnalytics = a
 }
 
 func (s *householdService) capture(userID, event string) {
@@ -1618,6 +1631,10 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	}
 
 	s.capture(callerUserID, phclient.EventHouseholdInviteAccepted)
+	// The household entitlement projection was just materialized for the joiner: the owner's
+	// resolved tier, the occupied seat count after the join, and the tier's included seat limit.
+	// Emitted only after commit, so a rejected or rolled-back join emits nothing.
+	s.captureHouseholdProjection(ctx, ownerUserID, string(ownerTier.Name), activeCount+1, ownerTier.Pricing.UsersIncluded)
 	// Issue #1531 Task 10b-2b: bump the joiner, the owner, the household, and every existing
 	// member — the joiner's own household context just appeared, and every existing member's
 	// household-scoped analytics (e.g. combined spending) now include the new joiner's data.

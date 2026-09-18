@@ -419,7 +419,6 @@ func (w *SubscriptionWebhookWorker) reconcileOverCapacity(ctx context.Context, o
 		}
 		if w.analytics != nil {
 			w.analytics.Capture(ownerUserID, phclient.EventHouseholdOverCapacityEntered, map[string]interface{}{
-				"household_id": household.ID,
 				"active_count": activeCount,
 				"seat_limit":   seatLimit,
 			})

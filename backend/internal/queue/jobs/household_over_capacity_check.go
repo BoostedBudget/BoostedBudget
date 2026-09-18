@@ -16,6 +16,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
@@ -158,6 +159,10 @@ type HouseholdOverCapacityCheckWorker struct {
 	emailService HouseholdOverCapacityEmailService
 	tierConfig   *config.TierConfig
 	logger       *slog.Logger
+	// analytics reports an over-capacity entry this backstop discovered, reusing the existing
+	// household_over_capacity_entered event. Optional/nil-safe: unwired, every capture is skipped
+	// and the pass behaves identically.
+	analytics phclient.ProductAnalytics
 	// cacheGens is optional (nil = cache invalidation disabled/not wired); see
 	// SetCacheInvalidation. Issue #1531 Task 10b-2a-iii.
 	cacheGens *cache.Generations
@@ -206,6 +211,13 @@ func (w *HouseholdOverCapacityCheckWorker) SetCacheInvalidation(gens *cache.Gene
 
 func (w *HouseholdOverCapacityCheckWorker) SetOwnAccessResolver(resolver services.OwnAccessResolver) {
 	w.ownAccessResolver = resolver
+}
+
+// SetAnalytics wires the consent-aware Gateway used to report an over-capacity entry this
+// backstop discovered. Nil-safe: an unset value makes every capture a no-op and the pass behaves
+// identically, mirroring RetentionCleanupCheckWorker.SetAnalytics.
+func (w *HouseholdOverCapacityCheckWorker) SetAnalytics(analytics phclient.ProductAnalytics) {
+	w.analytics = analytics
 }
 func (w *HouseholdOverCapacityCheckWorker) ownerAccess(ctx context.Context, owner *domain.User) (domain.RevenueCatAccess, error) {
 	if w.ownAccessResolver != nil {
@@ -499,6 +511,17 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		// enforce, and email the owner a fabricated, incorrect deadline. effectiveSince
 		// is always the true value, whichever writer got there first.
 		h.OverCapacitySince = &effectiveSince
+		// Reuse the existing household_over_capacity_entered event: this is the same product
+		// state transition the subscription-webhook fast path reports, discovered by the
+		// authoritative backstop instead. A distinct name would fork the dashboard. The capture
+		// is a pure side effect and fires only on the NULL-to-value transition, so a re-run over
+		// an already-flagged household emits nothing.
+		if w.analytics != nil {
+			w.analytics.CaptureEvent(ctx, h.OwnerUserID, phclient.HouseholdOverCapacityEnteredPayload{
+				ActiveCount: int64(activeCount),
+				SeatLimit:   int64(seatLimit),
+			})
+		}
 	}
 
 	// In grace — either already, or just entered via Case 3 above. Branch on where

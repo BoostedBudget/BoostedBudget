@@ -472,4 +472,8 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 // 74 -> 75 (#1650): added posthog_erasure_outbox_test.go, which asserts transactional statement
 // ordering, encrypted identity capture, and two separated operator confirmations. It makes no
 // driver NULL-tolerance claim. No files removed.
-const pgxmockSweepFileCount = 80
+// 80 -> 81 (#1652 todo 10): added services/household_entitlement_projection_analytics_test.go,
+// which drives AcceptInvite through the real PostHog Gateway and asserts the household projection
+// event's name, exact properties, and consent boundary. It makes no driver NULL-tolerance claim.
+// No files removed.
+const pgxmockSweepFileCount = 81
