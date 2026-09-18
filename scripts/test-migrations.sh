@@ -822,8 +822,12 @@ apply_migrations() {
 # (gdpr_advertising_consent), which assert_replay_range_has_no_destructive_ddl below
 # correctly refuses to replay against the final schema. The guard's own remedy is to
 # move this start past the offending file; 000214 is the newest migration, so the
-# replay range is now empty. 000214 is still exercised by the empty-DB double-apply
-# idempotency pass and by test_rollback's up→down→up cycle.
+# replay range is now empty. The skipped range gets FIRST-APPLY coverage (the empty-DB
+# apply_migrations pass) and test_rollback's down→up cycle — NOT a genuine second
+# execution of its .up.sql: test_idempotency's second apply is a golang-migrate no-op
+# that executes zero migration SQL a second time, so it alone proves nothing about
+# idempotency. The genuine-second-execution replay check is therefore empty until the
+# next migration (000215) lands.
 REPLAY_RANGE_START_MIGRATION="000215"
 
 # Lists this run's ABS_MIGRATIONS_DIR *.up.sql files whose zero-padded numeric prefix is >=
@@ -1132,7 +1136,7 @@ replay_migrations_up_sql_range() {
     replay_files=$(list_replay_range_up_files)
 
     log_info "Re-executing migrations ${REPLAY_RANGE_START_MIGRATION} through HEAD directly via psql (genuine second execution, not golang-migrate no-op)..."
-    log_info "SKIPPED: $skipped_count migration(s) before ${REPLAY_RANGE_START_MIGRATION} — replaying them against the final schema is unsound (see assert_replay_range_has_no_destructive_ddl / the comment above replay_migrations_up_sql_range for why); they are still exercised by the empty-DB first+second apply_migrations pass."
+    log_info "SKIPPED: $skipped_count migration(s) before ${REPLAY_RANGE_START_MIGRATION} — replaying them against the final schema is unsound (see assert_replay_range_has_no_destructive_ddl / the comment above replay_migrations_up_sql_range for why); they get first-apply coverage (empty-DB apply_migrations) and test_rollback's down→up only — NOT a genuine second execution of their .up.sql (test_idempotency's second apply is a golang-migrate no-op that executes zero migration SQL again). The genuine-second-execution replay check is empty until the next migration (000215) lands."
 
     replayed_count=0
     while IFS= read -r f; do

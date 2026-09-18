@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 // requestAuditContextKey is the unexported context key under which RequestAudit stores the
@@ -31,9 +32,12 @@ type requestAudit struct {
 // independently. A request that skipped the gate (bypass environment, exempt path, or a chain with
 // no CloudflareOnly) therefore records NO IP rather than a plausible-but-untrustworthy one.
 //
-// The request ID is parsed from X-Request-ID with uuid.Parse. A malformed or absent header yields
-// a server-generated UUID; malformed input is never propagated into the audit INSERT (a non-UUID
-// would be rejected by the UUID column, turning an audit write into a failed transaction).
+// The request ID is taken from the ID middleware.RequestID already established for this request
+// (observability.RequestIDFromContext) — the same value the logs and the response X-Request-ID
+// header carry — so an audit row can be correlated with the request that produced it. It is parsed
+// with uuid.Parse; a malformed or absent value yields a server-generated UUID, and malformed input
+// is never propagated into the audit INSERT (a non-UUID would be rejected by the UUID column,
+// turning an audit write into a failed transaction).
 //
 // Register this AFTER CloudflareOnly so GateStatusFrom reports the real gate outcome; see
 // registerCloudflareAndRateLimitMiddlewareWithBackend in cmd/server/main.go, pinned by
@@ -49,7 +53,16 @@ func RequestAudit() echo.MiddlewareFunc {
 				}
 			}
 
-			if id, err := uuid.Parse(c.Request().Header.Get("X-Request-ID")); err == nil {
+			// Read the ID middleware.RequestID already established for this request rather than the
+			// raw X-Request-ID header. RequestID is installed FIRST (cmd/server/main.go), and it
+			// GENERATES a UUID when the client sent no header, stores it in the observability
+			// context (which every http_request log line carries) and echoes it in the response
+			// X-Request-ID header — it does NOT write it back to the request header. Reading the
+			// header here would therefore mint a SECOND, independent UUID for the absent-header
+			// case, and an operator grepping audit_logs.request_id by the response's ID would find
+			// nothing. uuid.Parse keeps the never-propagate rule: a malformed client header is
+			// stored raw by RequestID, Parse refuses it, and a server-generated UUID is used.
+			if id, err := uuid.Parse(observability.RequestIDFromContext(c.Request().Context())); err == nil {
 				meta.requestID = id
 			} else {
 				meta.requestID = uuid.New()
