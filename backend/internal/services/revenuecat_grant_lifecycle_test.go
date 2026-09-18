@@ -46,12 +46,13 @@ func TestRevenueCatCompExpiryThroughRealGateway(t *testing.T) {
 	_, err := s.Refresh(context.Background(), "target-user")
 	require.NoError(t, err)
 	require.Equal(t,
-		[]string{phclient.EventRevenueCatCompExpired, phclient.EventRevenueCatAccessInactive, phclient.EventRevenueCatRetentionArmed},
+		[]string{phclient.EventRevenueCatCompExpired, phclient.EventRevenueCatAccessRevoked, phclient.EventRevenueCatAccessInactive, phclient.EventRevenueCatRetentionArmed},
 		rcCapturedNames(transport),
-		"a lapsed comp grant must emit the comp expiry first, then the generic access outcome and its retention arming")
+		"a lapsed comp grant must emit the comp expiry first, then the revocation, the generic access outcome and its retention arming")
 	require.Equal(t, map[string]interface{}{"entitlement": "comp_household_3"}, transport.captures[0].props)
-	require.Equal(t, map[string]interface{}{"pending_operations": int64(0)}, transport.captures[1].props)
-	require.Equal(t, map[string]interface{}{"deferred_for_pending_operations": false}, transport.captures[2].props)
+	require.Equal(t, map[string]interface{}{"entitlement": "comp_household_3", "source": "webhook"}, transport.captures[1].props)
+	require.Equal(t, map[string]interface{}{"pending_operations": int64(0)}, transport.captures[2].props)
+	require.Equal(t, map[string]interface{}{"deferred_for_pending_operations": false}, transport.captures[3].props)
 	for _, capture := range transport.captures {
 		require.Equal(t, "canonical-subject", capture.subject)
 		requireLifecycleCaptureHasNoForbiddenKeys(t, capture)
@@ -66,10 +67,11 @@ func TestRevenueCatPaidGrantLapseThroughRealGateway(t *testing.T) {
 	_, err := s.Refresh(context.Background(), "target-user")
 	require.NoError(t, err)
 	require.Equal(t,
-		[]string{phclient.EventRevenueCatPaidGrantLapsed, phclient.EventRevenueCatAccessInactive, phclient.EventRevenueCatRetentionArmed},
+		[]string{phclient.EventRevenueCatPaidGrantLapsed, phclient.EventRevenueCatAccessRevoked, phclient.EventRevenueCatAccessInactive, phclient.EventRevenueCatRetentionArmed},
 		rcCapturedNames(transport),
-		"a lapsed paid grant must emit the lapse first, then the generic access outcome and its retention arming")
+		"a lapsed paid grant must emit the lapse first, then the revocation, the generic access outcome and its retention arming")
 	require.Equal(t, map[string]interface{}{"entitlement": "paid_household_2"}, transport.captures[0].props)
+	require.Equal(t, map[string]interface{}{"entitlement": "paid_household_2", "source": "refund"}, transport.captures[1].props)
 	for _, capture := range transport.captures {
 		require.Equal(t, "canonical-subject", capture.subject)
 		requireLifecycleCaptureHasNoForbiddenKeys(t, capture)
@@ -102,10 +104,11 @@ func TestRevenueCatTrialEndedExpiredThroughRealGateway(t *testing.T) {
 	_, err := s.Refresh(context.Background(), "target-user")
 	require.NoError(t, err)
 	require.Equal(t,
-		[]string{phclient.EventRevenueCatTrialEnded, phclient.EventRevenueCatAccessInactive, phclient.EventRevenueCatRetentionArmed},
+		[]string{phclient.EventRevenueCatTrialEnded, phclient.EventRevenueCatAccessRevoked, phclient.EventRevenueCatAccessInactive, phclient.EventRevenueCatRetentionArmed},
 		rcCapturedNames(transport),
-		"an expired trial must emit the trial boundary first, then the generic access outcome and its retention arming")
+		"an expired trial must emit the trial boundary first, then the revocation, the generic access outcome and its retention arming")
 	require.Equal(t, map[string]interface{}{"entitlement": "trial_premium", "converted": false}, transport.captures[0].props)
+	require.Equal(t, map[string]interface{}{"entitlement": "trial_premium", "source": "webhook"}, transport.captures[1].props)
 	for _, capture := range transport.captures {
 		require.Equal(t, "canonical-subject", capture.subject)
 		requireLifecycleCaptureHasNoForbiddenKeys(t, capture)

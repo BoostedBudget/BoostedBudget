@@ -235,6 +235,12 @@ func (s *RevenueCatService) captureAccessTransition(ctx context.Context, id, pri
 	// An admin revoke is applied by ProcessOperation, never by a refresh, so a refresh-driven
 	// inactive projection is the comp-expiry / paid-lapse path the admin queue does not describe.
 	s.captureGrantEnded(ctx, id, priorGrants)
+	source, key := bestRevenueCatGrant(priorGrants)
+	revocationSource := phclient.RevenueCatAccessRevokedSourceWebhook
+	if source == "paid" {
+		revocationSource = phclient.RevenueCatAccessRevokedSourceRefund
+	}
+	s.captureRevocation(ctx, id, key, revocationSource)
 	s.analytics.CaptureEvent(ctx, id, phclient.RevenueCatAccessInactivePayload{
 		PendingOperations: int64(state.PendingOperations),
 	})
@@ -260,6 +266,25 @@ func (s *RevenueCatService) captureGrantEnded(ctx context.Context, id string, pr
 			Entitlement: phclient.RevenueCatPaidGrantLapsedEntitlement(key),
 		})
 	}
+}
+
+// captureRevocation emits the refund/revocation event naming the entitlement whose access was
+// revoked and the bounded source of the revocation. It is the one-event-per-revocation signal:
+// the refresh path emits it once for the inactive flip (refund when the provider read dropped a
+// paid entitlement, webhook when it dropped a non-paid one), and ProcessOperation emits it once
+// for an applied admin revoke. Nil-safe, and an entitlement that is not a known RevenueCat key is
+// refused rather than offered to the gateway for a guaranteed drop.
+func (s *RevenueCatService) captureRevocation(ctx context.Context, userID, entitlement string, source phclient.RevenueCatAccessRevokedSource) {
+	if s.analytics == nil || entitlement == "" {
+		return
+	}
+	if _, _, _, ok := domain.RevenueCatKey(entitlement); !ok {
+		return
+	}
+	s.analytics.CaptureEvent(ctx, userID, phclient.RevenueCatAccessRevokedPayload{
+		Entitlement: phclient.RevenueCatAccessRevokedEntitlement(entitlement),
+		Source:      source,
+	})
 }
 
 // bestRevenueCatGrant returns the highest-ranked grant's source and key, mirroring
@@ -468,6 +493,9 @@ func (s *RevenueCatService) ProcessOperation(ctx context.Context, userID, operat
 		}
 		s.captureOperation(ctx, *attempted, phase)
 		s.captureTrialStarted(ctx, *attempted, workErr == nil)
+		if attempted.Revoke && workErr == nil {
+			s.captureRevocation(ctx, attempted.UserID, attempted.Key, phclient.RevenueCatAccessRevokedSourceAdmin)
+		}
 	}
 	return workErr
 }

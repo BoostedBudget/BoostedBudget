@@ -51,6 +51,8 @@ const (
 	EventPaymentSucceeded        = "payment_succeeded"
 	// EventRevenueCatAccessInactive Fires when a RevenueCat access-resolution refresh flips a previously granting user (active/trial/trialing) to an inactive projection. pending_operations is the count of queued RevenueCat operations at resolution; a non-zero value means the inactive projection was not persisted because a pending operation deferred it. Never carries the reason, the acting admin, or any Plaid/customer identifier.
 	EventRevenueCatAccessInactive = "revenuecat_access_inactive"
+	// EventRevenueCatAccessRevoked Fires when a RevenueCat access-resolution refresh flips a previously granting user to an inactive projection, or when an applied admin revoke ends access, naming the entitlement that was revoked and the bounded source of the revocation: refund (a paid entitlement removed by the provider), webhook (a non-paid entitlement removed by a provider state change), or admin (an applied admin revoke). One event per revocation, never one per imported record; never carries the reason, the acting admin, or any identifier.
+	EventRevenueCatAccessRevoked = "revenuecat_access_revoked"
 	// EventRevenueCatCompExpired Fires when an access-resolution refresh persists an inactive projection for a user whose previous projection was comp-backed — the comp grant lapsed on its own, without any admin-initiated operation (an admin revoke is the admin queue's revenuecat_operation_* stream). entitlement is the bounded comp key that ended; never carries the reason, the acting admin, or any identifier.
 	EventRevenueCatCompExpired = "revenuecat_comp_expired"
 	// EventRevenueCatOperationApplied Fires after a queued RevenueCat operation is applied to the target user's access; properties are the bounded grant class, entitlement key, and revoke flag only.
@@ -231,6 +233,44 @@ func (RevenueCatAccessInactivePayload) EventName() EventName { return EventReven
 func (p RevenueCatAccessInactivePayload) Properties() map[string]interface{} {
 	return map[string]interface{}{
 		"pending_operations": p.PendingOperations,
+	}
+}
+
+type RevenueCatAccessRevokedEntitlement string
+
+const (
+	RevenueCatAccessRevokedEntitlementPaidPremium    RevenueCatAccessRevokedEntitlement = "paid_premium"
+	RevenueCatAccessRevokedEntitlementPaidHousehold2 RevenueCatAccessRevokedEntitlement = "paid_household_2"
+	RevenueCatAccessRevokedEntitlementPaidHousehold3 RevenueCatAccessRevokedEntitlement = "paid_household_3"
+	RevenueCatAccessRevokedEntitlementPaidHousehold4 RevenueCatAccessRevokedEntitlement = "paid_household_4"
+	RevenueCatAccessRevokedEntitlementPaidHousehold5 RevenueCatAccessRevokedEntitlement = "paid_household_5"
+	RevenueCatAccessRevokedEntitlementCompPremium    RevenueCatAccessRevokedEntitlement = "comp_premium"
+	RevenueCatAccessRevokedEntitlementCompHousehold2 RevenueCatAccessRevokedEntitlement = "comp_household_2"
+	RevenueCatAccessRevokedEntitlementCompHousehold3 RevenueCatAccessRevokedEntitlement = "comp_household_3"
+	RevenueCatAccessRevokedEntitlementCompHousehold4 RevenueCatAccessRevokedEntitlement = "comp_household_4"
+	RevenueCatAccessRevokedEntitlementCompHousehold5 RevenueCatAccessRevokedEntitlement = "comp_household_5"
+	RevenueCatAccessRevokedEntitlementTrialPremium   RevenueCatAccessRevokedEntitlement = "trial_premium"
+)
+
+type RevenueCatAccessRevokedSource string
+
+const (
+	RevenueCatAccessRevokedSourceRefund  RevenueCatAccessRevokedSource = "refund"
+	RevenueCatAccessRevokedSourceWebhook RevenueCatAccessRevokedSource = "webhook"
+	RevenueCatAccessRevokedSourceAdmin   RevenueCatAccessRevokedSource = "admin"
+)
+
+type RevenueCatAccessRevokedPayload struct {
+	Entitlement RevenueCatAccessRevokedEntitlement `json:"entitlement"`
+	Source      RevenueCatAccessRevokedSource      `json:"source"`
+}
+
+func (RevenueCatAccessRevokedPayload) isGeneratedEvent()    {}
+func (RevenueCatAccessRevokedPayload) EventName() EventName { return EventRevenueCatAccessRevoked }
+func (p RevenueCatAccessRevokedPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"entitlement": p.Entitlement,
+		"source":      p.Source,
 	}
 }
 
@@ -717,6 +757,15 @@ var generatedEventContracts = map[EventName]EventContract{
 		LegacyPropertiesUnreviewed: false,
 		Properties: map[string]PropertyContract{
 			"pending_operations": {Kind: "integer", Required: true, Values: []string{}, Minimum: 0, Maximum: nil},
+		},
+	},
+	EventRevenueCatAccessRevoked: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"entitlement": {Kind: "string", Required: true, Values: []string{"paid_premium", "paid_household_2", "paid_household_3", "paid_household_4", "paid_household_5", "comp_premium", "comp_household_2", "comp_household_3", "comp_household_4", "comp_household_5", "trial_premium"}, Minimum: nil, Maximum: nil},
+			"source":      {Kind: "string", Required: true, Values: []string{"refund", "webhook", "admin"}, Minimum: nil, Maximum: nil},
 		},
 	},
 	EventRevenueCatCompExpired: {
