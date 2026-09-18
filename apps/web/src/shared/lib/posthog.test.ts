@@ -163,6 +163,7 @@ describe('posthog config', () => {
       disable_external_dependency_loading: cfg.disable_external_dependency_loading,
       capture_heatmaps: cfg.capture_heatmaps,
       capture_dead_clicks: cfg.capture_dead_clicks,
+      capture_performance: cfg.capture_performance,
       disable_scroll_properties: cfg.disable_scroll_properties,
       save_referrer: cfg.save_referrer,
       save_campaign_params: cfg.save_campaign_params,
@@ -189,6 +190,7 @@ describe('posthog config', () => {
       disable_external_dependency_loading: true,
       capture_heatmaps: false,
       capture_dead_clicks: false,
+      capture_performance: true,
       disable_scroll_properties: true,
       save_referrer: false,
       save_campaign_params: false,
@@ -199,6 +201,54 @@ describe('posthog config', () => {
       request_batching: false,
       disable_persistence: true,
     });
+  });
+
+  test('pins the exact top-level config key set', () => {
+    const cfg = posthogConfig();
+
+    expect(Object.keys(cfg).sort()).toEqual([
+      'advanced_disable_flags',
+      'autocapture',
+      'before_send',
+      'capture_dead_clicks',
+      'capture_exceptions',
+      'capture_heatmaps',
+      'capture_pageleave',
+      'capture_pageview',
+      'capture_performance',
+      'custom_campaign_params',
+      'disable_conversations',
+      'disable_external_dependency_loading',
+      'disable_persistence',
+      'disable_product_tours',
+      'disable_scroll_properties',
+      'disable_session_recording',
+      'disable_surveys',
+      'disable_surveys_automatic_display',
+      'disable_web_experiments',
+      'opt_out_capturing_by_default',
+      'opt_out_persistence_by_default',
+      'persistence',
+      'request_batching',
+      'respect_dnt',
+      'reuseAnonymousId',
+      'save_campaign_params',
+      'save_referrer',
+      'session_recording',
+    ]);
+  });
+
+  test('pins the exact session_recording key set', () => {
+    const cfg = posthogConfig();
+
+    expect(Object.keys(cfg.session_recording ?? {}).sort()).toEqual([
+      'blockSelector',
+      'maskAllInputs',
+      'maskCapturedNetworkRequestFn',
+      'maskTextSelector',
+      'recordBody',
+      'recordHeaders',
+    ]);
   });
 
   test('before_send rejects every event while the injected local capture gate is denied', () => {

@@ -332,6 +332,7 @@ export function posthogConfig(
     disable_external_dependency_loading: true,
     capture_heatmaps: false,
     capture_dead_clicks: false,
+    capture_performance: true,
     disable_scroll_properties: true,
     save_referrer: false,
     save_campaign_params: false,
