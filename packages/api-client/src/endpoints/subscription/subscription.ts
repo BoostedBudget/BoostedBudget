@@ -727,9 +727,3 @@ export function useGetSubscriptionTiers<TData = Awaited<ReturnType<typeof getSub
 
   return withQueryKey(query, queryOptions.queryKey);
 }
-
-
-
-
-
-
