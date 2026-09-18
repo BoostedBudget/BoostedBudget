@@ -3151,6 +3151,10 @@ func registerCloudflareAndRateLimitMiddleware(e *echo.Echo, cfCIDRRef *atomic.Po
 // order is load-bearing.
 func registerCloudflareAndRateLimitMiddlewareWithBackend(e *echo.Echo, cfCIDRRef *atomic.Pointer[[]netip.Prefix], cfg *config.Config, backend middleware.RateLimitBackend, done <-chan struct{}, logger *slog.Logger) {
 	e.Use(middleware.CloudflareOnly(cfCIDRRef, cfg.CFOriginSecret, cfg.Environment)) // Cloudflare-only enforcement: blocks direct *.fly.dev access
+	// #1683: capture per-request audit metadata (client IP / User-Agent / request ID) AFTER
+	// CloudflareOnly so GateStatusFrom reports the real gate outcome — RequestAudit only trusts
+	// Cf-Connecting-Ip when the gate passed. Pinned by TestRequestAuditMiddlewareOrdering.
+	e.Use(middleware.RequestAudit())
 	e.Use(middleware.IPRateLimiter(middleware.RateLimitConfig{                       // Per-IP rate limiting
 		// IPLimit/AuthEndpointLimit here feed ONLY the in-memory fallback store (memoryBackend) —
 		// the Redis-backed primary gets its own RegularLimit/AuthLimit via buildRateLimitBackend
