@@ -1876,6 +1876,9 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// user's id, WITH its PII-bearing `changes` payload intact, forever. Redact the payload for
 	// BOTH columns here — resource_id is the one this actually matters for; user_id is belt-and-
 	// braces given the FK already handles it, and harmless to include if that FK is ever changed.
+	// ip_address and user_agent are nulled in the same statement (#1683 Task 4): they are network
+	// identifiers tied to the request that created the row, so on a resource_id-keyed row they must
+	// not survive the subject's erasure any more than the payload may.
 	// Per the product decision: redact the payload, KEEP the row — this preserves the tamper-
 	// evident audit trail GDPR itself expects while removing the personal data it carries.
 	//
@@ -1887,7 +1890,7 @@ func (r *profileRepository) DeleteUserCascade(ctx context.Context, userID string
 	// doc comment (~line 2440) for the cross-user deadlock class (SQLSTATE 40P01, an audit-log
 	// INSERT's FK check requesting FOR KEY SHARE on a row already held FOR UPDATE elsewhere) that
 	// widening a lock window here would risk.
-	_, err = tx.Exec(ctx, `UPDATE audit_logs SET changes = NULL WHERE resource_id = $1 OR user_id = $1`, userID)
+	_, err = tx.Exec(ctx, `UPDATE audit_logs SET changes = NULL, ip_address = NULL, user_agent = NULL WHERE resource_id = $1 OR user_id = $1`, userID)
 	if err != nil {
 		return false, nil, fmt.Errorf("DeleteUserCascade: redact audit log PII: %w", err)
 	}

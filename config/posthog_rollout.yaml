@@ -21,8 +21,11 @@ project_controls:
   discard_client_ip: true
   allowed_domains_exact: true
   autocapture: false
+  # KEPT false at merge. The operator flips this false->true only after the
+  # "Replay enablement gate" staging inspection passes (see docs/operations/posthog-rollout.md).
   session_replay: false
-  web_analytics: false
+  heatmaps: false
+  web_analytics: true
   error_tracking: false
   experiments: false
   feature_flags: false
@@ -31,6 +34,22 @@ project_controls:
   support: true
   project_rendered_widget: false
   surveys: true
+
+# The replay TARGET is true: this is the operator contract. The current project
+# toggle above stays false at merge, so replay is inert until the staging gate is
+# satisfied. The gate below couples the target to the runbook section.
+session_replay_target: true
+enablement_gates:
+  session_replay: staging_inspection_required
+
+# Certifies the OPT-OUT PATH only: that a post-commit `$unset` survives ingestion
+# (the staging check that closes unset_ingestion_survival_unverified). It does NOT
+# certify feature liveness — identified diagnostics IS live at merge; only its
+# ingestion-survival is uncertified. The operator flips this to 'go' after the
+# staging check passes and the gap closes. The validator fails if it is 'go' while
+# the gap is open, and fails closed if the gap row is absent.
+identified_diagnostics_opt_out_certification:
+  status: blocked
 
 runtime_authority:
   analytics: consent_required
@@ -108,3 +127,85 @@ coverage_gaps:
   - id: planned_metrics_post_deploy_validation
     severity: measurement
     status: open
+  - id: heatmap_erasure_unverified
+    severity: blocking
+    status: open
+  - id: unset_ingestion_survival_unverified
+    severity: blocking
+    status: open
+
+# Per-surface go/no-go detail for all six consent-gated PostHog surfaces. The
+# project_controls block above holds only real PostHog project settings; web
+# vitals and dead clicks are per-surface analysis choices and live here.
+surfaces:
+  - surface: web_analytics
+    enabled: true
+    go_no_go: go
+    privacy_model: pseudonymous; sanitized route templates and bounded properties only
+    sampling: none (all consenting pageviews)
+    retention: PostHog project default
+    consent: analytics_required
+    notes: Enabled (project_controls.web_analytics true).
+  - surface: web_vitals
+    enabled: true
+    go_no_go: go
+    privacy_model: pseudonymous Core Web Vitals timings; no financial values
+    sampling: none
+    retention: PostHog project default
+    consent: analytics_required
+    notes: Enabled via capture_performance in posthog config; NOT a project_controls key.
+  - surface: heatmaps
+    enabled: true
+    go_no_go: go
+    privacy_model: click coordinates only; $heatmap_data URL keys sanitized and sensitive paths dropped
+    sampling: none
+    retention: PostHog project default
+    consent: analytics_required
+    notes: Client-gated on anonymous routes; project_controls.heatmaps stays false (analysis toggle off).
+  - surface: session_replay
+    enabled: false
+    go_no_go: no_go_until_staging_gate
+    privacy_model: default-deny text masking (maskTextSelector '*'); maskAllElementAttributes true; no network body, no console logs
+    sampling_rate: 1.0
+    minimum_duration: none
+    retention: 30 days
+    recording_domains: [staging.boostedbudget.com, boostedbudget.com]
+    consent: analytics_required + interaction_capture_required
+    notes: Merges inert (client pin + project_controls.session_replay false); target true, gated by staging_inspection_required.
+  - surface: autocapture
+    enabled: false
+    go_no_go: no_go
+    privacy_model: n/a
+    sampling: n/a
+    retention: n/a
+    consent: n/a
+    notes: Disabled (project_controls.autocapture false).
+  - surface: dead_clicks
+    enabled: false
+    go_no_go: no_go
+    privacy_model: n/a
+    sampling: n/a
+    retention: n/a
+    consent: n/a
+    notes: Disabled; NOT a project_controls key, tracked only in this per-surface detail.
+
+# The exact project-settings diff the operator applies after the staging gate.
+project_settings:
+  diff:
+    - setting: session_replay
+      from: false
+      to: true
+      when: after the "Replay enablement gate" staging inspection passes
+    - setting: heatmaps
+      from: false
+      to: false
+      when: unchanged (analysis toggle stays off)
+    - setting: web_analytics
+      from: false
+      to: true
+      when: already applied at merge
+    - setting: identified_diagnostics_opt_out_certification
+      from: blocked
+      to: go
+      when: after the $unset-ingestion-survival staging check passes and the gap closes
+
