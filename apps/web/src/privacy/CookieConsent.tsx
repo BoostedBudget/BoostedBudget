@@ -19,6 +19,7 @@ const DEFAULT_CONSENTS: CookieConsentSettings = {
   necessary: true,
   analytics: false,
   advertising: false,
+  interactionCapture: false,
 };
 
 const calculateExpiryDate = (): Date => {
@@ -39,9 +40,11 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
       // Show banner if no consent or version mismatch
       setShowBanner(true);
     } else {
-      // Apply existing consents
-      setCustomConsents(consentData.consents);
-      onConsentChange?.(consentData.consents, 'stored');
+      // Normalize a stored cookie that predates the interaction-capture category so
+      // the new toggle reads a real boolean, not `undefined`.
+      const stored = { ...DEFAULT_CONSENTS, ...consentData.consents };
+      setCustomConsents(stored);
+      onConsentChange?.(stored, 'stored');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -70,6 +73,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
       necessary: true,
       analytics: true,
       advertising: false,
+      interactionCapture: true,
     });
   };
 
@@ -78,6 +82,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
       necessary: true,
       analytics: false,
       advertising: false,
+      interactionCapture: false,
     });
   };
 
@@ -100,7 +105,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
         type="button"
         className="fixed bottom-4 left-4 z-[9998] rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground shadow-md hover:bg-accent focus:outline-none focus:ring-2 focus:ring-primary"
         onClick={() => {
-          setCustomConsents(consentData?.consents ?? DEFAULT_CONSENTS);
+          setCustomConsents({ ...DEFAULT_CONSENTS, ...consentData?.consents });
           setShowDetails(true);
           setShowBanner(true);
         }}
@@ -140,7 +145,7 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
               onClick={handleAcceptAll}
               aria-label="Accept all cookies"
             >
-              Accept All
+              Accept All (Analytics + Session Recording)
             </button>
             <button
               className={btnSecondary}
@@ -199,6 +204,27 @@ export const CookieConsent: React.FC<CookieConsentProps> = ({ onConsentChange })
                 <p className="m-0 text-sm text-muted-foreground leading-relaxed">
                   Help us understand how visitors interact with our website by collecting
                   pseudonymous usage patterns through PostHog only after you choose analytics.
+                </p>
+              </div>
+
+              <div className="p-4 bg-muted rounded-lg border border-border">
+                <div className="flex justify-between items-center mb-2 max-sm:flex-col max-sm:items-start max-sm:gap-2">
+                  <label htmlFor="consent-interaction-capture" className="flex items-center gap-2 cursor-pointer flex-1">
+                    <strong className="text-foreground">Session Recording</strong>
+                  </label>
+                  <input
+                    type="checkbox"
+                    id="consent-interaction-capture"
+                    checked={customConsents.interactionCapture}
+                    onChange={() => handleToggleConsent('interactionCapture')}
+                    className="w-5 h-5 cursor-pointer accent-primary"
+                    aria-label="Session recording"
+                  />
+                </div>
+                <p className="m-0 text-sm text-muted-foreground leading-relaxed">
+                  Records how you interact with the app so we can improve it. Turning this off
+                  stops future interaction enrichment; sessions already recorded are retained and
+                  removing them requires account erasure.
                 </p>
               </div>
 

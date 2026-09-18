@@ -29,7 +29,7 @@ function deps({
   identity = { distinct_id: 'user_A', identity_hash: 'signed-A' },
   identityLoading = false,
   identityError = false,
-  analytics = { generation: 1, state: 'granted', scope: 'user_A' } as AnalyticsLifecycleSnapshot,
+  analytics = { generation: 1, state: 'granted', scope: 'user_A', withdrawn: false } as AnalyticsLifecycleSnapshot,
 }: Partial<{
   loaded: boolean
   userId: string | null
@@ -118,7 +118,7 @@ describe('AuthenticatedPostHogExperiences', () => {
     })
     render(<AuthenticatedPostHogExperiences
       controller={actualController}
-      dependencies={deps({ analytics: { generation: 2, state: 'denied', scope: 'user_A' } })}
+      dependencies={deps({ analytics: { generation: 2, state: 'denied', scope: 'user_A', withdrawn: false } })}
     />)
 
     expect(createSupportClient).not.toHaveBeenCalled()
@@ -129,7 +129,7 @@ describe('AuthenticatedPostHogExperiences', () => {
   test('support remains click-available without analytics consent while surveys stay disabled', async () => {
     const c = controller()
     render(<AuthenticatedPostHogExperiences controller={c} dependencies={deps({
-      analytics: { generation: 2, state: 'denied', scope: 'user_A' },
+      analytics: { generation: 2, state: 'denied', scope: 'user_A', withdrawn: false },
     })} />)
     expect(c.activateSupport).not.toHaveBeenCalled()
     expect(c.activateSurveys).not.toHaveBeenCalled()
@@ -144,7 +144,7 @@ describe('AuthenticatedPostHogExperiences', () => {
     render(<AuthenticatedPostHogExperiences controller={c} dependencies={deps({
       userId: 'user_B',
       identity: { distinct_id: 'user_A', identity_hash: 'signed-A' },
-      analytics: { generation: 2, state: 'granted', scope: 'user_B' },
+      analytics: { generation: 2, state: 'granted', scope: 'user_B', withdrawn: false },
     })} />)
     expect(c.activateSupport).not.toHaveBeenCalled()
     expect(c.activateSurveys).not.toHaveBeenCalled()
@@ -215,7 +215,7 @@ describe('AuthenticatedPostHogExperiences', () => {
 
     rerender(<AuthenticatedPostHogExperiences
       controller={c}
-      dependencies={deps({ analytics: { generation: 2, state: 'denied', scope: 'user_A' } })}
+      dependencies={deps({ analytics: { generation: 2, state: 'denied', scope: 'user_A', withdrawn: false } })}
       routeEligible={false}
     />)
     expect(c.deactivateSurveys).toHaveBeenCalled()

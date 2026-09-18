@@ -56,10 +56,12 @@ For each project:
    app-owned bottom-right **Support** control is the sole launcher because it can enforce the
    authenticated route and verified identity boundary. Enabling PostHog's launcher recreates the
    original logged-out-homepage defect.
-5. Enable Surveys. Keep session replay, Web Analytics, Error Tracking, experiments, feature flags,
-   logs, and tracing disabled. Their follow-up is issue #1651.
-6. Disable PostHog autocapture and its Support identification form. Clerk plus the signed backend
-   endpoint is the only Support identity source.
+5. Enable Surveys and Web Analytics. Keep session replay, Error Tracking, experiments, feature
+   flags, logs, and tracing disabled at merge. Session replay merges INERT and is enabled only
+   through the **Replay enablement gate** below; Error Tracking, experiments, feature flags, logs,
+   and tracing follow in issue #1651.
+6. Disable PostHog autocapture, heatmaps (the project analysis toggle), and its Support
+   identification form. Clerk plus the signed backend endpoint is the only Support identity source.
 
 Configure environment-scoped deployment secrets with credentials from that environment's project:
 
@@ -219,6 +221,56 @@ verification payloads, then add it to the cohort and prove the dashboard exclude
 Record event IDs and timestamps only when they contain no sensitive values. When this checklist and
 remote-setting evidence are complete, close `remote_configuration_unapplied`; evaluate
 `legacy_event_schemas_unreviewed`; and move each proven metric to `live` in a reviewed code change.
+
+## Replay enablement gate
+
+Session replay merges INERT: `project_controls.session_replay` is `false` and the client pin
+(`disable_session_recording: true`) is in code. `config/posthog_rollout.yaml` records the operator
+contract — `session_replay_target: true` plus `enablement_gates.session_replay:
+staging_inspection_required`. The validator couples the target to this section. Do not flip
+`project_controls.session_replay` to `true`, and do not enable replay in production, until every
+step below passes in staging and is recorded in the deployment evidence.
+
+**PRE-MERGE BLOCKING STEP (do not skip): the `$unset`-ingestion-survival check.** The identified-
+diagnostics opt-out emits a post-commit `$unset` when a user turns identified diagnostics off. Before
+this branch is merged, run that opt-out against staging and confirm the `$unset` SURVIVES ingestion
+(it is not dropped or rewritten by PostHog's transformation). **If it does not survive, raise with
+PostHog BEFORE MERGE — do not merge with a dead opt-out.** This is gated by the
+`unset_ingestion_survival_unverified` coverage gap, which stays `open` until the check passes.
+
+1. **Payload OFF→ON.** Capture a replay payload with the current config while replay is disabled,
+   then enable the client recorder for the test identity only and capture the same route with it ON.
+   Diff the two: the ON payload must carry a `$snapshot` whose element attributes and text follow the
+   masking contract, and the OFF payload must carry none.
+2. **Resolved masking sentinels — text AND attributes.** In the ON `$snapshot`, confirm a
+   `[data-ph-unmask]` sentinel survives verbatim while ordinary text is asterisk-masked
+   (`maskTextSelector: '*'`), AND confirm an attribute sentinel (`aria-label`, `title`, `placeholder`,
+   `alt`) is masked by `maskAllElementAttributes: true`. If attributes arrive UNMASKED, replay
+   enablement stays BLOCKED — do not enable it. Record both the text and attribute outcomes.
+3. **Remote-config-arrival fallback.** If the replay payload arrives before the remote project
+   config does (or the remote config is unavailable), confirm the client defaults are the safe
+   defaults — masking ON, `disable_session_recording` behaviour unchanged — and that no unmasked
+   snapshot is captured during the window. If remote-config arrival cannot be proven to fail closed,
+   keep replay disabled.
+4. **CSP enforcement — BLOCKING.** `apps/web/nginx.conf` ships the Content-Security-Policy in
+   Report-Only mode, and `disable_external_dependency_loading: false` adds a runtime third-party
+   recorder fetch. **Before enabling replay, flip the CSP from Report-Only to enforcing** (the
+   recorder host `us-assets.i.posthog.com` is already in `script-src`) and confirm no CSP violation
+   blocks the recorder. A Report-Only CSP is not a gate.
+5. **Heatmap-erasure counts.** On an ANONYMOUS route with a synthetic `distinct_id`, capture
+   `$$heatmap` data, record the pre-erasure count, run the erasure path, and record the post-erasure
+   count. Both counts are the exit evidence for `heatmap_erasure_unverified`; until they are
+   recorded, the gap stays `open` and heatmap capture is not trusted.
+6. **Operator flip for identified diagnostics (R16-05).** Once the `$unset`-ingestion-survival
+   check in the PRE-MERGE step passes and `unset_ingestion_survival_unverified` is closed, flip
+   `identified_diagnostics_opt_out_certification.status` from `blocked` to `go` in a reviewed code
+   change. This certifies the OPT-OUT PATH (post-commit `$unset` survives ingestion) only — it does
+   NOT certify feature liveness, because identified diagnostics is already live at merge. The
+   validator fails if the status is `go` while the gap is still `open`.
+
+Only after steps 1–5 pass and step 6's precondition holds may the operator flip
+`project_controls.session_replay` to `true` in the PostHog project and record the setting ID,
+date, operator, and commit in the deployment evidence.
 
 ## Incident kill switches
 

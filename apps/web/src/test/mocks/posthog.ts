@@ -3,6 +3,7 @@
 
 import { mock } from 'bun:test'
 import { PostHog } from 'posthog-js'
+import type { AnalyticsAuthority } from '../../shared/lib/analyticsLifecycle'
 
 export const mockPosthogCapture = mock((_event?: string, _properties?: Record<string, unknown>) => {})
 export const mockPosthogIdentify = mock(() => {})
@@ -13,18 +14,18 @@ export const mockPosthogClearOptInOutCapturing = mock(() => {})
 // Issue #1413: server-authoritative tier/comp person-property sync (usePostHogIdentify)
 export const mockPosthogSetPersonProperties = mock(() => {})
 export const mockPosthogStopSessionRecording = mock(() => {})
+export const mockPosthogStartSessionRecording = mock(() => {})
 export const mockGrantProductAnalytics = mock((
   _scope: string,
   _distinctId?: string,
   _properties?: Record<string, unknown>,
 ) => Promise.resolve())
-export const mockApplyProductAnalyticsAuthority = mock((
-  _scope: string,
-  _distinctId?: string,
-  _properties?: Record<string, unknown>,
-) => Promise.resolve())
+export const mockApplyProductAnalyticsAuthority = mock(
+  (_authority: AnalyticsAuthority) => Promise.resolve(),
+)
 export const mockDenyProductAnalytics = mock(() => {})
 export const mockWithdrawProductAnalytics = mock((_scope: string) => {})
+export const mockClearProductAnalyticsWithdrawal = mock((_scope: string) => {})
 export const mockSetAnalyticsLifecyclePending = mock(() => {})
 export const mockSetProductAnalyticsScope = mock((_scope: string) => {})
 export const mockCapturePageView = mock(() => {})
