@@ -11,7 +11,14 @@ The API environment selector filters subscriptions, not active entitlements.
 Separate projects are therefore required for access isolation; do not treat a
 `sandbox` selector as isolation for promotional trials or complimentary access.
 Use the Clerk user ID as RevenueCat's App User ID. Do not use email, the internal
-BoostedBudget UUID, or anonymous purchase identities.
+BoostedBudget UUID, or anonymous purchase identities. The mapping is one-way and
+silent: RevenueCat attributes every purchase to whichever App User ID the SDK was
+configured with, and the webhook resolves that ID back to a local account by an
+exact Clerk ID match. A mismatch therefore **silently separates a user's purchases
+from their account**: the entitlement is credited to an App User ID no local
+account owns, the webhook cannot resolve it (the handler returns 503 and the
+delivery is retried), and the paid access never appears in the product. Nothing
+reconciles this automatically; correcting it is an operator task.
 
 No Apple or Google store configuration is required for this issue.
 
@@ -26,14 +33,57 @@ The frontend deployment jobs build separately for their matching GitHub
 environment. Set the public key there before rebuilding; configuring only the
 backend Fly secrets will not configure the SPA.
 
+## RevenueCat-side setup checklist (ordered)
+
+Work through this list once per project. Staging/QA and production are separate
+projects; every identifier below is exact, and a typo in an entitlement key or a
+price mapping is not cosmetic: it silently breaks access resolution or the
+bootstrap's catalog validation. Detail for each step is in the sections that
+follow.
+
+1. **Create or confirm the RevenueCat project** for this environment. Use one
+   project per environment (see Environment separation).
+2. **Connect the Paddle integration** to the matching Paddle account (sandbox for
+   staging/QA, production for production) and record the integration's Paddle API
+   key. Grant the documented Paddle permissions, including the exact permission
+   `customer_portal_session.write`, so RevenueCat can populate the subscription
+   management URL.
+3. **Create the entitlement keys** exactly as `domain.RevenueCatKey` expects. For
+   every tier in `config/subscription_tiers.yaml` (`premium`, `household_2`,
+   `household_3`, `household_4`, `household_5`) create `paid_<tier>` and
+   `comp_<tier>`; create `trial_premium` once. That is eleven entitlements, listed
+   in Product catalog below. The alignment is mechanically enforced by
+   `backend/internal/config/tier_entitlement_alignment_test.go`.
+4. **Import or create the products** and associate each `paid_<tier>` entitlement
+   with both its monthly and annual Paddle price IDs. Product catalog below lists
+   the exact IDs from the tier catalogue.
+5. **Create the `web` offering** with all supported tier/interval packages and
+   publish its web paywall.
+6. **Generate the REST v2 secret API key** for this project with only the
+   permissions listed in Backend credentials.
+7. **Generate the REST v1-compatible grant API key** as a separate key; do not
+   assume a v2-only key works for v1 grants.
+8. **Configure the webhook**: URL, the exact `Authorization` value, HMAC signing,
+   and the event types in Webhook connection.
+9. **Capture the public SDK key** (web/Paddle) for the SPA (SPA configuration).
+10. **Set the environment**: `sandbox` for staging/QA, `production` for
+    production, and make `PADDLE_ENVIRONMENT` match it.
+11. **Set the backend secrets** in the target runtime (Backend credentials).
+12. **Set the frontend public key** in the matching GitHub environment and rebuild
+    the SPA (SPA configuration).
+13. **Confirm the identity mapping**: the Clerk user ID is the RevenueCat App User
+    ID (Environment separation).
+14. **Validate** with the bootstrap's read-only inventory before enabling
+    purchases (Bootstrap and validation).
+
 ## Product catalog
 
 In each project:
 
 1. Connect the matching Paddle account using RevenueCat's Paddle integration setup.
-   Grant the documented Paddle permissions, including customer portal session write
-   permission when using authenticated management links.
-2. Import the existing monthly and annual prices for Premium and Household 2–5.
+   Grant the documented Paddle permissions, including the exact permission
+   `customer_portal_session.write` when using authenticated management links.
+2. Import the existing monthly and annual prices for Premium and Household 2 through 5.
    Keep the existing price amounts and billing intervals. The card-free trial is
    a `trial_premium` grant, not a second trial configured on a paid Paddle price.
 3. Create `paid_premium`, `paid_household_2`, `paid_household_3`,
@@ -49,6 +99,39 @@ In each project:
    checkouts require disabling Paddle abandoned-cart emails, whose checkout links
    cannot resume RevenueCat-created checkout flows.
 
+The eleven entitlement keys, and the tier/source each must resolve to under
+`domain.RevenueCatKey` (`backend/internal/domain/revenuecat.go`):
+
+| Entitlement key | Source | Tier |
+| --- | --- | --- |
+| `trial_premium` | `trial` | `premium` |
+| `paid_premium` | `paid` | `premium` |
+| `paid_household_2` | `paid` | `household_2` |
+| `paid_household_3` | `paid` | `household_3` |
+| `paid_household_4` | `paid` | `household_4` |
+| `paid_household_5` | `paid` | `household_5` |
+| `comp_premium` | `comp` | `premium` |
+| `comp_household_2` | `comp` | `household_2` |
+| `comp_household_3` | `comp` | `household_3` |
+| `comp_household_4` | `comp` | `household_4` |
+| `comp_household_5` | `comp` | `household_5` |
+
+`trial_` is valid only for `premium`; every tier accepts `paid_` and `comp_`.
+Never combine trial and comp grants under one entitlement, because revocation is
+entitlement-scoped.
+
+Each `paid_<tier>` entitlement is attached to both Paddle prices for that tier.
+These IDs come from `config/subscription_tiers.yaml`; treat that file as the
+source of truth and re-read it before the bootstrap's catalog validation.
+
+| Tier | Monthly price ID | Annual price ID |
+| --- | --- | --- |
+| `premium` | `pri_01jmwgcb66fqp57epz7abzcpym` | `pri_01jmwgcyc80s12t63w4nt2c4jy` |
+| `household_2` | `pri_01jmwge4e7hhp52tz1fnt85hj8` | `pri_01jmwgeeemscr1nv0dh6mkhvdg` |
+| `household_3` | `pri_01jmwgej5rqnmwevg4wmn8vgj0` | `pri_01jmwgerr3vmwsktmvt7m8jcbm` |
+| `household_4` | `pri_01jmwgewjqtzy3kc05wvswk87r` | `pri_01jmwgf2tkx2hfz6jrs9m3jr1q` |
+| `household_5` | `pri_01jmwgf798kbh5mkny2j7g08m4` | `pri_01jmwgfbpdpmjpxpkv7q39e3xs` |
+
 References: [Paddle integration](https://www.revenuecat.com/docs/web/integrations/paddle),
 [Web paywalls](https://www.revenuecat.com/docs/web/paywalls).
 
@@ -61,16 +144,20 @@ ensure that the configured grant key supports that API. Never put these keys in 
 `VITE_` variable or GitHub build argument.
 
 The implementation's environment template is the source of truth for exact names.
-Required settings (all six are required in staging and production):
+All eight settings below are required in staging and production; the first six are
+validated at startup by `backend/internal/config/revenuecat.go`, and the last two
+are the retained Paddle prerequisites for plan-change and management-link flows.
 
-| Variable | Purpose | Visibility |
-| --- | --- | --- |
-| `REVENUECAT_PROJECT_ID` | Matching RevenueCat project | Backend configuration |
-| `REVENUECAT_ENVIRONMENT` | `sandbox` for staging; `production` for production | Backend configuration |
-| `REVENUECAT_SECRET_API_KEY` | REST v2 customer create/read/delete and catalog/subscription reads | Server secret |
-| `REVENUECAT_GRANT_API_KEY` | REST v1 grants and revocation | Server secret |
-| `REVENUECAT_WEBHOOK_AUTHORIZATION` | Exact webhook authorization header value | Server secret |
-| `REVENUECAT_WEBHOOK_SIGNING_SECRET` | Webhook HMAC verification | Server secret |
+| Variable | Scope / permission | Where it is set | What breaks without it |
+| --- | --- | --- | --- |
+| `REVENUECAT_PROJECT_ID` | Non-secret project identifier; must name the project the keys below belong to | Fly secret (staging/production); operator `.env` / QA compose | Staging and production startup validation fails; the bootstrap CLI refuses |
+| `REVENUECAT_ENVIRONMENT` | `sandbox` for staging/QA, `production` for production | Fly secret / QA compose | Startup validation fails; must equal `PADDLE_ENVIRONMENT` or the bootstrap refuses |
+| `REVENUECAT_SECRET_API_KEY` | REST v2 secret key: customer read/write, subscription read, entitlement read, app read | Fly secret | Startup validation fails; customer initialization/read, catalog validation and GDPR deletion are unavailable |
+| `REVENUECAT_GRANT_API_KEY` | REST v1-compatible secret key: promotional grant and revoke | Fly secret | Startup validation fails; trials and comps cannot be granted or revoked |
+| `REVENUECAT_WEBHOOK_AUTHORIZATION` | Exact `Authorization` header value configured on the RevenueCat webhook (include a `Bearer ` prefix only if you chose one, on both sides) | Fly secret, and the RevenueCat webhook config | Every delivery is rejected 401 (`invalid_signature`); access never synchronizes |
+| `REVENUECAT_WEBHOOK_SIGNING_SECRET` | HMAC signing secret for `X-RevenueCat-Webhook-Signature` | Fly secret, and the RevenueCat webhook config | Every delivery is rejected 401; access never synchronizes |
+| `PADDLE_ENVIRONMENT` | `sandbox`/`production`; must equal `REVENUECAT_ENVIRONMENT` | Fly secret / QA compose | The bootstrap refuses on a mismatch; this value also selects `config/subscription_tiers.sandbox.yaml` or `config/subscription_tiers.production.yaml`, so a wrong value loads the wrong price catalogue |
+| `PADDLE_API_KEY` | Paddle API key carrying the exact permission `customer_portal_session.write` | Fly secret | Subscription management URLs stay empty: RevenueCat cannot resolve a self-service link |
 
 Install secrets into the correct Fly application using secure input. Do not paste
 actual values into shell history, PR comments, logs, or this document. Keep the
@@ -91,8 +178,9 @@ different from both server keys. See [API key configuration](https://www.revenue
 
 Use `fly secrets import --app staging-boostedbudget-api` (or
 `fly secrets import --app boostedbudget-api` for production), feeding the six
-`NAME=value` settings through secure stdin from your secret manager. Keep the
-existing `PADDLE_ENVIRONMENT` equal to `REVENUECAT_ENVIRONMENT`. Do not import
+RevenueCat `NAME=value` settings through secure stdin from your secret manager,
+and keep the retained `PADDLE_ENVIRONMENT` / `PADDLE_API_KEY` values in place.
+Keep `PADDLE_ENVIRONMENT` equal to `REVENUECAT_ENVIRONMENT`. Do not import
 staging secrets into the production app. Restart/deploy the matching backend
 after migrations; configured environments fail startup on partial settings.
 
@@ -111,9 +199,22 @@ that integration's signing secret as `REVENUECAT_WEBHOOK_SIGNING_SECRET`.
 The handler requires `X-RevenueCat-Webhook-Signature`, validates the raw request
 body, and accepts timestamps only within five minutes. Keep server clocks in
 sync. See [RevenueCat webhook setup](https://www.revenuecat.com/docs/integrations/webhooks).
-Send all relevant customer lifecycle and promotional events to the matching
-environment. Promotional events may have no app ID; filtering them out would
-break trials and comps. Never route staging events to production.
+Send exactly these event types (RevenueCat webhook configuration → event types).
+The ingestion handler accepts any well-formed event that carries an `app_user_id`,
+but these are the types the code classifies (`ClassifyAccessChange` in
+`backend/internal/integration/revenuecat/webhook.go`); an unlisted type is folded
+into the `other` metric label and still triggers a refresh.
+
+- **Access-changing** (refresh entitlement state): `INITIAL_PURCHASE`, `RENEWAL`,
+  `NON_RENEWING_PURCHASE`, `PRODUCT_CHANGE`, `SUBSCRIPTION_EXTENDED`,
+  `TEMPORARY_ENTITLEMENT_GRANT`, `EXPIRATION`, `SUBSCRIPTION_PAUSED`.
+- **Billing-truth lifecycle** (recorded, no access change): `CANCELLATION`,
+  `UNCANCELLATION`, `BILLING_ISSUE`, `TRANSFER`.
+- **Delivery probe**: `TEST` (returns `test_received`; creates no customer
+  projection or inbox row).
+
+Promotional events may have no app ID; filtering them out would break trials and
+comps. Never route staging events to production.
 
 After configuration, confirm that a valid delivery reaches the admin webhook
 explorer and applies a customer projection. A delivery or queue acknowledgement
@@ -133,16 +234,59 @@ mixes staging and production. Never supply a secret RevenueCat API key here.
 
 In GitHub **Settings → Environments → staging / production → Environment secrets**,
 add `VITE_REVENUECAT_PUBLIC_API_KEY` using that project's Paddle app SDK key.
-Both deployment workflows require it, so rerun the appropriate frontend deploy
-after setting or changing it. There is no separate RevenueCat server secret,
-project ID, or native key to configure in the SPA. Docker deployments instead
-accept `REVENUECAT_PUBLIC_API_KEY` at container startup, with
-`VITE_REVENUECAT_PUBLIC_API_KEY` as a fallback. Local Vite reads
-`apps/web/.env.local`. QA accepts the same public key plus the six backend
-settings; keep all backend settings blank only for deliberately unconfigured QA.
+`deploy-to-staging.yaml` and `deploy-production.yml` hard-fail the build when it is
+empty; `deploy-qa.yml` supplies the same secret to the container. Rerun the
+appropriate frontend deploy after setting or changing it. There is no separate
+RevenueCat server secret, project ID, or native key to configure in the SPA.
+
+The SPA resolves the key from two sources, `window.ENV` first and
+`import.meta.env` second (`apps/web/src/features/billing/revenueCatRuntime.ts`):
+
+| Runtime | Where the key comes from | Which source wins |
+| --- | --- | --- |
+| Local Vite dev | `apps/web/.env.local` (operator-created, gitignored) | `import.meta.env.VITE_REVENUECAT_PUBLIC_API_KEY` |
+| Staging / production SPA | GitHub environment secret, baked in at build time | `import.meta.env.VITE_REVENUECAT_PUBLIC_API_KEY` |
+| Docker / QA container | `REVENUECAT_PUBLIC_API_KEY` at container start (falls back to `VITE_REVENUECAT_PUBLIC_API_KEY`), written into `window.ENV` by `apps/web/docker-entrypoint.sh` | `window.ENV.REVENUECAT_PUBLIC_API_KEY` |
+
+QA accepts the same public key plus the six backend settings; keep all backend
+settings blank only for deliberately unconfigured QA.
 
 The SPA still uses Clerk for sign-in. Its RevenueCat identity must switch with the
 Clerk user. No native SDK or mobile store key belongs in the SPA configuration.
+
+## Manual versus automated
+
+**Manual, human-owned and sensitive**: no CLI performs these: creating the
+RevenueCat project and connecting the Paddle integration; granting the exact
+Paddle permission `customer_portal_session.write`; creating entitlements,
+products and the `web` offering; generating the REST v2 secret key, the grant key,
+the webhook `Authorization` value and the signing secret; capturing the public SDK
+key; installing secrets into Fly and GitHub; and rotating any of them.
+
+**Performed by the bootstrap CLI** (`backend/cmd/revenuecat-bootstrap`): a
+read-only inventory that validates all eleven entitlement mappings, the app's
+Paddle environment and every customer's inventory before any apply; and, with
+`--apply`, recording durable grant intents. It does **not** create projects, keys,
+entitlements, products or webhooks, and it never changes access directly or sends
+promotional mutations itself. See Bootstrap and validation.
+
+## Key rotation
+
+Rotate one key at a time and verify a real sandbox event reaches the inbox and
+applies a projection before moving on. Never commit a value; names and scopes only.
+
+- **REST v2 secret key / grant key**: generate a new key in RevenueCat with the
+  same permission scope, import it into the matching Fly app
+  (`fly secrets import`), and restart/redeploy. RevenueCat may accept both keys
+  during the overlap, so rotate the value before revoking the old one.
+- **Webhook `Authorization` value**: change it in RevenueCat's webhook config and
+  in `REVENUECAT_WEBHOOK_AUTHORIZATION` in the same window. A mismatch rejects
+  every delivery with 401 (`invalid_signature`) until both sides agree.
+- **Webhook signing secret**: re-generate it in the integration and store it as
+  `REVENUECAT_WEBHOOK_SIGNING_SECRET` before the next delivery; a delivery signed
+  with the old secret fails HMAC verification.
+- **Public SDK key**: rotate it in RevenueCat, update the matching GitHub
+  environment secret, and rebuild the SPA (SPA configuration).
 
 ## Bootstrap and validation
 
@@ -150,8 +294,11 @@ This is a **prelaunch-only** cutover, not a paid-customer migration. Keep
 registration, checkout, and admin grant writes closed for the whole inventory,
 apply, and reconciliation window. Drain old trial/subscription workers before
 starting the new version; do not run old and new access writers together.
-Take the normal database backup and apply migrations through `000210` using
-the existing deployment migration workflow. Do not run down migrations against
+Take the normal database backup and apply migrations through `000217` using
+the existing deployment migration workflow. (Staging's maximum before this branch
+is `000213`; the branch adds `000214` through `000217`, so `000217` is the post-merge
+maximum. Re-derive it from `backend/migrations/` (take the highest `*.up.sql`
+version) rather than trusting this number.) Do not run down migrations against
 populated authority tables as a rollback strategy.
 
 Run from `backend/` with the target environment's server credentials and
