@@ -55,6 +55,16 @@ const REFERRER_PROPERTIES = new Set([
 const CAMPAIGN_CLICK_ID_PROPERTIES = new Set([
   'gclid', 'fbclid', 'msclkid', '$gclid', '$fbclid', '$msclkid',
 ])
+// Person properties are default-deny: `$set`/`$set_once` maps keep ONLY these
+// keys. The browser sends `{name}` (Task 6); the rest are the server/legacy floor.
+const ALLOWED_PERSON_PROPERTIES = new Set([
+  'is_comped',
+  'name',
+  'primary_region',
+  'subscription_status_effective',
+  'subscription_tier',
+])
+const PERSON_PROPERTY_MAPS = new Set(['$set', '$set_once'])
 
 const WITHDRAWAL_STORAGE_KEY = 'boostedbudget:analytics-withdrawal'
 const YES_LIKE_PRIVACY_SIGNAL_VALUES = new Set<unknown>([true, 'true', 1, '1', 'yes'])
@@ -270,7 +280,16 @@ function containsSensitiveUrl(value: unknown, visited = new WeakSet<object>()): 
   return false
 }
 
-function sanitizeValue(value: unknown, ancestors = new WeakSet<object>()): unknown {
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)
+}
+
+function sanitizeValue(
+  value: unknown,
+  ancestors = new WeakSet<object>(),
+  personPropertyMap = false,
+  isEventRoot = false,
+): unknown {
   if (!value || typeof value !== 'object') return value
   if (value instanceof Date) return new Date(value.getTime())
   if (ancestors.has(value)) return null
@@ -282,9 +301,40 @@ function sanitizeValue(value: unknown, ancestors = new WeakSet<object>()): unkno
     return sanitized
   }
 
+  const record = value as Record<string, unknown>
+  const isSetEvent = isEventRoot && record.event === '$set'
   const sanitized: Record<string, unknown> = {}
-  for (const [key, child] of Object.entries(value)) {
+  for (const [key, child] of Object.entries(record)) {
     const normalized = key.toLowerCase()
+    // `$unset` is not a person property: preserve the array verbatim wherever it appears.
+    if (normalized === '$unset') {
+      sanitized[key] = child
+      continue
+    }
+    // Person properties are default-deny: only the allowlist survives, and the old
+    // `isPiiKey` denylist does NOT gate them. Applies to the keys of a `$set`/`$set_once`
+    // sub-object and to the direct properties of an event NAMED `$set`.
+    if (personPropertyMap && !ALLOWED_PERSON_PROPERTIES.has(key)) continue
+    if (PERSON_PROPERTY_MAPS.has(normalized) && isPlainRecord(child)) {
+      sanitized[key] = sanitizeValue(child, ancestors, true)
+      continue
+    }
+    if (isSetEvent && normalized === 'properties' && isPlainRecord(child)) {
+      sanitized[key] = sanitizeValue(child, ancestors, true)
+      continue
+    }
+    // `$heatmap_data` is URL-keyed; remap each key and drop sensitive routes.
+    if (normalized === '$heatmap_data' && isPlainRecord(child) && !ancestors.has(child)) {
+      ancestors.add(child)
+      const heatmap: Record<string, unknown> = {}
+      for (const [urlKey, data] of Object.entries(child)) {
+        if (isSensitiveAnalyticsPath(urlKey)) continue
+        heatmap[sanitizeAnalyticsUrl(urlKey)] = sanitizeValue(data, ancestors)
+      }
+      ancestors.delete(child)
+      sanitized[key] = heatmap
+      continue
+    }
     if (isPiiKey(key) || REFERRER_PROPERTIES.has(normalized) || isCampaignProperty(normalized)) continue
     if (URL_PROPERTIES.has(normalized)) {
       if (typeof child === 'string') sanitized[key] = sanitizeAnalyticsUrl(child)
@@ -348,7 +398,7 @@ export function posthogConfig(
     },
     before_send: event => {
       if (!isCaptureAllowed() || !event || containsSensitiveUrl(event.properties)) return null
-      return sanitizeValue(event) as typeof event
+      return sanitizeValue(event, new WeakSet(), false, true) as typeof event
     },
   }
 }
