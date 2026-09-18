@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 )
 
 const maxResponseBytes = 4 << 20
@@ -110,41 +112,68 @@ func (c *Client) customerPath(id string) string {
 	return c.projectPath() + "/customers/" + url.PathEscape(id)
 }
 
+// observe records one logical provider operation's duration and outcome. It is the single place
+// the operation label is produced, so a call site cannot widen the label set by passing a request
+// path (which embeds the customer id).
+func (c *Client) observe(operation string, fn func() error) error {
+	start := time.Now()
+	err := fn()
+	observability.ObserveRevenueCatAPIRequestDuration(operation, time.Since(start).Seconds())
+	status := observability.RevenueCatAPIStatusSuccess
+	var httpErr *HTTPError
+	switch {
+	case errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusTooManyRequests:
+		status = observability.RevenueCatAPIStatusRateLimited
+		observability.RecordRevenueCatRateLimited()
+	case err != nil:
+		status = observability.RevenueCatAPIStatusError
+	}
+	observability.RecordRevenueCatAPIRequest(operation, status)
+	return err
+}
+
 // EnsureCustomer establishes the canonical Clerk identity before a card-free grant.
 // A conflict is confirmed by reading that exact customer; unrelated failures remain errors.
 func (c *Client) EnsureCustomer(ctx context.Context, id string) error {
-	if id == "" {
-		return errors.New("RevenueCat customer ID is required")
-	}
-	body, err := json.Marshal(map[string]string{"id": id})
-	if err != nil {
-		return err
-	}
-	_, err = c.request(ctx, http.MethodPost, c.projectPath()+"/customers", c.secretAPIKey, body)
-	var status *HTTPError
-	if !errors.As(err, &status) || status.StatusCode != http.StatusConflict {
-		return err
-	}
-	raw, err := c.request(ctx, http.MethodGet, c.customerPath(id), c.secretAPIKey, nil)
-	if err != nil {
-		return err
-	}
-	var customer struct {
-		ID string `json:"id"`
-	}
-	if json.Unmarshal(raw, &customer) != nil || customer.ID != id {
-		return errors.New("RevenueCat customer conflict could not be confirmed")
-	}
-	return nil
+	return c.observe(observability.RevenueCatOperationEnsureCustomer, func() error {
+		if id == "" {
+			return errors.New("RevenueCat customer ID is required")
+		}
+		body, err := json.Marshal(map[string]string{"id": id})
+		if err != nil {
+			return err
+		}
+		_, err = c.request(ctx, http.MethodPost, c.projectPath()+"/customers", c.secretAPIKey, body)
+		var status *HTTPError
+		if !errors.As(err, &status) || status.StatusCode != http.StatusConflict {
+			return err
+		}
+		raw, err := c.request(ctx, http.MethodGet, c.customerPath(id), c.secretAPIKey, nil)
+		if err != nil {
+			return err
+		}
+		var customer struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(raw, &customer) != nil || customer.ID != id {
+			return errors.New("RevenueCat customer conflict could not be confirmed")
+		}
+		return nil
+	})
 }
 
 func (c *Client) FetchSnapshot(ctx context.Context, id string) (Snapshot, error) {
-	es, err := c.FetchEntitlements(ctx, id)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	ss, err := c.FetchSubscriptions(ctx, id)
-	return Snapshot{Entitlements: es, Subscriptions: ss}, err
+	var out Snapshot
+	err := c.observe(observability.RevenueCatOperationFetchSnapshot, func() error {
+		es, err := c.fetchEntitlements(ctx, id)
+		if err != nil {
+			return err
+		}
+		ss, err := c.fetchSubscriptions(ctx, id)
+		out = Snapshot{Entitlements: es, Subscriptions: ss}
+		return err
+	})
+	return out, err
 }
 
 // entitlementCatalog caches only a complete validated catalog, coalescing its
@@ -185,6 +214,16 @@ func (c *Client) entitlementCatalog(ctx context.Context, previous *entitlementCa
 // FetchEntitlements resolves opaque entitlement IDs through the project catalog.
 // An incomplete or malformed response is never an empty grant set.
 func (c *Client) FetchEntitlements(ctx context.Context, id string) ([]Entitlement, error) {
+	var out []Entitlement
+	err := c.observe(observability.RevenueCatOperationFetchEntitlements, func() error {
+		es, err := c.fetchEntitlements(ctx, id)
+		out = es
+		return err
+	})
+	return out, err
+}
+
+func (c *Client) fetchEntitlements(ctx context.Context, id string) ([]Entitlement, error) {
 	if id == "" {
 		return nil, errors.New("RevenueCat customer ID is required")
 	}
@@ -231,6 +270,16 @@ func (c *Client) FetchEntitlements(ctx context.Context, id string) ([]Entitlemen
 // StoreSubscriptionIdentifier is provider-reported metadata; callers must resolve
 // the actual Paddle subscription before issuing Paddle mutations.
 func (c *Client) FetchSubscriptions(ctx context.Context, id string) ([]Subscription, error) {
+	var out []Subscription
+	err := c.observe(observability.RevenueCatOperationFetchSubscriptions, func() error {
+		ss, err := c.fetchSubscriptions(ctx, id)
+		out = ss
+		return err
+	})
+	return out, err
+}
+
+func (c *Client) fetchSubscriptions(ctx context.Context, id string) ([]Subscription, error) {
 	if id == "" {
 		return nil, errors.New("RevenueCat customer ID is required")
 	}
@@ -281,59 +330,70 @@ func millis(raw json.RawMessage) (*time.Time, error) {
 }
 
 func (c *Client) Grant(ctx context.Context, id, lookup string, end *time.Time) error {
-	if id == "" || lookup == "" {
-		return errors.New("RevenueCat customer and entitlement are required")
-	}
-	body := map[string]any{"duration": "lifetime"}
-	if end != nil {
-		if end.UnixMilli() <= 0 {
-			return errors.New("invalid RevenueCat grant expiry")
+	return c.observe(observability.RevenueCatOperationGrant, func() error {
+		if id == "" || lookup == "" {
+			return errors.New("RevenueCat customer and entitlement are required")
 		}
-		body = map[string]any{"end_time_ms": end.UnixMilli()}
-	}
-	data, _ := json.Marshal(body)
-	_, err := c.request(ctx, http.MethodPost, promotionalPath(id, lookup)+"/promotional", c.grantAPIKey, data)
-	return err
+		body := map[string]any{"duration": "lifetime"}
+		if end != nil {
+			if end.UnixMilli() <= 0 {
+				return errors.New("invalid RevenueCat grant expiry")
+			}
+			body = map[string]any{"end_time_ms": end.UnixMilli()}
+		}
+		data, _ := json.Marshal(body)
+		_, err := c.request(ctx, http.MethodPost, promotionalPath(id, lookup)+"/promotional", c.grantAPIKey, data)
+		return err
+	})
 }
 func (c *Client) Revoke(ctx context.Context, id, lookup string) error {
-	if id == "" || lookup == "" {
-		return errors.New("RevenueCat customer and entitlement are required")
-	}
-	_, err := c.request(ctx, http.MethodPost, promotionalPath(id, lookup)+"/revoke_promotionals", c.grantAPIKey, nil)
-	return err
+	return c.observe(observability.RevenueCatOperationRevoke, func() error {
+		if id == "" || lookup == "" {
+			return errors.New("RevenueCat customer and entitlement are required")
+		}
+		_, err := c.request(ctx, http.MethodPost, promotionalPath(id, lookup)+"/revoke_promotionals", c.grantAPIKey, nil)
+		return err
+	})
 }
 func promotionalPath(id, lookup string) string {
 	return "/v1/subscribers/" + url.PathEscape(id) + "/entitlements/" + url.PathEscape(lookup)
 }
 func (c *Client) DeleteCustomer(ctx context.Context, id string) error {
-	if id == "" {
-		return errors.New("RevenueCat customer ID is required")
-	}
-	_, err := c.request(ctx, http.MethodDelete, c.customerPath(id), c.secretAPIKey, nil)
-	return err
+	return c.observe(observability.RevenueCatOperationDeleteCustomer, func() error {
+		if id == "" {
+			return errors.New("RevenueCat customer ID is required")
+		}
+		_, err := c.request(ctx, http.MethodDelete, c.customerPath(id), c.secretAPIKey, nil)
+		return err
+	})
 }
 
 // CustomerExists confirms asynchronous deletion through the canonical customer
 // resource. An empty entitlement list does not prove that its PII was erased.
 func (c *Client) CustomerExists(ctx context.Context, id string) (bool, error) {
-	if id == "" {
-		return false, errors.New("RevenueCat customer ID is required")
-	}
-	raw, err := c.request(ctx, http.MethodGet, c.customerPath(id), c.secretAPIKey, nil)
-	var status *HTTPError
-	if errors.As(err, &status) && status.StatusCode == http.StatusNotFound {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	var customer struct {
-		ID string `json:"id"`
-	}
-	if json.Unmarshal(raw, &customer) != nil || customer.ID != id {
-		return false, errors.New("RevenueCat customer readback identity mismatch")
-	}
-	return true, nil
+	var exists bool
+	err := c.observe(observability.RevenueCatOperationCustomerExists, func() error {
+		if id == "" {
+			return errors.New("RevenueCat customer ID is required")
+		}
+		raw, err := c.request(ctx, http.MethodGet, c.customerPath(id), c.secretAPIKey, nil)
+		var status *HTTPError
+		if errors.As(err, &status) && status.StatusCode == http.StatusNotFound {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var customer struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(raw, &customer) != nil || customer.ID != id {
+			return errors.New("RevenueCat customer readback identity mismatch")
+		}
+		exists = true
+		return nil
+	})
+	return exists, err
 }
 
 func (c *Client) list(ctx context.Context, path string) ([]json.RawMessage, error) {

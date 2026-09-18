@@ -11,6 +11,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	rc "github.com/maxnussbaum/BoostedBudget/internal/integration/revenuecat"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
@@ -110,12 +111,14 @@ func (s *RevenueCatService) ResolveOwnAccessAt(ctx context.Context, id string, n
 	}
 	if err == nil {
 		if access, e := state.ResolveAccess(now); e == nil {
+			observability.RecordRevenueCatResolution(observability.RevenueCatResolutionResolved)
 			return access, nil
 		}
 	}
 	// The locked recheck coalesces concurrent cache misses across all server instances.
 	state, err = s.refresh(ctx, id, false, now)
 	if err != nil {
+		observability.RecordRevenueCatResolution(observability.RevenueCatResolutionError)
 		return domain.RevenueCatAccess{}, fmt.Errorf("%w: refresh failed", domain.ErrRevenueCatUnresolved)
 	}
 	// Billing I/O and the transaction commit can cross an entitlement expiry after
@@ -124,7 +127,13 @@ func (s *RevenueCatService) ResolveOwnAccessAt(ctx context.Context, id string, n
 	if returnedAt := time.Now(); returnedAt.After(now) {
 		now = returnedAt
 	}
-	return state.ResolveAccess(now)
+	access, err := state.ResolveAccess(now)
+	if err != nil {
+		observability.RecordRevenueCatResolution(observability.RevenueCatResolutionUnresolved)
+		return access, err
+	}
+	observability.RecordRevenueCatResolution(observability.RevenueCatResolutionResolved)
+	return access, nil
 }
 func (s *RevenueCatService) GetEffectiveSubscriptionStatusByUserID(ctx context.Context, id string) (string, error) {
 	a, err := s.ResolveOwnAccess(ctx, id)
@@ -134,6 +143,7 @@ func (s *RevenueCatService) Refresh(ctx context.Context, id string) (domain.Reve
 	return s.refresh(ctx, id, true, time.Now())
 }
 func (s *RevenueCatService) refresh(ctx context.Context, id string, force bool, requested time.Time, erasure ...bool) (domain.RevenueCatState, error) {
+	start := time.Now()
 	var state domain.RevenueCatState
 	var priorGrants []domain.RevenueCatGrant
 	var remoteErr error
@@ -177,11 +187,20 @@ func (s *RevenueCatService) refresh(ctx context.Context, id string, force bool, 
 		return nil // persist sanitized failure and prior confirmed snapshot, even on provider error.
 	})
 	if err != nil {
+		observability.ObserveRevenueCatRefresh(observability.RevenueCatRefreshError, time.Since(start).Seconds())
 		return state, err
 	}
 	if refreshed {
 		s.captureAccessTransition(ctx, id, priorStatus, priorGrants, state, len(erasure) > 0)
 	}
+	outcome := observability.RevenueCatRefreshNotDue
+	if refreshed {
+		outcome = observability.RevenueCatRefreshSuccess
+		if remoteErr != nil {
+			outcome = observability.RevenueCatRefreshError
+		}
+	}
+	observability.ObserveRevenueCatRefresh(outcome, time.Since(start).Seconds())
 	return state, remoteErr
 }
 func (s *RevenueCatService) customerID(ctx context.Context, id string) (string, *domain.User, error) {
@@ -206,25 +225,41 @@ func (s *RevenueCatService) customerID(ctx context.Context, id string) (string, 
 // inactive refresh does not re-fire. A user being erased never emits: the authority query would drop
 // it anyway, and attempting it would recreate the PostHog person the erasure outbox just deleted.
 func (s *RevenueCatService) captureAccessTransition(ctx context.Context, id, priorStatus string, priorGrants []domain.RevenueCatGrant, state domain.RevenueCatState, erasureRequested bool) {
-	if s.analytics == nil || erasureRequested || state.ErasureStartedAt != nil {
-		return
-	}
-	if priorStatus == "" {
+	if erasureRequested || state.ErasureStartedAt != nil || priorStatus == "" {
 		return
 	}
 	access, err := state.ResolveAccess(time.Now())
 	if err != nil {
 		return
 	}
+	// The lifecycle FLOW counters are recorded here, before the analytics gate, because they
+	// describe the system's grant lifecycle rather than the user's consent-gated product stream.
+	// The predicates are exactly the once-per-transition ones the product events below use, so a
+	// repeated inactive refresh cannot re-count.
+	//
 	// The trial boundary is checked before the inactive early-return because a trial that converted
 	// to a paid grant resolves active, not inactive.
-	if priorStatus == "trial" || priorStatus == "trialing" {
-		if access.Status != "trial" {
-			s.analytics.CaptureEvent(ctx, id, phclient.RevenueCatTrialEndedPayload{
-				Entitlement: phclient.RevenueCatTrialEndedEntitlementTrialPremium,
-				Converted:   access.Status == "active",
-			})
-		}
+	trialEnded := (priorStatus == "trial" || priorStatus == "trialing") && access.Status != "trial"
+	if trialEnded && access.Status != "active" {
+		observability.RecordRevenueCatGrantExpired(observability.RevenueCatGrantClassTrial)
+	}
+	armed := access.Status == "inactive" && (priorStatus == "active" || priorStatus == "trial" || priorStatus == "trialing")
+	if armed {
+		observability.RecordRevenueCatRetentionEpisodeArmed()
+	}
+	source, key := bestRevenueCatGrant(priorGrants)
+	if access.Status == "inactive" && priorStatus != "inactive" &&
+		(source == observability.RevenueCatGrantClassComp || source == observability.RevenueCatGrantClassPaid) {
+		observability.RecordRevenueCatGrantExpired(source)
+	}
+	if s.analytics == nil {
+		return
+	}
+	if trialEnded {
+		s.analytics.CaptureEvent(ctx, id, phclient.RevenueCatTrialEndedPayload{
+			Entitlement: phclient.RevenueCatTrialEndedEntitlementTrialPremium,
+			Converted:   access.Status == "active",
+		})
 	}
 	if priorStatus == "inactive" {
 		return
@@ -235,7 +270,6 @@ func (s *RevenueCatService) captureAccessTransition(ctx context.Context, id, pri
 	// An admin revoke is applied by ProcessOperation, never by a refresh, so a refresh-driven
 	// inactive projection is the comp-expiry / paid-lapse path the admin queue does not describe.
 	s.captureGrantEnded(ctx, id, priorGrants)
-	source, key := bestRevenueCatGrant(priorGrants)
 	revocationSource := phclient.RevenueCatAccessRevokedSourceWebhook
 	if source == "paid" {
 		revocationSource = phclient.RevenueCatAccessRevokedSourceRefund
@@ -244,7 +278,7 @@ func (s *RevenueCatService) captureAccessTransition(ctx context.Context, id, pri
 	s.analytics.CaptureEvent(ctx, id, phclient.RevenueCatAccessInactivePayload{
 		PendingOperations: int64(state.PendingOperations),
 	})
-	if priorStatus == "active" || priorStatus == "trial" || priorStatus == "trialing" {
+	if armed {
 		s.analytics.CaptureEvent(ctx, id, phclient.RevenueCatRetentionArmedPayload{
 			DeferredForPendingOperations: state.PendingOperations > 0,
 		})
@@ -366,6 +400,7 @@ func (s *RevenueCatService) refreshLocked(ctx context.Context, session repositor
 	}
 	return session.Save(ctx, *state)
 }
+
 // applyRevenueCatGrants projects a FRESH provider read, which is authoritative about what access
 // the customer has NOW. A grant that can no longer resolve — already lapsed, an unrecognised key,
 // or a duplicate — is DROPPED rather than failing the whole refresh. Failing here aborted the
@@ -463,7 +498,7 @@ func (s *RevenueCatService) ProcessOperation(ctx context.Context, userID, operat
 		attempted = &op
 		if identityErr != nil {
 			workErr = identityErr
-			return session.FinishOperation(ctx, op.ID, "pending", revenueCatErrorCode(identityErr))
+			return session.FinishOperation(ctx, op.ID, "pending", revenueCatErrorCode(identityErr), op.Class)
 		}
 		state, err := session.Read(ctx)
 		if err != nil {
@@ -481,7 +516,7 @@ func (s *RevenueCatService) ProcessOperation(ctx context.Context, userID, operat
 			stage = "pending"
 			message = revenueCatErrorCode(workErr)
 		}
-		return session.FinishOperation(ctx, op.ID, stage, message)
+		return session.FinishOperation(ctx, op.ID, stage, message, op.Class)
 	})
 	if err != nil {
 		return err

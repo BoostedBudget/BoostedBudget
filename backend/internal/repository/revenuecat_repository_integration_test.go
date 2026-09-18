@@ -256,7 +256,7 @@ func TestRevenueCatRepository_PendingOperationsFairToNewIntent(t *testing.T) {
 	require.NoError(t, repo.RequestOperation(ctx, &old))
 	require.NoError(t, repo.RequestOperation(ctx, &next))
 	require.NoError(t, repo.WithCustomer(ctx, id, func(s RevenueCatSession) error {
-		return s.FinishOperation(ctx, old.ID, "pending", "provider_unavailable")
+		return s.FinishOperation(ctx, old.ID, "pending", "provider_unavailable", old.Class)
 	}))
 	pending, err := repo.PendingOperations(ctx, 1)
 	require.NoError(t, err)

@@ -93,7 +93,7 @@ func (s rcTestSession) Operation(_ context.Context, id string) (domain.RevenueCa
 	}
 	return o, nil
 }
-func (s rcTestSession) FinishOperation(_ context.Context, id, stage, message string) error {
+func (s rcTestSession) FinishOperation(_ context.Context, id, stage, message, _ string) error {
 	o := s.r.ops[id]
 	o.Stage = stage
 	o.LastError = message

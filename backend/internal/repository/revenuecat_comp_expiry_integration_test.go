@@ -63,7 +63,7 @@ func TestRevenueCatCompExpiry_ArmsRetentionAndClearsOverride(t *testing.T) {
 	// inactive projection below (Save's guard: an inactive projection is withheld while an intent
 	// is pending).
 	require.NoError(t, repo.WithCustomer(ctx, id, func(s RevenueCatSession) error {
-		return s.FinishOperation(ctx, op.ID, "applied", "")
+		return s.FinishOperation(ctx, op.ID, "applied", "", op.Class)
 	}))
 
 	state := domain.RevenueCatState{UserID: id, AccessUpdatedAt: time.Now(), Grants: []domain.RevenueCatGrant{{Key: "comp_household_3"}}}

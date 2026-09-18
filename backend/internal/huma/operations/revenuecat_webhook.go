@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -10,6 +11,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	rc "github.com/maxnussbaum/BoostedBudget/internal/integration/revenuecat"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue/jobs"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -50,7 +52,9 @@ type RevenueCatWebhookOutput struct {
 }
 
 func (h *RevenueCatWebhookHandler) Handle(ctx context.Context, input *RevenueCatWebhookInput) (*RevenueCatWebhookOutput, error) {
+	start := time.Now()
 	if err := rc.VerifyWebhook(input.RawBody, input.Authorization, input.Signature, h.deps.Authorization, h.deps.SigningSecret, time.Now()); err != nil {
+		h.reject("", observability.RevenueCatWebhookReasonInvalidSignature, "webhook authentication failed")
 		recordInvalidWebhookAttempt(ctx, h.deps.InvalidAttempts, "revenuecat", input.RawBody, nil)
 		return nil, huma.Error401Unauthorized("Webhook authentication failed.")
 	}
@@ -62,23 +66,28 @@ func (h *RevenueCatWebhookHandler) Handle(ctx context.Context, input *RevenueCat
 		} `json:"event"`
 	}
 	if json.Unmarshal(input.RawBody, &payload) != nil || payload.Event.ID == "" || len(payload.Event.ID) > 200 || payload.Event.Type == "" || len(payload.Event.Type) > 100 {
+		h.reject("", observability.RevenueCatWebhookReasonMalformedPayload, "webhook event fields are missing or malformed")
 		return nil, huma.Error400BadRequest("Webhook event fields are missing or malformed.")
 	}
 	out := &RevenueCatWebhookOutput{}
 	if payload.Event.Type == "TEST" {
 		out.Body.Status = "test_received"
+		observability.ObserveRevenueCatWebhookProcessingDuration(payload.Event.Type, time.Since(start).Seconds())
 		return out, nil
 	}
 	if payload.Event.AppUserID == "" || len(payload.Event.AppUserID) > 255 {
+		h.reject(payload.Event.Type, observability.RevenueCatWebhookReasonMalformedPayload, "webhook customer identity is missing or malformed")
 		return nil, huma.Error400BadRequest("Webhook customer identity is missing or malformed.")
 	}
 	if h.deps.Inbox == nil || h.deps.Queue == nil || h.deps.Profiles == nil {
+		h.reject(payload.Event.Type, observability.RevenueCatWebhookReasonUnavailable, "subscription synchronization is unavailable")
 		return nil, huma.Error503ServiceUnavailable("Subscription synchronization is unavailable. Retry this delivery.")
 	}
 	// Exact Clerk identity only. Email, anonymous IDs and client-supplied internal
 	// UUIDs cannot identify an account for subscription access.
 	user, err := h.deps.Profiles.GetUserByClerkID(ctx, payload.Event.AppUserID)
 	if err != nil || user == nil || user.IsDeleted {
+		h.reject(payload.Event.Type, observability.RevenueCatWebhookReasonUnresolvedCustomer, "webhook customer could not be resolved")
 		return nil, huma.Error503ServiceUnavailable("Webhook customer could not be resolved. Retry this delivery.")
 	}
 	accepted, err := h.deps.Inbox.AcceptWebhook(ctx, payload.Event.ID, user.ID, payload.Event.Type, func(ctx context.Context, tx pgx.Tx, eventID string) error {
@@ -86,14 +95,31 @@ func (h *RevenueCatWebhookHandler) Handle(ctx context.Context, input *RevenueCat
 		return err
 	})
 	if err != nil {
+		h.reject(payload.Event.Type, observability.RevenueCatWebhookReasonQueueError, "webhook processing could not be queued")
 		return nil, huma.Error503ServiceUnavailable("Webhook processing could not be queued. Retry this delivery.")
 	}
 	out.Body.Status = "duplicate"
 	if accepted {
 		out.Body.Status = "queued"
+		// Only a NEW accepted row is throughput; a deduped redelivery is provider retry pressure
+		// and is deliberately not counted here.
+		observability.RecordRevenueCatWebhookReceived(payload.Event.Type)
 		h.captureAccessChange(ctx, user.ID, payload.Event.Type)
 	}
+	observability.ObserveRevenueCatWebhookProcessingDuration(payload.Event.Type, time.Since(start).Seconds())
 	return out, nil
+}
+
+// reject records an ingestion rejection on both operational surfaces: the fixed-enum Prometheus
+// counter (event type normalized, reason class derived from WHERE the rejection happened) and a
+// structured log line. It deliberately carries neither the raw body nor any customer identity.
+func (h *RevenueCatWebhookHandler) reject(eventType, reasonClass, message string) {
+	observability.RecordRevenueCatWebhookFailed(eventType, reasonClass)
+	slog.Default().Warn("revenuecat webhook rejected",
+		"reason_class", reasonClass,
+		"event_type", observability.NormalizeRevenueCatEventType(eventType),
+		"message", message,
+	)
 }
 
 // captureAccessChange emits the product event for a delivery that changed access. It is a pure

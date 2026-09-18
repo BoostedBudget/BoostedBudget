@@ -7,6 +7,7 @@ import (
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	rc "github.com/maxnussbaum/BoostedBudget/internal/integration/revenuecat"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/riverqueue/river"
 )
@@ -38,7 +39,27 @@ func NewRevenueCatSyncWorker(service revenueCatSyncService, webhooks revenueCatW
 	return &RevenueCatSyncWorker{service: service, webhooks: webhooks}
 }
 
+// Work records the generic River job outcome pair for this kind — the async counterpart to the
+// handler-side revenuecat_webhook_processing_duration_seconds. A rate-limit snooze is neither a
+// success nor a failure: River will re-run the job, so it is recorded as "snoozed" rather than
+// inflating the failure rate with an expected throttle.
 func (w *RevenueCatSyncWorker) Work(ctx context.Context, job *river.Job[RevenueCatSyncArgs]) error {
+	start := time.Now()
+	err := w.work(ctx, job)
+	status := "success"
+	var snooze *river.JobSnoozeError
+	switch {
+	case errors.As(err, &snooze):
+		status = "snoozed"
+	case err != nil:
+		status = "failed"
+	}
+	observability.JobsCompleted.WithLabelValues(job.Kind, job.Queue, status).Inc()
+	observability.JobDuration.WithLabelValues(job.Kind).Observe(time.Since(start).Seconds())
+	return err
+}
+
+func (w *RevenueCatSyncWorker) work(ctx context.Context, job *river.Job[RevenueCatSyncArgs]) error {
 	a := job.Args
 	if a.UserID == "" || (a.OperationID != "" && a.EventID != "") {
 		return errors.New("invalid RevenueCat job references")

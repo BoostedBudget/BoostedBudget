@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -142,6 +143,18 @@ func run() error {
 	defer db.Close()
 	result, err := runBootstrap(ctx, repository.NewRevenueCatBootstrapRepository(db, enc), client, expected, *appID, *apply)
 	// Counts only: never print credentials, customer identities, or account metadata.
+	//
+	// ⚠ THE LOG IS THE ONLY OPERATIONAL SURFACE FOR THIS COMMAND, deliberately. This is a
+	// short-lived CLI with no Prometheus listener and no pushgateway anywhere in backend/, so a
+	// counter registered here would be scraped by nobody. Batch mechanics are recorded as counts
+	// per run instead; if a durable record is ever wanted, revenuecat_operations is the place.
+	slog.Default().Info("revenuecat bootstrap run completed",
+		"apply", result.Apply,
+		"users", result.Users,
+		"planned_grants", result.PlannedGrants,
+		"queued_grants", result.QueuedGrants,
+		"error", err,
+	)
 	if printErr := json.NewEncoder(os.Stdout).Encode(result); printErr != nil {
 		return printErr
 	}
