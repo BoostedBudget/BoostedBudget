@@ -755,6 +755,10 @@ describe('legacy migration inventory', () => {
     const promotedEvents = new Set([
       'admin_subscription_override_applied_server',
       'admin_subscription_override_removed_server',
+      // #1652 todo 10: promoted so the authoritative daily backstop can reuse the same event
+      // through the Gateway (a legacy zero-property contract has no generated payload to pass
+      // to CaptureEvent). The subscription-webhook fast-path emitter keeps its raw Capture call.
+      'household_over_capacity_entered',
     ])
     expect(legacy.map((event) => event.name).sort()).toEqual(
       fixture.legacy_events.filter((event) => !retiredEvents.has(event) && !removedEvents.has(event) && !promotedEvents.has(event)),
@@ -803,19 +807,22 @@ describe('legacy migration inventory', () => {
     const catalog = parseEventCatalogYaml(
       readFileSync(join(import.meta.dir, '../config/posthog_events.yaml'), 'utf8'),
     )
-    const descriptions = Object.fromEntries(
-      catalog.events
-        .filter((event) => Object.hasOwn(fixture.descriptions, event.contract_id))
-        .map((event) => [event.contract_id, event.description]),
-    )
-
     const removedContractIds = new Set([
       'backend_admin_subscription_override_expired',
       'backend_past_due_auto_cancelled',
       'backend_past_due_plaid_disconnected',
     ])
+    // #1652 todo 10 promoted this contract to active and rewrote its description to name the
+    // daily-backstop emitter, so the fixture's historical description no longer matches.
+    const promotedContractIds = new Set(['backend_household_over_capacity_entered'])
+    const descriptions = Object.fromEntries(
+      catalog.events
+        .filter((event) => Object.hasOwn(fixture.descriptions, event.contract_id) && !promotedContractIds.has(event.contract_id))
+        .map((event) => [event.contract_id, event.description]),
+    )
+
     expect(descriptions).toEqual(Object.fromEntries(
-      Object.entries(fixture.descriptions).filter(([contractId]) => !removedContractIds.has(contractId)),
+      Object.entries(fixture.descriptions).filter(([contractId]) => !removedContractIds.has(contractId) && !promotedContractIds.has(contractId)),
     ))
   })
 })

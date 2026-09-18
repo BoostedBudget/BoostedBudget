@@ -4,9 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"time"
 )
+
+// captureHouseholdProjection emits the household's RevenueCat-driven seat/entitlement projection
+// after a membership transaction has committed. It is a pure side effect — the projection is
+// identical whether or not analytics is configured — and nil-safe. The subject is the household's
+// owner (the plan holder), mirroring household_over_capacity_entered; the tier is the owner's
+// RevenueCat-resolved tier when the RevenueCat path is enabled. Never carries a member id,
+// household id, email, or amount.
+func (s *householdService) captureHouseholdProjection(ctx context.Context, ownerUserID, tier string, seatCount, seatsIncluded int) {
+	if s.productAnalytics == nil {
+		return
+	}
+	s.productAnalytics.CaptureEvent(ctx, ownerUserID, phclient.HouseholdEntitlementProjectedPayload{
+		Tier:          phclient.HouseholdEntitlementProjectedTier(tier),
+		SeatCount:     int64(seatCount),
+		SeatsIncluded: int64(seatsIncluded),
+	})
+}
 
 func (s *householdService) revenueCatEnabled() bool {
 	return s.entitlementSvc != nil && s.entitlementSvc.ownAccessResolver != nil

@@ -996,6 +996,7 @@ func main() {
 			householdEntitlementService, profileRepo, tierConfig, emailService, fieldEncryptor,
 		)
 		householdService.SetAnalytics(analyticsGateway)
+		householdService.SetProductAnalytics(analyticsGateway)
 		// #1367 — Phase 3 Round 2 (GT-3): enrich GET /households/me/members with a Clerk
 		// display name + avatar. identityRepo maps internal user_id -> Clerk ID;
 		// NewDefaultClerkUserGetter reuses the same Clerk SDK plumbing as AdminService
@@ -1040,6 +1041,7 @@ func main() {
 		// cache is disabled (NewNoopCache), and bumpCacheForHousehold nil-guards on it.
 		householdOverCapacityCheckWorker.SetCacheInvalidation(cacheInstance.Generations())
 		householdOverCapacityCheckWorker.SetOwnAccessResolver(revenueCatService)
+		householdOverCapacityCheckWorker.SetAnalytics(analyticsGateway)
 		appLogger.Info("Household over-capacity check worker created (River)")
 
 		// Create deletion services (if token secret configured)
