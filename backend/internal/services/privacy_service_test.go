@@ -55,7 +55,6 @@ func TestGetPrivacySettings_Existing(t *testing.T) {
 		UserID:                 userID,
 		GDPRNecessaryConsent:   true,
 		GDPRAnalyticsConsent:   true,
-		GDPRAdvertisingConsent: false,
 		GDPRConsentTimestamp:   time.Now(),
 		MarketingEmailsEnabled: false,
 		ProductUpdatesEnabled:  true,
@@ -95,7 +94,6 @@ func TestGetPrivacySettings_NotFound_CreatesDefaults(t *testing.T) {
 		return s.UserID == userID &&
 			s.GDPRNecessaryConsent == true && // Must be true by default
 			s.GDPRAnalyticsConsent == false && // Opt-in (default false)
-			s.GDPRAdvertisingConsent == false && // Opt-in (default false)
 			s.MarketingEmailsEnabled == false && // Opt-in
 			s.ProductUpdatesEnabled == true && // Opt-out (default true)
 			s.SecurityAlertsEnabled == true // Opt-out (default true)
@@ -108,9 +106,8 @@ func TestGetPrivacySettings_NotFound_CreatesDefaults(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, settings)
 	assert.Equal(t, userID, settings.UserID)
-	assert.True(t, settings.GDPRNecessaryConsent)    // GDPR compliance check
-	assert.False(t, settings.GDPRAnalyticsConsent)   // Opt-in model
-	assert.False(t, settings.GDPRAdvertisingConsent) // Opt-in model
+	assert.True(t, settings.GDPRNecessaryConsent)  // GDPR compliance check
+	assert.False(t, settings.GDPRAnalyticsConsent) // Opt-in model
 	mockRepo.AssertExpectations(t)
 	mockRepo.AssertCalled(t, "Create", ctx, mock.Anything)
 }
@@ -152,7 +149,6 @@ func TestUpdatePrivacySettings_Success(t *testing.T) {
 
 	updateRequest := &domain.UpdatePrivacySettingsRequest{
 		GDPRAnalyticsConsent:   boolPtr(true),
-		GDPRAdvertisingConsent: boolPtr(true),
 		MarketingEmailsEnabled: boolPtr(true),
 	}
 
@@ -161,7 +157,6 @@ func TestUpdatePrivacySettings_Success(t *testing.T) {
 	mockRepo.On("Update", ctx, mock.MatchedBy(func(s *domain.PrivacySettings) bool {
 		return s.UserID == userID &&
 			s.GDPRAnalyticsConsent == true &&
-			s.GDPRAdvertisingConsent == true &&
 			s.MarketingEmailsEnabled == true
 	})).Return(nil)
 
@@ -172,7 +167,6 @@ func TestUpdatePrivacySettings_Success(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, settings)
 	assert.True(t, settings.GDPRAnalyticsConsent)
-	assert.True(t, settings.GDPRAdvertisingConsent)
 	assert.True(t, settings.MarketingEmailsEnabled)
 	mockRepo.AssertExpectations(t)
 }

@@ -2,6 +2,8 @@ package domain
 
 import (
 	"encoding/json"
+	"reflect"
+	"sort"
 	"testing"
 	"time"
 )
@@ -12,18 +14,17 @@ func TestPrivacySettings_JSONMarshaling(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 
 	original := &PrivacySettings{
-		ID:                       "550e8400-e29b-41d4-a716-446655440000",
-		UserID:                   "650e8400-e29b-41d4-a716-446655440001",
-		GDPRNecessaryConsent:     true,
-		GDPRAnalyticsConsent:     true,
-		GDPRAdvertisingConsent:   false,
-		GDPRConsentTimestamp:     now,
-		MarketingEmailsEnabled:   false,
-		ProductUpdatesEnabled:    true,
-		SecurityAlertsEnabled:    true,
-		DataSharingEnabled:       false,
-		CreatedAt:                now,
-		UpdatedAt:                now,
+		ID:                     "550e8400-e29b-41d4-a716-446655440000",
+		UserID:                 "650e8400-e29b-41d4-a716-446655440001",
+		GDPRNecessaryConsent:   true,
+		GDPRAnalyticsConsent:   true,
+		GDPRConsentTimestamp:   now,
+		MarketingEmailsEnabled: false,
+		ProductUpdatesEnabled:  true,
+		SecurityAlertsEnabled:  true,
+		DataSharingEnabled:     false,
+		CreatedAt:              now,
+		UpdatedAt:              now,
 	}
 
 	// Marshal to JSON
@@ -54,6 +55,38 @@ func TestPrivacySettings_JSONMarshaling(t *testing.T) {
 	}
 }
 
+// TestPrivacySettings_JSONHasNoAdvertisingConsentKey pins the exact marshalled
+// key set after the advertising consent field was removed (issue #1683,
+// migration 000214). Set equality fails if that key ever returns.
+func TestPrivacySettings_JSONHasNoAdvertisingConsentKey(t *testing.T) {
+	jsonData, err := json.Marshal(&PrivacySettings{})
+	if err != nil {
+		t.Fatalf("Failed to marshal PrivacySettings: %v", err)
+	}
+
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(jsonData, &decoded); err != nil {
+		t.Fatalf("Failed to unmarshal PrivacySettings: %v", err)
+	}
+
+	got := make([]string, 0, len(decoded))
+	for k := range decoded {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+
+	want := []string{
+		"created_at", "data_sharing_enabled", "gdpr_analytics_consent",
+		"gdpr_consent_timestamp", "gdpr_necessary_consent", "id",
+		"include_in_aggregate_stats", "marketing_emails_enabled",
+		"product_updates_enabled", "security_alerts_enabled",
+		"updated_at", "user_id",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("PrivacySettings JSON keys = %v, want %v", got, want)
+	}
+}
+
 // TestNewPrivacySettings tests that NewPrivacySettings creates
 // a privacy settings object with correct GDPR-compliant defaults
 func TestNewPrivacySettings(t *testing.T) {
@@ -74,12 +107,9 @@ func TestNewPrivacySettings(t *testing.T) {
 		t.Error("GDPRNecessaryConsent must default to true")
 	}
 
-	// Analytics and advertising should default to false (opt-in only)
+	// Analytics should default to false (opt-in only)
 	if settings.GDPRAnalyticsConsent != false {
 		t.Error("GDPRAnalyticsConsent should default to false (opt-in)")
-	}
-	if settings.GDPRAdvertisingConsent != false {
-		t.Error("GDPRAdvertisingConsent should default to false (opt-in)")
 	}
 
 	// Email preferences: marketing off by default, updates/security on
@@ -129,7 +159,6 @@ func TestUpdatePrivacySettingsRequest_Validate(t *testing.T) {
 			name: "valid update - all optional fields",
 			request: &UpdatePrivacySettingsRequest{
 				GDPRAnalyticsConsent:   boolPtr(true),
-				GDPRAdvertisingConsent: boolPtr(false),
 				MarketingEmailsEnabled: boolPtr(true),
 				ProductUpdatesEnabled:  boolPtr(false),
 				SecurityAlertsEnabled:  boolPtr(true),
@@ -172,7 +201,6 @@ func TestUpdatePrivacySettingsRequest_ApplyTo(t *testing.T) {
 
 	update := &UpdatePrivacySettingsRequest{
 		GDPRAnalyticsConsent:   boolPtr(true),
-		GDPRAdvertisingConsent: boolPtr(true),
 		MarketingEmailsEnabled: boolPtr(true),
 	}
 
@@ -181,9 +209,6 @@ func TestUpdatePrivacySettingsRequest_ApplyTo(t *testing.T) {
 	// Verify changes applied
 	if !originalSettings.GDPRAnalyticsConsent {
 		t.Error("GDPRAnalyticsConsent should be updated to true")
-	}
-	if !originalSettings.GDPRAdvertisingConsent {
-		t.Error("GDPRAdvertisingConsent should be updated to true")
 	}
 	if !originalSettings.MarketingEmailsEnabled {
 		t.Error("MarketingEmailsEnabled should be updated to true")

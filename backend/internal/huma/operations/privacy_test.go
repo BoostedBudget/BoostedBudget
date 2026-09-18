@@ -44,7 +44,6 @@ func createTestPrivacySettings() *domain.PrivacySettings {
 		UserID:                 "user-123",
 		GDPRNecessaryConsent:   true,
 		GDPRAnalyticsConsent:   false,
-		GDPRAdvertisingConsent: false,
 		GDPRConsentTimestamp:   now,
 		MarketingEmailsEnabled: false,
 		ProductUpdatesEnabled:  true,

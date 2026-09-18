@@ -36,7 +36,6 @@ export interface PrivacySettings {
   readonly $schema?: string;
   created_at: string;
   data_sharing_enabled: boolean;
-  gdpr_advertising_consent: boolean;
   gdpr_analytics_consent: boolean;
   gdpr_consent_timestamp: string;
   gdpr_necessary_consent: boolean;

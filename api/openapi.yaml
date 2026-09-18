@@ -6179,8 +6179,6 @@ components:
           type: string
         data_sharing_enabled:
           type: boolean
-        gdpr_advertising_consent:
-          type: boolean
         gdpr_analytics_consent:
           type: boolean
         gdpr_consent_timestamp:
@@ -6208,7 +6206,6 @@ components:
         - user_id
         - gdpr_necessary_consent
         - gdpr_analytics_consent
-        - gdpr_advertising_consent
         - gdpr_consent_timestamp
         - marketing_emails_enabled
         - product_updates_enabled
@@ -8681,8 +8678,6 @@ components:
           readOnly: true
           type: string
         data_sharing_enabled:
-          type: boolean
-        gdpr_advertising_consent:
           type: boolean
         gdpr_analytics_consent:
           type: boolean
