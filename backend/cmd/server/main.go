@@ -1166,6 +1166,7 @@ func main() {
 		// which stamped the *_sent_at marker BEFORE the send was attempted.
 		retentionCleanupCheckWorker.SetWorkClaimsRepo(workClaimsRepo)
 		retentionCleanupCheckWorker.SetSubscriptionCleanupGuard(revenueCatCleanupGuard)
+		retentionCleanupCheckWorker.SetAnalytics(analyticsGateway)
 		appLogger.Info("Retention cleanup check worker created (River)")
 
 		// Create Paddle services (if configured) - Issue #45, #46: Paddle Payment Integration

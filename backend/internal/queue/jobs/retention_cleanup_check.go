@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -441,6 +442,9 @@ type RetentionCleanupCheckWorker struct {
 	// whether this particular pass can act on it. This field itself still cannot panic on a nil call
 	// (repairPlaidDisconnects checks before ever calling through it).
 	plaidCleanup RetentionPlaidCleanup
+	// analytics records the safety net's product outcome — a bank feed actually disconnected.
+	// Optional/nil-safe: unwired, every capture is skipped and the pass behaves identically.
+	analytics phclient.ProductAnalytics
 	// claimsRepo backs the durable work-claims mechanism send30dNotices/send7dNotices require for
 	// EXCLUSIVITY on ActionRetentionNotice30d/7d before a notice email is sent (Issue #1413 Medium
 	// finding M9, Codex review round 3). See SetWorkClaimsRepo — like
@@ -560,6 +564,13 @@ func (w *RetentionCleanupCheckWorker) SetWorkClaimsRepo(repo repository.WorkClai
 // check itself and why it now runs AFTER the self-healing backstop, not before.
 func (w *RetentionCleanupCheckWorker) SetPlaidCleanup(c RetentionPlaidCleanup) {
 	w.plaidCleanup = c
+}
+
+// SetAnalytics wires the consent-aware Gateway used to report a completed Plaid disconnection as a
+// product event. Nil-safe: an unset value makes every capture a no-op and the pass behaves
+// identically, mirroring the worker's other optional collaborators.
+func (w *RetentionCleanupCheckWorker) SetAnalytics(analytics phclient.ProductAnalytics) {
+	w.analytics = analytics
 }
 
 // releaseClaimOnFailure releases a work claim and logs any release failure. Mirrors
@@ -1613,6 +1624,15 @@ func (w *RetentionCleanupCheckWorker) repairPlaidDisconnects(ctx context.Context
 		} else if !cleared {
 			w.logger.Info("Plaid disconnect repaired, but plaid_cleanup_pending_at had already moved on to a new episode since this worker started — leaving the new episode's marker untouched for its own future run",
 				"job_id", jobID, "user_id", userID)
+		}
+
+		// The safety-net outcome is product-relevant (a bank feed was disconnected), so it is
+		// emitted here, after the disconnect has actually succeeded. marker_cleared distinguishes a
+		// cleanly closed episode from one whose items are gone but whose marker is stuck.
+		if w.analytics != nil {
+			w.analytics.CaptureEvent(ctx, userID, phclient.RevenueCatPlaidCleanupDisconnectedPayload{
+				MarkerCleared: clearErr == nil && cleared,
+			})
 		}
 
 		w.logger.Info("Plaid disconnect repaired", "job_id", jobID, "user_id", userID)
