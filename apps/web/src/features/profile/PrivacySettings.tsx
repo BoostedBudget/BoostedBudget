@@ -104,10 +104,20 @@ export function PrivacySettings({
   }
 
   function handleToggle(field: keyof PrivacySettingsType) {
-    setModifications(prev => ({
-      ...prev,
-      [field]: !(formState[field] as boolean),
-    }))
+    setModifications(prev => {
+      const next: Partial<PrivacySettingsType> = {
+        ...prev,
+        [field]: !(formState[field] as boolean),
+      }
+      // Mirror the server's delta-triggered cascade: interaction capture cannot stay
+      // on while analytics is off, or the PUT is rejected with a 422.
+      if (field === 'gdpr_analytics_consent'
+        && next.gdpr_analytics_consent === false
+        && formState.gdpr_interaction_capture_consent === true) {
+        next.gdpr_interaction_capture_consent = false
+      }
+      return next
+    })
     // Clear success message when user makes changes
     setSuccessMessage(null)
   }
@@ -189,6 +199,11 @@ export function PrivacySettings({
       return
     }
     const withdrawingAnalytics = updates.gdpr_analytics_consent === false
+    const grantGeneration = updates.gdpr_analytics_consent === true
+      ? analyticsActions.getSnapshot().generation
+      : null
+    const grantWasWithdrawn = updates.gdpr_analytics_consent === true
+      && analyticsActions.getSnapshot().withdrawn
     if (withdrawingAnalytics && user) analyticsActions.withdraw(user.id)
 
     try {
@@ -204,7 +219,13 @@ export function PrivacySettings({
       })
       if (identityAttempt !== recoveryAttempt.current) return
       setModifications({})
-      if (updates.gdpr_analytics_consent === true && user) {
+      // A newer withdrawal during the await must win over this stale grant; only the
+      // client-side lift/apply is suppressed, the saved server state stands.
+      const snapshot = analyticsActions.getSnapshot()
+      const grantIsCurrent = grantGeneration !== null
+        && snapshot.generation === grantGeneration
+        && !(snapshot.withdrawn && !grantWasWithdrawn)
+      if (updates.gdpr_analytics_consent === true && user && grantIsCurrent) {
         // Re-enabling must lift the local withdrawal latch before the hook re-applies;
         // apply() is idempotent and itself refuses a still-withdrawn scope.
         analyticsActions.clearWithdrawal(user.id)
