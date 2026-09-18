@@ -7,11 +7,14 @@ function createDependencies(initialSnapshot: AnalyticsLifecycleSnapshot) {
   let snapshot = initialSnapshot
   let listener: ((next: AnalyticsLifecycleSnapshot) => void) | undefined
   const capture = mock((_url: string) => {})
+  const setRoute = mock((_url: string) => {})
 
   return {
     capture,
+    setRoute,
     dependencies: {
       capture,
+      setRoute,
       getSnapshot: () => snapshot,
       subscribe: (next: (value: AnalyticsLifecycleSnapshot) => void) => {
         listener = next
@@ -123,9 +126,11 @@ describe('useConsentAwarePageViews', () => {
 
   it('captures each granted navigation once and cleans up its subscriber', () => {
     const capture = mock((_url: string) => {})
+    const setRoute = mock((_url: string) => {})
     const cleanup = mock(() => {})
     const dependencies = {
       capture,
+      setRoute,
       getSnapshot: () => ({ state: 'granted', scope: 'user-a', generation: 1, withdrawn: false }) as const,
       subscribe: (_next: (value: AnalyticsLifecycleSnapshot) => void) => {
         return cleanup
@@ -162,5 +167,18 @@ describe('useConsentAwarePageViews', () => {
       '/planning',
       '/dashboard',
     ])
+  })
+
+  it('records the route for heatmap gating on every navigation even while consent is pending', () => {
+    const lifecycle = createDependencies({ state: 'pending', scope: 'user-a', generation: 1, withdrawn: false })
+    const { rerender } = renderHook(
+      ({ url }) => useConsentAwarePageViews(url, lifecycle.dependencies),
+      { initialProps: { url: '/' } },
+    )
+
+    rerender({ url: '/billing/manage' })
+
+    expect(lifecycle.setRoute.mock.calls.map(call => call[0])).toEqual(['/', '/billing/manage'])
+    expect(lifecycle.capture).not.toHaveBeenCalled()
   })
 })

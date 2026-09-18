@@ -435,6 +435,22 @@ export function sanitizeCapturedNetworkRequest(
   return copy
 }
 
+// Single source of truth for the replay recorder options: the rrweb masking proof
+// (e2e/rrweb-mask-proof) imports this object directly, so a change here is exercised
+// by that proof. Text is default-deny masked; `[data-ph-unmask]` is the only escape
+// hatch and element attributes are masked wholesale.
+export const sessionRecordingConfig: NonNullable<PostHogConfig['session_recording']> = {
+  maskAllInputs: true,
+  maskTextSelector: '*',
+  maskTextFn: (text, element) =>
+    element?.closest('[data-ph-unmask]') ? text : text.replace(/[\S]/g, '*'),
+  blockSelector: '[data-ph-block]',
+  maskAllElementAttributes: true,
+  recordHeaders: false,
+  recordBody: false,
+  maskCapturedNetworkRequestFn: sanitizeCapturedNetworkRequest,
+}
+
 export function posthogConfig(
   isCaptureAllowed: () => boolean = analyticsCaptureGate.isGranted,
 ): Partial<PostHogConfig> {
@@ -456,7 +472,10 @@ export function posthogConfig(
     disable_conversations: true,
     disable_web_experiments: true,
     disable_product_tours: true,
-    disable_external_dependency_loading: true,
+    // Aligned with the isolated engagement instances (engagement.ts:451,456): the
+    // primary was the only instance pinning these TRUE. Session recording stays
+    // inert through disable_session_recording below.
+    disable_external_dependency_loading: false,
     capture_heatmaps: false,
     capture_dead_clicks: false,
     capture_performance: true,
@@ -464,15 +483,8 @@ export function posthogConfig(
     save_referrer: false,
     save_campaign_params: false,
     custom_campaign_params: [],
-    advanced_disable_flags: true,
-    session_recording: {
-      maskAllInputs: true,
-      maskTextSelector: '[data-ph-mask]',
-      blockSelector: '[data-ph-block]',
-      recordHeaders: false,
-      recordBody: false,
-      maskCapturedNetworkRequestFn: sanitizeCapturedNetworkRequest,
-    },
+    advanced_disable_flags: false,
+    session_recording: { ...sessionRecordingConfig },
     before_send: event => {
       if (!isCaptureAllowed() || !event || containsSensitiveUrl(event.properties)) return null
       return sanitizeValue(event, new WeakSet(), false, true) as typeof event
