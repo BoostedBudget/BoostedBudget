@@ -56,8 +56,10 @@ function realLifecycle(name: string, dntEnabled: () => boolean = () => false) {
       return result
     },
     reset: resetDeviceId => sdk.reset(resetDeviceId),
+    setCaptureHeatmaps: () => {},
     setPersistenceEnabled: enabled => setPostHogPersistenceEnabled(sdk, enabled),
     setPersonProperties: properties => sdk.setPersonProperties(properties),
+    startSessionRecording: () => {},
     stopSessionRecording: () => sdk.stopSessionRecording(),
   }
   const lifecycle = createProductAnalyticsLifecycle({
@@ -69,6 +71,18 @@ function realLifecycle(name: string, dntEnabled: () => boolean = () => false) {
     isDoNotTrackEnabled: dntEnabled,
   })
   return { lifecycle, sdk, capturedEvents, getInitCalls: () => initCalls }
+}
+
+function grant(
+  lifecycle: ReturnType<typeof realLifecycle>['lifecycle'],
+  scope: string,
+  distinctId?: string,
+): void {
+  void lifecycle.apply({
+    scope,
+    purposes: { analytics: true, identifiedDiagnostics: false, interactionCapture: false },
+    ...(distinctId ? { distinctId } : {}),
+  })
 }
 
 const originalFetch = globalThis.fetch
@@ -120,13 +134,13 @@ describe('PostHog real SDK tab persistence', () => {
   test('grant to pending and grant to deny both remove all SDK session persistence', () => {
     const { lifecycle } = realLifecycle('pending-tab')
     lifecycle.setScope('user-a')
-    lifecycle.grantFromAuthority('user-a', 'user-a')
+    grant(lifecycle, 'user-a', 'user-a')
     expect(storageKeysFor('pending-tab').length).toBeGreaterThan(0)
 
     lifecycle.setPending()
     expect(storageKeysFor('pending-tab')).toEqual([])
 
-    lifecycle.grantFromAuthority('user-a', 'user-a')
+    grant(lifecycle, 'user-a', 'user-a')
     expect(storageKeysFor('pending-tab').length).toBeGreaterThan(0)
     lifecycle.deny()
     expect(storageKeysFor('pending-tab')).toEqual([])
@@ -136,7 +150,7 @@ describe('PostHog real SDK tab persistence', () => {
     const productionName = 'shared-production-name'
     const { lifecycle: tabA } = realLifecycle(productionName)
     tabA.setScope('user-a')
-    tabA.grantFromAuthority('user-a', 'user-a')
+    grant(tabA, 'user-a', 'user-a')
     const tabADeviceId = persistedDeviceId(productionName)
     const clonedTabStorage = Array.from(
       { length: sessionStorage.length },
@@ -147,7 +161,7 @@ describe('PostHog real SDK tab persistence', () => {
     // Initializing only after B's grant must discard that cloned SDK identity.
     const { lifecycle: tabB } = realLifecycle(productionName)
     tabB.setScope('user-b')
-    tabB.grantFromAuthority('user-b', 'user-b')
+    grant(tabB, 'user-b', 'user-b')
     expect(persistedDeviceId(productionName)).not.toBe(tabADeviceId)
 
     const tabBStorage = Array.from(
@@ -169,7 +183,7 @@ describe('PostHog real SDK tab persistence', () => {
   test('clears the pinned ESM retry poller without corrupting its interval across regrant', () => {
     const { lifecycle, sdk } = realLifecycle('retry-cleanup-tab')
     lifecycle.setScope('user-a')
-    lifecycle.grantFromAuthority('user-a', 'user-a')
+    grant(lifecycle, 'user-a', 'user-a')
     const queue = (sdk as unknown as {
       Du?: {
         Ls(request: unknown): void
@@ -193,7 +207,7 @@ describe('PostHog real SDK tab persistence', () => {
       expect(queue.ia).toEqual([])
       expect(queue.ca).toBe(3000)
 
-      lifecycle.grantFromAuthority('user-a', 'user-a')
+      grant(lifecycle, 'user-a', 'user-a')
       queue.Ls({ method: 'POST', url: '/e', data: {} })
       expect(queue.ha).toBe(true)
       expect(queue.ma).toBeDefined()
@@ -216,9 +230,9 @@ describe('PostHog real SDK tab persistence', () => {
       expect(localStorage.getItem(legacyConsentKey)).toBe('0')
 
       if (authority === 'anonymous cookie') {
-        lifecycle.grantFromAuthority(scope)
+        grant(lifecycle, scope)
       } else {
-        lifecycle.grantFromAuthority(scope, 'user-a')
+        grant(lifecycle, scope, 'user-a')
       }
 
       expect(lifecycle.getState()).toBe('granted')
@@ -247,7 +261,7 @@ describe('PostHog real SDK tab persistence', () => {
         isDoNotTrackEnabled,
       )
       lifecycle.setScope('user-a')
-      lifecycle.grantFromAuthority('user-a', 'user-a')
+      grant(lifecycle, 'user-a', 'user-a')
 
       expect(lifecycle.getState()).toBe('denied')
       expect(getInitCalls()).toBe(0)

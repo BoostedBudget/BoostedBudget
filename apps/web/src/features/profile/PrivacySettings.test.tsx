@@ -20,7 +20,7 @@ import {
 import { createMockClerkUser, mockClerkUser, mockUseUser } from '@/test/mocks/clerk'
 import {
   mockCaptureProductEvent,
-  mockGrantProductAnalytics,
+  mockClearProductAnalyticsWithdrawal,
   mockWithdrawProductAnalytics,
 } from '@/test/mocks/posthog'
 
@@ -43,8 +43,8 @@ function renderPrivacySettings() {
   const result = render(
     <QueryClientProvider client={queryClient}>
       <PrivacySettings analyticsActions={{
-        grant: mockGrantProductAnalytics,
-        getSnapshot: () => ({ generation: analyticsGeneration, scope: mockClerkUser.id, state: 'denied' }),
+        clearWithdrawal: mockClearProductAnalyticsWithdrawal,
+        getSnapshot: () => ({ generation: analyticsGeneration, scope: mockClerkUser.id, state: 'denied', withdrawn: false }),
         withdraw: mockWithdrawProductAnalytics,
       }} />
     </QueryClientProvider>
@@ -58,7 +58,7 @@ describe('PrivacySettings', () => {
     mockUseGetPrivacySettings.mockClear()
     mockUseUpdatePrivacySettings.mockClear()
     mockUpdatePrivacySettingsMutateAsync.mockClear()
-    mockGrantProductAnalytics.mockClear()
+    mockClearProductAnalyticsWithdrawal.mockClear()
     mockWithdrawProductAnalytics.mockClear()
     mockCaptureProductEvent.mockClear()
     mockUseUser.mockReturnValue(createMockClerkUser({
@@ -220,13 +220,11 @@ describe('PrivacySettings', () => {
 
       fireEvent.click(screen.getByLabelText(/analytics cookies/i))
       fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
-      expect(mockGrantProductAnalytics).not.toHaveBeenCalled()
+      expect(mockClearProductAnalyticsWithdrawal).not.toHaveBeenCalled()
 
       resolveSave({ ...mockSettingsWithAlertsEnabled, gdpr_analytics_consent: true })
-      await waitFor(() => expect(mockGrantProductAnalytics).toHaveBeenCalledWith(
+      await waitFor(() => expect(mockClearProductAnalyticsWithdrawal).toHaveBeenCalledWith(
         mockClerkUser.id,
-        mockClerkUser.id,
-        expect.objectContaining({ subscription_tier: 'free', primary_region: 'iad' }),
       ))
       expect(mockCaptureProductEvent).not.toHaveBeenCalledWith('privacy_settings_changed')
     })
@@ -250,10 +248,8 @@ describe('PrivacySettings', () => {
       fireEvent.click(screen.getByLabelText(/analytics cookies/i))
       fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
 
-      await waitFor(() => expect(mockGrantProductAnalytics).toHaveBeenCalledWith(
+      await waitFor(() => expect(mockClearProductAnalyticsWithdrawal).toHaveBeenCalledWith(
         mockClerkUser.id,
-        mockClerkUser.id,
-        expect.any(Object),
       ))
       expect(screen.getByText(/settings saved successfully/i)).toBeInTheDocument()
       expect(screen.queryByText(/failed to save privacy settings/i)).not.toBeInTheDocument()
@@ -284,7 +280,7 @@ describe('PrivacySettings', () => {
       resolveSave({ ...mockSettingsWithAlertsEnabled, gdpr_analytics_consent: true })
 
       await screen.findByText(/settings saved successfully/i)
-      expect(mockGrantProductAnalytics).not.toHaveBeenCalled()
+      expect(mockClearProductAnalyticsWithdrawal).not.toHaveBeenCalled()
     })
 
     it('withdraws locally before persistence and stays off when persistence fails', async () => {
@@ -304,7 +300,7 @@ describe('PrivacySettings', () => {
       await waitFor(() => {
         expect(screen.getByText(/failed to save privacy settings/i)).toBeInTheDocument()
       })
-      expect(mockGrantProductAnalytics).not.toHaveBeenCalled()
+      expect(mockClearProductAnalyticsWithdrawal).not.toHaveBeenCalled()
       expect(mockCaptureProductEvent).not.toHaveBeenCalledWith('privacy_settings_changed')
     })
 
@@ -324,16 +320,14 @@ describe('PrivacySettings', () => {
       fireEvent.click(screen.getByLabelText(/analytics cookies/i))
       fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
       await screen.findByText(/failed to save privacy settings/i)
-      expect(mockGrantProductAnalytics).not.toHaveBeenCalled()
+      expect(mockClearProductAnalyticsWithdrawal).not.toHaveBeenCalled()
 
       fireEvent.click(screen.getByLabelText(/analytics cookies/i))
       fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
 
       await waitFor(() => expect(refetch).toHaveBeenCalledTimes(1))
-      expect(mockGrantProductAnalytics).toHaveBeenCalledWith(
+      expect(mockClearProductAnalyticsWithdrawal).toHaveBeenCalledWith(
         mockClerkUser.id,
-        mockClerkUser.id,
-        expect.any(Object),
       )
       expect(screen.queryByText(/no changes to save/i)).not.toBeInTheDocument()
       expect(mockUpdatePrivacySettingsMutateAsync).toHaveBeenCalledTimes(1)
@@ -362,7 +356,7 @@ describe('PrivacySettings', () => {
       fireEvent.click(screen.getByRole('button', { name: /save privacy settings/i }))
 
       await waitFor(() => expect(refetch).toHaveBeenCalledTimes(1))
-      expect(mockGrantProductAnalytics).not.toHaveBeenCalled()
+      expect(mockClearProductAnalyticsWithdrawal).not.toHaveBeenCalled()
       expect(screen.getByText(/could not confirm analytics consent/i)).toBeInTheDocument()
     })
 
@@ -393,7 +387,7 @@ describe('PrivacySettings', () => {
       resolveRefetch({ data: mockSettingsWithAlertsEnabled, error: null })
 
       await waitFor(() => expect(screen.getByText(/could not confirm analytics consent/i)).toBeInTheDocument())
-      expect(mockGrantProductAnalytics).not.toHaveBeenCalled()
+      expect(mockClearProductAnalyticsWithdrawal).not.toHaveBeenCalled()
     })
 
     it('writes a successful mutation to the same identity-scoped privacy cache', async () => {
@@ -444,8 +438,8 @@ describe('PrivacySettings', () => {
       rendered.rerender(
         <QueryClientProvider client={rendered.queryClient}>
           <PrivacySettings analyticsActions={{
-            grant: mockGrantProductAnalytics,
-            getSnapshot: () => ({ generation: analyticsGeneration, scope: userB.id, state: 'denied' }),
+            clearWithdrawal: mockClearProductAnalyticsWithdrawal,
+            getSnapshot: () => ({ generation: analyticsGeneration, scope: userB.id, state: 'denied', withdrawn: false }),
             withdraw: mockWithdrawProductAnalytics,
           }} />
         </QueryClientProvider>,
@@ -497,8 +491,8 @@ describe('PrivacySettings', () => {
       rendered.rerender(
         <QueryClientProvider client={rendered.queryClient}>
           <PrivacySettings analyticsActions={{
-            grant: mockGrantProductAnalytics,
-            getSnapshot: () => ({ generation: analyticsGeneration, scope: userB.id, state: 'denied' }),
+            clearWithdrawal: mockClearProductAnalyticsWithdrawal,
+            getSnapshot: () => ({ generation: analyticsGeneration, scope: userB.id, state: 'denied', withdrawn: false }),
             withdraw: mockWithdrawProductAnalytics,
           }} />
         </QueryClientProvider>,
@@ -511,7 +505,7 @@ describe('PrivacySettings', () => {
       resolveSave(mockSettingsWithAlertsEnabled)
 
       await waitFor(() => expect(mockUpdatePrivacySettingsMutateAsync).toHaveBeenCalledTimes(1))
-      expect(mockGrantProductAnalytics).not.toHaveBeenCalled()
+      expect(mockClearProductAnalyticsWithdrawal).not.toHaveBeenCalled()
       expect(screen.queryByText(/settings saved successfully/i)).not.toBeInTheDocument()
     })
 

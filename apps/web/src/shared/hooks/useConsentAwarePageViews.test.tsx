@@ -27,14 +27,14 @@ function createDependencies(initialSnapshot: AnalyticsLifecycleSnapshot) {
 
 describe('useConsentAwarePageViews', () => {
   it('captures a pending route once when consent becomes granted', () => {
-    const lifecycle = createDependencies({ state: 'pending', scope: 'user-a', generation: 1 })
+    const lifecycle = createDependencies({ state: 'pending', scope: 'user-a', generation: 1, withdrawn: false })
     const { rerender } = renderHook(
       ({ url }) => useConsentAwarePageViews(url, lifecycle.dependencies),
       { initialProps: { url: '/dashboard?sentinel=query#sentinel-hash' } },
     )
     expect(lifecycle.capture).not.toHaveBeenCalled()
 
-    lifecycle.publish({ state: 'granted', scope: 'user-a', generation: 1 })
+    lifecycle.publish({ state: 'granted', scope: 'user-a', generation: 1, withdrawn: false })
     expect(lifecycle.capture).toHaveBeenCalledWith('/dashboard?sentinel=query#sentinel-hash')
 
     rerender({ url: '/dashboard?sentinel=query#sentinel-hash' })
@@ -42,18 +42,29 @@ describe('useConsentAwarePageViews', () => {
   })
 
   it('does not recapture the unchanged route after a same-scope privacy refetch', () => {
-    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1 })
+    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1, withdrawn: false })
     renderHook(() => useConsentAwarePageViews('/dashboard', lifecycle.dependencies))
     expect(lifecycle.capture).toHaveBeenCalledTimes(1)
 
-    lifecycle.publish({ state: 'pending', scope: 'user-a', generation: 1 })
-    lifecycle.publish({ state: 'granted', scope: 'user-a', generation: 1 })
+    lifecycle.publish({ state: 'pending', scope: 'user-a', generation: 1, withdrawn: false })
+    lifecycle.publish({ state: 'granted', scope: 'user-a', generation: 1, withdrawn: false })
+
+    expect(lifecycle.capture).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not recapture the unchanged route after a purpose-only reconcile', () => {
+    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 3, withdrawn: false })
+    renderHook(() => useConsentAwarePageViews('/dashboard', lifecycle.dependencies))
+    expect(lifecycle.capture).toHaveBeenCalledTimes(1)
+
+    // A purpose-only toggle re-publishes the same generation/scope snapshot.
+    lifecycle.publish({ state: 'granted', scope: 'user-a', generation: 3, withdrawn: false })
 
     expect(lifecycle.capture).toHaveBeenCalledTimes(1)
   })
 
   it('deduplicates query and hash variants by their sanitized route', () => {
-    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1 })
+    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1, withdrawn: false })
     const { rerender } = renderHook(
       ({ url }) => useConsentAwarePageViews(url, lifecycle.dependencies),
       { initialProps: { url: '/accounts/account-secret?query=sentinel' } },
@@ -65,7 +76,7 @@ describe('useConsentAwarePageViews', () => {
   })
 
   it('captures navigation between entity IDs while transmitting only sanitized templates', () => {
-    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1 })
+    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1, withdrawn: false })
     const { rerender } = renderHook(
       ({ url }) => useConsentAwarePageViews(url, lifecycle.dependencies),
       { initialProps: { url: '/accounts/account-a?query=one' } },
@@ -80,17 +91,17 @@ describe('useConsentAwarePageViews', () => {
   })
 
   it('suppresses a protected route on logout until the anonymous public redirect', () => {
-    const lifecycle = createDependencies({ state: 'granted', scope: 'anonymous', generation: 1 })
+    const lifecycle = createDependencies({ state: 'granted', scope: 'anonymous', generation: 1, withdrawn: false })
     const { rerender } = renderHook(
       ({ url }) => useConsentAwarePageViews(url, lifecycle.dependencies),
       { initialProps: { url: '/' } },
     )
 
     rerender({ url: '/dashboard' })
-    lifecycle.publish({ state: 'pending', scope: 'user-a', generation: 2 })
-    lifecycle.publish({ state: 'granted', scope: 'user-a', generation: 2 })
-    lifecycle.publish({ state: 'pending', scope: 'anonymous', generation: 3 })
-    lifecycle.publish({ state: 'granted', scope: 'anonymous', generation: 3 })
+    lifecycle.publish({ state: 'pending', scope: 'user-a', generation: 2, withdrawn: false })
+    lifecycle.publish({ state: 'granted', scope: 'user-a', generation: 2, withdrawn: false })
+    lifecycle.publish({ state: 'pending', scope: 'anonymous', generation: 3, withdrawn: false })
+    lifecycle.publish({ state: 'granted', scope: 'anonymous', generation: 3, withdrawn: false })
     expect(lifecycle.capture.mock.calls.map(call => call[0])).toEqual(['/', '/dashboard'])
 
     rerender({ url: '/' })
@@ -98,11 +109,11 @@ describe('useConsentAwarePageViews', () => {
   })
 
   it('captures the same route once for each identified user scope', () => {
-    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1 })
+    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1, withdrawn: false })
     renderHook(() => useConsentAwarePageViews('/legal/privacy-policy', lifecycle.dependencies))
 
-    lifecycle.publish({ state: 'pending', scope: 'user-b', generation: 2 })
-    lifecycle.publish({ state: 'granted', scope: 'user-b', generation: 2 })
+    lifecycle.publish({ state: 'pending', scope: 'user-b', generation: 2, withdrawn: false })
+    lifecycle.publish({ state: 'granted', scope: 'user-b', generation: 2, withdrawn: false })
 
     expect(lifecycle.capture.mock.calls.map(call => call[0])).toEqual([
       '/legal/privacy-policy',
@@ -115,7 +126,7 @@ describe('useConsentAwarePageViews', () => {
     const cleanup = mock(() => {})
     const dependencies = {
       capture,
-      getSnapshot: () => ({ state: 'granted', scope: 'user-a', generation: 1 }) as const,
+      getSnapshot: () => ({ state: 'granted', scope: 'user-a', generation: 1, withdrawn: false }) as const,
       subscribe: (_next: (value: AnalyticsLifecycleSnapshot) => void) => {
         return cleanup
       },
@@ -137,7 +148,7 @@ describe('useConsentAwarePageViews', () => {
   })
 
   it('captures a new visit when navigation returns to a previously visited route', () => {
-    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1 })
+    const lifecycle = createDependencies({ state: 'granted', scope: 'user-a', generation: 1, withdrawn: false })
     const { rerender } = renderHook(
       ({ url }) => useConsentAwarePageViews(url, lifecycle.dependencies),
       { initialProps: { url: '/dashboard' } },

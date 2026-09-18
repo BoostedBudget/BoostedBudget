@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { CaptureResult, PostHogConfig } from 'posthog-js';
+import type { CaptureResult, PostHogConfig, Properties } from 'posthog-js';
 import {
+  applyProductAnalyticsAuthority,
   capturePageView,
   captureProductEvent,
   clearPostHogQueuedEvents,
+  clearProductAnalyticsWithdrawal,
   guardPostHogRetryQueue,
   grantProductAnalytics,
   isAnonymousAnalyticsPath,
@@ -15,14 +17,21 @@ import {
   resetAnalyticsLifecycleForTests,
   sanitizeAnalyticsUrl,
   sanitizeCapturedNetworkRequest,
+  setProductAnalyticsScope,
+  setRoute,
+  withdrawProductAnalytics,
 } from './posthog';
 import {
   createAnalyticsCaptureGate,
   createProductAnalyticsLifecycle,
+  NO_PURPOSES,
+  type AnalyticsAuthority,
   type AnalyticsClient,
+  type AnalyticsLifecycleSnapshot,
+  type AnalyticsPurposes,
 } from './analyticsLifecycle';
 import * as posthogModule from './posthog';
-import { mockPosthogCapture } from '@/test/mocks/posthog';
+import { mockPosthogCapture, mockPosthogSetConfig } from '@/test/mocks/posthog';
 import {
   ANALYTICS_EVENTS,
   isValidAnalyticsEventPayload,
@@ -545,6 +554,80 @@ describe('posthog person-property default-deny + heatmap URL sanitization', () =
     expect(properties.full_name).toBeUndefined();
   });
 
+  test('keeps SDK transport keys on a $set-named event while default-denying person keys', () => {
+    // posthog-js's own before_send wrapper snapshots `properties.token` before
+    // this callback and DROPS the whole event if it is missing ("This property
+    // is required for ingestion"). The top-level properties of a `$set`-named
+    // event are default-denied like a person-property map, so the transport
+    // keys every capture carries must be explicitly exempt.
+    const out = applyBeforeSend(allowedConfig(), {
+      event: '$set',
+      properties: {
+        $unset: ['name'],
+        token: 'phc_test',
+        $lib: 'web',
+        distinct_id: 'd1',
+        $current_url: 'https://x/p',
+        full_name: 'Y',
+      },
+    } as unknown as CaptureResult);
+
+    const properties = out?.properties as Record<string, unknown>;
+    expect(properties.token).toBe('phc_test');
+    expect(properties.$lib).toBe('web');
+    expect(properties.distinct_id).toBe('d1');
+    expect(properties.$current_url).toBe('https://x/p');
+    expect(properties.$unset).toEqual(['name']);
+    expect(properties.full_name).toBeUndefined();
+  });
+
+  test('keeps the SDK $set/$set_once sub-maps on a $set-named event with only allowlisted keys', () => {
+    // Realistic SDK capture: `setPersonProperties({name})` emits
+    // `capture('$set', { $set: { name }, $set_once: {} })`, and the top-level
+    // envelope carries the transport keys ingestion requires.
+    const out = applyBeforeSend(allowedConfig(), {
+      event: '$set',
+      properties: {
+        token: 'phc_test',
+        $set: { name: 'X', full_name: 'Y' },
+        $set_once: { $session_entry_pathname: '/accounts/1' },
+      },
+    } as unknown as CaptureResult);
+
+    const properties = out?.properties as Record<string, unknown>;
+    expect(properties.token).toBe('phc_test');
+    expect(properties.$set).toEqual({ name: 'X' });
+    expect(properties.$set_once).toEqual({});
+  });
+
+  test.each(['$set', '$set_once'])(
+    'drops a non-record %s array instead of recursing generically (fail closed)',
+    (key) => {
+      const out = applyBeforeSend(allowedConfig(), {
+        event: 'identify_shaped',
+        properties: { [key]: [{ full_name: 'SECRETNAME' }] },
+      } as unknown as CaptureResult);
+
+      const properties = out?.properties as Record<string, unknown>;
+      expect(properties[key]).toBeUndefined();
+      expect(JSON.stringify(out)).not.toContain('SECRETNAME');
+    },
+  );
+
+  test.each(['$set', '$set_once'])(
+    'drops a non-record %s string instead of recursing generically (fail closed)',
+    (key) => {
+      const out = applyBeforeSend(allowedConfig(), {
+        event: 'identify_shaped',
+        properties: { [key]: 'SECRETNAME' },
+      } as unknown as CaptureResult);
+
+      const properties = out?.properties as Record<string, unknown>;
+      expect(properties[key]).toBeUndefined();
+      expect(JSON.stringify(out)).not.toContain('SECRETNAME');
+    },
+  );
+
   test('preserves a nested $unset inside a $set_once sub-object', () => {
     const out = applyBeforeSend(allowedConfig(), {
       event: 'identify_shaped',
@@ -621,6 +704,32 @@ describe('posthog lifecycle', () => {
   let captureGate: ReturnType<typeof createAnalyticsCaptureGate>;
   let lifecycle: ReturnType<typeof createProductAnalyticsLifecycle>;
 
+  const userPurposes = (overrides: Partial<AnalyticsPurposes> = {}): AnalyticsPurposes => ({
+    analytics: true,
+    identifiedDiagnostics: false,
+    interactionCapture: false,
+    ...overrides,
+  });
+
+  const authority = (
+    scope: string,
+    overrides: Partial<AnalyticsPurposes> = {},
+    distinctId?: string,
+    personProperties?: Properties,
+  ): AnalyticsAuthority => ({
+    scope,
+    purposes: userPurposes(overrides),
+    ...(distinctId ? { distinctId } : {}),
+    ...(personProperties ? { personProperties } : {}),
+  });
+
+  function sharedReady(): () => void {
+    let resolveReady: (() => void) | undefined;
+    const ready = new Promise<void>(resolve => { resolveReady = resolve; });
+    client.ready = mock(() => ready);
+    return () => resolveReady?.();
+  }
+
   beforeEach(() => {
     resetAnalyticsLifecycleForTests();
     window.ENV = { ...window.ENV, POSTHOG_KEY: 'phc_test' };
@@ -634,8 +743,10 @@ describe('posthog lifecycle', () => {
       identify: mock(() => {}),
       init: mock(() => {}),
       reset: mock(() => {}),
+      setCaptureHeatmaps: mock(() => {}),
       setPersistenceEnabled: mock(() => {}),
       setPersonProperties: mock(() => {}),
+      startSessionRecording: mock(() => {}),
       stopSessionRecording: mock(() => {}),
     };
     captureGate = createAnalyticsCaptureGate();
@@ -698,15 +809,16 @@ describe('posthog lifecycle', () => {
     );
   });
 
-  test('does nothing while pending and initializes idempotently only after grant', () => {
+  test('does nothing while pending and initializes idempotently only after grant', async () => {
     lifecycle.capture('dashboard_viewed');
     expect(client.init).not.toHaveBeenCalled();
     expect(client.capture).not.toHaveBeenCalled();
     expect(client.identify).not.toHaveBeenCalled();
     expect(client.clearLegacyConsent).not.toHaveBeenCalled();
 
-    lifecycle.grant('user-123', { subscription_tier: 'premium' });
-    lifecycle.grant('user-123', { subscription_tier: 'premium' });
+    lifecycle.setScope('user-123');
+    await lifecycle.apply(authority('user-123'));
+    await lifecycle.apply(authority('user-123'));
 
     expect(client.init).toHaveBeenCalledTimes(1);
     expect(client.clearLegacyConsent).toHaveBeenCalledTimes(1);
@@ -715,14 +827,13 @@ describe('posthog lifecycle', () => {
   });
 
   test('waits for the lazy SDK load before initializing', async () => {
-    let resolveReady: (() => void) | undefined
-    client.ready = mock(() => new Promise<void>(resolve => { resolveReady = resolve }))
+    const resolveReady = sharedReady();
     lifecycle.setScope('user-a');
 
-    const grant = lifecycle.grantFromAuthority('user-a', 'user-a');
+    const grant = lifecycle.apply(authority('user-a', {}, 'user-a'));
     expect(client.init).not.toHaveBeenCalled();
 
-    resolveReady?.();
+    resolveReady();
     await grant;
 
     expect(client.init).toHaveBeenCalledTimes(1);
@@ -730,51 +841,52 @@ describe('posthog lifecycle', () => {
   });
 
   test('does not initialize after a withdrawal that lands while the SDK load is in flight', async () => {
-    let resolveReady: (() => void) | undefined
-    client.ready = mock(() => new Promise<void>(resolve => { resolveReady = resolve }))
+    const resolveReady = sharedReady();
     lifecycle.setScope('user-a');
 
-    const grant = lifecycle.grantFromAuthority('user-a', 'user-a');
+    const grant = lifecycle.apply(authority('user-a', {}, 'user-a'));
     lifecycle.withdraw('user-a');
-    resolveReady?.();
+    resolveReady();
     await grant;
 
     expect(client.init).not.toHaveBeenCalled();
     expect(lifecycle.getState()).toBe('denied');
     expect(captureGate.isGranted()).toBe(false);
+    expect(lifecycle.getSnapshot().withdrawn).toBe(true);
   });
 
   test('does not initialize a stale scope when the SDK load resolves after a scope change', async () => {
-    let resolveReady: (() => void) | undefined
-    client.ready = mock(() => new Promise<void>(resolve => { resolveReady = resolve }))
+    const resolveReady = sharedReady();
     lifecycle.setScope('user-a');
 
-    const grant = lifecycle.grantFromAuthority('user-a', 'user-a');
+    const grant = lifecycle.apply(authority('user-a', {}, 'user-a'));
     lifecycle.setScope('user-b');
-    resolveReady?.();
+    resolveReady();
     await grant;
 
     expect(client.init).not.toHaveBeenCalled();
     expect(lifecycle.getState()).toBe('pending');
   });
 
-  test('preserves the unconfigured no-op', () => {
+  test('preserves the unconfigured no-op', async () => {
     key = undefined;
     expect(lifecycle.init()).toBe(false);
-    lifecycle.grant('user-123');
+    lifecycle.setScope('user-123');
+    await lifecycle.apply(authority('user-123'));
     expect(client.init).not.toHaveBeenCalled();
     expect(client.identify).not.toHaveBeenCalled();
     expect(lifecycle.getState()).toBe('denied');
   });
 
-  test('DNT is a browser-only hard stop', () => {
+  test('DNT is a browser-only hard stop', async () => {
     dnt = true;
-    lifecycle.grant('user-123');
+    lifecycle.setScope('user-123');
+    await lifecycle.apply(authority('user-123'));
     expect(client.init).not.toHaveBeenCalled();
     expect(lifecycle.getState()).toBe('denied');
   });
 
-  test('withdrawal closes the local gate before stopping recording and resetting tab state', () => {
+  test('withdrawal closes the local gate before stopping recording and resetting tab state', async () => {
     const order: string[] = [];
     const setGranted = captureGate.setGranted;
     captureGate.setGranted = mock((granted: boolean) => {
@@ -783,15 +895,25 @@ describe('posthog lifecycle', () => {
     });
     client.clearQueuedEvents = mock(() => { order.push('clear'); });
     client.clearPersistence = mock(() => { order.push('clear-persistence'); });
+    client.setCaptureHeatmaps = mock((enabled: boolean) => { order.push(`heatmaps:${enabled}`); });
     client.stopSessionRecording = mock(() => { order.push('stop'); });
     client.reset = mock(() => { order.push('reset'); });
     client.setPersistenceEnabled = mock((enabled: boolean) => { order.push(`persistence:${enabled}`); });
-    lifecycle.grant('user-123');
+    lifecycle.setScope('user-123');
+    await lifecycle.apply(authority('user-123'));
     order.length = 0;
 
     lifecycle.deny();
 
-    expect(order).toEqual(['gate:false', 'persistence:false', 'clear-persistence', 'clear', 'stop', 'reset']);
+    expect(order).toEqual([
+      'gate:false',
+      'persistence:false',
+      'clear-persistence',
+      'heatmaps:false',
+      'clear',
+      'stop',
+      'reset',
+    ]);
     expect(client.reset).toHaveBeenCalledWith(true);
     expect(lifecycle.getState()).toBe('denied');
   });
@@ -805,20 +927,20 @@ describe('posthog lifecycle', () => {
     expect(client.clearPersistence).toHaveBeenCalledTimes(2);
   });
 
-  test('pending disables persistence before any reset and grant restores it before identity', () => {
+  test('pending disables persistence before any reset and grant restores it before identity', async () => {
     const order: string[] = [];
     client.clearLegacyConsent = mock(() => { order.push('clear-legacy-consent'); });
     client.setPersistenceEnabled = mock((enabled: boolean) => { order.push(`persistence:${enabled}`); });
     client.clearPersistence = mock(() => { order.push('clear-persistence'); });
     client.identify = mock(() => { order.push('identify'); });
     lifecycle.setScope('user-a');
-    lifecycle.grantFromAuthority('user-a', 'user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
     order.length = 0;
 
     lifecycle.setPending();
     expect(order).toEqual(['persistence:false', 'clear-persistence']);
 
-    lifecycle.grantFromAuthority('user-a', 'user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
     expect(order).toEqual([
       'persistence:false',
       'clear-persistence',
@@ -828,7 +950,7 @@ describe('posthog lifecycle', () => {
     ]);
   });
 
-  test('separate tab lifecycles do not share native consent or identity state', () => {
+  test('separate tab lifecycles do not share native consent or identity state', async () => {
     const tabBClient: AnalyticsClient = {
       capture: mock(() => {}),
       clearLegacyConsent: mock(() => {}),
@@ -836,8 +958,10 @@ describe('posthog lifecycle', () => {
       identify: mock(() => {}),
       init: mock(() => {}),
       reset: mock(() => {}),
+      setCaptureHeatmaps: mock(() => {}),
       setPersistenceEnabled: mock(() => {}),
       setPersonProperties: mock(() => {}),
+      startSessionRecording: mock(() => {}),
       stopSessionRecording: mock(() => {}),
     };
     const tabBGate = createAnalyticsCaptureGate();
@@ -850,9 +974,9 @@ describe('posthog lifecycle', () => {
       isDoNotTrackEnabled: () => false,
     });
     lifecycle.setScope('user-a');
-    lifecycle.grantFromAuthority('user-a', 'user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
     tabB.setScope('user-b');
-    tabB.grantFromAuthority('user-b', 'user-b');
+    await tabB.apply(authority('user-b', {}, 'user-b'));
 
     lifecycle.withdraw('user-a');
     tabB.capture('still_enabled');
@@ -864,46 +988,49 @@ describe('posthog lifecycle', () => {
     expect(client).not.toHaveProperty('opt_out_capturing');
   });
 
-  test('test authority reset can preserve one physical SDK initialization', () => {
+  test('test authority reset can preserve one physical SDK initialization', async () => {
     const order: string[] = [];
     client.setPersistenceEnabled = mock(() => { order.push('disable-persistence'); });
     client.clearPersistence = mock(() => { order.push('clear-persistence'); });
     client.clearQueuedEvents = mock(() => { order.push('clear-queues'); });
+    client.setCaptureHeatmaps = mock((enabled: boolean) => { order.push(`heatmaps:${enabled}`); });
     client.stopSessionRecording = mock(() => { order.push('stop-recording'); });
     client.clearLegacyConsent = mock(() => { order.push('clear-legacy-consent'); });
     client.reset = mock(() => { order.push('reset'); });
     lifecycle.setScope('user-a');
-    lifecycle.grantFromAuthority('user-a', 'user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
     (client.init as ReturnType<typeof mock>).mockClear();
     order.length = 0;
 
     lifecycle.resetForTests(true);
     lifecycle.setScope('user-b');
-    lifecycle.grantFromAuthority('user-b', 'user-b');
+    await lifecycle.apply(authority('user-b', {}, 'user-b'));
 
     expect(client.init).not.toHaveBeenCalled();
     expect(client.reset).toHaveBeenCalledWith(true);
     expect(order).toEqual([
       'disable-persistence',
       'clear-persistence',
+      'heatmaps:false',
       'clear-queues',
       'stop-recording',
       'clear-legacy-consent',
       'reset',
       'clear-legacy-consent',
       'disable-persistence',
+      'heatmaps:true',
     ]);
   });
 
   test('a cross-tab withdrawal latches denial against stale authority and cleans up', () => {
-    const withdraw = mock((_scope: string) => {});
+    const withdraw = mock((_scope: string, _purpose: string) => {});
     const cleanup = listenForAnalyticsWithdrawal(withdraw);
 
     window.dispatchEvent(new StorageEvent('storage', {
       key: 'boostedbudget:analytics-withdrawal',
       newValue: JSON.stringify({ scope: 'user-123', nonce: 1 }),
     }));
-    expect(withdraw).toHaveBeenCalledWith('user-123');
+    expect(withdraw).toHaveBeenCalledWith('user-123', 'all');
 
     cleanup();
     window.dispatchEvent(new StorageEvent('storage', {
@@ -913,12 +1040,32 @@ describe('posthog lifecycle', () => {
     expect(withdraw).toHaveBeenCalledTimes(1);
   });
 
+  test('treats a purpose-less cross-tab withdrawal message as all', () => {
+    const withdraw = mock((_scope: string, _purpose: string) => {});
+    const cleanup = listenForAnalyticsWithdrawal(withdraw);
+
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: 'boostedbudget:analytics-withdrawal',
+      newValue: JSON.stringify({ scope: 'user-123', nonce: 1 }),
+    }));
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: 'boostedbudget:analytics-withdrawal',
+      newValue: JSON.stringify({ scope: 'user-123', purpose: 'interactionCapture', nonce: 2 }),
+    }));
+
+    expect(withdraw.mock.calls).toEqual([
+      ['user-123', 'all'],
+      ['user-123', 'interactionCapture'],
+    ]);
+    cleanup();
+  });
+
   test('exposes identity-scoped authority and withdrawal transitions', () => {
     const scoped = lifecycle as unknown as Record<string, unknown>;
 
     expect(scoped.setScope).toBeFunction();
-    expect(scoped.grantFromAuthority).toBeFunction();
-    expect(scoped.grantExplicitly).toBeFunction();
+    expect(scoped.apply).toBeFunction();
+    expect(scoped.clearWithdrawal).toBeFunction();
     expect(scoped.withdraw).toBeFunction();
     expect(scoped.subscribe).toBeFunction();
   });
@@ -929,69 +1076,344 @@ describe('posthog lifecycle', () => {
     expect(posthogModule.subscribeToAnalyticsLifecycle).toBeFunction();
   });
 
-  test('failed backend withdrawal stays denied when stale server authority refetches true', () => {
+  test('failed backend withdrawal stays denied when stale server authority refetches true', async () => {
     lifecycle.setScope('user-a');
-    lifecycle.grantFromAuthority('user-a', 'user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
     lifecycle.withdraw('user-a');
     expect(lifecycle.getSnapshot().generation).toBe(2);
 
     lifecycle.setPending();
-    lifecycle.grantFromAuthority('user-a', 'user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
     expect(lifecycle.getState()).toBe('denied');
 
-    lifecycle.grantExplicitly('user-a', 'user-a');
+    lifecycle.clearWithdrawal('user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
     expect(lifecycle.getState()).toBe('granted');
   });
 
-  test('ignores late authority responses from a torn-down identity generation', () => {
+  test('ignores late authority responses from a torn-down identity generation', async () => {
     lifecycle.setScope('user-a');
-    lifecycle.grantFromAuthority('user-a', 'user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
     lifecycle.setScope('user-b');
 
-    lifecycle.grantFromAuthority('user-a', 'user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
     expect(lifecycle.getState()).toBe('pending');
     expect(client.identify).toHaveBeenCalledTimes(1);
 
-    lifecycle.grantFromAuthority('user-b', 'user-b');
+    await lifecycle.apply(authority('user-b', {}, 'user-b'));
     expect(lifecycle.getState()).toBe('granted');
     expect(client.identify).toHaveBeenLastCalledWith('user-b', undefined);
   });
 
-  test('notifies subscribers only when authority newly transitions to granted', () => {
-    const states: Array<{ state: string; scope: string | null; generation: number }> = [];
+  test('notifies subscribers only when authority newly transitions to granted', async () => {
+    const states: AnalyticsLifecycleSnapshot[] = [];
     lifecycle.setScope('anonymous');
     const cleanup = lifecycle.subscribe(state => states.push(state));
 
-    lifecycle.grantFromAuthority('anonymous');
-    lifecycle.grantFromAuthority('anonymous');
-    expect(states).toEqual([{ state: 'granted', scope: 'anonymous', generation: 1 }]);
+    await lifecycle.apply(authority('anonymous'));
+    await lifecycle.apply(authority('anonymous'));
+    expect(states).toEqual([{
+      state: 'granted',
+      scope: 'anonymous',
+      generation: 1,
+      withdrawn: false,
+    }]);
 
     cleanup();
     lifecycle.withdraw('anonymous');
-    lifecycle.grantExplicitly('anonymous');
-    expect(states).toEqual([{ state: 'granted', scope: 'anonymous', generation: 1 }]);
+    lifecycle.clearWithdrawal('anonymous');
+    await lifecycle.apply(authority('anonymous'));
+    expect(states).toHaveLength(1);
   });
 
-  test('includes the new identity scope in pending and granted notifications', () => {
-    const snapshots: Array<{ state: string; scope: string | null; generation: number }> = [];
+  test('includes the new identity scope in pending and granted notifications', async () => {
+    const snapshots: AnalyticsLifecycleSnapshot[] = [];
     lifecycle.subscribe(snapshot => snapshots.push(snapshot));
 
     lifecycle.setScope('user-a');
-    lifecycle.grantFromAuthority('user-a', 'user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
     lifecycle.setScope('user-b');
 
-    expect(snapshots).toContainEqual({ state: 'granted', scope: 'user-a', generation: 1 });
-    expect(snapshots).toContainEqual({ state: 'pending', scope: 'user-b', generation: 2 });
+    expect(snapshots).toContainEqual({
+      state: 'granted',
+      scope: 'user-a',
+      generation: 1,
+      withdrawn: false,
+    });
+    expect(snapshots).toContainEqual({
+      state: 'pending',
+      scope: 'user-b',
+      generation: 2,
+      withdrawn: false,
+    });
   });
 
-  test('identifies a signed-in grant before notifying pageview subscribers', () => {
+  test('identifies a signed-in grant before notifying pageview subscribers', async () => {
     const order: string[] = [];
     client.identify = mock(() => { order.push('identify'); });
     lifecycle.setScope('user-a');
     lifecycle.subscribe(() => { order.push('pageview'); });
 
-    lifecycle.grantFromAuthority('user-a', 'user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
 
     expect(order).toEqual(['identify', 'pageview']);
+  });
+
+  test('opens the capture gate only after the state flips to granted', async () => {
+    const order: string[] = [];
+    const setGranted = captureGate.setGranted;
+    captureGate.setGranted = mock((granted: boolean) => {
+      order.push(`gate:${granted}:${lifecycle.getState()}`);
+      setGranted(granted);
+    });
+    lifecycle.setScope('user-a');
+
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
+
+    expect(order).toEqual(['gate:true:granted']);
+  });
+
+  test('re-grant after a pending refetch re-decides session recording from the authority', async () => {
+    lifecycle.setScope('user-a');
+    await lifecycle.apply(authority('user-a', { interactionCapture: true }, 'user-a'));
+    expect(client.startSessionRecording).toHaveBeenCalledTimes(1);
+    expect(client.setCaptureHeatmaps).toHaveBeenLastCalledWith(true);
+
+    lifecycle.setPending();
+    await lifecycle.apply(authority('user-a', { interactionCapture: true }, 'user-a'));
+
+    expect(client.startSessionRecording).toHaveBeenCalledTimes(2);
+    expect(client.setCaptureHeatmaps).toHaveBeenLastCalledWith(true);
+  });
+
+  test('withdrawal turns heatmaps off and stops session recording', async () => {
+    lifecycle.setScope('user-a');
+    await lifecycle.apply(authority('user-a', { interactionCapture: true }, 'user-a'));
+
+    lifecycle.withdraw('user-a');
+
+    expect(client.setCaptureHeatmaps).toHaveBeenLastCalledWith(false);
+    expect(client.stopSessionRecording).toHaveBeenCalledTimes(1);
+    expect(lifecycle.getSnapshot().withdrawn).toBe(true);
+  });
+
+  test('setScope keeps an earlier withdrawal latched', async () => {
+    lifecycle.setScope('user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
+    lifecycle.withdraw('user-a');
+
+    lifecycle.setScope('user-b');
+    lifecycle.setScope('user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
+
+    expect(lifecycle.getState()).not.toBe('granted');
+    expect(captureGate.isGranted()).toBe(false);
+    expect(lifecycle.getSnapshot().withdrawn).toBe(true);
+  });
+
+  test('ignores a withdrawal for another scope', async () => {
+    lifecycle.setScope('user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
+
+    lifecycle.withdraw('user-b');
+
+    expect(lifecycle.getState()).toBe('granted');
+    expect(lifecycle.getSnapshot().withdrawn).toBe(false);
+  });
+
+  test('a setPending after a withdrawal does not re-grant or bump the snapshot generation', async () => {
+    lifecycle.setScope('user-a');
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
+    lifecycle.withdraw('user-a');
+    const generation = lifecycle.getSnapshot().generation;
+
+    lifecycle.setPending();
+
+    expect(lifecycle.getSnapshot().generation).toBe(generation);
+    expect(lifecycle.getState()).toBe('denied');
+
+    await lifecycle.apply(authority('user-a', {}, 'user-a'));
+    expect(lifecycle.getState()).toBe('denied');
+    expect(captureGate.isGranted()).toBe(false);
+  });
+
+  test('does not grant when a pending refetch lands while the SDK load is in flight', async () => {
+    const resolveReady = sharedReady();
+    lifecycle.setScope('user-a');
+
+    const grant = lifecycle.apply(authority('user-a', {}, 'user-a'));
+    lifecycle.setPending();
+    resolveReady();
+    await grant;
+
+    expect(lifecycle.getState()).toBe('pending');
+    expect(captureGate.isGranted()).toBe(false);
+    expect(client.init).not.toHaveBeenCalled();
+  });
+
+  test('the hook re-apply after a suspended grant proceeds and outruns the stale continuation', async () => {
+    const resolvers: Array<() => void> = [];
+    client.ready = mock(() => new Promise<void>(resolve => { resolvers.push(resolve); }));
+    lifecycle.setScope('user-a');
+    const stale = lifecycle.apply(authority('user-a', {}, 'user-a'));
+    lifecycle.setPending();
+    const resumption = lifecycle.apply(authority('user-a', {}, 'user-a'));
+
+    resolvers[0]?.();
+    await stale;
+    expect(lifecycle.getState()).toBe('pending');
+
+    resolvers[1]?.();
+    await resumption;
+    expect(lifecycle.getState()).toBe('granted');
+    expect(client.init).toHaveBeenCalledTimes(1);
+    expect(client.identify).toHaveBeenCalledTimes(1);
+  });
+
+  test('applies the new scope authority when a scope change lands during the SDK load', async () => {
+    const resolveReady = sharedReady();
+    lifecycle.setScope('user-a');
+    const stale = lifecycle.apply(authority('user-a', {}, 'user-a'));
+    lifecycle.setScope('user-b');
+    const next = lifecycle.apply(authority('user-b', {}, 'user-b'));
+
+    resolveReady();
+    await stale;
+    await next;
+
+    expect(lifecycle.getState()).toBe('granted');
+    expect(client.identify).toHaveBeenCalledTimes(1);
+    expect(client.identify).toHaveBeenCalledWith('user-b', undefined);
+  });
+
+  test('resolves interleaved applies last-invoked-wins regardless of resolution order', async () => {
+    const resolveReady = sharedReady();
+    lifecycle.setScope('user-a');
+    const recording = lifecycle.apply(authority('user-a', { interactionCapture: true }, 'user-a'));
+    const silent = lifecycle.apply(authority('user-a', { interactionCapture: false }, 'user-a'));
+
+    resolveReady();
+    await recording;
+    await silent;
+
+    expect(lifecycle.getState()).toBe('granted');
+    expect(client.startSessionRecording).not.toHaveBeenCalled();
+    expect(client.stopSessionRecording).not.toHaveBeenCalled();
+  });
+
+  test('resolves interleaved applies last-invoked-wins when the first resolves last', async () => {
+    const resolveReady = sharedReady();
+    lifecycle.setScope('user-a');
+    const recording = lifecycle.apply(authority('user-a', { interactionCapture: true }, 'user-a'));
+    const silent = lifecycle.apply(authority('user-a', { interactionCapture: false }, 'user-a'));
+
+    resolveReady();
+    await silent;
+    await recording;
+
+    expect(lifecycle.getState()).toBe('granted');
+    expect(client.startSessionRecording).not.toHaveBeenCalled();
+  });
+
+  test('a purpose-only toggle keeps the snapshot generation stable and re-reconciles purposes', async () => {
+    lifecycle.setScope('user-a');
+    await lifecycle.apply(authority(
+      'user-a',
+      { identifiedDiagnostics: true, interactionCapture: true },
+      'user-a',
+      { name: 'Sentinel Name' },
+    ));
+    const generation = lifecycle.getSnapshot().generation;
+    expect(client.setPersonProperties).toHaveBeenCalledWith({ name: 'Sentinel Name' });
+
+    await lifecycle.apply(authority(
+      'user-a',
+      { identifiedDiagnostics: false, interactionCapture: false },
+      'user-a',
+      { name: 'Sentinel Name' },
+    ));
+
+    expect(lifecycle.getSnapshot().generation).toBe(generation);
+    expect(client.capture).toHaveBeenCalledWith(ANALYTICS_EVENTS.POSTHOG_SET, {
+      $unset: ['name'],
+    });
+    expect(client.stopSessionRecording).toHaveBeenCalledTimes(1);
+  });
+
+  test('reconcile turns identified diagnostics on with the allowlisted name only', async () => {
+    lifecycle.setScope('user-a');
+    await lifecycle.apply(authority(
+      'user-a',
+      { identifiedDiagnostics: true },
+      'user-a',
+      { name: 'Sentinel Name' },
+    ));
+
+    expect(client.setPersonProperties).toHaveBeenCalledWith({ name: 'Sentinel Name' });
+    expect(client.capture).not.toHaveBeenCalled();
+  });
+});
+
+describe('posthog heatmap route gating', () => {
+  const anonymousAuthority: AnalyticsAuthority = {
+    scope: 'anonymous',
+    purposes: { analytics: true, identifiedDiagnostics: false, interactionCapture: false },
+  };
+
+  beforeEach(() => {
+    resetAnalyticsLifecycleForTests();
+    window.ENV = { ...window.ENV, POSTHOG_KEY: 'phc_test' };
+    mockPosthogSetConfig.mockClear();
+  });
+
+  test('turns heatmaps on when an anonymous route is recorded while granted', async () => {
+    setProductAnalyticsScope('anonymous');
+    await applyProductAnalyticsAuthority(anonymousAuthority);
+    mockPosthogSetConfig.mockClear();
+
+    setRoute('/pricing');
+
+    expect(mockPosthogSetConfig).toHaveBeenCalledWith({ capture_heatmaps: true });
+  });
+
+  test('re-grant turns heatmaps on for an anonymous current route', async () => {
+    setRoute('/');
+    setProductAnalyticsScope('anonymous');
+    await applyProductAnalyticsAuthority(anonymousAuthority);
+    expect(mockPosthogSetConfig).toHaveBeenLastCalledWith({ capture_heatmaps: true });
+
+    withdrawProductAnalytics('anonymous');
+    expect(mockPosthogSetConfig).toHaveBeenLastCalledWith({ capture_heatmaps: false });
+
+    clearProductAnalyticsWithdrawal('anonymous');
+    await applyProductAnalyticsAuthority(anonymousAuthority);
+    expect(mockPosthogSetConfig).toHaveBeenLastCalledWith({ capture_heatmaps: true });
+  });
+
+  test('keeps heatmaps off while pending or denied on an anonymous route', async () => {
+    setRoute('/');
+    setProductAnalyticsScope('anonymous');
+    expect(mockPosthogSetConfig).not.toHaveBeenCalled();
+
+    await applyProductAnalyticsAuthority({ scope: 'anonymous', purposes: NO_PURPOSES });
+
+    expect(mockPosthogSetConfig).toHaveBeenLastCalledWith({ capture_heatmaps: false });
+  });
+
+  test('keeps heatmaps off on re-grant before any route is recorded', async () => {
+    setProductAnalyticsScope('anonymous');
+
+    await applyProductAnalyticsAuthority(anonymousAuthority);
+
+    expect(mockPosthogSetConfig).toHaveBeenLastCalledWith({ capture_heatmaps: false });
+  });
+
+  test('keeps heatmaps off on a sensitive route', async () => {
+    setRoute('/billing/manage');
+    setProductAnalyticsScope('anonymous');
+
+    await applyProductAnalyticsAuthority(anonymousAuthority);
+
+    expect(mockPosthogSetConfig).toHaveBeenLastCalledWith({ capture_heatmaps: false });
   });
 });

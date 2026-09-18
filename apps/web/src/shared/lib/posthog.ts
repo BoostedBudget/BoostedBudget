@@ -15,11 +15,17 @@ import { isPiiKey } from './piiScrubbing'
 import {
   createAnalyticsCaptureGate,
   createProductAnalyticsLifecycle,
+  type AnalyticsAuthority,
   type AnalyticsLifecycleSnapshot,
   type AnalyticsLifecycleState,
 } from './analyticsLifecycle'
 
-export type { AnalyticsLifecycleSnapshot, AnalyticsLifecycleState } from './analyticsLifecycle'
+export type {
+  AnalyticsAuthority,
+  AnalyticsLifecycleSnapshot,
+  AnalyticsLifecycleState,
+  AnalyticsPurposes,
+} from './analyticsLifecycle'
 
 const SENSITIVE_PATHS = [
   /^\/billing\/(?:manage|success)(?:\/|$)/,
@@ -65,12 +71,72 @@ const ALLOWED_PERSON_PROPERTIES = new Set([
   'subscription_tier',
 ])
 const PERSON_PROPERTY_MAPS = new Set(['$set', '$set_once'])
+// Envelope keys posthog-js puts on every event's `properties` inside
+// `calculateEventProperties` (installed posthog-js 1.430.2,
+// node_modules/posthog-js/dist/module.js). A `$set`-NAMED event's top-level
+// properties are default-denied like a person-property map, but these are the
+// event envelope, not person properties: the SDK's own before_send wrapper
+// snapshots `token` and DROPS the whole event if it is removed ("This property
+// is required for ingestion"), and the rest are the metadata every capture
+// carries. Person properties live in the `$set`/`$set_once` sub-maps, which
+// stay default-denied. Keys are taken verbatim from that function:
+// `token`/`$config_defaults`/`$cookieless_mode`/`distinct_id`/`$session_id`/
+// `$window_id`/`$is_identified`/`$process_person_profile`/`$groups`/
+// `$duration`/`$browser_type`/`$lib_custom_api_host` are set directly there;
+// `$device_id`/`$had_persisted_distinct_id` come from persistence properties
+// merged in; `$pageview_id` from `pageViewManager.doEvent()`; the `$os`/
+// `$browser`/`$device`/`$screen`/`$viewport`/`$timezone`/`$insert_id`/`$time`
+// family from its browser-properties helper. `$sdk_debug_*` keys are omitted
+// deliberately: they are diagnostic-only and never required for ingestion.
+const SDK_TRANSPORT_PROPERTIES = new Set([
+  'token',
+  '$config_defaults',
+  '$cookieless_mode',
+  'distinct_id',
+  '$device_id',
+  '$had_persisted_distinct_id',
+  '$session_id',
+  '$window_id',
+  '$pageview_id',
+  '$lib',
+  '$lib_version',
+  '$lib_custom_api_host',
+  '$insert_id',
+  '$time',
+  '$os',
+  '$os_version',
+  '$browser',
+  '$browser_version',
+  '$browser_language',
+  '$browser_language_prefix',
+  '$browser_type',
+  '$device',
+  '$device_type',
+  '$webview_app',
+  '$webview_app_version',
+  '$current_url',
+  '$host',
+  '$pathname',
+  '$raw_user_agent',
+  '$screen_height',
+  '$screen_width',
+  '$viewport_height',
+  '$viewport_width',
+  '$timezone',
+  '$timezone_offset',
+  '$sdk_dist_channel',
+  '$duration',
+  '$groups',
+  '$is_identified',
+  '$process_person_profile',
+])
 
 const WITHDRAWAL_STORAGE_KEY = 'boostedbudget:analytics-withdrawal'
 const YES_LIKE_PRIVACY_SIGNAL_VALUES = new Set<unknown>([true, 'true', 1, '1', 'yes'])
 
 let posthogSdk: PostHog | null = null
 let posthogSdkLoad: Promise<void> | null = null
+let currentRoute: string | null = null
 
 /**
  * Loads the consent-gated posthog-js SDK on demand. The SDK is ~92 kB gzip and
@@ -289,6 +355,7 @@ function sanitizeValue(
   ancestors = new WeakSet<object>(),
   personPropertyMap = false,
   isEventRoot = false,
+  sdkEventProperties = false,
 ): unknown {
   if (!value || typeof value !== 'object') return value
   if (value instanceof Date) return new Date(value.getTime())
@@ -314,13 +381,23 @@ function sanitizeValue(
     // Person properties are default-deny: only the allowlist survives, and the old
     // `isPiiKey` denylist does NOT gate them. Applies to the keys of a `$set`/`$set_once`
     // sub-object and to the direct properties of an event NAMED `$set`.
-    if (personPropertyMap && !ALLOWED_PERSON_PROPERTIES.has(key)) continue
-    if (PERSON_PROPERTY_MAPS.has(normalized) && isPlainRecord(child)) {
-      sanitized[key] = sanitizeValue(child, ancestors, true)
+    if (personPropertyMap && !ALLOWED_PERSON_PROPERTIES.has(key)) {
+      // A `$set`-named event's own properties also carry the SDK envelope: the
+      // transport keys every capture needs to be ingested (`token` is required or the
+      // SDK drops the event) and the `$set`/`$set_once` sub-maps the SDK's
+      // setPersonProperties/unsetPersonProperties calls actually send.
+      const isSdkEnvelopeKey = sdkEventProperties
+        && (SDK_TRANSPORT_PROPERTIES.has(key) || PERSON_PROPERTY_MAPS.has(normalized))
+      if (!isSdkEnvelopeKey) continue
+    }
+    if (PERSON_PROPERTY_MAPS.has(normalized)) {
+      // Fail closed: a non-record `$set`/`$set_once` cannot be allowlisted key-by-key,
+      // and generic recursion would apply only the weaker `isPiiKey` denylist.
+      if (isPlainRecord(child)) sanitized[key] = sanitizeValue(child, ancestors, true)
       continue
     }
-    if (isSetEvent && normalized === 'properties' && isPlainRecord(child)) {
-      sanitized[key] = sanitizeValue(child, ancestors, true)
+    if (isSetEvent && normalized === 'properties') {
+      if (isPlainRecord(child)) sanitized[key] = sanitizeValue(child, ancestors, true, false, true)
       continue
     }
     // `$heatmap_data` is URL-keyed; remap each key and drop sensitive routes.
@@ -442,25 +519,50 @@ export function grantProductAnalytics(
   distinctId?: string,
   personProperties?: Properties,
 ): Promise<void> {
-  return analyticsLifecycle.grantExplicitly(scope, distinctId, personProperties)
+  return analyticsLifecycle.apply({
+    scope,
+    purposes: { analytics: true, identifiedDiagnostics: false, interactionCapture: false },
+    ...(distinctId ? { distinctId } : {}),
+    ...(personProperties ? { personProperties } : {}),
+  })
 }
 
-export function applyProductAnalyticsAuthority(
-  scope: string,
-  distinctId?: string,
-  personProperties?: Properties,
-): Promise<void> {
-  return analyticsLifecycle.grantFromAuthority(scope, distinctId, personProperties)
+export function applyProductAnalyticsAuthority(authority: AnalyticsAuthority): Promise<void> {
+  return analyticsLifecycle.apply(authority)
+}
+
+export function clearProductAnalyticsWithdrawal(scope: string): void {
+  analyticsLifecycle.clearWithdrawal(scope)
+}
+
+function applyHeatmapCapture(analyticsEnabled: boolean): void {
+  const enabled = analyticsEnabled
+    && currentRoute !== null
+    && isAnonymousAnalyticsPath(currentRoute)
+  posthogSdk?.set_config({ capture_heatmaps: enabled })
+}
+
+/**
+ * Records the route before gating heatmaps, so a mid-page analytics re-grant can
+ * re-enable heatmaps on an anonymous route without waiting for a pageview.
+ */
+export function setRoute(url: string): void {
+  currentRoute = url
+  if (getAnalyticsLifecycleState() !== 'granted') return
+  applyHeatmapCapture(true)
 }
 
 export function denyProductAnalytics(): void {
   analyticsLifecycle.deny()
 }
 
-export function withdrawProductAnalytics(scope: string): void {
+export function withdrawProductAnalytics(scope: string, purpose: string = 'all'): void {
   analyticsLifecycle.withdraw(scope)
   try {
-    localStorage.setItem(WITHDRAWAL_STORAGE_KEY, JSON.stringify({ scope, nonce: Date.now() }))
+    localStorage.setItem(
+      WITHDRAWAL_STORAGE_KEY,
+      JSON.stringify({ scope, purpose, nonce: Date.now() }),
+    )
     localStorage.removeItem(WITHDRAWAL_STORAGE_KEY)
   } catch {
     // Local denial is authoritative even when cross-tab storage is unavailable.
@@ -468,13 +570,19 @@ export function withdrawProductAnalytics(scope: string): void {
 }
 
 export function listenForAnalyticsWithdrawal(
-  onWithdrawal: (scope: string) => void = scope => analyticsLifecycle.withdraw(scope),
+  onWithdrawal: (scope: string, purpose: string) => void =
+    scope => analyticsLifecycle.withdraw(scope),
 ): () => void {
   function handleStorage(event: StorageEvent): void {
     if (event.key === WITHDRAWAL_STORAGE_KEY && event.newValue !== null) {
       try {
-        const message = JSON.parse(event.newValue) as { scope?: unknown }
-        if (typeof message.scope === 'string') onWithdrawal(message.scope)
+        const message = JSON.parse(event.newValue) as { scope?: unknown; purpose?: unknown }
+        if (typeof message.scope === 'string') {
+          onWithdrawal(
+            message.scope,
+            typeof message.purpose === 'string' ? message.purpose : 'all',
+          )
+        }
       } catch {
         // Ignore malformed or legacy messages that cannot be scoped safely.
       }
@@ -519,6 +627,7 @@ export function setProductAnalyticsPersonProperties(properties: Properties): voi
 /** Test-only reset; production authority transitions use pending/grant/deny above. */
 export function resetAnalyticsLifecycleForTests(): void {
   analyticsLifecycle.resetForTests(true)
+  currentRoute = null
 }
 
 const analyticsCaptureGate = createAnalyticsCaptureGate()
@@ -548,10 +657,12 @@ const analyticsClient = {
   },
   ready: loadPostHogSdk,
   reset: (resetDeviceId: boolean) => posthogSdk?.reset(resetDeviceId),
+  setCaptureHeatmaps: (analyticsEnabled: boolean) => applyHeatmapCapture(analyticsEnabled),
   setPersistenceEnabled: (enabled: boolean) => {
     if (posthogSdk) setPostHogPersistenceEnabled(posthogSdk, enabled)
   },
   setPersonProperties: (properties: Properties) => posthogSdk?.setPersonProperties(properties),
+  startSessionRecording: () => posthogSdk?.startSessionRecording(),
   stopSessionRecording: () => posthogSdk?.stopSessionRecording(),
 }
 
