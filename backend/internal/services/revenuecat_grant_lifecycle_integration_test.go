@@ -75,9 +75,10 @@ func TestRevenueCatCompExpiryIntegrationThroughRealDBAndGateway(t *testing.T) {
 	_, err := s.Refresh(context.Background(), fx.id)
 	require.NoError(t, err)
 	require.Equal(t,
-		[]string{phclient.EventRevenueCatCompExpired, phclient.EventRevenueCatAccessInactive, phclient.EventRevenueCatRetentionArmed},
+		[]string{phclient.EventRevenueCatCompExpired, phclient.EventRevenueCatAccessRevoked, phclient.EventRevenueCatAccessInactive, phclient.EventRevenueCatRetentionArmed},
 		rcCapturedNames(transport))
 	require.Equal(t, map[string]interface{}{"entitlement": "comp_household_3"}, transport.captures[0].props)
+	require.Equal(t, map[string]interface{}{"entitlement": "comp_household_3", "source": "webhook"}, transport.captures[1].props)
 	for _, capture := range transport.captures {
 		require.Equal(t, "canonical-subject", capture.subject)
 		requireLifecycleCaptureHasNoForbiddenKeys(t, capture)
@@ -90,7 +91,8 @@ func TestRevenueCatPaidGrantLapseIntegrationThroughRealDBAndGateway(t *testing.T
 	_, err := s.Refresh(context.Background(), fx.id)
 	require.NoError(t, err)
 	require.Equal(t,
-		[]string{phclient.EventRevenueCatPaidGrantLapsed, phclient.EventRevenueCatAccessInactive, phclient.EventRevenueCatRetentionArmed},
+		[]string{phclient.EventRevenueCatPaidGrantLapsed, phclient.EventRevenueCatAccessRevoked, phclient.EventRevenueCatAccessInactive, phclient.EventRevenueCatRetentionArmed},
 		rcCapturedNames(transport))
 	require.Equal(t, map[string]interface{}{"entitlement": "paid_premium"}, transport.captures[0].props)
+	require.Equal(t, map[string]interface{}{"entitlement": "paid_premium", "source": "refund"}, transport.captures[1].props)
 }
