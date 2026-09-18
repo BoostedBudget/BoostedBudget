@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/maxnussbaum/BoostedBudget/internal/middleware"
+	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -132,16 +133,26 @@ func TestRequestAudit_AbsentRequestIdGetsServerUuid(t *testing.T) {
 	assert.NotEqual(t, uuid.Nil, probe.requestID)
 }
 
-// TestRequestAudit_ValidRequestIdIsPropagated: a well-formed header is preserved for cross-service
-// tracing.
+// TestRequestAudit_ValidRequestIdIsPropagated: a well-formed client header is preserved for
+// cross-service tracing. RequestID is wired FIRST (production order), since RequestAudit reads the
+// ID RequestID established rather than the raw request header.
 func TestRequestAudit_ValidRequestIdIsPropagated(t *testing.T) {
 	id := uuid.New()
-	e, probe := newRequestAuditEcho(middleware.GateStatusPassed)
+	e := echo.New()
+	var got uuid.UUID
+	e.Use(middleware.RequestID())
+	e.Use(middleware.RequestAudit())
+	e.GET("/audit-probe", func(c echo.Context) error {
+		_, _, got = middleware.RequestAuditFrom(c.Request().Context())
+		return c.NoContent(http.StatusOK)
+	})
 	req := httptest.NewRequest(http.MethodGet, "/audit-probe", nil)
 	req.Header.Set("X-Request-ID", id.String())
-	serveAuditProbe(t, e, req)
+	rr := httptest.NewRecorder()
+	e.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
 
-	assert.Equal(t, id, probe.requestID)
+	assert.Equal(t, id, got)
 }
 
 // TestRequestAuditFrom_WithoutMiddlewareIsZeroSafe pins the "middleware never ran" contract: the
@@ -152,4 +163,57 @@ func TestRequestAuditFrom_WithoutMiddlewareIsZeroSafe(t *testing.T) {
 	assert.False(t, ip.IsValid())
 	assert.Empty(t, ua)
 	assert.Equal(t, uuid.Nil, requestID)
+}
+
+// TestRequestAudit_CorrelatesWithRequestIDMiddleware is the correlation guard: the pre-existing
+// RequestID middleware (installed FIRST, main.go:300) establishes the request ID that every
+// http_request log line and the response X-Request-ID header carry. RequestAudit must record THAT
+// ID, not a second independent one, or an operator grepping audit_logs.request_id by the response's
+// ID finds nothing. Here the request carries no X-Request-ID header, which is exactly the case
+// where the old code diverged.
+func TestRequestAudit_CorrelatesWithRequestIDMiddleware(t *testing.T) {
+	e := echo.New()
+	var auditID uuid.UUID
+	var obsID uuid.UUID
+	e.Use(middleware.RequestID())
+	e.Use(middleware.RequestAudit())
+	e.GET("/audit-probe", func(c echo.Context) error {
+		_, _, auditID = middleware.RequestAuditFrom(c.Request().Context())
+		obsID, _ = uuid.Parse(observability.RequestIDFromContext(c.Request().Context()))
+		return c.NoContent(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/audit-probe", nil)
+	rr := httptest.NewRecorder()
+	e.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NotEqual(t, uuid.Nil, obsID, "RequestID middleware must have generated a UUID")
+	assert.Equal(t, obsID, auditID,
+		"audit request_id must equal the request's established ID; a second independent UUID defeats "+
+			"log/audit correlation")
+}
+
+// TestRequestAudit_MalformedHeaderWithRequestIDStillYieldsServerUuid keeps the never-propagate rule
+// intact when RequestID is wired: RequestID stores the raw malformed header, and RequestAudit must
+// refuse it rather than copy a non-UUID into the UUID column.
+func TestRequestAudit_MalformedHeaderWithRequestIDStillYieldsServerUuid(t *testing.T) {
+	e := echo.New()
+	var auditID uuid.UUID
+	var obsRaw string
+	e.Use(middleware.RequestID())
+	e.Use(middleware.RequestAudit())
+	e.GET("/audit-probe", func(c echo.Context) error {
+		_, _, auditID = middleware.RequestAuditFrom(c.Request().Context())
+		obsRaw = observability.RequestIDFromContext(c.Request().Context())
+		return c.NoContent(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/audit-probe", nil)
+	req.Header.Set("X-Request-ID", "not-a-uuid")
+	rr := httptest.NewRecorder()
+	e.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "not-a-uuid", obsRaw, "fixture: RequestID must have stored the raw header")
+	assert.NotEqual(t, uuid.Nil, auditID, "a server-generated UUID is required")
+	assert.NotEqual(t, "not-a-uuid", auditID.String(), "malformed input must never be propagated")
 }
