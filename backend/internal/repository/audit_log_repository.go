@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -112,12 +114,44 @@ type AuditLogRepository interface {
 	LogInTx(ctx context.Context, tx pgx.Tx, action, resourceType, resourceID string) error
 }
 
+// AuditLogMetadata is the request metadata an audit row may record alongside the load-bearing
+// action/resource facts. Zero values mean "not recorded": an invalid netip.Addr and uuid.Nil are
+// bound as SQL NULL, and a nil Changes slice is bound as SQL NULL. This is deliberate — an absent
+// value must stay absent rather than become a zero IP or an all-zero UUID that reads as data.
+type AuditLogMetadata struct {
+	IP        netip.Addr
+	UserAgent string
+	RequestID uuid.UUID
+	Changes   []byte
+}
+
+// AuditLogMetadataRepository is the AuditLogRepository surface PLUS LogInTxWithMetadata, the
+// in-transaction write that also records request metadata (ip_address, user_agent, request_id,
+// changes — the four columns migration 000003 already declares). #1683 Task 4 adds it; Task 5's
+// privacy write path is its first consumer.
+//
+// It is a SEPARATE interface rather than a widening of AuditLogRepository on purpose: the several
+// test doubles across the repo (deletion_service_test.go's MockAuditLogRepository and the
+// repository integration-test spies) implement AuditLogRepository directly, and adding a method
+// there would break every one of them. Consumers that need the metadata write take this type.
+type AuditLogMetadataRepository interface {
+	AuditLogRepository
+	LogInTxWithMetadata(ctx context.Context, tx pgx.Tx, action, resourceType, resourceID string, meta AuditLogMetadata) error
+}
+
 type auditLogRepository struct {
 	db DB
 }
 
 // NewAuditLogRepository creates the production AuditLogRepository.
 func NewAuditLogRepository(db DB) AuditLogRepository {
+	return &auditLogRepository{db: db}
+}
+
+// NewAuditLogMetadataRepository creates the production AuditLogMetadataRepository — the same
+// concrete type, exposed with the metadata-carrying method. Existing callers keep using
+// NewAuditLogRepository; a consumer that needs LogInTxWithMetadata (Task 5) uses this one.
+func NewAuditLogMetadataRepository(db DB) AuditLogMetadataRepository {
 	return &auditLogRepository{db: db}
 }
 
@@ -132,6 +166,14 @@ func (r *auditLogRepository) LogInTx(ctx context.Context, tx pgx.Tx, action, res
 	return writeAuditLogEntry(ctx, tx, action, resourceType, resourceID)
 }
 
+// LogInTxWithMetadata implements AuditLogMetadataRepository. It is LogInTx plus the four request-
+// metadata columns migration 000003 already declares. The actor (user_id) is STILL written as the
+// literal SQL NULL — see LogInTx's #1506 warning: a non-NULL actor would take FOR KEY SHARE on a
+// users row inside the caller's transaction and reintroduce the cross-user 40P01 deadlock class.
+func (r *auditLogRepository) LogInTxWithMetadata(ctx context.Context, tx pgx.Tx, action, resourceType, resourceID string, meta AuditLogMetadata) error {
+	return writeAuditLogEntryWithMetadata(ctx, tx, action, resourceType, resourceID, meta)
+}
+
 // writeAuditLogEntry is the single statement behind both Log and LogInTx, so the two cannot drift
 // apart on validation, column choice, or error wording. Same shape as recordMCPAuditEntry.
 func writeAuditLogEntry(ctx context.Context, db DB, action, resourceType, resourceID string) error {
@@ -143,9 +185,8 @@ func writeAuditLogEntry(ctx context.Context, db DB, action, resourceType, resour
 	// This refusal is BEFORE the statement, so on the LogInTx path it fails the caller's
 	// transaction without poisoning it — the caller gets an error on a still-usable tx rather than
 	// a `current transaction is aborted` on every subsequent statement.
-	if action == "" || resourceType == "" || resourceID == "" {
-		return fmt.Errorf("audit log: action, resource type and resource id are all required (got %q/%q/%q)",
-			action, resourceType, resourceID)
+	if err := validateAuditEntry(action, resourceType, resourceID); err != nil {
+		return err
 	}
 	// user_id is left NULL deliberately — see the type doc. It also means this INSERT performs no
 	// FK check on users, so it cannot request FOR KEY SHARE on a users row another transaction
@@ -155,6 +196,43 @@ func writeAuditLogEntry(ctx context.Context, db DB, action, resourceType, resour
 	_, err := db.Exec(ctx,
 		`INSERT INTO audit_logs (user_id, action, resource_type, resource_id) VALUES (NULL, $1, $2, $3)`,
 		action, resourceType, resourceID)
+	if err != nil {
+		return fmt.Errorf("audit log %q on %s %s: %w", action, resourceType, resourceID, err)
+	}
+	return nil
+}
+
+// validateAuditEntry is the refusal shared by both write helpers so they cannot drift apart. It is
+// deliberately BEFORE the statement, so on an in-transaction path it fails the caller's
+// transaction without poisoning it — the caller gets an error on a still-usable tx rather than a
+// `current transaction is aborted` on every subsequent statement.
+func validateAuditEntry(action, resourceType, resourceID string) error {
+	if action == "" || resourceType == "" || resourceID == "" {
+		return fmt.Errorf("audit log: action, resource type and resource id are all required (got %q/%q/%q)",
+			action, resourceType, resourceID)
+	}
+	return nil
+}
+
+// writeAuditLogEntryWithMetadata is the metadata-carrying sibling of writeAuditLogEntry. It writes
+// the same load-bearing facts plus the four request-metadata columns, and keeps user_id as the
+// literal SQL NULL for the 40P01 reason restated at LogInTxWithMetadata. Invalid IP / uuid.Nil /
+// nil Changes are bound as SQL NULL, never as zero values.
+func writeAuditLogEntryWithMetadata(ctx context.Context, db DB, action, resourceType, resourceID string, meta AuditLogMetadata) error {
+	if err := validateAuditEntry(action, resourceType, resourceID); err != nil {
+		return err
+	}
+	var ip any
+	if meta.IP.IsValid() {
+		ip = meta.IP.Unmap()
+	}
+	var requestID any
+	if meta.RequestID != uuid.Nil {
+		requestID = meta.RequestID
+	}
+	_, err := db.Exec(ctx,
+		`INSERT INTO audit_logs (user_id, action, resource_type, resource_id, ip_address, user_agent, request_id, changes) VALUES (NULL, $1, $2, $3, $4, $5, $6, $7)`,
+		action, resourceType, resourceID, ip, meta.UserAgent, requestID, meta.Changes)
 	if err != nil {
 		return fmt.Errorf("audit log %q on %s %s: %w", action, resourceType, resourceID, err)
 	}
