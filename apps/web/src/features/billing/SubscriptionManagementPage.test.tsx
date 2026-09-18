@@ -7,6 +7,8 @@ import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router'
 import { SubscriptionManagementPage } from './SubscriptionManagementPage'
+import { ANALYTICS_EVENTS } from '@/shared/analytics'
+import { mockTrackEvent } from '@/test/mocks/track-event'
 import {
   mockUseGetCurrentSubscription,
   mockUseGetSubscriptionTiers,
@@ -528,5 +530,30 @@ describe('SubscriptionManagementPage', () => {
 
       expect(screen.getByText('Payment Past Due')).toBeInTheDocument()
     })
+  })
+
+  // #1652 todo 11 (D2): the pre-existing mount fire was a page-view proxy. The event now belongs
+  // to the management-link ACTION (BillingPortalButton), so mounting the page must not fire it —
+  // otherwise the same event name counts both a view and a click.
+  it('does not fire subscription_managed on mount', () => {
+    mockTrackEvent.mockClear()
+    mockUseGetCurrentSubscription.mockReturnValue({
+      data: {
+        subscription_id: 'sub_rc_1',
+        status: 'trialing',
+        tier: 'premium',
+        amount: '8.99',
+        currency: 'USD',
+        billing_interval: 'month',
+        trial_days_remaining: 5,
+      },
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve({ data: undefined, error: null }),
+    } as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+
+    renderPage()
+
+    expect(mockTrackEvent).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.SUBSCRIPTION_MANAGED)
   })
 })
