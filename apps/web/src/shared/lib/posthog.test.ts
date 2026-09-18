@@ -364,6 +364,7 @@ describe('posthog config', () => {
         nested: {
           userEmail: 'nested@example.com',
           safe: 'kept',
+          page_url: '/accounts/nested-account-sentinel?query=nested-url-sentinel',
         },
         $set: {
           accountName: 'Secret checking',
@@ -387,9 +388,13 @@ describe('posthog config', () => {
     expect(out?.properties?.utm_source).toBeUndefined();
     expect((out?.properties?.nested as Record<string, unknown>).userEmail).toBeUndefined();
     expect((out?.properties?.nested as Record<string, unknown>).safe).toBe('kept');
+    expect((out?.properties?.nested as Record<string, unknown>).page_url).toBe('/accounts/:accountId');
+    // `$set` is a person-property map: default-deny strips every non-allowlisted
+    // key before the PII/URL passes even see it (`safe_tier` and `$current_url`
+    // both used to survive).
     expect((out?.properties?.$set as Record<string, unknown>).accountName).toBeUndefined();
-    expect((out?.properties?.$set as Record<string, unknown>).safe_tier).toBe('premium');
-    expect((out?.properties?.$set as Record<string, unknown>).$current_url).toBe('/boosts/:id');
+    expect((out?.properties?.$set as Record<string, unknown>).safe_tier).toBeUndefined();
+    expect((out?.properties?.$set as Record<string, unknown>).$current_url).toBeUndefined();
     expect(JSON.stringify(out)).not.toContain('sentinel');
   });
 
@@ -490,6 +495,122 @@ describe('posthog config', () => {
     expect(out.name).toBe(expected);
     expect(out.requestHeaders).toBeUndefined();
     expect(out.requestBody).toBeUndefined();
+  });
+});
+
+describe('posthog person-property default-deny + heatmap URL sanitization', () => {
+  // G2 (#1683 task 2): `$set`/`$set_once` person properties are default-deny —
+  // only ALLOWED_PERSON_PROPERTIES survive, and the old `isPiiKey` denylist does
+  // NOT gate them. `$unset` is not a person property and rides through verbatim
+  // at every level. `$heatmap_data` is URL-keyed and its keys are sanitized.
+  const allowedConfig = () => posthogConfig(() => true);
+
+  test('strips a non-allowlisted $set_once key (person-property default-deny)', () => {
+    const out = applyBeforeSend(allowedConfig(), {
+      event: 'identify_shaped',
+      properties: {
+        $set_once: { $session_entry_pathname: '/accounts/11111111-1111-1111-1111-111111111111' },
+      },
+    } as unknown as CaptureResult);
+
+    const setOnce = out?.properties?.$set_once as Record<string, unknown>;
+    expect(setOnce.$session_entry_pathname).toBeUndefined();
+    expect(Object.keys(setOnce)).toEqual([]);
+  });
+
+  test('keeps only allowlisted person properties under a $set sub-object', () => {
+    const out = applyBeforeSend(allowedConfig(), {
+      event: 'identify_shaped',
+      properties: {
+        $set: { name: 'X', full_name: 'Y', display_name: 'Z', email: 'e@x.com' },
+      },
+    } as unknown as CaptureResult);
+
+    const set = out?.properties?.$set as Record<string, unknown>;
+    expect(Object.keys(set)).toEqual(['name']);
+    expect(set.name).toBe('X');
+    expect(set.full_name).toBeUndefined();
+    expect(set.display_name).toBeUndefined();
+    expect(set.email).toBeUndefined();
+  });
+
+  test('preserves a top-level $unset verbatim on a $set event while default-denying siblings', () => {
+    const out = applyBeforeSend(allowedConfig(), {
+      event: '$set',
+      properties: { $unset: ['name'], full_name: 'Y' },
+    } as unknown as CaptureResult);
+
+    const properties = out?.properties as Record<string, unknown>;
+    expect(properties.$unset).toEqual(['name']);
+    expect(properties.full_name).toBeUndefined();
+  });
+
+  test('preserves a nested $unset inside a $set_once sub-object', () => {
+    const out = applyBeforeSend(allowedConfig(), {
+      event: 'identify_shaped',
+      properties: {
+        $set_once: { $unset: ['name'], full_name: 'Y' },
+      },
+    } as unknown as CaptureResult);
+
+    const setOnce = out?.properties?.$set_once as Record<string, unknown>;
+    expect(setOnce.$unset).toEqual(['name']);
+    expect(setOnce.full_name).toBeUndefined();
+  });
+
+  test('sanitizes $heatmap_data URL keys and drops sensitive-path entries', () => {
+    const out = applyBeforeSend(allowedConfig(), {
+      event: '$$heatmap',
+      properties: {
+        // Shape pinned from the installed SDK: `$heatmap_data` is an object keyed
+        // by the page URL whose values are arrays of click points.
+        $heatmap_data: {
+          'https://x/accounts/11111111-1111-1111-1111-111111111111?search=SENTINEL#h': [
+            { x: 1, y: 2, target_fixed: false, type: 'click' },
+          ],
+          'https://x/billing/manage?token=SENTINEL': [
+            { x: 3, y: 4, target_fixed: false, type: 'click' },
+          ],
+        },
+      },
+    } as unknown as CaptureResult);
+
+    const heatmap = out?.properties?.$heatmap_data as Record<string, unknown>;
+    expect(Object.keys(heatmap)).toEqual(['https://x/accounts/:accountId']);
+    expect(JSON.stringify(out)).not.toContain('SENTINEL');
+  });
+
+  test('isolated config rejects $snapshot and every event when the capture gate is denied', () => {
+    const denied = posthogConfig(() => false);
+    const events = [
+      { event: '$snapshot', properties: { $snapshot_data: [{ type: 4 }] } },
+      { event: '$$heatmap', properties: { $heatmap_data: {} } },
+      { event: 'dashboard_viewed', properties: { $current_url: 'https://x/accounts/a' } },
+    ];
+
+    for (const event of events) {
+      expect(applyBeforeSend(denied, event as unknown as CaptureResult)).toBeNull();
+    }
+  });
+
+  test('never emits a $dead_click or $autocapture key in sanitized output', () => {
+    const cfg = allowedConfig();
+    const outputs = [
+      applyBeforeSend(cfg, {
+        event: '$$heatmap',
+        properties: { $heatmap_data: { 'https://x/accounts/a': [{ x: 1, y: 2 }] } },
+      } as unknown as CaptureResult),
+      applyBeforeSend(cfg, {
+        event: '$set',
+        properties: { $unset: ['name'] },
+      } as unknown as CaptureResult),
+    ];
+
+    for (const out of outputs) {
+      const serialized = JSON.stringify(out);
+      expect(serialized).not.toContain('$dead_click');
+      expect(serialized).not.toContain('$autocapture');
+    }
   });
 });
 
