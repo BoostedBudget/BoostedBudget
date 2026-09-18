@@ -135,6 +135,7 @@ func (s *RevenueCatService) Refresh(ctx context.Context, id string) (domain.Reve
 }
 func (s *RevenueCatService) refresh(ctx context.Context, id string, force bool, requested time.Time, erasure ...bool) (domain.RevenueCatState, error) {
 	var state domain.RevenueCatState
+	var priorGrants []domain.RevenueCatGrant
 	var remoteErr error
 	refreshed := false
 	// ProfileRepository uses the pool. Never acquire a second connection while
@@ -150,6 +151,9 @@ func (s *RevenueCatService) refresh(ctx context.Context, id string, force bool, 
 		if err != nil {
 			return err
 		}
+		// refreshLocked replaces state.Grants with the fresh projection; keep the one it overwrites
+		// so the lifecycle classification below can name the grant that ended.
+		priorGrants = append([]domain.RevenueCatGrant(nil), state.Grants...)
 		checkAt := requested
 		if state.AccessUpdatedAt.After(checkAt) {
 			checkAt = state.AccessUpdatedAt
@@ -176,7 +180,7 @@ func (s *RevenueCatService) refresh(ctx context.Context, id string, force bool, 
 		return state, err
 	}
 	if refreshed {
-		s.captureAccessTransition(ctx, id, priorStatus, state, len(erasure) > 0)
+		s.captureAccessTransition(ctx, id, priorStatus, priorGrants, state, len(erasure) > 0)
 	}
 	return state, remoteErr
 }
@@ -195,22 +199,42 @@ func (s *RevenueCatService) customerID(ctx context.Context, id string) (string, 
 }
 
 // captureAccessTransition emits the access-loss and retention-armed pair when a refresh flips a
-// previously granting user (active/trial/trialing) to an inactive projection. It is a pure side
-// effect — resolution and persistence are identical whether or not analytics is configured. The
-// prior status comes from the persisted users row, so a repeated inactive refresh does not re-fire.
-// A user being erased never emits: the authority query would drop it anyway, and attempting it
-// would recreate the PostHog person the erasure outbox just deleted.
-func (s *RevenueCatService) captureAccessTransition(ctx context.Context, id, priorStatus string, state domain.RevenueCatState, erasureRequested bool) {
+// previously granting user (active/trial/trialing) to an inactive projection, plus the
+// grant-lifecycle event naming the grant that ended. It is a pure side effect — resolution and
+// persistence are identical whether or not analytics is configured. The prior status comes from the
+// persisted users row and the prior grants from the projection this refresh overwrote, so a repeated
+// inactive refresh does not re-fire. A user being erased never emits: the authority query would drop
+// it anyway, and attempting it would recreate the PostHog person the erasure outbox just deleted.
+func (s *RevenueCatService) captureAccessTransition(ctx context.Context, id, priorStatus string, priorGrants []domain.RevenueCatGrant, state domain.RevenueCatState, erasureRequested bool) {
 	if s.analytics == nil || erasureRequested || state.ErasureStartedAt != nil {
 		return
 	}
-	if priorStatus == "" || priorStatus == "inactive" {
+	if priorStatus == "" {
 		return
 	}
 	access, err := state.ResolveAccess(time.Now())
-	if err != nil || access.Status != "inactive" {
+	if err != nil {
 		return
 	}
+	// The trial boundary is checked before the inactive early-return because a trial that converted
+	// to a paid grant resolves active, not inactive.
+	if priorStatus == "trial" || priorStatus == "trialing" {
+		if access.Status != "trial" {
+			s.analytics.CaptureEvent(ctx, id, phclient.RevenueCatTrialEndedPayload{
+				Entitlement: phclient.RevenueCatTrialEndedEntitlementTrialPremium,
+				Converted:   access.Status == "active",
+			})
+		}
+	}
+	if priorStatus == "inactive" {
+		return
+	}
+	if access.Status != "inactive" {
+		return
+	}
+	// An admin revoke is applied by ProcessOperation, never by a refresh, so a refresh-driven
+	// inactive projection is the comp-expiry / paid-lapse path the admin queue does not describe.
+	s.captureGrantEnded(ctx, id, priorGrants)
 	s.analytics.CaptureEvent(ctx, id, phclient.RevenueCatAccessInactivePayload{
 		PendingOperations: int64(state.PendingOperations),
 	})
@@ -219,6 +243,60 @@ func (s *RevenueCatService) captureAccessTransition(ctx context.Context, id, pri
 			DeferredForPendingOperations: state.PendingOperations > 0,
 		})
 	}
+}
+
+// captureGrantEnded names the grant class that backed the projection this refresh overwrote, when
+// that projection was comp- or paid-backed. Expiry is ignored on purpose: the grant that just
+// expired IS the transition being classified, and ResolveAccess would refuse the projection for it.
+func (s *RevenueCatService) captureGrantEnded(ctx context.Context, id string, priorGrants []domain.RevenueCatGrant) {
+	source, key := bestRevenueCatGrant(priorGrants)
+	switch source {
+	case "comp":
+		s.analytics.CaptureEvent(ctx, id, phclient.RevenueCatCompExpiredPayload{
+			Entitlement: phclient.RevenueCatCompExpiredEntitlement(key),
+		})
+	case "paid":
+		s.analytics.CaptureEvent(ctx, id, phclient.RevenueCatPaidGrantLapsedPayload{
+			Entitlement: phclient.RevenueCatPaidGrantLapsedEntitlement(key),
+		})
+	}
+}
+
+// bestRevenueCatGrant returns the highest-ranked grant's source and key, mirroring
+// domain.RevenueCatState.ResolveAccess's ranking (trial weakest, then comp/paid by tier) while
+// ignoring expiry, for the reason above.
+func bestRevenueCatGrant(grants []domain.RevenueCatGrant) (source, key string) {
+	best := 0
+	for _, g := range grants {
+		_, src, rank, ok := domain.RevenueCatKey(g.Key)
+		if !ok {
+			continue
+		}
+		score := rank * 10
+		switch src {
+		case "trial":
+			score = 1
+		case "paid":
+			score++
+		}
+		if score > best {
+			best, source, key = score, src, g.Key
+		}
+	}
+	return source, key
+}
+
+// captureTrialStarted emits the trial lifecycle boundary when a trial-class operation is applied. A
+// trial grant is system-initiated (registration or bootstrap import) and never carries an actor, so
+// the admin queue's revenuecat_operation_* stream does not cover this boundary. Nil-safe, and never
+// emitted for a failed or revoked operation — access did not change.
+func (s *RevenueCatService) captureTrialStarted(ctx context.Context, op domain.RevenueCatOperation, applied bool) {
+	if s.analytics == nil || !applied || op.Revoke || op.Class != "trial" {
+		return
+	}
+	s.analytics.CaptureEvent(ctx, op.UserID, phclient.RevenueCatTrialStartedPayload{
+		Entitlement: phclient.RevenueCatTrialStartedEntitlementTrialPremium,
+	})
 }
 func (s *RevenueCatService) refreshLocked(ctx context.Context, session repository.RevenueCatSession, customer string, state *domain.RevenueCatState, erasure ...bool) error {
 	grants, err := s.provider.FetchEntitlements(ctx, customer)
@@ -389,6 +467,7 @@ func (s *RevenueCatService) ProcessOperation(ctx context.Context, userID, operat
 			phase = revenueCatOperationFailed
 		}
 		s.captureOperation(ctx, *attempted, phase)
+		s.captureTrialStarted(ctx, *attempted, workErr == nil)
 	}
 	return workErr
 }
