@@ -6,10 +6,12 @@ import {
   useUpdatePrivacySettings,
 } from '@boostedbudget/api-client/endpoints/privacy/privacy'
 import {
+  applyProductAnalyticsAuthority,
   clearProductAnalyticsWithdrawal,
   getAnalyticsLifecycleSnapshot,
   withdrawProductAnalytics,
 } from '../../shared/lib/posthog'
+import { resolveAnalyticsAuthority } from '../../shared/analytics/resolveAnalyticsAuthority'
 import type { PrivacySettings as PrivacySettingsType, UpdatePrivacySettingsRequest } from './types'
 import { DeleteAccountSection } from '../deletion/components/DeleteAccountSection'
 import { DataExportSection } from './components/DataExportSection'
@@ -23,12 +25,14 @@ interface PrivacySettingsProps {
 }
 
 interface AnalyticsActions {
+  apply: typeof applyProductAnalyticsAuthority
   clearWithdrawal: typeof clearProductAnalyticsWithdrawal
   getSnapshot: typeof getAnalyticsLifecycleSnapshot
   withdraw: typeof withdrawProductAnalytics
 }
 
 const defaultAnalyticsActions: AnalyticsActions = {
+  apply: applyProductAnalyticsAuthority,
   clearWithdrawal: clearProductAnalyticsWithdrawal,
   getSnapshot: getAnalyticsLifecycleSnapshot,
   withdraw: withdrawProductAnalytics,
@@ -117,6 +121,12 @@ export function PrivacySettings({
     if (formState.gdpr_analytics_consent !== undefined && formState.gdpr_analytics_consent !== settings.gdpr_analytics_consent) {
       updates.gdpr_analytics_consent = formState.gdpr_analytics_consent
     }
+    if (formState.gdpr_interaction_capture_consent !== undefined && formState.gdpr_interaction_capture_consent !== settings.gdpr_interaction_capture_consent) {
+      updates.gdpr_interaction_capture_consent = formState.gdpr_interaction_capture_consent
+    }
+    if (formState.identified_diagnostics_enabled !== undefined && formState.identified_diagnostics_enabled !== settings.identified_diagnostics_enabled) {
+      updates.identified_diagnostics_enabled = formState.identified_diagnostics_enabled
+    }
     if (formState.marketing_emails_enabled !== undefined && formState.marketing_emails_enabled !== settings.marketing_emails_enabled) {
       updates.marketing_emails_enabled = formState.marketing_emails_enabled
     }
@@ -133,11 +143,6 @@ export function PrivacySettings({
       updates.include_in_aggregate_stats = formState.include_in_aggregate_stats
     }
     return updates
-  }
-
-  function grantAnalytics(): void {
-    if (!user) return
-    analyticsActions.clearWithdrawal(user.id)
   }
 
   async function reconcileFailedWithdrawal(): Promise<void> {
@@ -157,7 +162,10 @@ export function PrivacySettings({
         setSaveError('Could not confirm analytics consent. Please try again.')
         return
       }
-      grantAnalytics()
+      if (!user) return
+      // Lift the local latch only; the mounted lifecycle hook re-applies from the
+      // confirmed server authority on the next snapshot notification.
+      analyticsActions.clearWithdrawal(user.id)
       setAnalyticsRecoveryNeeded(false)
       setModifications({})
       setSuccessMessage('Analytics resumed successfully!')
@@ -181,9 +189,6 @@ export function PrivacySettings({
       return
     }
     const withdrawingAnalytics = updates.gdpr_analytics_consent === false
-    const grantGeneration = updates.gdpr_analytics_consent === true
-      ? analyticsActions.getSnapshot().generation
-      : null
     if (withdrawingAnalytics && user) analyticsActions.withdraw(user.id)
 
     try {
@@ -199,10 +204,21 @@ export function PrivacySettings({
       })
       if (identityAttempt !== recoveryAttempt.current) return
       setModifications({})
-      const grantIsCurrent = grantGeneration !== null
-        && analyticsActions.getSnapshot().generation === grantGeneration
-      if (updates.gdpr_analytics_consent === true && user && grantIsCurrent) {
-        grantAnalytics()
+      if (updates.gdpr_analytics_consent === true && user) {
+        // Re-enabling must lift the local withdrawal latch before the hook re-applies;
+        // apply() is idempotent and itself refuses a still-withdrawn scope.
+        analyticsActions.clearWithdrawal(user.id)
+        void analyticsActions.apply(resolveAnalyticsAuthority({
+          scope: user.id,
+          purposes: {
+            analytics: true,
+            identifiedDiagnostics: updatedSettings.identified_diagnostics_enabled === true,
+            interactionCapture: updatedSettings.gdpr_interaction_capture_consent === true,
+          },
+          distinctId: user.id,
+          firstName: user.firstName,
+          fullName: user.fullName,
+        }))
         setAnalyticsRecoveryNeeded(false)
       }
       setSuccessMessage('Settings saved successfully!')
@@ -296,6 +312,43 @@ export function PrivacySettings({
           </label>
           <p className="mt-2 ml-8 text-muted-foreground text-sm leading-relaxed">
             Help us improve the app with pseudonymous usage statistics when you choose analytics.
+          </p>
+        </div>
+
+        <div className="mb-6 pb-6 border-b border-muted last:border-b-0 last:mb-0 last:pb-0">
+          <label className="flex items-center cursor-pointer font-medium text-foreground">
+            <input
+              type="checkbox"
+              className="w-5 h-5 mr-3 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
+              checked={formState.gdpr_interaction_capture_consent ?? false}
+              disabled={formState.gdpr_analytics_consent !== true}
+              onChange={() => handleToggle('gdpr_interaction_capture_consent')}
+              aria-label="Session recording"
+            />
+            <span className="text-base font-semibold">Session Recording</span>
+          </label>
+          <p className="mt-2 ml-8 text-muted-foreground text-sm leading-relaxed">
+            Records how you use the app so we can improve it. Turning this off stops future
+            interaction enrichment; sessions already recorded are retained and removing them
+            requires account erasure.
+          </p>
+        </div>
+
+        <div className="mb-6 pb-6 border-b border-muted last:border-b-0 last:mb-0 last:pb-0">
+          <label className="flex items-center cursor-pointer font-medium text-foreground">
+            <input
+              type="checkbox"
+              className="w-5 h-5 mr-3 cursor-pointer"
+              checked={formState.identified_diagnostics_enabled ?? false}
+              onChange={() => handleToggle('identified_diagnostics_enabled')}
+              aria-label="Identified diagnostics"
+            />
+            <span className="text-base font-semibold">Identified Diagnostics</span>
+          </label>
+          <p className="mt-2 ml-8 text-muted-foreground text-sm leading-relaxed">
+            Associates product diagnostics with your display name. Turning this off stops future
+            enrichment and removes the name from your analytics profile; diagnostics already
+            recorded are retained until erased.
           </p>
         </div>
 
