@@ -20,6 +20,11 @@ type PrivacyRepository interface {
 	// GetByUserID retrieves privacy settings for a specific user
 	GetByUserID(ctx context.Context, userID string) (*domain.PrivacySettings, error)
 
+	// GetByUserIDForUpdate retrieves privacy settings for a specific user and locks the row
+	// (SELECT ... FOR UPDATE) for the remainder of the caller's transaction, so a read-modify-write
+	// of consent state cannot interleave with a concurrent writer.
+	GetByUserIDForUpdate(ctx context.Context, tx pgx.Tx, userID string) (*domain.PrivacySettings, error)
+
 	// Create creates new privacy settings for a user
 	Create(ctx context.Context, settings *domain.PrivacySettings) error
 
@@ -29,6 +34,9 @@ type PrivacyRepository interface {
 
 	// Update updates existing privacy settings for a user
 	Update(ctx context.Context, settings *domain.PrivacySettings) error
+
+	// UpdateTx updates existing privacy settings for a user within a transaction
+	UpdateTx(ctx context.Context, tx pgx.Tx, settings *domain.PrivacySettings) error
 }
 
 // privacyRepository implements PrivacyRepository using PostgreSQL
@@ -45,28 +53,57 @@ func NewPrivacyRepository(db DB) PrivacyRepository {
 func (r *privacyRepository) GetByUserID(ctx context.Context, userID string) (*domain.PrivacySettings, error) {
 	query := `
 		SELECT id, user_id, gdpr_necessary_consent, gdpr_analytics_consent,
-		       gdpr_advertising_consent, gdpr_consent_timestamp,
+		       gdpr_interaction_capture_consent,
+		       gdpr_consent_timestamp,
 		       marketing_emails_enabled, product_updates_enabled,
 		       security_alerts_enabled, data_sharing_enabled,
 		       include_in_aggregate_stats,
+		       identified_diagnostics_enabled,
 		       created_at, updated_at
 		FROM privacy_settings
 		WHERE user_id = $1
 	`
 
+	return scanPrivacySettingsRow(r.db.QueryRow(ctx, query, userID))
+}
+
+// GetByUserIDForUpdate is GetByUserID inside the caller's transaction, with the row locked by
+// SELECT ... FOR UPDATE. The lock is held until the caller's transaction ends.
+func (r *privacyRepository) GetByUserIDForUpdate(ctx context.Context, tx pgx.Tx, userID string) (*domain.PrivacySettings, error) {
+	query := `
+		SELECT id, user_id, gdpr_necessary_consent, gdpr_analytics_consent,
+		       gdpr_interaction_capture_consent,
+		       gdpr_consent_timestamp,
+		       marketing_emails_enabled, product_updates_enabled,
+		       security_alerts_enabled, data_sharing_enabled,
+		       include_in_aggregate_stats,
+		       identified_diagnostics_enabled,
+		       created_at, updated_at
+		FROM privacy_settings
+		WHERE user_id = $1
+		FOR UPDATE
+	`
+
+	return scanPrivacySettingsRow(tx.QueryRow(ctx, query, userID))
+}
+
+// scanPrivacySettingsRow is the single Scan behind both privacy reads, so the column list cannot
+// drift between the plain read and the locked read.
+func scanPrivacySettingsRow(row pgx.Row) (*domain.PrivacySettings, error) {
 	var settings domain.PrivacySettings
-	err := r.db.QueryRow(ctx, query, userID).Scan(
+	err := row.Scan(
 		&settings.ID,
 		&settings.UserID,
 		&settings.GDPRNecessaryConsent,
 		&settings.GDPRAnalyticsConsent,
-		&settings.GDPRAdvertisingConsent,
+		&settings.GDPRInteractionCaptureConsent,
 		&settings.GDPRConsentTimestamp,
 		&settings.MarketingEmailsEnabled,
 		&settings.ProductUpdatesEnabled,
 		&settings.SecurityAlertsEnabled,
 		&settings.DataSharingEnabled,
 		&settings.IncludeInAggregateStats,
+		&settings.IdentifiedDiagnosticsEnabled,
 		&settings.CreatedAt,
 		&settings.UpdatedAt,
 	)
@@ -97,18 +134,22 @@ func (r *privacyRepository) Create(ctx context.Context, settings *domain.Privacy
 	query := `
 		INSERT INTO privacy_settings (
 			id, user_id, gdpr_necessary_consent, gdpr_analytics_consent,
-			gdpr_advertising_consent, gdpr_consent_timestamp,
+			gdpr_interaction_capture_consent,
+			gdpr_consent_timestamp,
 			marketing_emails_enabled, product_updates_enabled,
 			security_alerts_enabled, data_sharing_enabled,
 			include_in_aggregate_stats,
+			identified_diagnostics_enabled,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4,
-			$5, $6,
+			$5,
+			$6,
 			$7, $8,
 			$9, $10,
 			$11,
-			$12, $13
+			$12,
+			$13, $14
 		)
 	`
 
@@ -117,13 +158,14 @@ func (r *privacyRepository) Create(ctx context.Context, settings *domain.Privacy
 		settings.UserID,
 		settings.GDPRNecessaryConsent,
 		settings.GDPRAnalyticsConsent,
-		settings.GDPRAdvertisingConsent,
+		settings.GDPRInteractionCaptureConsent,
 		settings.GDPRConsentTimestamp,
 		settings.MarketingEmailsEnabled,
 		settings.ProductUpdatesEnabled,
 		settings.SecurityAlertsEnabled,
 		settings.DataSharingEnabled,
 		settings.IncludeInAggregateStats,
+		settings.IdentifiedDiagnosticsEnabled,
 		settings.CreatedAt,
 		settings.UpdatedAt,
 	)
@@ -151,18 +193,22 @@ func (r *privacyRepository) CreateTx(ctx context.Context, tx pgx.Tx, settings *d
 	query := `
 		INSERT INTO privacy_settings (
 			id, user_id, gdpr_necessary_consent, gdpr_analytics_consent,
-			gdpr_advertising_consent, gdpr_consent_timestamp,
+			gdpr_interaction_capture_consent,
+			gdpr_consent_timestamp,
 			marketing_emails_enabled, product_updates_enabled,
 			security_alerts_enabled, data_sharing_enabled,
 			include_in_aggregate_stats,
+			identified_diagnostics_enabled,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4,
-			$5, $6,
+			$5,
+			$6,
 			$7, $8,
 			$9, $10,
 			$11,
-			$12, $13
+			$12,
+			$13, $14
 		)
 	`
 
@@ -171,13 +217,14 @@ func (r *privacyRepository) CreateTx(ctx context.Context, tx pgx.Tx, settings *d
 		settings.UserID,
 		settings.GDPRNecessaryConsent,
 		settings.GDPRAnalyticsConsent,
-		settings.GDPRAdvertisingConsent,
+		settings.GDPRInteractionCaptureConsent,
 		settings.GDPRConsentTimestamp,
 		settings.MarketingEmailsEnabled,
 		settings.ProductUpdatesEnabled,
 		settings.SecurityAlertsEnabled,
 		settings.DataSharingEnabled,
 		settings.IncludeInAggregateStats,
+		settings.IdentifiedDiagnosticsEnabled,
 		settings.CreatedAt,
 		settings.UpdatedAt,
 	)
@@ -192,34 +239,48 @@ func (r *privacyRepository) CreateTx(ctx context.Context, tx pgx.Tx, settings *d
 // Update updates existing privacy settings for a user
 // Updates the updated_at timestamp automatically
 func (r *privacyRepository) Update(ctx context.Context, settings *domain.PrivacySettings) error {
-	// Update timestamp
+	return updatePrivacySettings(ctx, r.db, settings)
+}
+
+// UpdateTx updates existing privacy settings for a user within a transaction,
+// mirroring Update's statement and timestamp behaviour. It is the write half of the locked
+// read-modify-write pair opened by GetByUserIDForUpdate.
+func (r *privacyRepository) UpdateTx(ctx context.Context, tx pgx.Tx, settings *domain.PrivacySettings) error {
+	return updatePrivacySettings(ctx, tx, settings)
+}
+
+// updatePrivacySettings is the single UPDATE behind Update and UpdateTx, so the two cannot drift
+// apart on column list, placeholder numbering, or the not-found refusal.
+func updatePrivacySettings(ctx context.Context, q Querier, settings *domain.PrivacySettings) error {
 	settings.UpdatedAt = time.Now()
 
 	query := `
 		UPDATE privacy_settings
 		SET gdpr_necessary_consent = $1,
 		    gdpr_analytics_consent = $2,
-		    gdpr_advertising_consent = $3,
+		    gdpr_interaction_capture_consent = $3,
 		    gdpr_consent_timestamp = $4,
 		    marketing_emails_enabled = $5,
 		    product_updates_enabled = $6,
 		    security_alerts_enabled = $7,
 		    data_sharing_enabled = $8,
 		    include_in_aggregate_stats = $9,
-		    updated_at = $10
-		WHERE user_id = $11
+		    identified_diagnostics_enabled = $10,
+		    updated_at = $11
+		WHERE user_id = $12
 	`
 
-	ct, err := r.db.Exec(ctx, query,
+	ct, err := q.Exec(ctx, query,
 		settings.GDPRNecessaryConsent,
 		settings.GDPRAnalyticsConsent,
-		settings.GDPRAdvertisingConsent,
+		settings.GDPRInteractionCaptureConsent,
 		settings.GDPRConsentTimestamp,
 		settings.MarketingEmailsEnabled,
 		settings.ProductUpdatesEnabled,
 		settings.SecurityAlertsEnabled,
 		settings.DataSharingEnabled,
 		settings.IncludeInAggregateStats,
+		settings.IdentifiedDiagnosticsEnabled,
 		settings.UpdatedAt,
 		settings.UserID,
 	)

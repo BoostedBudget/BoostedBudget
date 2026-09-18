@@ -573,7 +573,7 @@ describe('PrivacyPolicy', () => {
     expect(screen.getByText(/support message content.*sanitized application route/i)).toBeInTheDocument()
     expect(screen.getByText(/temporary support session identifier.*only after you select support/i)).toBeInTheDocument()
     expect(screen.getByText(/not included in authenticated requests.*removed on logout.*account switch/i)).toBeInTheDocument()
-    expect(screen.getByText(/production session replay is disabled/i)).toBeInTheDocument()
+    expect(screen.getByText(/session recording and heatmaps are separately consent-gated and merge disabled/i)).toBeInTheDocument()
     expect(screen.getByText(/do not track.*browser only/i)).toBeInTheDocument()
     expect(screen.getByText(/tab-scoped sessionStorage/i)).toBeInTheDocument()
   })

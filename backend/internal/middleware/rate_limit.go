@@ -198,23 +198,6 @@ func isAuthEndpoint(path string) bool {
 // users are hitting it.
 const identitySentinelFallback = "!rate-limit-identity-unresolved!"
 
-// singleValuedHeaderAddr returns the canonicalized address carried by a header
-// that is only trustworthy when it appears exactly once and parses as a valid
-// IP. Zero occurrences, more than one occurrence (possible header-injection /
-// smuggling), and unparseable values all report ok=false rather than handing
-// back an opaque string to be used as a bucket key.
-func singleValuedHeaderAddr(r *http.Request, canonicalHeader string) (netip.Addr, bool) {
-	values := r.Header[canonicalHeader]
-	if len(values) != 1 {
-		return netip.Addr{}, false
-	}
-	addr, err := netip.ParseAddr(strings.TrimSpace(values[0]))
-	if err != nil {
-		return netip.Addr{}, false
-	}
-	return addr.Unmap(), true
-}
-
 // remoteAddrIdentity canonicalizes the raw TCP peer address (r.RemoteAddr),
 // stripping the port. Unlike any HTTP header, this value is not something an
 // HTTP client can set at the HTTP layer — it's the actual socket peer address
@@ -273,13 +256,13 @@ func clientIdentity(c echo.Context) string {
 	r := c.Request()
 	switch GateStatusFrom(c) {
 	case GateStatusPassed:
-		if addr, ok := singleValuedHeaderAddr(r, "Cf-Connecting-Ip"); ok {
+		if addr, ok := SingleValuedHeaderAddr(r, "Cf-Connecting-Ip"); ok {
 			return addr.String()
 		}
 		observability.RateLimitIdentitySentinelFallbackTotal.Inc()
 		return identitySentinelFallback
 	case GateStatusExemptPath:
-		if addr, ok := singleValuedHeaderAddr(r, "Fly-Client-Ip"); ok {
+		if addr, ok := SingleValuedHeaderAddr(r, "Fly-Client-Ip"); ok {
 			return addr.String()
 		}
 		return remoteAddrIdentity(r)

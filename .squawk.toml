@@ -34,6 +34,7 @@ excluded_paths = [
   "*000030_add_river_queue*.sql",
   "*000047_drop_sync_audit*.sql",  # Intentional schema cleanup — drops dead sync audit table/columns
   "*000145_river_migration_007*.sql",  # Mirrors River's own main-line migration 007; the DROP TABLEs are the point
+  "*000214_drop_gdpr_advertising_consent*.sql",  # Intentional cleanup — removes the unused server-side advertising consent column (issue #1683); ban-drop-column is enabled and this is the deliberate exception
 ]
 
 # Rules to exclude from linting

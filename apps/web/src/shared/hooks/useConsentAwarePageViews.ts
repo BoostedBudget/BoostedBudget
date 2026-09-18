@@ -4,18 +4,21 @@ import {
   getAnalyticsLifecycleSnapshot,
   isAnonymousAnalyticsPath,
   isSensitiveAnalyticsPath,
+  setRoute,
   subscribeToAnalyticsLifecycle,
   type AnalyticsLifecycleSnapshot,
 } from '../lib/posthog'
 
 export interface PageViewDependencies {
   capture: (url: string) => void
+  setRoute: (url: string) => void
   getSnapshot: () => AnalyticsLifecycleSnapshot
   subscribe: (listener: (snapshot: AnalyticsLifecycleSnapshot) => void) => () => void
 }
 
 const defaultDependencies: PageViewDependencies = {
   capture: capturePageView,
+  setRoute,
   getSnapshot: getAnalyticsLifecycleSnapshot,
   subscribe: subscribeToAnalyticsLifecycle,
 }
@@ -47,6 +50,7 @@ export function useConsentAwarePageViews(
     candidateUrl: string,
     snapshot: AnalyticsLifecycleSnapshot,
   ): void => {
+    dependencies.setRoute(candidateUrl)
     if (snapshot.state !== 'granted') return
     const key = pageViewKey(candidateUrl, snapshot)
     if (key === null) {

@@ -84,12 +84,10 @@ BEGIN
     INSERT INTO privacy_settings (
         user_id,
         gdpr_necessary_consent,
-        gdpr_analytics_consent,
-        gdpr_advertising_consent
+        gdpr_analytics_consent
     ) VALUES (
         v_user_id,
         true,
-        false,
         false
     );
 

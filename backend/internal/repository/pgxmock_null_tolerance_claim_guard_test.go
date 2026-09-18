@@ -464,4 +464,16 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 // 74 -> 75 (#1650): added posthog_erasure_outbox_test.go, which asserts transactional statement
 // ordering, encrypted identity capture, and two separated operator confirmations. It makes no
 // driver NULL-tolerance claim. No files removed.
-const pgxmockSweepFileCount = 75
+// 75 -> 76 (#1683 Task 4): added audit_log_repository_test.go, which pins the metadata INSERT shape
+// (VALUES (NULL, plus all four metadata columns), the erasure redaction SET clause, and the
+// pgxmock-bound metadata write including NULL binding for absent metadata. It makes no
+// driver NULL-tolerance claim — it uses no AddRow at all — so it is clean under
+// TestNoUndisclosedPgxmockNullToleranceClaim above. No file was removed.
+//
+// 76 -> 77 (#1683 Task 5): privacy_service_test.go newly imports pgxmock — it drives the service's
+// Begin/Commit/Rollback transaction boundary, the locked read-modify-write statement sequence, and
+// the in-transaction audit INSERT. It makes no driver NULL-tolerance claim: every AddRow seeds all
+// fourteen privacy_settings columns explicitly and the audit metadata binds []byte(nil) for
+// `changes`, so it is clean under TestNoUndisclosedPgxmockNullToleranceClaim above. No file was
+// added or removed — the file already existed without the import.
+const pgxmockSweepFileCount = 77

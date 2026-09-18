@@ -12,7 +12,9 @@
  * slice (Tasks 5–14) adds data-ph-mask coverage.
  */
 
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
+import { describe, test, it, expect, beforeEach, afterEach, mock } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { render, screen, within, waitFor, cleanup, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
@@ -3699,4 +3701,82 @@ describe('PII coverage — Round 22: DeadLetterDetailModal structured Postgres e
     expect(screen.getByTestId('job-error-constraint').textContent).toBe('users_email_key')
     expect(screen.getByTestId('job-error-constraint').closest('[data-ph-mask]')).toBeNull()
   })
+})
+
+// ── Mask roster (#1683) ─────────────────────────────────────────────────────────────────────────
+//
+// With `maskTextSelector: '*'` session-replay text masking is DEFAULT-DENY, so the `data-ph-mask`
+// markers named below are defence-in-depth: they keep the roster honest for any revert of the
+// global mask. Unlike the DOM sweeps above, this block is a SOURCE scan — it reads each
+// component's own source and fails when a roster entry stops carrying its marker, so a marker
+// removed in a refactor cannot leave the roster describing a mask that is no longer there.
+//
+// Membership is NOT derivable. A surface joins this roster only because someone added it here,
+// and the same is true of the no-mask list: a surface with no marker is a RECORDED decision, not
+// an omission, so every no-mask member must say why.
+
+const PII_TEST_SRC = join(import.meta.dir, '..')
+
+interface MaskRosterEntry {
+  readonly file: string
+  readonly rationale: string
+  /** Either an exact count of `data-ph-mask` occurrences, or a regex the source must match. */
+  readonly expect: { readonly count: number } | { readonly pattern: RegExp }
+}
+
+const MASK_ROSTER: readonly MaskRosterEntry[] = [
+  {
+    file: 'features/transactions/components/TransactionCard.tsx',
+    rationale:
+      'merchant/display name, account display name, category, tags and amount — the card view of a raw transaction',
+    expect: { count: 5 },
+  },
+  {
+    file: 'features/accounts/components/EmojiInput.tsx',
+    rationale: 'the text <input> holds a user-authored emoji',
+    // The marker belongs on the <input> element itself (it starts at :77); :82 is only its
+    // `placeholder` attribute, which is a fixed default — do not anchor there.
+    expect: { pattern: /<input\b[\s\S]*?data-ph-mask[\s\S]*?\/>/ },
+  },
+  {
+    file: 'features/transactions/components/filters/FilterPill.tsx',
+    rationale:
+      'the `value` span renders the actual filter selection, which may be free text; the aria-label uses only `label`, a fixed closed-set filter-type string',
+    expect: { pattern: /<span[^>]*data-ph-mask[^>]*>\{value\}<\/span>/ },
+  },
+]
+
+/**
+ * Surfaces deliberately WITHOUT a `data-ph-mask` marker. These are roster members too: the test
+ * asserts the marker is absent, so adding one without moving the entry (and revisiting the
+ * reason) turns red rather than silently going stale.
+ */
+const NO_MASK_JUSTIFICATIONS = [
+  {
+    file: 'features/transactions/review/components/ReviewFilterPresets.tsx',
+    reason:
+      'renders PRESET_LABELS[preset], a fixed 4-entry closed set (unreviewed/reviewed/auto-categorized/manually-reviewed); no user-authored preset text exists',
+  },
+] as const
+
+describe('PII coverage — mask roster (#1683)', () => {
+  for (const entry of MASK_ROSTER) {
+    it(`${entry.file} carries its data-ph-mask marker — ${entry.rationale}`, () => {
+      const source = readFileSync(join(PII_TEST_SRC, entry.file), 'utf8')
+      if ('count' in entry.expect) {
+        const found = source.match(/data-ph-mask/g)?.length ?? 0
+        expect(found).toBe(entry.expect.count)
+      } else {
+        expect(source).toMatch(entry.expect.pattern)
+      }
+    })
+  }
+
+  for (const entry of NO_MASK_JUSTIFICATIONS) {
+    it(`${entry.file} is documented as needing no mask — ${entry.reason}`, () => {
+      const source = readFileSync(join(PII_TEST_SRC, entry.file), 'utf8')
+      expect(source.length).toBeGreaterThan(0)
+      expect(source).not.toContain('data-ph-mask')
+    })
+  }
 })
