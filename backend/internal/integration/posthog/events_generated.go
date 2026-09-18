@@ -51,16 +51,24 @@ const (
 	EventPaymentSucceeded        = "payment_succeeded"
 	// EventRevenueCatAccessInactive Fires when a RevenueCat access-resolution refresh flips a previously granting user (active/trial/trialing) to an inactive projection. pending_operations is the count of queued RevenueCat operations at resolution; a non-zero value means the inactive projection was not persisted because a pending operation deferred it. Never carries the reason, the acting admin, or any Plaid/customer identifier.
 	EventRevenueCatAccessInactive = "revenuecat_access_inactive"
+	// EventRevenueCatCompExpired Fires when an access-resolution refresh persists an inactive projection for a user whose previous projection was comp-backed — the comp grant lapsed on its own, without any admin-initiated operation (an admin revoke is the admin queue's revenuecat_operation_* stream). entitlement is the bounded comp key that ended; never carries the reason, the acting admin, or any identifier.
+	EventRevenueCatCompExpired = "revenuecat_comp_expired"
 	// EventRevenueCatOperationApplied Fires after a queued RevenueCat operation is applied to the target user's access; properties are the bounded grant class, entitlement key, and revoke flag only.
 	EventRevenueCatOperationApplied = "revenuecat_operation_applied"
 	// EventRevenueCatOperationFailed Fires when a queued RevenueCat operation fails and remains pending for retry; properties are the bounded grant class, entitlement key, and revoke flag only.
 	EventRevenueCatOperationFailed = "revenuecat_operation_failed"
 	// EventRevenueCatOperationQueued Fires when an admin-initiated RevenueCat grant or revoke is queued for the target user; properties are the bounded grant class, entitlement key, and revoke flag only, never the reason or the acting admin.
 	EventRevenueCatOperationQueued = "revenuecat_operation_queued"
+	// EventRevenueCatPaidGrantLapsed Fires when an access-resolution refresh persists an inactive projection for a user whose previous projection was paid-backed — the paid grant's expiry passed and the fresh provider read dropped it, whether the refresh was scheduled or webhook-triggered. entitlement is the bounded paid key that lapsed; never carries the reason, an amount, or any identifier.
+	EventRevenueCatPaidGrantLapsed = "revenuecat_paid_grant_lapsed"
 	// EventRevenueCatPlaidCleanupDisconnected Fires from the retention-cleanup disconnect pass when the safety net actually disconnects a read-only user's Plaid items after the grace window. marker_cleared reports whether the plaid_cleanup_pending_at episode marker was cleared afterwards; false means the items are disconnected but the marker is stuck. Never carries a Plaid item id or any other identifier.
 	EventRevenueCatPlaidCleanupDisconnected = "revenuecat_plaid_cleanup_disconnected"
 	// EventRevenueCatRetentionArmed Fires alongside revenuecat_access_inactive when that transition arms the retention/Plaid-cleanup safety net (retention clock + plaid_cleanup_pending_at stamped). deferred_for_pending_operations is true when a pending RevenueCat operation prevented the arming write from persisting. Carries no reason, actor, or identifier.
 	EventRevenueCatRetentionArmed = "revenuecat_retention_armed"
+	// EventRevenueCatTrialEnded Fires when an access-resolution refresh finds a previously trial-backed projection is no longer trial — the trial either expired (converted false) or converted to a paid grant (converted true). entitlement is the fixed trial key; never carries the reason, the acting admin, or any identifier.
+	EventRevenueCatTrialEnded = "revenuecat_trial_ended"
+	// EventRevenueCatTrialStarted Fires when a trial-class RevenueCat operation is applied and the user's access becomes trial-backed. This is a system-initiated grant (registration, or bootstrap import) rather than an admin operation, so it is not covered by the admin queue's revenuecat_operation_* stream. entitlement is the fixed trial key; never carries the reason, the actor, or any identifier.
+	EventRevenueCatTrialStarted = "revenuecat_trial_started"
 	// EventRevenueCatWebhookAccessChanged Fires when a newly accepted RevenueCat webhook delivery's event type indicates the target user's entitlement state changed: a grant was applied or access was revoked. Carries only the bounded RevenueCat event type and the grant/revoke direction, never the webhook body, a customer id or an email; duplicates and non-entitlement deliveries emit nothing.
 	EventRevenueCatWebhookAccessChanged  = "revenuecat_webhook_access_changed"
 	EventSavingsGoalProgressBasisChanged = "savings_goal_progress_basis_changed"
@@ -226,6 +234,28 @@ func (p RevenueCatAccessInactivePayload) Properties() map[string]interface{} {
 	}
 }
 
+type RevenueCatCompExpiredEntitlement string
+
+const (
+	RevenueCatCompExpiredEntitlementCompPremium    RevenueCatCompExpiredEntitlement = "comp_premium"
+	RevenueCatCompExpiredEntitlementCompHousehold2 RevenueCatCompExpiredEntitlement = "comp_household_2"
+	RevenueCatCompExpiredEntitlementCompHousehold3 RevenueCatCompExpiredEntitlement = "comp_household_3"
+	RevenueCatCompExpiredEntitlementCompHousehold4 RevenueCatCompExpiredEntitlement = "comp_household_4"
+	RevenueCatCompExpiredEntitlementCompHousehold5 RevenueCatCompExpiredEntitlement = "comp_household_5"
+)
+
+type RevenueCatCompExpiredPayload struct {
+	Entitlement RevenueCatCompExpiredEntitlement `json:"entitlement"`
+}
+
+func (RevenueCatCompExpiredPayload) isGeneratedEvent()    {}
+func (RevenueCatCompExpiredPayload) EventName() EventName { return EventRevenueCatCompExpired }
+func (p RevenueCatCompExpiredPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"entitlement": p.Entitlement,
+	}
+}
+
 type RevenueCatOperationAppliedClass string
 
 const (
@@ -330,6 +360,28 @@ func (p RevenueCatOperationQueuedPayload) Properties() map[string]interface{} {
 	}
 }
 
+type RevenueCatPaidGrantLapsedEntitlement string
+
+const (
+	RevenueCatPaidGrantLapsedEntitlementPaidPremium    RevenueCatPaidGrantLapsedEntitlement = "paid_premium"
+	RevenueCatPaidGrantLapsedEntitlementPaidHousehold2 RevenueCatPaidGrantLapsedEntitlement = "paid_household_2"
+	RevenueCatPaidGrantLapsedEntitlementPaidHousehold3 RevenueCatPaidGrantLapsedEntitlement = "paid_household_3"
+	RevenueCatPaidGrantLapsedEntitlementPaidHousehold4 RevenueCatPaidGrantLapsedEntitlement = "paid_household_4"
+	RevenueCatPaidGrantLapsedEntitlementPaidHousehold5 RevenueCatPaidGrantLapsedEntitlement = "paid_household_5"
+)
+
+type RevenueCatPaidGrantLapsedPayload struct {
+	Entitlement RevenueCatPaidGrantLapsedEntitlement `json:"entitlement"`
+}
+
+func (RevenueCatPaidGrantLapsedPayload) isGeneratedEvent()    {}
+func (RevenueCatPaidGrantLapsedPayload) EventName() EventName { return EventRevenueCatPaidGrantLapsed }
+func (p RevenueCatPaidGrantLapsedPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"entitlement": p.Entitlement,
+	}
+}
+
 type RevenueCatPlaidCleanupDisconnectedPayload struct {
 	MarkerCleared bool `json:"marker_cleared"`
 }
@@ -353,6 +405,44 @@ func (RevenueCatRetentionArmedPayload) EventName() EventName { return EventReven
 func (p RevenueCatRetentionArmedPayload) Properties() map[string]interface{} {
 	return map[string]interface{}{
 		"deferred_for_pending_operations": p.DeferredForPendingOperations,
+	}
+}
+
+type RevenueCatTrialEndedEntitlement string
+
+const (
+	RevenueCatTrialEndedEntitlementTrialPremium RevenueCatTrialEndedEntitlement = "trial_premium"
+)
+
+type RevenueCatTrialEndedPayload struct {
+	Entitlement RevenueCatTrialEndedEntitlement `json:"entitlement"`
+	Converted   bool                            `json:"converted"`
+}
+
+func (RevenueCatTrialEndedPayload) isGeneratedEvent()    {}
+func (RevenueCatTrialEndedPayload) EventName() EventName { return EventRevenueCatTrialEnded }
+func (p RevenueCatTrialEndedPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"entitlement": p.Entitlement,
+		"converted":   p.Converted,
+	}
+}
+
+type RevenueCatTrialStartedEntitlement string
+
+const (
+	RevenueCatTrialStartedEntitlementTrialPremium RevenueCatTrialStartedEntitlement = "trial_premium"
+)
+
+type RevenueCatTrialStartedPayload struct {
+	Entitlement RevenueCatTrialStartedEntitlement `json:"entitlement"`
+}
+
+func (RevenueCatTrialStartedPayload) isGeneratedEvent()    {}
+func (RevenueCatTrialStartedPayload) EventName() EventName { return EventRevenueCatTrialStarted }
+func (p RevenueCatTrialStartedPayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"entitlement": p.Entitlement,
 	}
 }
 
@@ -629,6 +719,14 @@ var generatedEventContracts = map[EventName]EventContract{
 			"pending_operations": {Kind: "integer", Required: true, Values: []string{}, Minimum: 0, Maximum: nil},
 		},
 	},
+	EventRevenueCatCompExpired: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"entitlement": {Kind: "string", Required: true, Values: []string{"comp_premium", "comp_household_2", "comp_household_3", "comp_household_4", "comp_household_5"}, Minimum: nil, Maximum: nil},
+		},
+	},
 	EventRevenueCatOperationApplied: {
 		Consent:                    "analytics_required",
 		Status:                     "active",
@@ -659,6 +757,14 @@ var generatedEventContracts = map[EventName]EventContract{
 			"revoke":      {Kind: "boolean", Required: true, Values: []string{}, Minimum: nil, Maximum: nil},
 		},
 	},
+	EventRevenueCatPaidGrantLapsed: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"entitlement": {Kind: "string", Required: true, Values: []string{"paid_premium", "paid_household_2", "paid_household_3", "paid_household_4", "paid_household_5"}, Minimum: nil, Maximum: nil},
+		},
+	},
 	EventRevenueCatPlaidCleanupDisconnected: {
 		Consent:                    "analytics_required",
 		Status:                     "active",
@@ -673,6 +779,23 @@ var generatedEventContracts = map[EventName]EventContract{
 		LegacyPropertiesUnreviewed: false,
 		Properties: map[string]PropertyContract{
 			"deferred_for_pending_operations": {Kind: "boolean", Required: true, Values: []string{}, Minimum: nil, Maximum: nil},
+		},
+	},
+	EventRevenueCatTrialEnded: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"entitlement": {Kind: "string", Required: true, Values: []string{"trial_premium"}, Minimum: nil, Maximum: nil},
+			"converted":   {Kind: "boolean", Required: true, Values: []string{}, Minimum: nil, Maximum: nil},
+		},
+	},
+	EventRevenueCatTrialStarted: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"entitlement": {Kind: "string", Required: true, Values: []string{"trial_premium"}, Minimum: nil, Maximum: nil},
 		},
 	},
 	EventRevenueCatWebhookAccessChanged: {
