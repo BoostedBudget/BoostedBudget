@@ -3,10 +3,22 @@ import {
   releaseRevenueCatCheckout,
   refreshRevenueCatSubscription,
 } from '@boostedbudget/api-client/endpoints/subscription/subscription'
+import { RevenueCatCheckoutBeginInputBodyTier } from '@boostedbudget/api-client/models'
 import { RevenueCatCheckout } from './revenueCatCheckout'
 
+// The pricing UI and the post-sign-in intent both hand us plain strings; the API accepts only a
+// known tier. Parse at the boundary so an unknown value never reaches the request.
+const CHECKOUT_TIERS: ReadonlySet<string> = new Set(Object.values(RevenueCatCheckoutBeginInputBodyTier))
+
+function isCheckoutTier(tier: string): tier is RevenueCatCheckoutBeginInputBodyTier {
+  return CHECKOUT_TIERS.has(tier)
+}
+
 export const revenueCatCheckout = new RevenueCatCheckout({
-  begin: () => beginRevenueCatCheckout(),
+  begin: (tier, billingInterval) => {
+    if (!isCheckoutTier(tier)) throw new Error('Checkout is unavailable')
+    return beginRevenueCatCheckout({ tier, billing_interval: billingInterval })
+  },
   release: id => releaseRevenueCatCheckout(id),
   refresh: () => refreshRevenueCatSubscription(),
   load: async (userId, isCurrent) => {
@@ -17,13 +29,12 @@ export const revenueCatCheckout = new RevenueCatCheckout({
     const purchases = Purchases.configure({ apiKey, appUserId: userId })
     return {
       close: () => purchases.close(),
-      present: async (offeringId, htmlTarget, purchaseHtmlTarget) => {
+      purchase: async (offeringId, packageId, htmlTarget) => {
         const offerings = await purchases.getOfferings()
         const offering = offerings.all[offeringId]
-        if (!offering || !htmlTarget.isConnected || !purchaseHtmlTarget.isConnected) {
-          throw new Error('Checkout is unavailable')
-        }
-        return purchases.presentPaywall({ offering, htmlTarget, purchaseHtmlTarget })
+        const pkg = offering?.availablePackages.find(p => p.identifier === packageId)
+        if (!pkg || !htmlTarget.isConnected) throw new Error('Checkout is unavailable')
+        return purchases.purchase({ rcPackage: pkg, htmlTarget })
       },
     }
   },

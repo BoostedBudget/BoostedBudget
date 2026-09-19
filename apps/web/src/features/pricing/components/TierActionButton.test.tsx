@@ -109,6 +109,12 @@ describe('TierActionButton', () => {
       renderButton({ status: 'inactive' })
       expect(screen.getByRole('button')).not.toBeDisabled()
     })
+
+    it('forwards the selected tier and billing interval to checkout', () => {
+      renderButton({ status: 'inactive' }, 'household_3', 'year')
+      fireEvent.click(screen.getByRole('button'))
+      expect(mockStartCheckout).toHaveBeenCalledWith('household_3', 'year')
+    })
   })
 
   describe('trial state', () => {

@@ -53,14 +53,15 @@ describe('usePostSignInCheckoutIntent', () => {
     expect(mockStartCheckout).not.toHaveBeenCalled()
   })
 
-  it('consumes sessionStorage intent and initiates checkout when signed in', async () => {
+  it('consumes sessionStorage intent and initiates checkout with the stored tier and interval', async () => {
     mockUseUser.mockReturnValue(signedInUser)
-    sessionStorage.setItem('checkout_intent', JSON.stringify({ tier: 'premium', billingInterval: 'month' }))
+    sessionStorage.setItem('checkout_intent', JSON.stringify({ tier: 'premium', billingInterval: 'year' }))
 
     renderHook(() => usePostSignInCheckoutIntent(), { wrapper: createWrapper() })
 
     await new Promise((r) => setTimeout(r, 50))
     expect(mockStartCheckout).toHaveBeenCalledTimes(1)
+    expect(mockStartCheckout).toHaveBeenCalledWith('premium', 'year')
   })
 
   it('clears sessionStorage intent after consuming it', async () => {

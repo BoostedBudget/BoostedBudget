@@ -39,6 +39,6 @@ export function usePostSignInCheckoutIntent() {
 
     firedRef.current = true
     revenueCatCheckout.setIdentity(user.id)
-    void revenueCatCheckout.start()
+    void revenueCatCheckout.start(intent.tier, intent.billingInterval)
   }, [isLoaded, isSignedIn, user?.id])
 }
