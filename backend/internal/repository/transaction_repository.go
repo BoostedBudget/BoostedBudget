@@ -42,6 +42,10 @@ var transactionSelectColumns = []string{
 	// scanTransactionDestSliceWithState are positionally coupled, and appending to both tails
 	// keeps every existing offset unchanged.
 	"deleted_at", "deleted_reason", "deleted_by",
+	// The logical user-account link (#1684). Appended LAST for the same reason as the tombstone
+	// columns above — this list is positionally coupled to scanTransactionDestSliceWithState, so
+	// appending to both tails leaves every existing offset unchanged.
+	"user_account_id",
 }
 
 var transactionSelectExpr = strings.Join(transactionSelectColumns, ", ")
@@ -1679,6 +1683,7 @@ func (r *transactionRepository) scanTransactionDestSliceWithState(tx *domain.Tra
 		&tx.DeletedAt,
 		&s.deletedReason,
 		&tx.DeletedBy,
+		&tx.UserAccountID,
 	}
 	return dest, s
 }
