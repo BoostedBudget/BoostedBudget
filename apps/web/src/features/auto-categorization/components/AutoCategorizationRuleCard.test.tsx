@@ -373,7 +373,7 @@ describe('AutoCategorizationRuleCard', () => {
         conditions: [{ type: 'existing_pfc_primary' as const, value: 'FOOD_AND_DRINK' }],
       })
 
-      expect(screen.getByText('PFC Primary')).toBeInTheDocument()
+      expect(screen.getByText('Existing PFC Primary (as the bank originally reported it)')).toBeInTheDocument()
       // formatPFCPrimary converts enum → "Food And Drink" display string
       expect(screen.getByText('Food And Drink')).toBeInTheDocument()
     })

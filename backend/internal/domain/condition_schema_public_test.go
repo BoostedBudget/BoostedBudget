@@ -179,6 +179,35 @@ func TestConditionSchema_PFCFieldsPointToWhereTheirClosedSetIsPublished(t *testi
 	}
 }
 
+// #1684 Task 4: both PFC fields match the category the bank ORIGINALLY reported — the raw
+// provider value — not the effective category an override installs. matchPFC reads
+// tx.PFCPrimary/tx.PFCDetailed directly for exactly that reason, so a rule's own action can never
+// rewrite what it matches. A caller reading only the published schema must be able to learn the
+// distinction: without it the obvious reading of "pfc_primary" is "the category this transaction
+// currently has", which is the one value an override changes.
+func TestConditionSchema_PFCFieldsStateSourceSemantics(t *testing.T) {
+	published := map[string]ConditionFieldSchema{}
+	for _, f := range ConditionSchema().Fields {
+		published[f.Field] = f
+	}
+
+	for _, field := range []RuleConditionField{FieldPFCPrimary, FieldPFCDetailed} {
+		notes := published[string(field)].Notes
+		lower := strings.ToLower(notes)
+		for _, want := range []string{
+			"the category the bank originally reported",
+			"before any override",
+			"not the effective category",
+		} {
+			if !strings.Contains(lower, want) {
+				t.Errorf("field %q Notes %q does not state the source-vs-effective semantics (%q) — "+
+					"a caller would read the field as the effective category, which an override changes",
+					field, notes, want)
+			}
+		}
+	}
+}
+
 // #1625 Task 11: the OpenAPI `enum:` struct tag is a FOURTH hand-maintained copy of the field
 // list, and nothing checked it.
 //
