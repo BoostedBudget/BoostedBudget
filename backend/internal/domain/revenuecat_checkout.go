@@ -12,6 +12,28 @@ type RevenueCatCheckoutIntent struct {
 	ID        string    `json:"id"`
 	ExpiresAt time.Time `json:"expires_at"`
 	Offering  string    `json:"offering"`
+	Package   string    `json:"package"` // RevenueCat package lookup key, e.g. "premium_annual"
+}
+
+// RevenueCatPackageKey maps a tier and Paddle-style billing interval ("month"|"year")
+// to the RevenueCat package lookup key. Returns ok=false for an unknown tier or interval.
+func RevenueCatPackageKey(tier, billingInterval string) (string, bool) {
+	var suffix string
+	switch billingInterval {
+	case "month":
+		suffix = "monthly"
+	case "year":
+		suffix = "annual"
+	default:
+		return "", false
+	}
+
+	switch TierName(tier) {
+	case TierPremium, TierHousehold2, TierHousehold3, TierHousehold4, TierHousehold5:
+		return tier + "_" + suffix, true
+	default:
+		return "", false
+	}
 }
 
 // CanStartCheckout is duplicate-purchase admission, never an access grant. Even
