@@ -1327,6 +1327,11 @@ func (s *transactionSyncService) processModifiedTransactions(
 	// stranded-settlement pull-forward after the loop.
 	var settledCandidates []domain.Transaction
 
+	// #1684 (Defect 2): modified entries with no LIVE stored row, collected so their write — and
+	// the categorization rules that must run on the way in — happen ONCE for the whole batch
+	// rather than once per transaction. See the batch block after the loop.
+	var upsertCandidates []domain.Transaction
+
 	// Issue #1163: Batch-upsert merchants for modified transactions (best-effort)
 	// Build domain txns temporarily just to use shared upsertMerchants helper
 	modifiedDomainTxns := make([]domain.Transaction, len(modified))
@@ -1391,31 +1396,17 @@ func (s *transactionSyncService) processModifiedTransactions(
 			// Residual (3): no live row to update. Upsert instead of dropping the edit — see the
 			// MISSING ROWS note on this function for why, and for why this cannot resurrect a
 			// tombstone.
-			if newTxn.ID == "" {
-				newTxn.ID = uuid.New().String()
-			}
+			//
+			// #1684 (Defect 2): the candidate is COLLECTED here and written in the batch block
+			// after the loop. Before that change this branch called CreateBatch once per
+			// transaction and NEVER applied categorization rules, so an edit re-delivered as
+			// `modified` landed with no rule category at all.
 			if newTxn.MerchantName != nil && merchantIDs != nil {
 				if id, ok := merchantIDs[*newTxn.MerchantName]; ok {
 					newTxn.MerchantID = &id
 				}
 			}
-			// #1586 (gap G7): the batch is a NAMED SLICE and the row is read back out of it. It
-			// used to be an inline `[]domain.Transaction{*newTxn}` — a COPY — and CreateBatch
-			// writes the PERSISTED id into the element it was handed. On a conflict (this branch's
-			// most likely outcome: no LIVE row, but a tombstoned one the ON CONFLICT arbiter still
-			// sees) that persisted id differs from the UUID minted six lines above, and writing it
-			// into a discarded copy left settledCandidates carrying an id that names no row. The
-			// repair below then matched nothing and reported success.
-			batch := []domain.Transaction{*newTxn}
-			if _, upsertErr := s.transactionRepo.CreateBatch(ctx, batch); upsertErr != nil {
-				return fmt.Errorf("failed to upsert modified transaction %s with no stored row: %w",
-					plaidTxn.TransactionId, upsertErr)
-			}
-			*newTxn = batch[0]
-			s.logger.Info("upserted modified transaction that had no stored row",
-				"transaction_id", plaidTxn.TransactionId)
-			upsertedCount++
-			settledCandidates = append(settledCandidates, *newTxn)
+			upsertCandidates = append(upsertCandidates, *newTxn)
 			continue
 		}
 
@@ -1439,6 +1430,76 @@ func (s *transactionSyncService) processModifiedTransactions(
 
 		settledCandidates = append(settledCandidates, *newTxn)
 		successCount++
+	}
+
+	// #1684 (Defect 2): the upsert branch's writes are batched here so categorization rules run
+	// on the way in, exactly as processAddedTransactions does (:1185-1211). Collecting first is
+	// what makes it ONE ApplyRulesToBatch call for the batch: its rule fetch, merchant enrichment
+	// and quarantine census all run once per call (rule_application_service.go:298-325), so a call
+	// per transaction is N× the queries. This mirrors the added path rather than the update branch
+	// (T6), which must first load the manual/reviewed guard state.
+	//
+	// T7 records the residual that remains after this change: only rows that were never reviewed
+	// and never manually categorized are re-checked, and the exact set that is still not
+	// re-evaluated is named there.
+	if len(upsertCandidates) > 0 {
+		// Issue #1213: pre-assign UUIDs before rule application so the ids keying
+		// BatchRuleApplication records match the ids CreateBatch returns. CreateBatch preserves
+		// pre-assigned IDs via its `if tx.ID == ""` guard, so this is safe — same reason as
+		// processAddedTransactions (:1156-1164).
+		for i := range upsertCandidates {
+			if upsertCandidates[i].ID == "" {
+				upsertCandidates[i].ID = uuid.New().String()
+			}
+		}
+
+		// Issue #346: apply categorization rules before storing. Rules are applied in-place;
+		// side-effects are deferred to EmitBatchSideEffects after CreateBatch so they are gated on
+		// genuine inserts only (Issue #1213). Guarded because this branch is reachable with a nil
+		// rule service — see TestProcessModifiedTransactions_TransactionNotFound.
+		var ruleApplications []BatchRuleApplication
+		if s.ruleApplicationService != nil {
+			apps, applyErr := s.ruleApplicationService.ApplyRulesToBatch(ctx, upsertCandidates, linkedItem.UserID)
+			if applyErr != nil {
+				// Log but don't fail — rule application is non-critical.
+				s.logger.Warn("failed to apply categorization rules to upserted modified transactions",
+					"error", applyErr)
+			} else {
+				ruleApplications = apps
+			}
+		}
+
+		// Capture the provider's raw external ids BEFORE the write: CreateBatch encrypts
+		// ExternalTransactionID in place, so reading it afterwards would log ciphertext instead of
+		// the transaction id the provider sent.
+		rawExternalIDs := make([]string, len(upsertCandidates))
+		for i := range upsertCandidates {
+			if upsertCandidates[i].ExternalTransactionID != nil {
+				rawExternalIDs[i] = *upsertCandidates[i].ExternalTransactionID
+			}
+		}
+
+		// #1586 (gap G7): the slice is passed by reference and CreateBatch writes the PERSISTED id
+		// into each element it was handed. Read it back PER ELEMENT: with one row per call the
+		// read-back was `batch[0]`, but a batched call that kept `batch[0]` would give every
+		// settledCandidate the FIRST row's id, and the stranded-settlement repair below would match
+		// nothing for the rest while still reporting success.
+		insertedIDs, upsertErr := s.transactionRepo.CreateBatch(ctx, upsertCandidates)
+		if upsertErr != nil {
+			return fmt.Errorf("failed to upsert modified transactions with no stored row: %w", upsertErr)
+		}
+
+		// Issue #1213: emit analytics/match-count side-effects only for genuinely inserted rows.
+		if s.ruleApplicationService != nil && len(ruleApplications) > 0 {
+			s.ruleApplicationService.EmitBatchSideEffects(ctx, linkedItem.UserID, ruleApplications, insertedIDs)
+		}
+
+		for i := range upsertCandidates {
+			s.logger.Info("upserted modified transaction that had no stored row",
+				"transaction_id", rawExternalIDs[i])
+			settledCandidates = append(settledCandidates, upsertCandidates[i])
+		}
+		upsertedCount += len(upsertCandidates)
 	}
 
 	// Issue #1586: a `modified` delivery is the OTHER way a stored row can learn a pointer. Both
