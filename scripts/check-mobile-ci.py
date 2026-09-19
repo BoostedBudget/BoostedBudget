@@ -70,6 +70,10 @@ REQUIRED_STEPS = (
     ("bun run --cwd apps/mobile export:web", "."),
     ("bun run --cwd apps/mobile export:ios", "."),
     ("bun run --cwd apps/mobile export:android", "."),
+    # Todo 4 (#1658): the NativeWind RC evidence gate must run in CI, not merely be a
+    # script a worker can claim to have run. `--check` exits non-zero when any threshold
+    # in apps/mobile/nativewind-gate.evidence.json fails.
+    ("bun run --cwd apps/mobile gate:nativewind --check", "."),
 )
 
 MOBILE_COMPATIBILITY_DEPS = {

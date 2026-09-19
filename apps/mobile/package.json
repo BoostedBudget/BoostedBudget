@@ -16,6 +16,7 @@
     "export:web": "expo export --platform web --output-dir dist/web",
     "export:ios": "expo export --platform ios --output-dir dist/ios",
     "export:android": "expo export --platform android --output-dir dist/android",
+    "gate:nativewind": "bun run scripts/nativewind-gate.ts",
     "build": "bun run export:web && bun run export:ios && bun run export:android"
   },
   "dependencies": {

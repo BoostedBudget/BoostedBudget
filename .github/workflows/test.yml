@@ -2458,6 +2458,11 @@ jobs:
       - name: Export Android bundle
         run: bun run --cwd apps/mobile export:android
 
+      - name: Run NativeWind RC evidence gate
+        # Todo 4 (#1658): re-runs doctor + the three exports so the sizes are measured, not
+        # reported, and exits non-zero when any threshold in nativewind-gate.evidence.json fails.
+        run: bun run --cwd apps/mobile gate:nativewind --check
+
   # =============================================================================
   # Frontend Tests (Single job - no sharding)
   # =============================================================================

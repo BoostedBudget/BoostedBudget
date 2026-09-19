@@ -1,0 +1,26 @@
+{
+  "recordedAt": "2026-09-19",
+  "recordedAfter": "Wave 1 (todos 1, 2, 3, 4, 5, 26)",
+  "note": "PRE-CHANGE baseline for apps/mobile/scripts/nativewind-gate.ts. Recorded once, after Wave 1 landed and before any Todo 8-18 primitive work, so a bundle delta measures the NativeWind substrate rather than Wave-1 token work. Do not re-record to hide a regression; a reviewed commit is the only way this file changes.",
+  "resolvedVersions": {
+    "nativewind": "5.0.0-rc.0",
+    "react-native-css": "3.1.0-rc.0"
+  },
+  "bundles": {
+    "web": {
+      "bytes": 1314949,
+      "gzipBytes": 347166,
+      "fileCount": 2
+    },
+    "ios": {
+      "bytes": 4187168,
+      "gzipBytes": 1774298,
+      "fileCount": 2
+    },
+    "android": {
+      "bytes": 4392165,
+      "gzipBytes": 1880903,
+      "fileCount": 2
+    }
+  }
+}
