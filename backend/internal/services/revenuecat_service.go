@@ -535,6 +535,7 @@ func (s *RevenueCatService) ProcessOperation(ctx context.Context, userID, operat
 	return workErr
 }
 func (s *RevenueCatService) applyOperation(ctx context.Context, session repository.RevenueCatSession, customer string, op domain.RevenueCatOperation, state *domain.RevenueCatState) error {
+	now := time.Now()
 	grants, err := s.provider.FetchEntitlements(ctx, customer)
 	if err != nil {
 		return err
@@ -552,7 +553,7 @@ func (s *RevenueCatService) applyOperation(ctx context.Context, session reposito
 		if source != op.Class {
 			continue
 		}
-		if !op.Revoke && g.LookupKey == op.Key && sameRevenueCatExpiry(g.ExpiresAt, op.ExpiresAt) {
+		if !op.Revoke && revenueCatGrantMatches(g, op, now) {
 			continue
 		}
 		if err = s.provider.Revoke(ctx, customer, g.LookupKey); err != nil {
@@ -564,7 +565,7 @@ func (s *RevenueCatService) applyOperation(ctx context.Context, session reposito
 	if readErr != nil {
 		return readErr
 	}
-	if !revenueCatDesired(observed, op) && !op.Revoke {
+	if !revenueCatDesired(observed, op, now) && !op.Revoke {
 		// Do not grant while a conflicting old promotion still exists: retries must
 		// first complete revoke to avoid RC's close-expiry duplicate suppression.
 		for _, g := range observed {
@@ -573,7 +574,7 @@ func (s *RevenueCatService) applyOperation(ctx context.Context, session reposito
 				return errors.New("promotional revocation not yet confirmed")
 			}
 		}
-		if op.ExpiresAt == nil || op.ExpiresAt.After(time.Now()) {
+		if op.ExpiresAt == nil || op.ExpiresAt.After(now) {
 			err = s.provider.Grant(ctx, customer, op.Key, op.ExpiresAt)
 		}
 	}
@@ -581,13 +582,13 @@ func (s *RevenueCatService) applyOperation(ctx context.Context, session reposito
 	if readErr != nil {
 		return readErr
 	}
-	if !revenueCatDesired(final, op) {
+	if !revenueCatDesired(final, op, now) {
 		if err != nil {
 			return err
 		}
 		return errors.New("grant change not yet confirmed")
 	}
-	applyRevenueCatGrants(state, final, time.Now())
+	applyRevenueCatGrants(state, final, now)
 	return session.Save(ctx, *state)
 }
 func sameRevenueCatExpiry(a, b *time.Time) bool {
@@ -596,7 +597,23 @@ func sameRevenueCatExpiry(a, b *time.Time) bool {
 	}
 	return a.UnixMilli() == b.UnixMilli()
 }
-func revenueCatDesired(grants []rc.Entitlement, op domain.RevenueCatOperation) bool {
+
+// RevenueCat materialises a `duration:lifetime` promotional grant as a concrete,
+// per-grant jittered expiry roughly 200 years out, so a permanent (nil-expiry)
+// operation can never match by exact equality. A genuine finite comp is always far
+// below this horizon; only another effectively-permanent grant satisfies a nil op.
+const revenueCatPermanentHorizon = 10 * 365 * 24 * time.Hour
+
+func revenueCatGrantMatches(g rc.Entitlement, op domain.RevenueCatOperation, now time.Time) bool {
+	if g.LookupKey != op.Key {
+		return false
+	}
+	if op.ExpiresAt == nil {
+		return g.ExpiresAt == nil || g.ExpiresAt.After(now.Add(revenueCatPermanentHorizon))
+	}
+	return sameRevenueCatExpiry(g.ExpiresAt, op.ExpiresAt)
+}
+func revenueCatDesired(grants []rc.Entitlement, op domain.RevenueCatOperation, now time.Time) bool {
 	matched := false
 	for _, g := range grants {
 		_, source, _, ok := domain.RevenueCatKey(g.LookupKey)
@@ -606,11 +623,11 @@ func revenueCatDesired(grants []rc.Entitlement, op domain.RevenueCatOperation) b
 		if source != op.Class {
 			continue
 		}
-		if op.Revoke || g.LookupKey != op.Key || !sameRevenueCatExpiry(g.ExpiresAt, op.ExpiresAt) {
+		if op.Revoke || !revenueCatGrantMatches(g, op, now) {
 			return false
 		}
 		matched = true
 	}
 	// An intent whose fixed expiry has passed is successfully absent, not renewed.
-	return matched || op.Revoke || (op.ExpiresAt != nil && !op.ExpiresAt.After(time.Now()))
+	return matched || op.Revoke || (op.ExpiresAt != nil && !op.ExpiresAt.After(now))
 }
