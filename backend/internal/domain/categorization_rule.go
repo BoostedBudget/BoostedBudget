@@ -27,9 +27,14 @@ const (
 	ConditionPaymentChannel     ConditionType = "payment_channel"
 	ConditionDateRange          ConditionType = "date_range"
 
-	// ConditionExistingPFCPrimary matches against the Plaid PFC primary enum (e.g. "FOOD_AND_DRINK").
+	// ConditionExistingPFCPrimary matches the Plaid PFC primary enum (e.g. "FOOD_AND_DRINK") as the
+	// bank ORIGINALLY reported it — the raw provider value, before any override. This is NOT the
+	// effective category shown in the app: a rule's own action can never rewrite what it matches.
 	ConditionExistingPFCPrimary ConditionType = "existing_pfc_primary"
-	// ConditionExistingPFCDetailed matches against the Plaid PFC detailed enum (e.g. "FOOD_AND_DRINK_FAST_FOOD").
+	// ConditionExistingPFCDetailed matches the Plaid PFC detailed enum (e.g.
+	// "FOOD_AND_DRINK_FAST_FOOD") as the bank ORIGINALLY reported it — the raw provider value,
+	// before any override. This is NOT the effective category shown in the app: a rule's own
+	// action can never rewrite what it matches.
 	ConditionExistingPFCDetailed ConditionType = "existing_pfc_detailed"
 )
 
