@@ -19,3 +19,10 @@ jest.mock('expo-router', () => {
 jest.mock('expo-status-bar', () => ({
   StatusBar: jest.fn(() => null),
 }))
+
+// The native AsyncStorage build throws at import time when no native module is
+// registered, which is always the case under jest. Use the package's own
+// in-memory mock so the theme provider can be exercised deterministically.
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+)

@@ -50,6 +50,13 @@ adapter; this scaffold does not store credentials.
   consumes `@boostedbudget/design-tokens/nativewind.css`. System light/dark
   preference is the only theme control. The repository uses Bun's hoisted
   linker so Expo native modules resolve to a single copy.
+- Theme preference is device-local and persisted through
+  `@react-native-async-storage/async-storage`, pinned to the Expo SDK 57
+  compatibility version `2.2.0` that `npx expo install` resolves. The default
+  export is used deliberately: its React Native Web build reads and writes
+  `window.localStorage` under the exact, unprefixed `bb-theme` key, which the
+  no-flash web bootstrap reads directly. `bb-theme:<userId>` is reserved for
+  the user-scoped preference seam in #1657.
 - `selectBillingProvider` is a pure contract: iOS and Android select
   RevenueCat; web selects Paddle. Neither payment SDK is installed.
 - Bundle identifier, Android package, URL scheme, and slug are fixed to

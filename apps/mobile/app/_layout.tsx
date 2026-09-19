@@ -7,6 +7,7 @@ import { ReactNode, useState } from 'react'
 import { useColorScheme } from 'react-native'
 import { createMobileQueryClient, initializeMobileRuntime } from '../src/bootstrap/runtime'
 import { getNavigationAppearance } from '../src/theme/navigation'
+import { ThemeProvider as ThemePreferenceProvider } from '../src/theme/ThemeProvider'
 
 initializeMobileRuntime({ EXPO_PUBLIC_API_URL: process.env.EXPO_PUBLIC_API_URL })
 
@@ -15,7 +16,7 @@ export function MobileAppProviders({ children }: { children: ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {children}
+      <ThemePreferenceProvider>{children}</ThemePreferenceProvider>
     </QueryClientProvider>
   )
 }
