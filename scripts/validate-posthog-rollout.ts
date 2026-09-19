@@ -32,6 +32,9 @@ export interface PostHogRollout {
     environments: RolloutEnvironment[]
   }
   project_controls: Record<string, boolean | 'UTC'>
+  session_replay_target: boolean
+  enablement_gates: Record<string, string>
+  identified_diagnostics_opt_out_certification: { status: 'blocked' | 'go' }
   runtime_authority: Record<string, string>
   exclusion_cohort: Record<string, unknown>
   kill_switches: Array<{ product: string; mechanism: string }>
@@ -43,14 +46,18 @@ export interface PostHogRollout {
 }
 
 const DEFERRED_PRODUCTS = [
-  'session_replay',
-  'web_analytics',
   'error_tracking',
   'experiments',
   'feature_flags',
   'logs',
   'tracing',
 ] as const
+
+const REQUIRED_REPLAY_GATE = 'staging_inspection_required'
+const REPLAY_RUNBOOK_PATH = 'docs/operations/posthog-rollout.md'
+const REPLAY_RUNBOOK_HEADING = '## Replay enablement gate'
+const IDENTIFIED_DIAGNOSTICS_CERTIFICATION_STATUSES = new Set(['blocked', 'go'])
+const REQUIRED_INGESTION_SURVIVAL_GAP_ID = 'unset_ingestion_survival_unverified'
 
 const REQUIRED_KILL_SWITCHES = new Map([
   ['all_browser_products', 'remove_project_token_and_redeploy'],
@@ -155,9 +162,53 @@ function validateProjectControls(root: UnknownRecord): void {
     fail('project-rendered Support launcher must remain disabled; the authenticated app control is authoritative')
   }
   if (controls.autocapture !== false) fail('project_controls.autocapture must be false')
+  if (controls.web_analytics !== true) fail('project_controls.web_analytics must be true')
+  if (controls.heatmaps !== false) fail('project_controls.heatmaps must be false')
   for (const product of DEFERRED_PRODUCTS) {
     if (controls[product] !== false) fail(`project_controls.${product} must remain false for #1651 or later`)
   }
+}
+
+function replayRunbookSource(): string {
+  try {
+    return readFileSync(REPLAY_RUNBOOK_PATH, 'utf8')
+  } catch {
+    fail(`cannot read ${REPLAY_RUNBOOK_PATH}; the replay enablement gate must be documented there`)
+  }
+}
+
+export function validateReplayEnablement(root: UnknownRecord, runbookSource: string): void {
+  if (typeof root.session_replay_target !== 'boolean') {
+    fail('session_replay_target must be a boolean')
+  }
+  const gates = record(root.enablement_gates, 'enablement_gates')
+  for (const [name, value] of Object.entries(gates)) {
+    if (typeof value !== 'string' || value.trim() === '') {
+      fail(`enablement_gates.${name} must be a non-empty string`)
+    }
+  }
+  const replayGate = gates.session_replay
+  if (root.session_replay_target === true && replayGate !== REQUIRED_REPLAY_GATE) {
+    fail(`session_replay_target requires enablement_gates.session_replay = ${REQUIRED_REPLAY_GATE}`)
+  }
+  if (replayGate !== undefined && !runbookSource.includes(REPLAY_RUNBOOK_HEADING)) {
+    fail(`enablement_gates.session_replay requires the "${REPLAY_RUNBOOK_HEADING}" section in ${REPLAY_RUNBOOK_PATH}`)
+  }
+}
+
+function identifiedDiagnosticsCertificationStatus(root: UnknownRecord): string {
+  const certification = record(
+    root.identified_diagnostics_opt_out_certification,
+    'identified_diagnostics_opt_out_certification',
+  )
+  const status = string(
+    certification.status,
+    'identified_diagnostics_opt_out_certification.status',
+  )
+  if (!IDENTIFIED_DIAGNOSTICS_CERTIFICATION_STATUSES.has(status)) {
+    fail("identified_diagnostics_opt_out_certification.status must be 'blocked' or 'go'")
+  }
+  return status
 }
 
 function validateAuthorityAndCohort(root: UnknownRecord): void {
@@ -287,7 +338,7 @@ function validateAlerts(root: UnknownRecord, metrics: ProductMetricCatalog): voi
   }
 }
 
-function validateCoverageGaps(root: UnknownRecord): void {
+function validateCoverageGaps(root: UnknownRecord, certificationStatus: string): void {
   if (!Array.isArray(root.coverage_gaps)) fail('coverage_gaps must be a list')
   const gaps = root.coverage_gaps.map((raw, index) => {
     const gap = record(raw, `coverage_gaps[${index}]`)
@@ -300,6 +351,13 @@ function validateCoverageGaps(root: UnknownRecord): void {
   if (!gaps.some(gap => gap.id === 'remote_configuration_unapplied' && gap.status === 'open')) {
     fail('coverage_gaps must keep remote_configuration_unapplied open until operator verification')
   }
+  const survivalGap = gaps.find(gap => gap.id === REQUIRED_INGESTION_SURVIVAL_GAP_ID)
+  if (!survivalGap) {
+    fail(`coverage_gaps must include ${REQUIRED_INGESTION_SURVIVAL_GAP_ID} until the staging opt-out-survival check passes (fail-closed)`)
+  }
+  if (certificationStatus === 'go' && survivalGap.status === 'open') {
+    fail('identified_diagnostics_opt_out_certification cannot be go while unset_ingestion_survival_unverified is open')
+  }
 }
 
 export function validatePostHogRollout(
@@ -310,13 +368,15 @@ export function validatePostHogRollout(
   if (root.schema_version !== 1) fail('PostHog rollout must use schema_version 1')
   const environments = validateEnvironments(root)
   validateProjectControls(root)
+  validateReplayEnablement(root, replayRunbookSource())
+  const certificationStatus = identifiedDiagnosticsCertificationStatus(root)
   validateAuthorityAndCohort(root)
   validateKillSwitches(root)
   validateScrubbing(root)
   const dashboards = validateDashboards(root, metrics)
   validateNativeViews(root)
   validateAlerts(root, metrics)
-  validateCoverageGaps(root)
+  validateCoverageGaps(root, certificationStatus)
   const rollout = input as PostHogRollout
   rollout.project_isolation.environments = environments
   rollout.dashboards = dashboards

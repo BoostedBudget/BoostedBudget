@@ -771,7 +771,16 @@ func main() {
 			DB:           db,
 			JobQueue:     nil, // Set after jobQueue is created via SetJobQueue
 		})
-		privacyService := services.NewPrivacyService(privacyRepo)
+		// #1683 Task 5: the privacy write path is transactional (locked read-modify-write + audit in
+		// the same tx) and emits the identified-diagnostics opt-out post-commit. phClient may be a
+		// typed nil when no PostHog API key is configured — its nil-receiver guard makes that a no-op.
+		privacyService := services.NewPrivacyService(
+			privacyRepo,
+			repository.NewAuditLogMetadataRepository(db),
+			db,
+			phClient,
+			middleware.RequestAuditFrom,
+		)
 		dataExportService := services.NewDataExportService(dataExportRepo)
 		dataExportService.SetAnalytics(analyticsGateway)
 		transactionService := services.NewTransactionService(transactionRepo, customCategoryRepo)
@@ -3077,6 +3086,10 @@ func registerCloudflareAndRateLimitMiddleware(e *echo.Echo, cfCIDRRef *atomic.Po
 // order is load-bearing.
 func registerCloudflareAndRateLimitMiddlewareWithBackend(e *echo.Echo, cfCIDRRef *atomic.Pointer[[]netip.Prefix], cfg *config.Config, backend middleware.RateLimitBackend, done <-chan struct{}, logger *slog.Logger) {
 	e.Use(middleware.CloudflareOnly(cfCIDRRef, cfg.CFOriginSecret, cfg.Environment)) // Cloudflare-only enforcement: blocks direct *.fly.dev access
+	// #1683: capture per-request audit metadata (client IP / User-Agent / request ID) AFTER
+	// CloudflareOnly so GateStatusFrom reports the real gate outcome — RequestAudit only trusts
+	// Cf-Connecting-Ip when the gate passed. Pinned by TestRequestAuditMiddlewareOrdering.
+	e.Use(middleware.RequestAudit())
 	e.Use(middleware.IPRateLimiter(middleware.RateLimitConfig{                       // Per-IP rate limiting
 		// IPLimit/AuthEndpointLimit here feed ONLY the in-memory fallback store (memoryBackend) —
 		// the Redis-backed primary gets its own RegularLimit/AuthLimit via buildRateLimitBackend

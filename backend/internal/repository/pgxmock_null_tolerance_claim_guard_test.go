@@ -476,4 +476,20 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 // which drives AcceptInvite through the real PostHog Gateway and asserts the household projection
 // event's name, exact properties, and consent boundary. It makes no driver NULL-tolerance claim.
 // No files removed.
-const pgxmockSweepFileCount = 81
+//
+// 75 -> 76 (#1683 Task 4): added audit_log_repository_test.go, which pins the metadata INSERT shape
+// (VALUES (NULL, plus all four metadata columns), the erasure redaction SET clause, and the
+// pgxmock-bound metadata write including NULL binding for absent metadata. It makes no
+// driver NULL-tolerance claim — it uses no AddRow at all — so it is clean under
+// TestNoUndisclosedPgxmockNullToleranceClaim above. No file was removed.
+//
+// 76 -> 77 (#1683 Task 5): privacy_service_test.go newly imports pgxmock — it drives the service's
+// Begin/Commit/Rollback transaction boundary, the locked read-modify-write statement sequence, and
+// the in-transaction audit INSERT. It makes no driver NULL-tolerance claim: every AddRow seeds all
+// fourteen privacy_settings columns explicitly and the audit metadata binds []byte(nil) for
+// `changes`, so it is clean under TestNoUndisclosedPgxmockNullToleranceClaim above. No file was
+// added or removed — the file already existed without the import.
+//
+// ⚠ PROVISIONAL (#1652 × #1688 merge): 83 is a placeholder so the tree compiles; the true count is
+// re-derived from the guard in a follow-up task. Do not treat 83 as verified.
+const pgxmockSweepFileCount = 83

@@ -142,6 +142,7 @@ export const ANALYTICS_EVENTS = {
   PORTFOLIO_RANGE_CHANGED: 'portfolio_range_changed',
   PORTFOLIO_SUMMARY_WIDGET_VIEWED: 'portfolio_summary_widget_viewed',
   POSTHOG_PAGEVIEW: '$pageview',
+  POSTHOG_SET: '$set',
   PRICING_VIEWED: 'pricing_viewed',
   PRIVACY_SETTINGS_CHANGED: 'privacy_settings_changed',
   PROFILE_UPDATED: 'profile_updated',
@@ -359,6 +360,7 @@ export interface AnalyticsEventProperties {
   'portfolio_range_changed': Record<string, unknown>
   'portfolio_summary_widget_viewed': Record<string, unknown>
   '$pageview': Record<string, unknown>
+  '$set': Record<string, never>
   'pricing_viewed': Record<string, unknown>
   'privacy_settings_changed': Record<string, never>
   'profile_updated': Record<string, unknown>
@@ -890,6 +892,8 @@ export const ANALYTICS_EVENT_CONTRACTS: Readonly<Record<
   'portfolio_summary_widget_viewed': {
   },
   '$pageview': {
+  },
+  '$set': {
   },
   'pricing_viewed': {
   },

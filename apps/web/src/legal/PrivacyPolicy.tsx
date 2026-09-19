@@ -84,7 +84,8 @@ export function PrivacyPolicy() {
             <li><strong>Legitimate interests (Art. 6(1)(f)):</strong> Security and fraud prevention,
               service improvement, error tracking and performance monitoring</li>
             <li><strong>Consent (Art. 6(1)(a)):</strong> Analytics cookies (PostHog), marketing emails,
-              household data sharing (see Section 9)</li>
+              household data sharing (see Section 9), and session recording and interaction capture
+              (see Section 6)</li>
             <li><strong>Legal obligation (Art. 6(1)(c)):</strong> Tax records, regulatory compliance,
               responding to lawful requests</li>
           </ul>
@@ -172,13 +173,16 @@ export function PrivacyPolicy() {
               any time in your account settings.</li>
             <li><strong>Paddle:</strong> Payment processing and subscription management</li>
             <li><strong>PostHog:</strong> Product analytics and closed-answer surveys (only with your
-              consent), plus authenticated Support chat when you choose to contact us. Support uses a
+              consent), consent-gated session recording and heatmaps (only with your separate
+              interaction-capture consent), plus authenticated Support chat when you choose to contact us.
+              Support uses a
               server-verified account identifier and is unavailable to signed-out visitors. PostHog
               receives your Support message content and a sanitized application route without URL
               query parameters or account and budget identifiers. The browser creates a temporary
               Support session identifier only after you select Support. It is not included in
               authenticated requests and is removed on logout, account switch, or when you leave the
-              authenticated application. Session replay links are not included.</li>
+              authenticated application. Session recording text and element attributes are masked;
+              Support conversation links are not included in replay.</li>
             <li><strong>Cloud Infrastructure:</strong> AWS (data hosting), Fly.io (application hosting)</li>
             <li><strong>Sentry:</strong> Error tracking and performance monitoring. Sentry may receive
               error context, device and browser information, IP address, and application state at the
@@ -193,7 +197,7 @@ export function PrivacyPolicy() {
 
         <section>
           <h2>6. Cookie Policy</h2>
-          <p>We use two types of cookies, in compliance with GDPR requirements:</p>
+          <p>We use three types of cookies, in compliance with GDPR requirements:</p>
           <ul>
             <li>
               <strong>Necessary Cookies (Required):</strong> Essential for app functionality, authentication,
@@ -202,6 +206,12 @@ export function PrivacyPolicy() {
             <li>
               <strong>Analytics Cookies (Optional):</strong> Help us understand how users interact with our
               platform to improve features and user experience. We use PostHog for analytics. Requires your consent.
+            </li>
+            <li>
+              <strong>Session Recording and Interaction Capture (Optional):</strong> Records how you use the
+              app — including session replay and heatmaps — so we can improve it. Requires your separate
+              consent. Recorded text and element attributes are masked. See our{' '}
+              <Link to="/legal/cookie-policy">Cookie Policy</Link> for details.
             </li>
           </ul>
           <p>
@@ -213,7 +223,8 @@ export function PrivacyPolicy() {
             resolves. No PostHog analytics persistence or analytics event capture occurs before that
             point. After consent,
             PostHog persistence uses tab-scoped sessionStorage so identity does not carry between tabs.
-            Production session replay is disabled. Do Not Track is enforced in the browser only; it does not rewrite your
+            Session recording and heatmaps are separately consent-gated and merge disabled; when enabled,
+            replay text and element attributes are masked. Do Not Track is enforced in the browser only; it does not rewrite your
             server-authoritative consent setting, so browser analytics can undercount consenting DNT users.
           </p>
         </section>

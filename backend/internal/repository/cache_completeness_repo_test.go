@@ -337,6 +337,7 @@ var repoMethodDispositions = map[string]repoMethodDisposition{
 	"PrivacyRepository.Create":                                            {dispositionDerivedNoCacheImpact, ""},
 	"PrivacyRepository.CreateTx":                                          {dispositionDerivedNoCacheImpact, ""},
 	"PrivacyRepository.Update":                                            {dispositionDerivedNoCacheImpact, ""},
+	"PrivacyRepository.UpdateTx":                                          {dispositionDerivedNoCacheImpact, ""},
 	"ProfileRepository.CreateUser":                                        {dispositionDerivedNoCacheImpact, ""},
 	"ProfileRepository.CreateUserTx":                                      {dispositionDerivedNoCacheImpact, ""},
 	"ProfileRepository.UpdateUser":                                        {dispositionDerivedNoCacheImpact, ""},

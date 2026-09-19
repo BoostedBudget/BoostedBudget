@@ -6,6 +6,7 @@ import { parseDocument } from 'yaml'
 import {
   parsePostHogRolloutYaml,
   validatePostHogRollout,
+  validateReplayEnablement,
 } from './validate-posthog-rollout'
 import {
   parseEventCatalogYaml,
@@ -47,7 +48,8 @@ function validRollout(): Record<string, unknown> {
       allowed_domains_exact: true,
       autocapture: false,
       session_replay: false,
-      web_analytics: false,
+      heatmaps: false,
+      web_analytics: true,
       error_tracking: false,
       experiments: false,
       feature_flags: false,
@@ -56,6 +58,15 @@ function validRollout(): Record<string, unknown> {
       support: true,
       project_rendered_widget: false,
       surveys: true,
+    },
+    // The replay TARGET is true; the project toggle above stays false until the operator
+    // completes the staging inspection. The gate is what couples the two.
+    session_replay_target: true,
+    enablement_gates: {
+      session_replay: 'staging_inspection_required',
+    },
+    identified_diagnostics_opt_out_certification: {
+      status: 'blocked',
     },
     runtime_authority: {
       analytics: 'consent_required',
@@ -117,6 +128,7 @@ function validRollout(): Record<string, unknown> {
     coverage_gaps: [
       { id: 'remote_configuration_unapplied', severity: 'blocking', status: 'open' },
       { id: 'legacy_event_schemas_unreviewed', severity: 'measurement', status: 'open' },
+      { id: 'unset_ingestion_survival_unverified', severity: 'blocking', status: 'closed' },
     ],
   }
 }
@@ -138,11 +150,56 @@ describe('PostHog rollout validation', () => {
   })
 
   test('rejects enabling deferred telemetry products', () => {
-    for (const product of ['session_replay', 'web_analytics', 'error_tracking', 'experiments', 'feature_flags', 'logs', 'tracing']) {
+    for (const product of ['error_tracking', 'experiments', 'feature_flags', 'logs', 'tracing']) {
       const rollout = validRollout() as any
       rollout.project_controls[product] = true
       expect(() => validatePostHogRollout(rollout, metrics)).toThrow(product)
     }
+  })
+
+  test('requires Web Analytics enabled and the heatmaps analysis toggle permanently off', () => {
+    const disabled = validRollout() as any
+    disabled.project_controls.web_analytics = false
+    expect(() => validatePostHogRollout(disabled, metrics)).toThrow(/web_analytics/i)
+
+    const heatmaps = validRollout() as any
+    heatmaps.project_controls.heatmaps = true
+    expect(() => validatePostHogRollout(heatmaps, metrics)).toThrow(/heatmaps/i)
+  })
+
+  test('couples a true session-replay target to the staging inspection gate', () => {
+    const missingGate = validRollout() as any
+    missingGate.enablement_gates = {}
+    expect(() => validatePostHogRollout(missingGate, metrics)).toThrow(/enablement_gates.session_replay/i)
+
+    const wrongGate = validRollout() as any
+    wrongGate.enablement_gates.session_replay = 'not_a_gate'
+    expect(() => validatePostHogRollout(wrongGate, metrics)).toThrow(/staging_inspection_required/i)
+  })
+
+  test('requires the replay gate to be documented by the runbook heading', () => {
+    const gates = { session_replay: 'staging_inspection_required' }
+    expect(() => validateReplayEnablement({ session_replay_target: true, enablement_gates: gates }, '# no heading here'))
+      .toThrow(/## Replay enablement gate/i)
+    expect(() => validateReplayEnablement({ session_replay_target: true, enablement_gates: gates }, '## Replay enablement gate\n'))
+      .not.toThrow()
+  })
+
+  test('fails closed on the identified-diagnostics opt-out certification', () => {
+    const openGap = validRollout() as any
+    openGap.identified_diagnostics_opt_out_certification.status = 'go'
+    openGap.coverage_gaps.find((gap: any) => gap.id === 'unset_ingestion_survival_unverified').status = 'open'
+    expect(() => validatePostHogRollout(openGap, metrics)).toThrow(/cannot be go while .*open/i)
+
+    const absentRow = validRollout() as any
+    absentRow.coverage_gaps = absentRow.coverage_gaps.filter(
+      (gap: any) => gap.id !== 'unset_ingestion_survival_unverified',
+    )
+    expect(() => validatePostHogRollout(absentRow, metrics)).toThrow(/unset_ingestion_survival_unverified/i)
+
+    const badEnum = validRollout() as any
+    badEnum.identified_diagnostics_opt_out_certification.status = 'maybe'
+    expect(() => validatePostHogRollout(badEnum, metrics)).toThrow(/'blocked' or 'go'/i)
   })
 
   test('rejects a ready dashboard backed by a planned metric', () => {
@@ -187,7 +244,9 @@ describe('PostHog rollout validation', () => {
 
   test('keeps unapplied remote configuration explicit as a blocking gap', () => {
     const rollout = validRollout() as any
-    rollout.coverage_gaps = []
+    rollout.coverage_gaps = [
+      { id: 'unset_ingestion_survival_unverified', severity: 'blocking', status: 'closed' },
+    ]
     expect(() => validatePostHogRollout(rollout, metrics)).toThrow(/remote_configuration_unapplied/i)
   })
 

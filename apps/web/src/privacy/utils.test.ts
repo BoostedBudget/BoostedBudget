@@ -17,7 +17,6 @@ describe('privacy utils', () => {
       expect(result).toEqual({
         gdpr_necessary_consent: true,
         gdpr_analytics_consent: true,
-        gdpr_advertising_consent: false,
       })
     })
 
@@ -32,7 +31,6 @@ describe('privacy utils', () => {
 
       expect(result.gdpr_necessary_consent).toBe(true)
       expect(result.gdpr_analytics_consent).toBe(true)
-      expect(result.gdpr_advertising_consent).toBe(true)
     })
 
     it('should handle only necessary consent', () => {
@@ -46,7 +44,6 @@ describe('privacy utils', () => {
 
       expect(result.gdpr_necessary_consent).toBe(true)
       expect(result.gdpr_analytics_consent).toBe(false)
-      expect(result.gdpr_advertising_consent).toBe(false)
     })
   })
 
@@ -57,7 +54,6 @@ describe('privacy utils', () => {
         user_id: 'user-123',
         gdpr_necessary_consent: true,
         gdpr_analytics_consent: true,
-        gdpr_advertising_consent: false,
         gdpr_consent_timestamp: '2025-01-15T10:00:00Z',
         marketing_emails_enabled: true,
         product_updates_enabled: true,
@@ -82,7 +78,6 @@ describe('privacy utils', () => {
         user_id: 'user-123',
         gdpr_necessary_consent: true,
         gdpr_analytics_consent: false,
-        gdpr_advertising_consent: false,
         gdpr_consent_timestamp: '2025-01-15T10:00:00Z',
         marketing_emails_enabled: false,
         product_updates_enabled: false,
@@ -103,13 +98,12 @@ describe('privacy utils', () => {
       expect(result).not.toHaveProperty('data_sharing_enabled')
     })
 
-    it('should handle all GDPR consents enabled', () => {
+    it('should always set advertising false (server no longer stores it)', () => {
       const settings: PrivacySettings = {
         id: '123',
         user_id: 'user-123',
         gdpr_necessary_consent: true,
         gdpr_analytics_consent: true,
-        gdpr_advertising_consent: true,
         gdpr_consent_timestamp: '2025-01-15T10:00:00Z',
         marketing_emails_enabled: false,
         product_updates_enabled: false,
@@ -123,7 +117,44 @@ describe('privacy utils', () => {
 
       expect(result.necessary).toBe(true)
       expect(result.analytics).toBe(true)
-      expect(result.advertising).toBe(true)
+      expect(result.advertising).toBe(false)
+    })
+  })
+
+  describe('interaction capture category', () => {
+    const completeSettings: PrivacySettings = {
+      id: '123',
+      user_id: 'user-123',
+      gdpr_necessary_consent: true,
+      gdpr_analytics_consent: true,
+      gdpr_interaction_capture_consent: true,
+      identified_diagnostics_enabled: false,
+      include_in_aggregate_stats: false,
+      gdpr_consent_timestamp: '2025-01-15T10:00:00Z',
+      marketing_emails_enabled: false,
+      product_updates_enabled: false,
+      security_alerts_enabled: false,
+      data_sharing_enabled: false,
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-15T10:00:00Z',
+    }
+
+    it('maps the cookie interaction-capture category to the backend field', () => {
+      const result = cookieToPrivacySettings({
+        necessary: true,
+        analytics: true,
+        advertising: false,
+        interactionCapture: true,
+      })
+
+      expect(result.gdpr_interaction_capture_consent).toBe(true)
+    })
+
+    it('writes interaction capture back to the cookie and keeps advertising false', () => {
+      const result = privacySettingsToCookie(completeSettings)
+
+      expect(result.interactionCapture).toBe(true)
+      expect(result.advertising).toBe(false)
     })
   })
 
@@ -144,7 +175,6 @@ describe('privacy utils', () => {
         user_id: 'user-123',
         gdpr_necessary_consent: backendUpdate.gdpr_necessary_consent!,
         gdpr_analytics_consent: backendUpdate.gdpr_analytics_consent!,
-        gdpr_advertising_consent: backendUpdate.gdpr_advertising_consent!,
         gdpr_consent_timestamp: '2025-01-15T10:00:00Z',
         marketing_emails_enabled: false,
         product_updates_enabled: true,
