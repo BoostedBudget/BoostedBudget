@@ -76,6 +76,7 @@ type DeletionService interface {
 	// SetPaddleCleanupService sets the Paddle cleanup service for billing reconciliation
 	// during deletion. Mirrors SetPlaidCleanupService pattern. Issue #1006.
 	SetPaddleCleanupService(svc PaddleDeletionCleaner)
+	SetRevenueCatCleanupService(svc RevenueCatDeletionCleaner)
 
 	// SetAnalytics sets the analytics client for capturing deletion lifecycle events
 	SetAnalytics(a phclient.Analytics)
@@ -109,6 +110,7 @@ type DeletionService interface {
 	// optional capability — a nil claims repo makes ExecuteDeletion fail loudly rather
 	// than silently falling back to the old, race-prone guard-only behavior.
 	SetWorkClaimsRepo(repo repository.WorkClaimsRepository)
+	SetSubscriptionCleanupGuard(guard SubscriptionCleanupGuard)
 
 	// SetCache wires Issue #1531 Task 10b's GDPR deletion purge: purger deletes the deleted
 	// user's own u:<userID>/k:<hash(clerkID)> cache footprint immediately (see cache.Purger's doc
@@ -142,22 +144,24 @@ type HouseholdInviteRevoker interface {
 
 // deletionService implements DeletionService
 type deletionService struct {
-	profileRepo      repository.ProfileRepository
-	emailService     EmailService
-	clerkService     ClerkService
-	auditLogger      AuditLogger
-	plaidCleanupSvc  PlaidItemCleanupService         // Issue #668: Remove Plaid items before DB deletion
-	paddleCleanupSvc PaddleDeletionCleaner           // Issue #1006: nil if Paddle not configured
-	analytics        phclient.Analytics              // Optional PostHog analytics client
-	householdReader  HouseholdReader                 // #1367 — Phase 3: nil skips the owner guard
-	inviteRevoker    HouseholdInviteRevoker          // #1367 — Phase 3: nil skips invite revocation
-	db               repository.DB                   // #1367 — Phase 3: nil falls back to non-transactional guard
-	claimsRepo       repository.WorkClaimsRepository // Issue #1413 C2: required for ExecuteDeletion
-	cachePurger      cache.Purger                    // Issue #1531 Task 10b: nil skips the cache purge
-	cacheGens        *cache.Generations              // Issue #1531 Task 10b: nil skips the household bump
-	jobQueue         queue.JobQueue                  // Issue #1531 Task 10b: nil skips the durable-retry enqueue
-	gracePeriodDays  int
-	tokenSecret      string
+	revenueCatCleanupSvc     RevenueCatDeletionCleaner
+	subscriptionCleanupGuard SubscriptionCleanupGuard
+	profileRepo              repository.ProfileRepository
+	emailService             EmailService
+	clerkService             ClerkService
+	auditLogger              AuditLogger
+	plaidCleanupSvc          PlaidItemCleanupService         // Issue #668: Remove Plaid items before DB deletion
+	paddleCleanupSvc         PaddleDeletionCleaner           // Issue #1006: nil if Paddle not configured
+	analytics                phclient.Analytics              // Optional PostHog analytics client
+	householdReader          HouseholdReader                 // #1367 — Phase 3: nil skips the owner guard
+	inviteRevoker            HouseholdInviteRevoker          // #1367 — Phase 3: nil skips invite revocation
+	db                       repository.DB                   // #1367 — Phase 3: nil falls back to non-transactional guard
+	claimsRepo               repository.WorkClaimsRepository // Issue #1413 C2: required for ExecuteDeletion
+	cachePurger              cache.Purger                    // Issue #1531 Task 10b: nil skips the cache purge
+	cacheGens                *cache.Generations              // Issue #1531 Task 10b: nil skips the household bump
+	jobQueue                 queue.JobQueue                  // Issue #1531 Task 10b: nil skips the durable-retry enqueue
+	gracePeriodDays          int
+	tokenSecret              string
 }
 
 // accountDeletionClaimLease is the lease duration ExecuteDeletion requests for
@@ -547,6 +551,12 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 	// down to "one call". The same irreducible-TOCTOU argument cleanupItems makes for its own
 	// per-item recheck applies here verbatim.
 	stillAuthorised := func(c context.Context) (bool, error) {
+		if kind == repository.DeletionKindRetention && s.subscriptionCleanupGuard != nil {
+			allowed, err := s.subscriptionCleanupGuard.CanCleanup(c, userID)
+			if err != nil || !allowed {
+				return false, err
+			}
+		}
 		return s.profileRepo.DeletionStillAuthorised(c, userID, kind, user.DeletionRequestedAt)
 	}
 	// abortIfUnauthorised returns a non-nil "handled" signal the caller returns directly. An
@@ -802,13 +812,28 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 		if !effects.any() {
 			return
 		}
-		slog.Default().Error("account deletion stopped after irreversible external work had already been issued against this user's Paddle account — the user KEEPS their account and data; this needs a human",
+		slog.Default().Error("account deletion stopped after irreversible external work had already been issued — the user KEEPS their account and data; this needs a human",
 			"user_id", userID, "claim_kind", string(kind),
 			"subscription_cancel_issued", effects.subscriptionCancel,
-			"customer_archive_issued", effects.customerArchive, "reason", reason)
+			"customer_archive_issued", effects.customerArchive, "revenuecat_erasure_issued", effects.revenueCatErasure, "reason", reason)
 	}
-	if s.paddleCleanupSvc != nil {
-		issued, err := s.cleanupPaddleResources(ctx, userID, kind, user, stillAuthorised)
+	if s.revenueCatCleanupSvc != nil {
+		if err := s.revenueCatCleanupSvc.Prepare(ctx, userID, kind == repository.DeletionKindRetention, stillAuthorised); err != nil {
+			releaseClaim(err.Error())
+			if errors.Is(err, ErrDeletionAuthorisationRevoked) {
+				return nil
+			}
+			return fmt.Errorf("prepare RevenueCat erasure: %w", err)
+		}
+	}
+	if s.paddleCleanupSvc != nil || s.revenueCatCleanupSvc != nil {
+		var issued paddleEffectsIssued
+		var err error
+		if s.revenueCatCleanupSvc != nil {
+			issued, err = s.cleanupRevenueCatPaddleResources(ctx, userID, kind, user, stillAuthorised)
+		} else {
+			issued, err = s.cleanupPaddleResources(ctx, userID, kind, user, stillAuthorised)
+		}
 		effects = issued
 		if err != nil {
 			if errors.Is(err, ErrDeletionAuthorisationRevoked) {
@@ -826,6 +851,27 @@ func (s *deletionService) ExecuteDeletion(ctx context.Context, userID string, ki
 			releaseClaim(err.Error())
 			reportSurvivingResidue("Paddle cleanup failed after external work had already been issued: " + err.Error())
 			return fmt.Errorf("aborting deletion — Paddle cleanup failed: %w", err)
+		}
+	}
+	if s.revenueCatCleanupSvc != nil {
+		err := s.revenueCatCleanupSvc.Erase(ctx, userID, func(c context.Context) (bool, error) {
+			allowed, e := stillAuthorised(c)
+			if e != nil || !allowed {
+				return allowed, e
+			}
+			if e = s.recordIssuedExternalEffect(c, userID, kind, repository.DeletionResidueRevenueCatCustomerErased, "about to erase RevenueCat customer", true); e != nil {
+				return false, e
+			}
+			effects.revenueCatErasure = true
+			return true, nil
+		})
+		if err != nil {
+			releaseClaim(err.Error())
+			reportSurvivingResidue("RevenueCat erasure stopped: " + err.Error())
+			if errors.Is(err, ErrDeletionAuthorisationRevoked) {
+				return nil
+			}
+			return fmt.Errorf("RevenueCat erasure: %w", err)
 		}
 	}
 
@@ -1140,6 +1186,10 @@ func (s *deletionService) SetPaddleCleanupService(svc PaddleDeletionCleaner) {
 	s.paddleCleanupSvc = svc
 }
 
+func (s *deletionService) SetRevenueCatCleanupService(svc RevenueCatDeletionCleaner) {
+	s.revenueCatCleanupSvc = svc
+}
+
 // SetAnalytics sets the analytics client for capturing deletion lifecycle events
 func (s *deletionService) SetAnalytics(a phclient.Analytics) {
 	s.analytics = a
@@ -1364,6 +1414,10 @@ func (s *deletionService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository
 	s.claimsRepo = repo
 }
 
+func (s *deletionService) SetSubscriptionCleanupGuard(guard SubscriptionCleanupGuard) {
+	s.subscriptionCleanupGuard = guard
+}
+
 // cleanupPaddleResources cancels subscriptions and archives the customer for GDPR compliance.
 //
 // Issue #1413 Critical finding C2 (closed for real, round 3): errors here now ABORT the
@@ -1486,12 +1540,15 @@ func (s *deletionService) cleanupPaddleResources(ctx context.Context, userID str
 // changed Paddle's state anyway (round 15 finding A2), and from this side of the network there is no
 // way to tell the two apart.
 type paddleEffectsIssued struct {
+	revenueCatErasure  bool
 	subscriptionCancel bool
 	customerArchive    bool
 }
 
 // any reports whether this run did anything to the user's Paddle account that it cannot take back.
-func (e paddleEffectsIssued) any() bool { return e.subscriptionCancel || e.customerArchive }
+func (e paddleEffectsIssued) any() bool {
+	return e.subscriptionCancel || e.customerArchive || e.revenueCatErasure
+}
 
 // deletionResidueWriteTimeout bounds the residue write's own independent context. Matches the 5s the
 // claim Release calls in ExecuteDeletion use, for the same reason: this write runs on paths where

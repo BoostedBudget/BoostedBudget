@@ -54,6 +54,10 @@ type WorkerConfig struct {
 
 	// Low queue: Deletions, analytics, digests (default: 3)
 	Low int
+
+	// RevenueCat has its own small pool so repairs do not crowd out paid/grant
+	// confirmations or fan out at the concurrency used for general background work.
+	RevenueCat int
 }
 
 // DefaultConfig returns the default configuration.
@@ -74,20 +78,25 @@ func DefaultWorkerConfig() *WorkerConfig {
 		Default:       20,
 		Notifications: 5,
 		Low:           3,
+		RevenueCat:    2,
 	}
 }
 
 // TotalWorkers returns the total number of workers across all queues.
 func (wc *WorkerConfig) TotalWorkers() int {
-	return wc.Critical + wc.Default + wc.Notifications + wc.Low
+	return wc.Critical + wc.Default + wc.Notifications + wc.Low + wc.RevenueCat
 }
 
 // ToRiverQueues converts worker config to River queue configuration.
 func (wc *WorkerConfig) ToRiverQueues() map[string]river.QueueConfig {
-	return map[string]river.QueueConfig{
+	queues := map[string]river.QueueConfig{
 		"critical":      {MaxWorkers: wc.Critical},
 		"default":       {MaxWorkers: wc.Default},
 		"notifications": {MaxWorkers: wc.Notifications},
 		"low":           {MaxWorkers: wc.Low},
 	}
+	if wc.RevenueCat > 0 {
+		queues["revenuecat"] = river.QueueConfig{MaxWorkers: wc.RevenueCat}
+	}
+	return queues
 }

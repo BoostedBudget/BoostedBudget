@@ -6,8 +6,23 @@
  * construction → "TypeError: n is not a function" → blank page.
  */
 import { test, expect } from '@playwright/test';
+import { readdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 test.describe('Production bundle smoke tests', () => {
+  test('landing does not fetch the separately built RevenueCat checkout SDK', async ({ page }) => {
+    const sdkChunks = readdirSync(resolve(import.meta.dirname, '../dist/assets'))
+      .filter(name => /^revenuecat-.*\.js$/.test(name));
+    expect(sdkChunks.length, 'The checkout SDK must have its own lazy chunk').toBeGreaterThan(0);
+    const requestedChunks: string[] = [];
+    page.on('request', request => {
+      requestedChunks.push(new URL(request.url()).pathname.split('/').pop() ?? '');
+    });
+    await page.goto('/');
+    await expect(page.locator('#root')).not.toBeEmpty({ timeout: 15_000 });
+    expect(requestedChunks.filter(name => sdkChunks.includes(name))).toEqual([]);
+  });
+
   test('app mounts without uncaught JS errors', async ({ page }) => {
     const uncaughtErrors: string[] = [];
 

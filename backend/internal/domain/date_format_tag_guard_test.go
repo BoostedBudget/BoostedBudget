@@ -129,7 +129,6 @@ func rfc3339StringFields() map[string]string {
 			"as an RFC 3339 datetime string; date-only only on the trial-user branch, so the field is mixed-format.",
 		"GetCurrentSubscriptionOutputBody.next_billing_date": "Paddle SDK TimePeriod.EndsAt, same mixed-format " +
 			"source as current_period_end above.",
-		"PreviewUpdateOutputBody.next_charge_date": "Paddle SDK TimePeriod.StartsAt, RFC 3339.",
 		"ListAdminRetentionWithheldOutputBody.as_of": "asOf.Format(time.RFC3339) — a full instant " +
 			"describing when the listing was taken, not a calendar day.",
 		"ListPlaidOrphanedItemsOutputBody.as_of": "asOf.Format(time.RFC3339) — a full instant, as above.",

@@ -3,13 +3,10 @@ import React from 'react'
 import { renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSubscriptionManagement } from './useSubscriptionManagement'
+import { mockUseAuth, createMockClerkAuth } from '@/test/mocks/clerk'
 import {
   mockUseGetCurrentSubscription,
-  mockUseUpdatePaddleSubscription,
-  mockUseCancelPaddleSubscription,
   mockUseGetBillingPortalUrl,
-  mockUpdateSubscriptionMutateAsync,
-  mockCancelSubscriptionMutateAsync,
 } from '@/test/mocks/subscription-api'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 
@@ -32,29 +29,11 @@ const defaultQueryState = {
   refetch: () => Promise.resolve({ data: undefined, error: null }),
 }
 
-const defaultMutationState = {
-  isPending: false,
-  isSuccess: false,
-  isError: false,
-  error: null,
-  reset: () => {},
-}
-
 describe('useSubscriptionManagement', () => {
   beforeEach(() => {
     mockUseGetCurrentSubscription.mockReturnValue(defaultQueryState)
-    mockUseUpdatePaddleSubscription.mockReturnValue({
-      mutateAsync: mockUpdateSubscriptionMutateAsync,
-      ...defaultMutationState,
-    })
-    mockUseCancelPaddleSubscription.mockReturnValue({
-      mutateAsync: mockCancelSubscriptionMutateAsync,
-      ...defaultMutationState,
-    })
     mockUseGetBillingPortalUrl.mockClear()
     mockUseGetBillingPortalUrl.mockReturnValue(defaultQueryState)
-    mockUpdateSubscriptionMutateAsync.mockClear()
-    mockCancelSubscriptionMutateAsync.mockClear()
     // Non-comped by default (the hook also consults the profile-derived presentation as a
     // resilience fallback for comped users, Issue #1413).
     mockUseGetUserProfile.mockClear()
@@ -314,46 +293,74 @@ describe('useSubscriptionManagement', () => {
     })
   })
 
-  describe('updateSubscription', () => {
-    it('includes current_billing_interval in mutation payload when provided', async () => {
-      mockUpdateSubscriptionMutateAsync.mockResolvedValue({})
+  describe('billing portal error state', () => {
+    it('normalizes a portal-URL failure instead of leaving a dead control', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: { status: 'active', tier: 'premium', subscription_id: 'sub_123' },
+      })
+      mockUseGetBillingPortalUrl.mockReturnValue({
+        ...defaultQueryState,
+        error: { status: 503, message: 'Service Unavailable' },
+      })
+
       const { result } = renderHook(() => useSubscriptionManagement(), {
         wrapper: createWrapper(),
       })
 
-      await result.current.updateSubscription({
-        newTier: 'household_2',
-        billingInterval: 'year',
-        currentBillingInterval: 'month',
-      })
-
-      expect(mockUpdateSubscriptionMutateAsync).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          new_tier: 'household_2',
-          billing_interval: 'year',
-          current_billing_interval: 'month',
-        }),
-      })
+      expect(result.current.billingPortalError?.message).toBe(
+        'Subscription service temporarily unavailable'
+      )
+      expect(result.current.billingPortalError?.message).not.toContain('503')
     })
 
-    it('omits current_billing_interval when not provided', async () => {
-      mockUpdateSubscriptionMutateAsync.mockResolvedValue({})
+    it('returns null billingPortalError when the portal resolves', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: { status: 'active', tier: 'premium', subscription_id: 'sub_123' },
+      })
+      mockUseGetBillingPortalUrl.mockReturnValue({
+        ...defaultQueryState,
+        data: { portal_url: 'https://portal.paddle.com/123' },
+      })
+
       const { result } = renderHook(() => useSubscriptionManagement(), {
         wrapper: createWrapper(),
       })
 
-      await result.current.updateSubscription({
-        newTier: 'premium',
-        billingInterval: 'month',
-      })
-
-      const call = mockUpdateSubscriptionMutateAsync.mock.calls[0]?.[0]
-      expect(call.data.current_billing_interval).toBeUndefined()
+      expect(result.current.billingPortalError).toBeNull()
+      expect(result.current.billingPortalUrl).toBe('https://portal.paddle.com/123')
     })
   })
 
   // Issue #1413: admin-comped users get real access even though there's no Paddle subscription.
   describe('Comped resilience (#1413)', () => {
+    it('partitions billing reads by Clerk identity after account switching', () => {
+      mockUseAuth.mockReturnValue(createMockClerkAuth({ userId: 'user_first' }))
+      const hook = renderHook(() => useSubscriptionManagement(), { wrapper: createWrapper() })
+      const getKey = () => (mockUseGetCurrentSubscription.mock.calls.at(-1) as unknown as [{ query: { queryKey: unknown } }])?.[0]?.query?.queryKey
+      const firstKey = getKey()
+      mockUseAuth.mockReturnValue(createMockClerkAuth({ userId: 'user_second' }))
+      hook.rerender()
+      const secondKey = getKey()
+      expect(secondKey).not.toEqual(firstKey)
+    })
+    it('allows billing portal recovery for a paused paid subscription', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: { status: 'paused', tier: 'premium', subscription_id: 'sub_paused' },
+      } as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+      renderHook(() => useSubscriptionManagement(), { wrapper: createWrapper() })
+      expect(mockUseGetBillingPortalUrl).toHaveBeenLastCalledWith({ query: expect.objectContaining({ enabled: true }) })
+    })
+    it('keeps the paid billing portal available when complimentary access coexists', () => {
+      mockUseGetCurrentSubscription.mockReturnValue({
+        ...defaultQueryState,
+        data: { status: 'active', tier: 'household_2', subscription_id: 'sub_paid', is_comped: true },
+      } as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+      renderHook(() => useSubscriptionManagement(), { wrapper: createWrapper() })
+      expect(mockUseGetBillingPortalUrl).toHaveBeenLastCalledWith({ query: expect.objectContaining({ enabled: true }) })
+    })
     it('returns hasNoSubscription false for a comped user even when the endpoint 404s (profile-derived)', () => {
       mockUseGetCurrentSubscription.mockReturnValue({
         ...defaultQueryState,

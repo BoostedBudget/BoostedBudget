@@ -7,13 +7,15 @@ import "time"
 type AdminUserListItem struct {
 	ID                 string `json:"id"`
 	Email              string `json:"email"`
-	SubscriptionTier   string `json:"subscription_tier"`
-	SubscriptionStatus string `json:"subscription_status"`
+	SubscriptionTier   string `json:"subscription_tier" doc:"Observed own-access projection used for tier filtering and sorting; see effective_tier for live aggregate access"`
+	SubscriptionStatus string `json:"subscription_status" doc:"Observed own-access projection used for sorting; see effective_status and access_resolved for live authority"`
 	// EffectiveStatus is the server-computed effective subscription status (Issue #1413) — it
 	// forces "active" when a live manual tier override exists, otherwise mirrors
 	// SubscriptionStatus. No omitempty: the frontend must always see this key so it never
 	// distinguishes "empty" from "absent" (mirrors domain.User.IsComped's precedent).
 	EffectiveStatus    string     `json:"effective_status"`
+	EffectiveTier      string     `json:"effective_tier,omitempty"`
+	AccessResolved     *bool      `json:"access_resolved,omitempty"`
 	ManualTierOverride *string    `json:"manual_tier_override,omitempty"`
 	ManualTierEndsAt   *time.Time `json:"manual_tier_ends_at,omitempty"`
 	// DeletionRequestedAt/DeletionScheduledAt surface a pending GDPR account deletion (Issue

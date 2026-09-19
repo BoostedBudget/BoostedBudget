@@ -83,6 +83,8 @@ var uniqueOptsByKind = map[string]func() *queue.UniqueOpts{
 	"posthog_erasure":          PostHogErasureUniqueOpts,
 
 	// Subscription / billing kinds
+	"revenuecat_sync":                   RevenueCatSyncUniqueOpts,
+	"revenuecat_repair":                 RevenueCatRepairUniqueOpts,
 	"trial_expiration_check":            TrialExpirationCheckUniqueOpts,
 	"past_due_check":                    PastDueCheckUniqueOpts,
 	"paddle_reconciliation":             PaddleReconciliationUniqueOpts,

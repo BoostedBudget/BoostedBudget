@@ -193,6 +193,7 @@ var reviewedUnauthenticatedOperations = map[string]string{
 	"getHouseholdInvitePreview": "authority comes from the unguessable invite token in the path; returns invite preview only",
 	"handlePlaidWebhook":        "unauthenticated by protocol; verified by Plaid webhook signature in the handler",
 	"paddle-webhook":            "unauthenticated by protocol; verified by Paddle webhook signature in the handler",
+	"revenuecat-webhook":        "provider authentication: exact Authorization plus timestamped HMAC-SHA256 of the raw body; accepted events request canonical customer readback and never directly grant access",
 	"recordMCPAuditEntry":       "MCP Worker origin proven by X-MCP-Worker-Secret plus a Clerk-verified OAuth token in the handler path",
 	"qaAuthBypass": "THE DANGEROUS ONE (#1432 B2-1): mints a five-minute Clerk ADMIN sign-in token. It is " +
 		"unauthenticated by necessity — it is how you obtain credentials — so it is gated at REGISTRATION " +

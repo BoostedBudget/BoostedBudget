@@ -30,6 +30,7 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { RevenueCatSummary } from './revenueCatSummary';
 import type { SubscriptionFeatures } from './subscriptionFeatures';
 import type { SubscriptionLimits } from './subscriptionLimits';
 import type { UserSubscriptionOverride } from './userSubscriptionOverride';
@@ -39,6 +40,7 @@ export interface AdminSubscriptionDetailOutputBody {
   readonly $schema?: string;
   active_overrides_count: number;
   as_of: string;
+  authority?: RevenueCatSummary;
   base_tier: string;
   deletion_requested_at?: string;
   deletion_scheduled_at?: string;

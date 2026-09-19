@@ -517,18 +517,13 @@ func TestNoActiveManualOverridePredicate_Integration_ExactExpiryBoundary(t *test
 // microsecond-aligned N: E >= N implies floor(E) >= N, and E < N implies floor(E) < N — the
 // ordering relative to N can never flip. So for any nanosecond-precision expiresAt, comparing
 // the RAW (untruncated) value against N and comparing its Postgres-truncated persisted form
-// against that SAME N are mathematically guaranteed to agree, with or without the
-// AdminUserService.UpdateUserTier truncation fix (admin_user_service.go).
+// against that SAME N are mathematically guaranteed to agree.
 //
-// The gap the truncation fix actually closes is not "these two comparisons can disagree against
-// a shared instant" (they provably cannot — see above) — it is that, absent the fix,
-// UpdateUserTier's Clerk-sync scratch user and the row it persists silently carried two
-// DIFFERENT time values (nanosecond vs microsecond) for what is supposed to be the exact same
-// instant. That is worth fixing on its own (and trivial to fix), but no single-shared-instant
-// agreement test — the only kind that is not itself flaky — can observe it, so none is included
-// here. See TestAdminUserService_UpdateUserTier_TruncatesExpiresAtToMicrosecond
-// (admin_user_service_test.go) for the regression test that actually exercises this fix, by
-// asserting on the exact value handed to the repository rather than on predicate agreement.
+// (#1652 deleted AdminUserService.UpdateUserTier and its expiresAt-truncation fix. The gap that
+// fix closed was that its Clerk-sync scratch user and the persisted row carried two DIFFERENT
+// time values — nanosecond vs microsecond — for what was supposed to be the exact same instant.
+// No single-shared-instant agreement test — the only kind that is not itself flaky — could
+// observe it, so none was included here.)
 //
 // Read the scope of this note precisely: what is not constructible is a FENCED, single-shared-instant
 // CROSS-SYSTEM agreement test — that and nothing broader. The underlying property IS pinnable, and is

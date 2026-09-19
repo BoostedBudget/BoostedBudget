@@ -1557,6 +1557,11 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		{Table: "referral_codes", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "referrals", Column: "referred_id", DeleteRule: "CASCADE"},
 		{Table: "referrals", Column: "referrer_id", DeleteRule: "CASCADE"},
+		{Table: "revenuecat_checkout_intents", Column: "user_id", DeleteRule: "CASCADE"},
+		{Table: "revenuecat_customers", Column: "user_id", DeleteRule: "CASCADE"},
+		{Table: "revenuecat_operations", Column: "actor_id", DeleteRule: "SET NULL"},
+		{Table: "revenuecat_operations", Column: "user_id", DeleteRule: "CASCADE"},
+		{Table: "revenuecat_webhooks", Column: "user_id", DeleteRule: "CASCADE"},
 		{Table: "rollover_history", Column: "user_id", DeleteRule: "CASCADE"},
 		// #1569 Task 14: boost_executions and rule_execution_history gained their OWN user_id
 		// CASCADE because their parent FKs became ON DELETE SET NULL. Before that flip each was
@@ -1871,6 +1876,34 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 		VALUES ($1, 'linked_items', 5)`, target.ID)
 	execNoErr(t, ctx, pool, `INSERT INTO user_tags (user_id, name) VALUES ($1, 'Test Tag')`, target.ID)
 
+	// RevenueCat's access, encrypted billing, desired operations, delivery receipts
+	// and checkout records all belong to the erased user. A separate operation on
+	// another user's account retains its history while forgetting the erased actor.
+	rcBilling, err := enc.EncryptString(`[{"store":"paddle","store_subscription_identifier":"sub_cascade_fixture"}]`)
+	require.NoError(t, err)
+	execNoErr(t, ctx, pool, `
+		INSERT INTO revenuecat_customers (user_id, grants, access_updated_at, billing, billing_updated_at, erasure_started_at, erasure_confirmed_at)
+		VALUES ($1, '[]', clock_timestamp(), $2, clock_timestamp(), clock_timestamp(), clock_timestamp())`, target.ID, rcBilling)
+	var rcOperationID, rcCheckoutID, survivingRCOperationID string
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO revenuecat_operations (id, user_id, class, entitlement_key, version, actor_id, reason, stage)
+		VALUES (gen_random_uuid(), $1, 'comp', 'comp_premium', 1, $2, 'Target grant audit', 'applied') RETURNING id`,
+		target.ID, otherA.ID).Scan(&rcOperationID))
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO revenuecat_operations (id, user_id, class, entitlement_key, version, actor_id, reason, stage)
+		VALUES (gen_random_uuid(), $1, 'comp', 'comp_premium', 1, $2, 'Retained grant audit', 'applied') RETURNING id`,
+		otherA.ID, target.ID).Scan(&survivingRCOperationID))
+	rcEventID := "rc-cascade-" + suffix
+	execNoErr(t, ctx, pool, `
+		INSERT INTO revenuecat_webhooks (event_id, user_id, event_type, processed_at)
+		VALUES ($1, $2, 'INITIAL_PURCHASE', clock_timestamp())`, rcEventID, target.ID)
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO revenuecat_checkout_intents (id, user_id, expires_at, closed_at)
+		VALUES (gen_random_uuid(), $1, clock_timestamp(), clock_timestamp()) RETURNING id`, target.ID).Scan(&rcCheckoutID))
+	var rcActorBefore string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT actor_id FROM revenuecat_operations WHERE id=$1`, survivingRCOperationID).Scan(&rcActorBefore))
+	require.Equal(t, target.ID, rcActorBefore, "the surviving audit row must actually reference the deletion target before erasure")
+
 	// audit_logs: one SET NULL row (target as actor) — resource_id deliberately points elsewhere
 	// so this row is unambiguously the "actor" case, not the "subject" case (that's this suite's
 	// dedicated TestDeleteUserCascade_Integration_RedactsAuditLogPII).
@@ -1940,6 +1973,28 @@ func TestDeleteUserCascade_Integration_EveryUserScopedTableIsCleaned(t *testing.
 	var acceptedInviteCount int
 	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM household_invites WHERE id = $1", acceptedInviteID).Scan(&acceptedInviteCount))
 	assert.Equal(t, 1, acceptedInviteCount, "the SET NULL row itself must survive — only the column is nulled")
+
+	for _, record := range []struct{ table, column, id string }{
+		{"revenuecat_customers", "user_id", target.ID},
+		{"revenuecat_operations", "id", rcOperationID},
+		{"revenuecat_webhooks", "event_id", rcEventID},
+		{"revenuecat_checkout_intents", "id", rcCheckoutID},
+	} {
+		var remaining int
+		query := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s=$1`, quoteIdent(record.table), quoteIdent(record.column))
+		require.NoError(t, pool.QueryRow(ctx, query, record.id).Scan(&remaining))
+		assert.Zero(t, remaining, "%s must erase the seeded personal record", record.table)
+	}
+	var survivingRCActor *string
+	var survivingRCUser, survivingRCReason, survivingRCStage, survivingRCKey string
+	require.NoError(t, pool.QueryRow(ctx, `
+		SELECT actor_id, user_id, reason, stage, entitlement_key FROM revenuecat_operations WHERE id=$1`,
+		survivingRCOperationID).Scan(&survivingRCActor, &survivingRCUser, &survivingRCReason, &survivingRCStage, &survivingRCKey))
+	assert.Nil(t, survivingRCActor, "the erased actor's identity must be removed from another user's operation")
+	assert.Equal(t, otherA.ID, survivingRCUser)
+	assert.Equal(t, "Retained grant audit", survivingRCReason)
+	assert.Equal(t, "applied", survivingRCStage)
+	assert.Equal(t, "comp_premium", survivingRCKey, "another user's grant audit must survive unchanged apart from actor identity")
 
 	// budget_period_events has NO direct FK to users (user_id is TEXT) — it is covered only
 	// transitively, via its own budget_id CASCADE to budgets. Prove that chain actually holds.

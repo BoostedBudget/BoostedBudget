@@ -66,31 +66,6 @@
     <!-- Runtime config MUST load before main bundle so window.ENV is available -->
     <script src="/config.js"></script>
 
-    <!-- Paddle.js SDK.
-         ⚠ `defer` is load-bearing TWICE, and it must never become `async`.
-
-         1. It was PARSER-BLOCKING, which made a third party a single point of failure for the
-            whole app. The browser had to fetch cdn.paddle.com before it could even discover
-            /src/main.tsx below, so a slow or stalled CDN response rendered nothing at all.
-            That is the best-supported explanation for #1598's E2E flakiness: durations were
-            BIMODAL (e.g. transaction-filtering mean 4.6s, max 31.4s; dashboard 6.3s/31.6s)
-            across many unrelated specs, pinning at the 30s per-test cap — while our own API
-            showed p50 35ms / p99 230ms / max 419ms over 1,935 requests with ZERO outliers. The
-            stall was upstream of our JS ever running, which is why no API call recorded it. It
-            surfaced when the job moved to an ephemeral VM (#1598): the self-hosted Mac had warm
-            DNS/TLS across jobs, a fresh VM starts cold every run.
-
-         2. It is on the landing route's critical path (#1601), where Lighthouse charges a
-            third-party connection ~313ms of critical-path latency.
-
-         NOT `async`: App.tsx:283 reads `window.Paddle` exactly once, in an effect with `[]`
-         deps and no retry or load listener — if it is absent it logs a warning and returns, so
-         Paddle.Initialize never runs and checkout silently stops working with nothing failing
-         loudly. `defer` keeps the guarantee that makes this safe: deferred classic scripts and
-         module scripts both execute after parsing in DOCUMENT ORDER, and this tag precedes the
-         entry module below, so window.Paddle is set before React mounts. `async` is unordered
-         and would break exactly that. -->
-    <script src="https://cdn.paddle.com/paddle/v2/paddle.js" defer></script>
   </head>
   <body>
     <div id="root"></div>

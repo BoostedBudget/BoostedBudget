@@ -54,10 +54,17 @@ import type {
   AdminCreateOverrideOutputBody,
   AdminRemoveTierOverrideInputBody,
   AdminRemoveTierOverrideOutputBody,
+  AdminRevenueCatGrantInputBody,
+  AdminRevenueCatHealthOutputBody,
+  AdminRevenueCatUserOutputBody,
   AdminSubscriptionDetailOutputBody,
   AdminSubscriptionTierInputBody,
   AdminSubscriptionTierOutputBody,
-  ErrorModel
+  ErrorModel,
+  ListAdminRevenueCatWebhooksParams,
+  RevenueCatOperation,
+  RevenueCatWebhookOutputBody,
+  RevenueCatWebhookReceipt
 } from '../../models';
 
 import { customInstance } from '../../client';
@@ -111,6 +118,536 @@ const withQueryKey = <T extends object, K>(query: T, queryKey: K): T & { queryKe
 };
 
 /**
+ * @summary Get RevenueCat synchronization metrics
+ */
+export const getAdminRevenueCatHealth = (
+
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<AdminRevenueCatHealthOutputBody>(
+      {url: `/api/v1/admin/revenuecat/health`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetAdminRevenueCatHealthQueryKey = () => {
+    return [
+    `/api/v1/admin/revenuecat/health`
+    ] as const;
+    }
+
+
+export const getGetAdminRevenueCatHealthQueryOptions = <TData = Awaited<ReturnType<typeof getAdminRevenueCatHealth>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminRevenueCatHealth>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetAdminRevenueCatHealthQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getAdminRevenueCatHealth>>> = ({ signal }) => getAdminRevenueCatHealth(requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getAdminRevenueCatHealth>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetAdminRevenueCatHealthQueryResult = NonNullable<Awaited<ReturnType<typeof getAdminRevenueCatHealth>>>
+export type GetAdminRevenueCatHealthQueryError = ErrorType<ErrorModel>
+
+
+export function useGetAdminRevenueCatHealth<TData = Awaited<ReturnType<typeof getAdminRevenueCatHealth>>, TError = ErrorType<ErrorModel>>(
+  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminRevenueCatHealth>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminRevenueCatHealth>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminRevenueCatHealth>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetAdminRevenueCatHealth<TData = Awaited<ReturnType<typeof getAdminRevenueCatHealth>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminRevenueCatHealth>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminRevenueCatHealth>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminRevenueCatHealth>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetAdminRevenueCatHealth<TData = Awaited<ReturnType<typeof getAdminRevenueCatHealth>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminRevenueCatHealth>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get RevenueCat synchronization metrics
+ */
+
+export function useGetAdminRevenueCatHealth<TData = Awaited<ReturnType<typeof getAdminRevenueCatHealth>>, TError = ErrorType<ErrorModel>>(
+  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminRevenueCatHealth>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetAdminRevenueCatHealthQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * @summary List authenticated webhook receipts and processing results
+ */
+export const listAdminRevenueCatWebhooks = (
+    params?: ListAdminRevenueCatWebhooksParams,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RevenueCatWebhookReceipt[] | null>(
+      {url: `/api/v1/admin/revenuecat/webhooks`, method: 'GET',
+        params, signal
+    },
+      options);
+    }
+
+
+
+
+export const getListAdminRevenueCatWebhooksQueryKey = (params?: ListAdminRevenueCatWebhooksParams,) => {
+    return [
+    `/api/v1/admin/revenuecat/webhooks`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListAdminRevenueCatWebhooksQueryOptions = <TData = Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>, TError = ErrorType<ErrorModel>>(params?: ListAdminRevenueCatWebhooksParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListAdminRevenueCatWebhooksQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>> = ({ signal }) => listAdminRevenueCatWebhooks(params, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListAdminRevenueCatWebhooksQueryResult = NonNullable<Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>>
+export type ListAdminRevenueCatWebhooksQueryError = ErrorType<ErrorModel>
+
+
+export function useListAdminRevenueCatWebhooks<TData = Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>, TError = ErrorType<ErrorModel>>(
+ params: undefined |  ListAdminRevenueCatWebhooksParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListAdminRevenueCatWebhooks<TData = Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>, TError = ErrorType<ErrorModel>>(
+ params?: ListAdminRevenueCatWebhooksParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>,
+          TError,
+          Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useListAdminRevenueCatWebhooks<TData = Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>, TError = ErrorType<ErrorModel>>(
+ params?: ListAdminRevenueCatWebhooksParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary List authenticated webhook receipts and processing results
+ */
+
+export function useListAdminRevenueCatWebhooks<TData = Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>, TError = ErrorType<ErrorModel>>(
+ params?: ListAdminRevenueCatWebhooksParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof listAdminRevenueCatWebhooks>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getListAdminRevenueCatWebhooksQueryOptions(params,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * @summary Retry webhook processing or refresh a completed receipt's customer
+ */
+export const replayAdminRevenueCatWebhook = (
+    eventId: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RevenueCatWebhookOutputBody>(
+      {url: `/api/v1/admin/revenuecat/webhooks/${eventId}/replay`, method: 'POST', signal
+    },
+      options);
+    }
+
+
+
+
+export const getReplayAdminRevenueCatWebhookMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof replayAdminRevenueCatWebhook>>, TError,{eventId: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof replayAdminRevenueCatWebhook>>, TError,{eventId: string}, TContext> => {
+
+const mutationKey = ['replayAdminRevenueCatWebhook'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof replayAdminRevenueCatWebhook>>, {eventId: string}> = (props) => {
+          const {eventId} = props ?? {};
+
+          return  replayAdminRevenueCatWebhook(eventId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReplayAdminRevenueCatWebhookMutationResult = NonNullable<Awaited<ReturnType<typeof replayAdminRevenueCatWebhook>>>
+
+    export type ReplayAdminRevenueCatWebhookMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Retry webhook processing or refresh a completed receipt's customer
+ */
+export const useReplayAdminRevenueCatWebhook = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof replayAdminRevenueCatWebhook>>, TError,{eventId: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof replayAdminRevenueCatWebhook>>,
+        TError,
+        {eventId: string},
+        TContext
+      > => {
+      return useMutation(getReplayAdminRevenueCatWebhookMutationOptions(options), queryClient);
+    }
+    /**
+ * @summary Inspect confirmed access, billing and grant operations
+ */
+export const getAdminRevenueCatUser = (
+    userId: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<AdminRevenueCatUserOutputBody>(
+      {url: `/api/v1/admin/users/${userId}/revenuecat`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetAdminRevenueCatUserQueryKey = (userId: string,) => {
+    return [
+    `/api/v1/admin/users/${userId}/revenuecat`
+    ] as const;
+    }
+
+
+export const getGetAdminRevenueCatUserQueryOptions = <TData = Awaited<ReturnType<typeof getAdminRevenueCatUser>>, TError = ErrorType<ErrorModel>>(userId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminRevenueCatUser>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetAdminRevenueCatUserQueryKey(userId);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getAdminRevenueCatUser>>> = ({ signal }) => getAdminRevenueCatUser(userId, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: userId !== null && userId !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getAdminRevenueCatUser>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetAdminRevenueCatUserQueryResult = NonNullable<Awaited<ReturnType<typeof getAdminRevenueCatUser>>>
+export type GetAdminRevenueCatUserQueryError = ErrorType<ErrorModel>
+
+
+export function useGetAdminRevenueCatUser<TData = Awaited<ReturnType<typeof getAdminRevenueCatUser>>, TError = ErrorType<ErrorModel>>(
+ userId: string, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminRevenueCatUser>>, TError, TData>> & Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminRevenueCatUser>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminRevenueCatUser>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetAdminRevenueCatUser<TData = Awaited<ReturnType<typeof getAdminRevenueCatUser>>, TError = ErrorType<ErrorModel>>(
+ userId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminRevenueCatUser>>, TError, TData>> & Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminRevenueCatUser>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminRevenueCatUser>>
+        > , 'initialData'
+      >, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetAdminRevenueCatUser<TData = Awaited<ReturnType<typeof getAdminRevenueCatUser>>, TError = ErrorType<ErrorModel>>(
+ userId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminRevenueCatUser>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Inspect confirmed access, billing and grant operations
+ */
+
+export function useGetAdminRevenueCatUser<TData = Awaited<ReturnType<typeof getAdminRevenueCatUser>>, TError = ErrorType<ErrorModel>>(
+ userId: string, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getAdminRevenueCatUser>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient
+ ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+
+  const queryOptions = getGetAdminRevenueCatUserQueryOptions(userId,options)
+
+  const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+/**
+ * Saves an audited, retryable operation. Pending does not mean access has been applied.
+ * @summary Request a trial or complimentary entitlement change
+ */
+export const requestAdminRevenueCatGrant = (
+    userId: string,
+    adminRevenueCatGrantInputBody: BodyType<NonReadonly<AdminRevenueCatGrantInputBody>>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RevenueCatOperation>(
+      {url: `/api/v1/admin/users/${userId}/revenuecat/grants`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: adminRevenueCatGrantInputBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getRequestAdminRevenueCatGrantMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof requestAdminRevenueCatGrant>>, TError,{userId: string;data: BodyType<NonReadonly<AdminRevenueCatGrantInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof requestAdminRevenueCatGrant>>, TError,{userId: string;data: BodyType<NonReadonly<AdminRevenueCatGrantInputBody>>}, TContext> => {
+
+const mutationKey = ['requestAdminRevenueCatGrant'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof requestAdminRevenueCatGrant>>, {userId: string;data: BodyType<NonReadonly<AdminRevenueCatGrantInputBody>>}> = (props) => {
+          const {userId,data} = props ?? {};
+
+          return  requestAdminRevenueCatGrant(userId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RequestAdminRevenueCatGrantMutationResult = NonNullable<Awaited<ReturnType<typeof requestAdminRevenueCatGrant>>>
+    export type RequestAdminRevenueCatGrantMutationBody = BodyType<NonReadonly<AdminRevenueCatGrantInputBody>>
+    export type RequestAdminRevenueCatGrantMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Request a trial or complimentary entitlement change
+ */
+export const useRequestAdminRevenueCatGrant = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof requestAdminRevenueCatGrant>>, TError,{userId: string;data: BodyType<NonReadonly<AdminRevenueCatGrantInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof requestAdminRevenueCatGrant>>,
+        TError,
+        {userId: string;data: BodyType<NonReadonly<AdminRevenueCatGrantInputBody>>},
+        TContext
+      > => {
+      return useMutation(getRequestAdminRevenueCatGrantMutationOptions(options), queryClient);
+    }
+    /**
+ * @summary Retry a pending grant operation
+ */
+export const retryAdminRevenueCatOperation = (
+    userId: string,
+    operationId: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RevenueCatWebhookOutputBody>(
+      {url: `/api/v1/admin/users/${userId}/revenuecat/operations/${operationId}/retry`, method: 'POST', signal
+    },
+      options);
+    }
+
+
+
+
+export const getRetryAdminRevenueCatOperationMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retryAdminRevenueCatOperation>>, TError,{userId: string;operationId: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof retryAdminRevenueCatOperation>>, TError,{userId: string;operationId: string}, TContext> => {
+
+const mutationKey = ['retryAdminRevenueCatOperation'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof retryAdminRevenueCatOperation>>, {userId: string;operationId: string}> = (props) => {
+          const {userId,operationId} = props ?? {};
+
+          return  retryAdminRevenueCatOperation(userId,operationId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RetryAdminRevenueCatOperationMutationResult = NonNullable<Awaited<ReturnType<typeof retryAdminRevenueCatOperation>>>
+
+    export type RetryAdminRevenueCatOperationMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Retry a pending grant operation
+ */
+export const useRetryAdminRevenueCatOperation = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retryAdminRevenueCatOperation>>, TError,{userId: string;operationId: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof retryAdminRevenueCatOperation>>,
+        TError,
+        {userId: string;operationId: string},
+        TContext
+      > => {
+      return useMutation(getRetryAdminRevenueCatOperationMutationOptions(options), queryClient);
+    }
+    /**
+ * @summary Queue a customer subscription refresh
+ */
+export const refreshAdminRevenueCatUser = (
+    userId: string,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RevenueCatWebhookOutputBody>(
+      {url: `/api/v1/admin/users/${userId}/revenuecat/refresh`, method: 'POST', signal
+    },
+      options);
+    }
+
+
+
+
+export const getRefreshAdminRevenueCatUserMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof refreshAdminRevenueCatUser>>, TError,{userId: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof refreshAdminRevenueCatUser>>, TError,{userId: string}, TContext> => {
+
+const mutationKey = ['refreshAdminRevenueCatUser'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof refreshAdminRevenueCatUser>>, {userId: string}> = (props) => {
+          const {userId} = props ?? {};
+
+          return  refreshAdminRevenueCatUser(userId,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RefreshAdminRevenueCatUserMutationResult = NonNullable<Awaited<ReturnType<typeof refreshAdminRevenueCatUser>>>
+
+    export type RefreshAdminRevenueCatUserMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Queue a customer subscription refresh
+ */
+export const useRefreshAdminRevenueCatUser = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof refreshAdminRevenueCatUser>>, TError,{userId: string}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof refreshAdminRevenueCatUser>>,
+        TError,
+        {userId: string},
+        TContext
+      > => {
+      return useMutation(getRefreshAdminRevenueCatUserMutationOptions(options), queryClient);
+    }
+    /**
  * View a user's subscription tier, manual overrides, and effective limits.
  * @summary Get user subscription details
  */

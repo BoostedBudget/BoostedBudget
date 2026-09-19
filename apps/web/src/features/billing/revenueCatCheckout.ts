@@ -1,0 +1,155 @@
+export interface CheckoutAuthority {
+  paid?: { status: string; tier: string } | null
+  access_resolved: boolean
+}
+
+export type CheckoutState = 'idle' | 'loading' | 'open' | 'pending' | 'confirmed' | 'cancelled' | 'unavailable'
+
+/**
+ * Raised by a `load` dependency when no purchase was attempted for a configuration reason —
+ * an unknown offering/package, or a detached mount target. It is unambiguous, unlike a purchase
+ * error, so the controller releases the lease instead of reporting a pending confirmation.
+ */
+export class CheckoutUnavailableError extends Error {}
+
+interface Dependencies {
+  begin: (tier: string, billingInterval: 'month' | 'year') => Promise<{ id: string; offering: string; package: string }>
+  release: (id: string) => Promise<unknown>
+  refresh: () => Promise<CheckoutAuthority>
+  load: (userId: string, isCurrent: () => boolean) => Promise<{
+    purchase: (offeringId: string, packageId: string, htmlTarget: HTMLElement) => Promise<unknown>
+    close: () => void
+  }>
+}
+
+/** One SDK session at a time. SDK close() stops tracking; it does not dismiss the purchase overlay. */
+export class RevenueCatCheckout {
+  state: CheckoutState = 'idle'
+  private userId: string | null = null
+  private generation = 0
+  private busy = false
+  private cancelActive?: () => void
+  private lease?: string
+  private target?: HTMLElement
+  private listeners = new Set<() => void>()
+
+  constructor(private readonly deps: Dependencies) {}
+
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+  getSnapshot = () => this.state
+
+  private update(state: CheckoutState) {
+    this.state = state
+    this.listeners.forEach(listener => listener())
+  }
+
+  private destroyTargets() {
+    if (!this.target) return
+    this.target.replaceChildren()
+    this.target.remove()
+    this.target = undefined
+  }
+
+  setIdentity(userId: string | null) {
+    if (this.userId === userId) return
+    this.userId = userId
+    this.generation++
+    this.cancelActive?.()
+    this.cancelActive = undefined
+    this.busy = false
+    this.lease = undefined
+    this.destroyTargets()
+    this.update('idle')
+  }
+
+  async retry() {
+    if (!this.userId || this.busy) return
+    this.busy = true
+    const generation = this.generation
+    try {
+      await this.confirm(generation)
+    } finally {
+      if (generation === this.generation) this.busy = false
+    }
+  }
+
+  private async confirm(generation: number) {
+    this.update('loading')
+    try {
+      const summary = await this.deps.refresh()
+      if (generation !== this.generation) return
+      if (summary.paid?.status === 'active') {
+        this.update('confirmed')
+        if (this.lease) await this.deps.release(this.lease).catch(() => {})
+        if (generation === this.generation) this.lease = undefined
+      } else this.update('pending')
+    } catch {
+      if (generation === this.generation) this.update('pending')
+    }
+  }
+
+  async start(tier: string, billingInterval: 'month' | 'year') {
+    if (!this.userId || this.busy) return
+    this.busy = true
+    const generation = this.generation
+    const userId = this.userId
+    const current = () => generation === this.generation
+    let sdk: Awaited<ReturnType<Dependencies['load']>> | undefined
+    let sdkClosed = false
+    let target: HTMLElement | undefined
+    const closeSDK = () => {
+      if (sdk && !sdkClosed) { sdkClosed = true; sdk.close() }
+    }
+    const removeTarget = () => {
+      if (!target) return
+      target.replaceChildren()
+      target.remove()
+    }
+    const cancelled = new Promise<void>(resolve => {
+      this.cancelActive = () => { closeSDK(); removeTarget(); resolve() }
+    })
+    this.update('loading')
+    try {
+      // Configuration failure must not strand a checkout lease for thirty minutes.
+      // Admission still precedes all offering/purchase interaction.
+      sdk = await this.deps.load(userId, current)
+      if (!current()) return
+      const intent = await this.deps.begin(tier, billingInterval)
+      if (!current()) return
+      this.lease = intent.id
+      target = document.createElement('div')
+      this.target = target
+      target.setAttribute('data-ph-mask', '')
+      target.className = 'fixed inset-0 z-[100] overflow-auto pointer-events-none [&>*]:pointer-events-auto'
+      document.body.append(target)
+      this.update('open')
+      // Removing SDK DOM need not settle the purchase. Our cancellation must.
+      await Promise.race([sdk.purchase(intent.offering, intent.package, target), cancelled])
+      if (!current()) return
+      await this.confirm(generation)
+    } catch (error) {
+      if (!current()) return
+      if (error instanceof CheckoutUnavailableError) {
+        if (this.lease) await this.deps.release(this.lease).catch(() => {})
+        if (current()) { this.lease = undefined; this.update('unavailable') }
+        return
+      }
+      const cancelled = typeof error === 'object' && error !== null && 'errorCode' in error && error.errorCode === 1
+      if (cancelled) {
+        if (this.lease) await this.deps.release(this.lease).catch(() => {})
+        if (current()) { this.lease = undefined; this.update('cancelled') }
+      } else this.update(this.lease ? 'pending' : 'unavailable')
+    } finally {
+      closeSDK()
+      removeTarget()
+      if (current()) {
+        this.target = undefined
+        this.cancelActive = undefined
+        this.busy = false
+      }
+    }
+  }
+}

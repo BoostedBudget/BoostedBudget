@@ -16,5 +16,5 @@ func TestMainWiresPostHogErasureOutboxWorkerIndependentlyOfProviderConfig(t *tes
 	assert.Contains(t, source, "repository.NewPostHogErasureOutboxRepository")
 	assert.Contains(t, source, "jobs.NewPostHogErasureWorker")
 	assert.Contains(t, source, "river.AddWorker(riverWorkers, postHogErasureWorker)")
-	assert.Contains(t, source, "postHogErasureWorker:                postHogErasureWorker")
+	assert.Contains(t, source, "postHogErasureWorker:              postHogErasureWorker")
 }

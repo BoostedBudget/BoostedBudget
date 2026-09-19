@@ -376,7 +376,7 @@ describe('buildWriteExecuteHandler', () => {
   // `operationClass` used to be computed from `capability?.confirmationRequired`
   // BEFORE the excluded check and then reused INSIDE it. Every excluded entry is
   // built by capability-manifest.ts's `excluded()` helper, which hard-codes
-  // `confirmationRequired: false` — so a denied `purgeAccount` or `grantTrial`
+  // `confirmationRequired: false` — so a denied `purgeAccount`
   // persisted an `mcp_audit_log` row saying `operation_class = 'read'`. The call
   // never runs (host-proxy.ts throws on `entry.excluded` before any gate), so the
   // harm is confined to the audit trail — but the audit trail is the whole point
@@ -389,15 +389,17 @@ describe('buildWriteExecuteHandler', () => {
   // reads the manifest first, and purgeAccount audits as 'destructive' rather than merely 'write'.
   // The original claim these cases exist to defend is unchanged and strengthened: a denied
   // mutating operation must NEVER be recorded as a read.
+  //
+  // ⚠ #1652 removed the admin trial-grant fixture: the route itself is deleted, so it no longer
+  // has a real manifest entry to deny. `purgeAccount` still proves the manifest-driven destructive
+  // class.
   const DENIAL_SPEC_ENTRIES = [
     { operationId: 'purgeAccount', method: 'DELETE', path: '/api/v1/accounts/{id}' },
-    { operationId: 'grantTrial', method: 'POST', path: '/api/v1/admin/subscription/grant-trial' },
     { operationId: 'checkRole', method: 'GET', path: '/api/v1/admin/check-role' },
   ]
 
   it.each([
     ['purgeAccount', 'DELETE'],
-    ['grantTrial', 'POST'],
   ])('audits a denied mutating operation (%s, %s) with its true class, never read', async (operationId) => {
     const proxy = makeFailingProxy('excluded', `Operation '${operationId}' is not available via MCP`)
     const handler = buildWriteExecuteHandler(proxy, DENIAL_SPEC_ENTRIES)
@@ -407,9 +409,8 @@ describe('buildWriteExecuteHandler', () => {
     expect(auditEvents).toHaveLength(1)
     expect(auditEvents[0]?.result).toBe('denied')
     expect(auditEvents[0]?.operationClass).not.toBe('read')
-    // purgeAccount hard-deletes accounts + balance_snapshots, grantTrial does not destroy: the
-    // audit row now distinguishes them instead of flattening both to 'write'.
-    expect(auditEvents[0]?.operationClass).toBe(operationId === 'purgeAccount' ? 'destructive' : 'write')
+    // purgeAccount hard-deletes accounts + balance_snapshots: the audit row records 'destructive'.
+    expect(auditEvents[0]?.operationClass).toBe('destructive')
     // The deny path itself must be untouched: nothing may be invoked.
     expect(proxy.invoke).not.toHaveBeenCalled()
   })

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -91,7 +92,7 @@ type MockJobHealthRepository struct {
 
 func (*MockJobHealthRepository) GetDeadLetterQueueSize(context.Context) (int, error) { return 0, nil }
 
-func (m *MockJobHealthRepository) GetOldestUnclearedExpiredManualTierOverrideAge(ctx context.Context) (time.Duration, error) {
+func (m *MockJobHealthRepository) GetOldestExpiredCompGrantAge(ctx context.Context) (time.Duration, error) {
 	args := m.Called(ctx)
 	return args.Get(0).(time.Duration), args.Error(1)
 }
@@ -105,6 +106,25 @@ func (m *MockJobHealthRepository) GetOutstandingPlaidCleanupStats(ctx context.Co
 func (m *MockJobHealthRepository) GetDeletionResidueStats(ctx context.Context) (int, time.Duration, error) {
 	args := m.Called(ctx)
 	return args.Int(0), args.Get(1).(time.Duration), args.Error(2)
+}
+
+// The four RevenueCat backlog reads (#1652 todo 12) feed the Prometheus collector, not the
+// /admin/health response, so they are zero-returning stubs: the service never calls them and a
+// `.Maybe()` expectation would only add noise.
+func (*MockJobHealthRepository) GetRevenueCatWebhookInboxStats(context.Context) (int, time.Duration, error) {
+	return 0, 0, nil
+}
+
+func (*MockJobHealthRepository) GetRevenueCatOperationsStats(context.Context) (int, int, time.Duration, error) {
+	return 0, 0, 0, nil
+}
+
+func (*MockJobHealthRepository) GetRevenueCatCompGrantsOutstanding(context.Context) (int, error) {
+	return 0, nil
+}
+
+func (*MockJobHealthRepository) GetRevenueCatRefreshOverdueUsers(context.Context) (int, error) {
+	return 0, nil
 }
 
 // Mock pool for database checks
@@ -138,7 +158,7 @@ func TestSystemHealthService_GetSystemHealth_Success(t *testing.T) {
 	})
 
 	// Mock queue stats for each queue
-	queues := []string{"critical", "default", "notifications", "low"}
+	queues := []string{"critical", "default", "notifications", "low", "revenuecat"}
 	for _, queue := range queues {
 		mockHealthRepo.On("GetRiverJobStats", mock.Anything, queue).Return(&domain.QueueMetrics{
 			Pending: 5,
@@ -193,7 +213,8 @@ func TestSystemHealthService_GetSystemHealth_Success(t *testing.T) {
 	assert.Equal(t, "sandbox", result.Services.Plaid.Environment)
 	assert.Equal(t, int64(3), result.SyncStatus.ActiveSyncs)
 	assert.Equal(t, int64(2), result.DeadLetterQueue.Count)
-	assert.Len(t, result.JobQueues, 4)
+	assert.Len(t, result.JobQueues, 5)
+	assert.Contains(t, result.JobQueues, "revenuecat")
 
 	mockHealthRepo.AssertExpectations(t)
 	mockDeadLetterRepo.AssertExpectations(t)
@@ -209,8 +230,12 @@ func TestSystemHealthService_GetSystemHealth_DatabaseDown(t *testing.T) {
 	mockPool.On("Ping", mock.Anything).Return(errors.New("connection refused"))
 
 	// Service still tries to gather other metrics
-	queues := []string{"critical", "default", "notifications", "low"}
+	queues := []string{"critical", "default", "notifications", "low", "revenuecat"}
 	for _, queue := range queues {
+		if queue == "revenuecat" {
+			mockHealthRepo.On("GetRiverJobStats", mock.Anything, queue).Return(nil, errors.New("queue metrics unavailable"))
+			continue
+		}
 		mockHealthRepo.On("GetRiverJobStats", mock.Anything, queue).Return(&domain.QueueMetrics{}, nil)
 		mockHealthRepo.On("GetRiverJobsCompletedLastHour", mock.Anything, queue).Return(int64(0), nil)
 	}
@@ -241,6 +266,9 @@ func TestSystemHealthService_GetSystemHealth_DatabaseDown(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Equal(t, "unhealthy", result.Status)
 	assert.Equal(t, "down", result.Services.Database.Status)
+	queueJSON, err := json.Marshal(result.JobQueues["revenuecat"])
+	require.NoError(t, err)
+	assert.Contains(t, string(queueJSON), `"unavailable":true`)
 
 	mockPool.AssertExpectations(t)
 	mockHealthRepo.AssertExpectations(t)
@@ -261,7 +289,7 @@ func TestSystemHealthService_GetSystemHealth_DegradedHighPendingJobs(t *testing.
 	})
 
 	// Mock high pending jobs
-	queues := []string{"critical", "default", "notifications", "low"}
+	queues := []string{"critical", "default", "notifications", "low", "revenuecat"}
 	for _, queue := range queues {
 		if queue == "default" {
 			mockHealthRepo.On("GetRiverJobStats", mock.Anything, queue).Return(&domain.QueueMetrics{
@@ -481,6 +509,16 @@ func TestSystemHealthService_CalculateOverallStatus(t *testing.T) {
 	}
 }
 
+func TestSystemHealthRevenueCatUnavailableIsDegraded(t *testing.T) {
+	var queue domain.QueueMetrics
+	require.NoError(t, json.Unmarshal([]byte(`{"unavailable":true}`), &queue))
+	response := &domain.SystemHealthResponse{
+		Services:  domain.ServiceHealthStatuses{Database: domain.DatabaseHealth{Status: "up"}},
+		JobQueues: map[string]domain.QueueMetrics{"revenuecat": queue},
+	}
+	assert.Equal(t, "degraded", (&systemHealthService{}).calculateOverallStatus(response))
+}
+
 func setupFullHealthMocks(
 	mockHealthRepo *MockSystemHealthRepository,
 	mockDeadLetterRepo *MockDeadLetterJobRepository,
@@ -492,7 +530,7 @@ func setupFullHealthMocks(
 	mockPool.On("Ping", mock.Anything).Return(nil)
 	mockPool.On("GetStats").Return(PoolStats{MaxConns: 100})
 
-	queues := []string{"critical", "default", "notifications", "low"}
+	queues := []string{"critical", "default", "notifications", "low", "revenuecat"}
 	for _, q := range queues {
 		mockHealthRepo.On("GetRiverJobStats", mock.Anything, q).Return(&domain.QueueMetrics{}, nil)
 		mockHealthRepo.On("GetRiverJobsCompletedLastHour", mock.Anything, q).Return(int64(0), nil)
@@ -561,7 +599,7 @@ func TestGetSystemHealth_PaddleMetricsError_UsesZeroValues(t *testing.T) {
 	mockPool.On("Ping", mock.Anything).Return(nil)
 	mockPool.On("GetStats").Return(PoolStats{MaxConns: 100})
 
-	queues := []string{"critical", "default", "notifications", "low"}
+	queues := []string{"critical", "default", "notifications", "low", "revenuecat"}
 	for _, q := range queues {
 		mockHealthRepo.On("GetRiverJobStats", mock.Anything, q).Return(&domain.QueueMetrics{}, nil)
 		mockHealthRepo.On("GetRiverJobsCompletedLastHour", mock.Anything, q).Return(int64(0), nil)
@@ -608,7 +646,7 @@ func TestGetSystemHealth_JobBacklogMetricsPopulated(t *testing.T) {
 
 	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
 	mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(3, 2*time.Hour, nil)
-	mockJobHealthRepo.On("GetOldestUnclearedExpiredManualTierOverrideAge", mock.Anything).Return(90*time.Minute, nil)
+	mockJobHealthRepo.On("GetOldestExpiredCompGrantAge", mock.Anything).Return(90*time.Minute, nil)
 
 	service := &systemHealthService{
 		healthRepo:     mockHealthRepo,
@@ -622,7 +660,7 @@ func TestGetSystemHealth_JobBacklogMetricsPopulated(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), result.JobBacklog.PlaidCleanupOutstandingUsers)
 	assert.Equal(t, int64(2*60*60), result.JobBacklog.PlaidCleanupOldestOutstandingSeconds)
-	assert.Equal(t, int64(90*60), result.JobBacklog.ManualTierOverrideOldestUnclearedExpiredSeconds)
+	assert.Equal(t, int64(90*60), result.JobBacklog.RevenueCatOldestExpiredCompGrantSeconds)
 	assert.True(t, result.JobBacklog.Available, "a successful query must be marked available (Issue #1458 follow-up G16)")
 
 	mockJobHealthRepo.AssertExpectations(t)
@@ -694,7 +732,7 @@ func TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues(t *testing.T) {
 // coverage gap Codex flagged for Issue #1458 (batch R4 Task 4): every existing error test above
 // stubs ONLY the FIRST query (GetOutstandingPlaidCleanupStats) to fail. Nothing pinned what
 // happens when that first query SUCCEEDS with real, non-zero data and the SECOND query
-// (GetOldestUnclearedExpiredManualTierOverrideAge) is the one that fails — a genuinely different
+// (GetOldestExpiredCompGrantAge) is the one that fails — a genuinely different
 // code path through getJobBacklogMetrics's two sequential, independently-failable calls.
 //
 // Codex verified the implementation is already correct here (a coverage gap, not a behaviour
@@ -717,7 +755,7 @@ func TestGetSystemHealth_JobBacklogMetrics_SecondQueryError_DiscardsFirstQuerysG
 	// First query succeeds with real, non-zero data.
 	mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(5, 3*time.Hour, nil)
 	// Second query fails.
-	mockJobHealthRepo.On("GetOldestUnclearedExpiredManualTierOverrideAge", mock.Anything).Return(time.Duration(0), errors.New("db error"))
+	mockJobHealthRepo.On("GetOldestExpiredCompGrantAge", mock.Anything).Return(time.Duration(0), errors.New("db error"))
 
 	service := &systemHealthService{
 		healthRepo:     mockHealthRepo,
@@ -766,7 +804,7 @@ func TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguisha
 
 		setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
 		mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), nil)
-		mockJobHealthRepo.On("GetOldestUnclearedExpiredManualTierOverrideAge", mock.Anything).Return(time.Duration(0), nil)
+		mockJobHealthRepo.On("GetOldestExpiredCompGrantAge", mock.Anything).Return(time.Duration(0), nil)
 
 		service := &systemHealthService{
 			healthRepo:     mockHealthRepo,

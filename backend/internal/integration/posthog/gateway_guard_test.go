@@ -48,30 +48,38 @@ func TestLegacyRawCaptureProducersArePinned(t *testing.T) {
 	// extra Capture call in an existing path, is a migration regression that needs an explicit
 	// contract review rather than silently expanding the raw API surface.
 	want := map[string][]string{
-		"internal/huma/operations/transfer_suggestion.go":          {"Capture:phclient.EventTransferSuggestionValidated", "Capture:phclient.EventTransferSuggestionValidated"},
-		"internal/queue/jobs/email_change_propagation.go":          {"Capture:phclient.EventEmailChanged"},
-		"internal/queue/jobs/manual_tier_override_expiry_check.go": {"CaptureIfConsented:phclient.EventAdminSubscriptionOverrideExpired"},
-		"internal/queue/jobs/subscription_webhook.go":              {"Capture:phclient.EventHouseholdOverCapacityEntered", "Capture:phclient.EventPaymentFailed", "Capture:phclient.EventPaymentSucceeded", "Capture:phclient.EventSubscriptionCancelled", "Capture:phclient.EventSubscriptionCreated"},
-		"internal/services/admin_user_service.go":                  {"CaptureIfConsented:phclient.EventAdminSubscriptionOverrideAppliedServer", "CaptureIfConsented:phclient.EventAdminSubscriptionOverrideRemovedServer"},
-		"internal/services/boost_execution_service.go":             {"Capture:phclient.EventBoostTriggered"},
-		"internal/services/data_export_service.go":                 {"Capture:phclient.EventDataExportGenerated"},
-		"internal/services/deletion_service.go":                    {"Capture:phclient.EventDeletionCancelled", "Capture:phclient.EventDeletionRequested", "Capture:phclient.EventUserDeleted"},
-		"internal/services/household_service.go":                   {"Capture:event"},
-		"internal/services/investment_sync_service.go":             {"Capture:phclient.EventInvestmentHoldingsSynced", "Capture:phclient.EventInvestmentTransactionsSynced"},
-		"internal/services/liability_sync_service.go":              {"Capture:phclient.EventLiabilitiesSynced"},
-		"internal/services/merchant_service.go":                    {"Capture:phclient.EventMerchantOverrideCleared", "Capture:phclient.EventMerchantOverrideSet", "Capture:phclient.EventMerchantOverrideSet", "Capture:phclient.EventMerchantOverrideSet", "Capture:phclient.EventMerchantOverrideSet", "Capture:phclient.EventMerchantsBulkOverridden", "Capture:phclient.EventMerchantsMerged"},
-		"internal/services/past_due_service.go":                    {"Capture:phclient.EventPastDueAutoCancelled", "Capture:phclient.EventPastDuePlaidDisconnected"},
-		"internal/services/registration_service.go":                {"Capture:phclient.EventUserRegistered"},
-		"internal/services/rule_application_service.go":            {"Capture:phclient.EventAutoCategorizationExecuted", "Capture:phclient.EventAutoCategorizationExecuted"},
-		"internal/services/savings_goal_service.go":                {"Capture:phclient.EventSavingsGoalProgressBasisChanged"},
-		"internal/services/transaction_service.go":                 {"Capture:phclient.EventTransactionRecategorized", "Capture:phclient.EventTransactionRecategorized", "Capture:phclient.EventTransactionReviewStateChanged"},
-		"internal/services/transfer_correlation_service.go":        {"Capture:phclient.EventTransferSuggestionMatched", "Capture:phclient.EventTransferSuggestionMatched"},
-		"internal/services/transfer_suggestion_service.go":         {"CaptureIfConsented:phclient.TransferSuggestionAccepted", "CaptureIfConsented:phclient.TransferSuggestionCanceled", "CaptureIfConsented:phclient.TransferSuggestionRejected"},
-		"internal/workers/plaid_sync_provider.go":                  {"Capture:phclient.EventAccountSynced", "Capture:phclient.EventSyncCompleted", "Capture:phclient.EventSyncFailed"},
-		"internal/workers/webhook_processor.go":                    {"Capture:posthog.EventWebhookReceived", "Capture:posthog.EventWebhookReceived"},
+		"internal/huma/operations/transfer_suggestion.go":   {"Capture:phclient.EventTransferSuggestionValidated", "Capture:phclient.EventTransferSuggestionValidated"},
+		"internal/queue/jobs/email_change_propagation.go":   {"Capture:phclient.EventEmailChanged"},
+		"internal/queue/jobs/subscription_webhook.go":       {"Capture:phclient.EventHouseholdOverCapacityEntered", "Capture:phclient.EventPaymentFailed", "Capture:phclient.EventPaymentSucceeded", "Capture:phclient.EventSubscriptionCancelled", "Capture:phclient.EventSubscriptionCreated"},
+		"internal/services/boost_execution_service.go":      {"Capture:phclient.EventBoostTriggered"},
+		"internal/services/data_export_service.go":          {"Capture:phclient.EventDataExportGenerated"},
+		"internal/services/deletion_service.go":             {"Capture:phclient.EventDeletionCancelled", "Capture:phclient.EventDeletionRequested", "Capture:phclient.EventUserDeleted"},
+		"internal/services/household_service.go":            {"Capture:event"},
+		"internal/services/investment_sync_service.go":      {"Capture:phclient.EventInvestmentHoldingsSynced", "Capture:phclient.EventInvestmentTransactionsSynced"},
+		"internal/services/liability_sync_service.go":       {"Capture:phclient.EventLiabilitiesSynced"},
+		"internal/services/merchant_service.go":             {"Capture:phclient.EventMerchantOverrideCleared", "Capture:phclient.EventMerchantOverrideSet", "Capture:phclient.EventMerchantOverrideSet", "Capture:phclient.EventMerchantOverrideSet", "Capture:phclient.EventMerchantOverrideSet", "Capture:phclient.EventMerchantsBulkOverridden", "Capture:phclient.EventMerchantsMerged"},
+		"internal/services/registration_service.go":         {"Capture:phclient.EventUserRegistered"},
+		"internal/services/rule_application_service.go":     {"Capture:phclient.EventAutoCategorizationExecuted", "Capture:phclient.EventAutoCategorizationExecuted"},
+		"internal/services/savings_goal_service.go":         {"Capture:phclient.EventSavingsGoalProgressBasisChanged"},
+		"internal/services/transaction_service.go":          {"Capture:phclient.EventTransactionRecategorized", "Capture:phclient.EventTransactionRecategorized", "Capture:phclient.EventTransactionReviewStateChanged"},
+		"internal/services/transfer_correlation_service.go": {"Capture:phclient.EventTransferSuggestionMatched", "Capture:phclient.EventTransferSuggestionMatched"},
+		"internal/services/transfer_suggestion_service.go":  {"CaptureIfConsented:phclient.TransferSuggestionAccepted", "CaptureIfConsented:phclient.TransferSuggestionCanceled", "CaptureIfConsented:phclient.TransferSuggestionRejected"},
+		"internal/workers/plaid_sync_provider.go":           {"Capture:phclient.EventAccountSynced", "Capture:phclient.EventSyncCompleted", "Capture:phclient.EventSyncFailed"},
+		"internal/workers/webhook_processor.go":             {"Capture:posthog.EventWebhookReceived", "Capture:posthog.EventWebhookReceived"},
 	}
 
 	backendRoot := filepath.Join("..", "..", "..")
+	got := walkRawCaptureProducers(t, backendRoot)
+	assert.Equal(t, want, got)
+}
+
+// walkRawCaptureProducers is the pinned-map guard's walk, extracted so
+// TestRawCaptureWalkFlagsAnUnpinnedProducer can drive it against a synthetic tree. It reads every
+// non-test Go file under backendRoot, skips the posthog integration adapters, and records each raw
+// Capture/CaptureIfConsented call as "<method>:<event symbol>", keyed by path relative to
+// backendRoot. Its result is compared by exact equality against the pinned `want` map.
+func walkRawCaptureProducers(t *testing.T, backendRoot string) map[string][]string {
+	t.Helper()
 	got := make(map[string][]string)
 	err := filepath.WalkDir(backendRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
@@ -91,7 +99,7 @@ func TestLegacyRawCaptureProducersArePinned(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	assert.Equal(t, want, got)
+	return got
 }
 
 func TestRawCaptureInventoryDetectsEventSymbolSubstitution(t *testing.T) {
