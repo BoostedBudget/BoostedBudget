@@ -461,7 +461,7 @@ func TestGetEffectiveSubscription_ResolverAppliesHouseholdTier(t *testing.T) {
 	resolver.AssertExpectations(t)
 }
 
-func TestGetEffectiveSubscription_ResolverError_FailsOpenToOwnTier(t *testing.T) {
+func TestGetEffectiveSubscription_ResolverError_DoesNotFallBackToLegacyTier(t *testing.T) {
 	tierConfig, err := config.LoadTierConfig()
 	require.NoError(t, err)
 	service := NewSubscriptionService(tierConfig, nil)
@@ -472,8 +472,8 @@ func TestGetEffectiveSubscription_ResolverError_FailsOpenToOwnTier(t *testing.T)
 	service.SetEntitlementResolver(resolver)
 
 	effective, err := service.GetEffectiveSubscription(context.Background(), user)
-	require.NoError(t, err, "a resolver error must never break GetEffectiveSubscription for the whole user base")
-	assert.Equal(t, domain.TierPremium, effective.Tier)
+	require.ErrorContains(t, err, "db timeout")
+	assert.Nil(t, effective, "an unconfirmed legacy tier must not authorize access during an authority outage")
 	resolver.AssertExpectations(t)
 }
 

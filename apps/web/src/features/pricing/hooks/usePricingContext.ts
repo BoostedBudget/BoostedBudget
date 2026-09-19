@@ -13,6 +13,7 @@ export type PricingState =
   | { status: 'loading' }
   | { status: 'signed-out' }
   | { status: 'inactive' }
+  | { status: 'unresolved' }
   /**
    * Issue #1413: admin-comped users get real access with no Paddle subscription behind it.
    * `compEndsAt` is present for a time-boxed comp, absent for a permanent one.
@@ -23,6 +24,7 @@ export type PricingState =
   | { status: 'active'; tier: TierName; billingInterval: 'month' | 'year'; subscriptionId: string; cancelAtPeriodEnd: boolean; scheduledChangeAt?: string }
   | { status: 'cancelled'; tier: TierName; billingInterval: 'month' | 'year'; subscriptionId: string; cancelAtPeriodEnd: boolean; scheduledChangeAt?: string; currentPeriodEnd?: string }
   | { status: 'past_due'; tier: TierName; billingInterval: 'month' | 'year'; subscriptionId: string }
+  | { status: 'paused'; tier: TierName; billingInterval: 'month' | 'year'; subscriptionId: string }
 
 export interface UsePricingContextResult {
   pricingState: PricingState
@@ -36,12 +38,13 @@ function getErrorStatus(error: unknown): number | undefined {
 }
 
 export function usePricingContext(): UsePricingContextResult {
-  const { isLoaded, isSignedIn } = useUser()
+  const { isLoaded, isSignedIn, user: clerkUser } = useUser()
   const { user } = useProfile()
   const profilePresentation = useSubscriptionPresentation()
 
   const subscriptionQuery = useGetCurrentSubscription({
     query: {
+      queryKey: ['/api/v1/subscription/current', clerkUser?.id],
       enabled: !!isSignedIn,
       retry: (failureCount: number, error: unknown) => {
         if (getErrorStatus(error) === 404) return false
@@ -71,9 +74,7 @@ export function usePricingContext(): UsePricingContextResult {
   const compedFallbackTier = (): TierName =>
     ((user?.effective_tier ?? user?.subscription_tier) as TierName) ?? 'premium'
 
-  // Shared by both "no subscription payload to read" branches below (404, and a non-404
-  // error/empty response) — a comped user still gets real access via the profile fallback;
-  // everyone else is simply inactive.
+  // Compatibility fallback only for an explicit missing subscription response.
   const compedOrInactive = (): PricingState =>
     profilePresentation.isComped
       ? { status: 'comped', tier: compedFallbackTier(), compEndsAt: profilePresentation.compEndsAt }
@@ -85,21 +86,27 @@ export function usePricingContext(): UsePricingContextResult {
     return { pricingState: compedOrInactive(), tiers }
   }
 
+  // A failed refetch can retain old React Query data. It is not current billing
+  // evidence, even if that cached response previously allowed a purchase.
+  if (subscriptionQuery.error) {
+    return { pricingState: { status: 'unresolved' }, tiers }
+  }
+
   if (subscriptionQuery.isLoading) {
     return { pricingState: { status: 'loading' }, tiers }
   }
 
   const sub = subscriptionQuery.data
   if (!sub) {
-    // isLoading is false here — this means a non-404 error or empty response
-    return { pricingState: compedOrInactive(), tiers }
+    // Unknown billing is not permission to start a second paid relationship.
+    return { pricingState: { status: 'unresolved' }, tiers }
   }
 
   // Route the raw sub.status handling through the shared derivation rather than re-deriving
   // "comped" from the raw payload here — OR profile-derived isComped in too, in case the
   // subscription endpoint hasn't been redeployed with the is_comped field yet.
   const subPresentation = presentationFromSubscription(sub)
-  if (subPresentation.isComped || profilePresentation.isComped) {
+  if (!sub.subscription_id && (subPresentation.isComped || profilePresentation.isComped)) {
     return {
       pricingState: {
         status: 'comped',
@@ -115,6 +122,12 @@ export function usePricingContext(): UsePricingContextResult {
   const billingInterval = (sub.billing_interval as 'month' | 'year') ?? 'month'
 
   switch (sub.status) {
+    case 'inactive':
+      return { pricingState: { status: 'inactive' }, tiers }
+    case 'unresolved':
+      return { pricingState: { status: 'unresolved' }, tiers }
+    case 'paused':
+      return { pricingState: { status: 'paused', tier, billingInterval, subscriptionId: sub.subscription_id ?? '' }, tiers }
     case 'trial':
       return {
         pricingState: {
@@ -176,6 +189,6 @@ export function usePricingContext(): UsePricingContextResult {
       }
 
     default:
-      return { pricingState: { status: 'loading' }, tiers }
+      return { pricingState: { status: 'unresolved' }, tiers }
   }
 }

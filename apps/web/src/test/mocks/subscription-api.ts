@@ -3,6 +3,15 @@
 
 import { mock } from 'bun:test'
 import * as RealSubscriptionModule from '@boostedbudget/api-client/endpoints/subscription/subscription'
+import type { RevenueCatSummary } from '@boostedbudget/api-client/models'
+
+export const mockRefreshRevenueCatSubscription = mock<() => Promise<RevenueCatSummary>>(() =>
+  Promise.resolve({ access_resolved: false, paid: null } as unknown as RevenueCatSummary))
+// #1652: the adapter calls the raw generated client with the request body directly — the `{ data }`
+// wrapper belongs to the generated mutation hook. The intent response now names the package.
+export const mockBeginRevenueCatCheckout = mock((_body: { tier: string; billing_interval: 'month' | 'year' }) =>
+  Promise.resolve({ id: 'intent_test', offering: 'web', package: 'premium_monthly', expires_at: '2026-10-01T00:00:00Z' }))
+export const mockReleaseRevenueCatCheckout = mock(() => Promise.resolve())
 
 // === useGetSubscriptionTiers ===
 export const mockRefetchSubscriptionTiers = mock(() => Promise.resolve())
@@ -44,48 +53,6 @@ export const mockUseCreatePaddleCheckout = mock(() => ({
   ...defaultMutationState,
 }))
 
-// === usePreviewPaddleSubscriptionUpdate ===
-export const mockPreviewUpdateMutateAsync = mock(() =>
-  Promise.resolve({
-    proration_amount: '5.00',
-    currency: 'USD',
-    next_charge_date: '2026-03-15',
-  })
-)
-
-export const mockUsePreviewPaddleSubscriptionUpdate = mock(() => ({
-  mutateAsync: mockPreviewUpdateMutateAsync,
-  ...defaultMutationState,
-}))
-
-// === useUpdatePaddleSubscription ===
-export const mockUpdateSubscriptionMutateAsync = mock(() =>
-  Promise.resolve({
-    subscription_id: 'sub_123',
-    status: 'active',
-    message: 'Subscription updated successfully',
-  })
-)
-
-export const mockUseUpdatePaddleSubscription = mock(() => ({
-  mutateAsync: mockUpdateSubscriptionMutateAsync,
-  ...defaultMutationState,
-}))
-
-// === useCancelPaddleSubscription ===
-export const mockCancelSubscriptionMutateAsync = mock(() =>
-  Promise.resolve({
-    subscription_id: 'sub_123',
-    message: 'Subscription cancelled',
-    ends_at: '2026-03-15',
-  })
-)
-
-export const mockUseCancelPaddleSubscription = mock(() => ({
-  mutateAsync: mockCancelSubscriptionMutateAsync,
-  ...defaultMutationState,
-}))
-
 // === useGetBillingPortalUrl ===
 export const mockUseGetBillingPortalUrl = mock(() => ({
   data: undefined,
@@ -97,11 +64,11 @@ export const mockUseGetBillingPortalUrl = mock(() => ({
 // Single mock.module() call - called once at preload time
 mock.module('@boostedbudget/api-client/endpoints/subscription/subscription', () => ({
   ...RealSubscriptionModule,
+  refreshRevenueCatSubscription: mockRefreshRevenueCatSubscription,
+  beginRevenueCatCheckout: mockBeginRevenueCatCheckout,
+  releaseRevenueCatCheckout: mockReleaseRevenueCatCheckout,
   useGetSubscriptionTiers: mockUseGetSubscriptionTiers,
   useGetCurrentSubscription: mockUseGetCurrentSubscription,
   useCreatePaddleCheckout: mockUseCreatePaddleCheckout,
-  usePreviewPaddleSubscriptionUpdate: mockUsePreviewPaddleSubscriptionUpdate,
-  useUpdatePaddleSubscription: mockUseUpdatePaddleSubscription,
-  useCancelPaddleSubscription: mockUseCancelPaddleSubscription,
   useGetBillingPortalUrl: mockUseGetBillingPortalUrl,
 }))

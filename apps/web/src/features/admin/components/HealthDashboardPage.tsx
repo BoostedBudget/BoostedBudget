@@ -6,6 +6,7 @@ import { SummaryCard } from '@/features/admin';
 import { Activity, AlertTriangle, Database, Shield, Landmark, RefreshCw, Clock, CreditCard, CheckCircle, Users, Timer, UserCheck, UserX, History, GitFork } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
+import { RevenueCatHealthSummary } from './RevenueCatHealthSummary';
 
 // Issue #1458: formats a backlog gauge's age (seconds) as a short human string for the Job
 // Backlog SummaryCard grid — mirrors the Paddle Status section's "Avg Duration" precedent
@@ -257,6 +258,7 @@ export function HealthDashboardPage() {
       </section>
 
       {/* Paddle Status Section */}
+      <RevenueCatHealthSummary />
       <section className="mb-8">
         <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Paddle Status</h2>
         <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
@@ -325,10 +327,10 @@ export function HealthDashboardPage() {
             status={!jobBacklogAvailable ? 'warning' : (data.job_backlog.plaid_cleanup_oldest_outstanding_seconds > 0 ? 'warning' : 'success')}
           />
           <SummaryCard
-            title="Manual Override Oldest Uncleared Expired"
-            value={jobBacklogAvailable ? formatBacklogAge(data.job_backlog.manual_tier_override_oldest_uncleared_expired_seconds) : 'Unavailable'}
+            title="RevenueCat Oldest Expired Comp Grant"
+            value={jobBacklogAvailable ? formatBacklogAge(data.job_backlog.revenuecat_oldest_expired_comp_grant_seconds) : 'Unavailable'}
             icon={<Timer size={24} />}
-            status={!jobBacklogAvailable ? 'warning' : (data.job_backlog.manual_tier_override_oldest_uncleared_expired_seconds > 0 ? 'warning' : 'success')}
+            status={!jobBacklogAvailable ? 'warning' : (data.job_backlog.revenuecat_oldest_expired_comp_grant_seconds > 0 ? 'warning' : 'success')}
           />
         </div>
       </section>
@@ -638,7 +640,7 @@ export function HealthDashboardPage() {
           {Object.entries(data.job_queues).map(([queueName, metrics]) => (
             <Card key={queueName}>
               <h3 className="m-0 mb-3 text-base font-semibold text-foreground">{queueName}</h3>
-              <div className="flex flex-col gap-2">
+              {metrics.unavailable ? <p className="text-warning">Unavailable</p> : <div className="flex flex-col gap-2">
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-muted-foreground">Pending:</span>
                   <span className="text-sm font-semibold text-foreground">{metrics.pending}</span>
@@ -657,7 +659,7 @@ export function HealthDashboardPage() {
                   <span className="text-sm text-muted-foreground">Completed (1h):</span>
                   <span className="text-sm font-semibold text-foreground">{metrics.completed_last_hour}</span>
                 </div>
-              </div>
+              </div>}
             </Card>
           ))}
         </div>

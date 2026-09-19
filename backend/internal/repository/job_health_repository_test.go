@@ -25,7 +25,7 @@ func setupJobHealthMockDB(t *testing.T) (pgxmock.PgxPoolIface, JobHealthReposito
 	return mock, repo
 }
 
-func TestJobHealthRepository_GetOldestUnclearedExpiredManualTierOverrideAge_Success(t *testing.T) {
+func TestJobHealthRepository_GetOldestExpiredCompGrantAge_Success(t *testing.T) {
 	mock, repo := setupJobHealthMockDB(t)
 	defer mock.Close()
 
@@ -33,42 +33,55 @@ func TestJobHealthRepository_GetOldestUnclearedExpiredManualTierOverrideAge_Succ
 	fiveDaysSeconds := float64(5 * 24 * 60 * 60)
 	rows := pgxmock.NewRows([]string{"age_seconds"}).AddRow(fiveDaysSeconds)
 
-	mock.ExpectQuery(regexp.QuoteMeta("manual_tier_override IS NOT NULL")).
+	mock.ExpectQuery(regexp.QuoteMeta("FROM revenuecat_customers rc")).
 		WillReturnRows(rows)
 
-	age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(context.Background())
+	age, err := repo.GetOldestExpiredCompGrantAge(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, 5*24*time.Hour, age)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestJobHealthRepository_GetOldestUnclearedExpiredManualTierOverrideAge_NoRows_ReturnsZero(t *testing.T) {
+func TestJobHealthRepository_GetOldestExpiredCompGrantAge_NoRows_ReturnsZero(t *testing.T) {
 	mock, repo := setupJobHealthMockDB(t)
 	defer mock.Close()
 
 	rows := pgxmock.NewRows([]string{"age_seconds"}).AddRow(float64(0))
-	mock.ExpectQuery(regexp.QuoteMeta("manual_tier_override IS NOT NULL")).
+	mock.ExpectQuery(regexp.QuoteMeta("FROM revenuecat_customers rc")).
 		WillReturnRows(rows)
 
-	age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(context.Background())
+	age, err := repo.GetOldestExpiredCompGrantAge(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, time.Duration(0), age)
 }
 
-func TestJobHealthRepository_GetOldestUnclearedExpiredManualTierOverrideAge_QueryError(t *testing.T) {
+func TestJobHealthRepository_GetOldestExpiredCompGrantAge_QueryError(t *testing.T) {
 	mock, repo := setupJobHealthMockDB(t)
 	defer mock.Close()
 
-	mock.ExpectQuery(regexp.QuoteMeta("manual_tier_override IS NOT NULL")).
+	mock.ExpectQuery(regexp.QuoteMeta("FROM revenuecat_customers rc")).
 		WillReturnError(errors.New("db unavailable"))
 
-	age, err := repo.GetOldestUnclearedExpiredManualTierOverrideAge(context.Background())
+	age, err := repo.GetOldestExpiredCompGrantAge(context.Background())
 
 	assert.Error(t, err)
 	assert.Equal(t, time.Duration(0), age)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestJobHealthRepository_OldestExpiredCompGrantAgeQuery_ScopesToCompGrants is the drift guard, and
+// it runs without a database so it cannot be skipped. The gauge must count ONLY comp_* grants (a
+// paid_* or trial_* grant lapsing is a normal subscription event, not this hazard), and it must
+// read RC's stored projection rather than the retired legacy column.
+func TestJobHealthRepository_OldestExpiredCompGrantAgeQuery_ScopesToCompGrants(t *testing.T) {
+	assert.Contains(t, oldestExpiredCompGrantAgeQuery, "revenuecat_customers",
+		"the gauge must read RevenueCat's stored projection, not the retired legacy column")
+	assert.Contains(t, oldestExpiredCompGrantAgeQuery, `LIKE 'comp\_%'`,
+		"only comp_* grants count; the underscore must be escaped so it is not a LIKE wildcard")
+	assert.NotContains(t, oldestExpiredCompGrantAgeQuery, "manual_tier_override",
+		"the retired legacy column must not reappear in this query")
 }
 
 // --- GetOutstandingPlaidCleanupStats (Issue #1413 — Plaid-disconnect-repair backlog gauge) ---
@@ -199,4 +212,139 @@ func TestJobHealthRepository_DeletionResidueStatsQuery_UsesTheWriterSharedPrefix
 		"the LIKE pattern must be built from deletionResidueActionPrefix — the same constant RecordDeletionResidue writes")
 	assert.Contains(t, deletionResidueStatsQuery, "MAX(created_at)",
 		"the age reported is the NEWEST record's, not the oldest: nothing prunes audit_logs, so MIN would climb forever and tell an operator nothing about whether this just happened")
+}
+
+// --- RevenueCat backlog gauges (#1652 todo 12) ---
+//
+// pgxmock proves the query is issued and the columns are scanned/wrapped correctly. The SQL
+// semantics (the pending predicate, the comp-grant liveness rule, the MIN/COALESCE aggregate) are
+// pinned by the drift guards below, which run without a database.
+
+func TestJobHealthRepository_GetRevenueCatWebhookInboxStats_Success(t *testing.T) {
+	mock, repo := setupJobHealthMockDB(t)
+	defer mock.Close()
+
+	rows := pgxmock.NewRows([]string{"count", "age_seconds"}).AddRow(int64(3), float64(120))
+	mock.ExpectQuery(regexp.QuoteMeta("FROM revenuecat_webhooks")).WillReturnRows(rows)
+
+	count, age, err := repo.GetRevenueCatWebhookInboxStats(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
+	assert.Equal(t, 2*time.Minute, age)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestJobHealthRepository_GetRevenueCatWebhookInboxStats_QueryError(t *testing.T) {
+	mock, repo := setupJobHealthMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta("FROM revenuecat_webhooks")).
+		WillReturnError(errors.New("db unavailable"))
+
+	count, age, err := repo.GetRevenueCatWebhookInboxStats(context.Background())
+
+	assert.Error(t, err)
+	assert.Equal(t, 0, count)
+	assert.Equal(t, time.Duration(0), age)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestJobHealthRepository_GetRevenueCatOperationsStats_Success(t *testing.T) {
+	mock, repo := setupJobHealthMockDB(t)
+	defer mock.Close()
+
+	rows := pgxmock.NewRows([]string{"pending", "errored", "age_seconds"}).AddRow(int64(5), int64(1), float64(600))
+	mock.ExpectQuery(regexp.QuoteMeta("FROM revenuecat_operations")).WillReturnRows(rows)
+
+	pending, errored, age, err := repo.GetRevenueCatOperationsStats(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, 5, pending)
+	assert.Equal(t, 1, errored)
+	assert.Equal(t, 10*time.Minute, age)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestJobHealthRepository_GetRevenueCatOperationsStats_QueryError(t *testing.T) {
+	mock, repo := setupJobHealthMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta("FROM revenuecat_operations")).
+		WillReturnError(errors.New("db unavailable"))
+
+	pending, errored, age, err := repo.GetRevenueCatOperationsStats(context.Background())
+
+	assert.Error(t, err)
+	assert.Equal(t, 0, pending)
+	assert.Equal(t, 0, errored)
+	assert.Equal(t, time.Duration(0), age)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestJobHealthRepository_GetRevenueCatCompGrantsOutstanding_Success(t *testing.T) {
+	mock, repo := setupJobHealthMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta("LIKE 'comp\\_%'")).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(4)))
+
+	count, err := repo.GetRevenueCatCompGrantsOutstanding(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, 4, count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestJobHealthRepository_GetRevenueCatRefreshOverdueUsers_Success(t *testing.T) {
+	mock, repo := setupJobHealthMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta("next_refresh_at < NOW()")).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(9)))
+
+	count, err := repo.GetRevenueCatRefreshOverdueUsers(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, 9, count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestJobHealthRepository_GetRevenueCatRefreshOverdueUsers_QueryError(t *testing.T) {
+	mock, repo := setupJobHealthMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta("next_refresh_at < NOW()")).
+		WillReturnError(errors.New("db unavailable"))
+
+	count, err := repo.GetRevenueCatRefreshOverdueUsers(context.Background())
+
+	assert.Error(t, err)
+	assert.Equal(t, 0, count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestJobHealthRepository_RevenueCatBacklogQueries_PinTheirPredicates are the drift guards. The
+// operations one is the sharpest: `errored` must count only rows that are STILL pending with a
+// last_error, because there is no 'failed' stage — a query that looked for one would report zero
+// forever while failures accumulated.
+func TestJobHealthRepository_RevenueCatBacklogQueries_PinTheirPredicates(t *testing.T) {
+	assert.Contains(t, revenueCatWebhookInboxStatsQuery, "processed_at IS NULL",
+		"the inbox backlog is unprocessed receipts")
+	assert.Contains(t, revenueCatWebhookInboxStatsQuery, "MIN(received_at)",
+		"the age is the OLDEST unprocessed receipt's")
+
+	assert.Contains(t, revenueCatOperationsStatsQuery, "stage = 'pending'")
+	assert.Contains(t, revenueCatOperationsStatsQuery, "last_error <> ''",
+		"errored is stage='pending' AND last_error <> '' — there is no 'failed' stage")
+	assert.Contains(t, revenueCatOperationsStatsQuery, "MIN(created_at)",
+		"the age is the OLDEST pending intent's")
+
+	assert.Contains(t, revenueCatCompGrantsOutstandingQuery, `LIKE 'comp\_%'`,
+		"only comp_* grants count; the underscore must be escaped so it is not a LIKE wildcard")
+	assert.Contains(t, revenueCatCompGrantsOutstandingQuery, "> NOW()",
+		"a comp grant is outstanding only while its expiry is still in the future (or absent)")
+
+	assert.Contains(t, revenueCatRefreshOverdueUsersQuery, "next_refresh_at < NOW()",
+		"the refresh backlog is customers whose next_refresh_at has elapsed")
 }

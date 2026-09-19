@@ -15,14 +15,15 @@ package repository
 // for the round-9 regression this replacement anchor exists to close: a STALE retention_started_at
 // combined with a genuinely fresh plaid_cleanup_pending_at must NOT trigger a premature disconnect.
 //
-// TrialService.ExpireTrial no longer calls Plaid at all — no ordering of a status flip and an
+// The legacy trial-expiry flow (deleted in #1652) never called Plaid — no ordering of a status flip and an
 // irreversible Plaid call can be safe, because /subscription/checkout is deliberately whitelisted
 // for read-only users (internal/huma/middleware/read_only.go), so becoming read-only never stops a
 // user from becoming active again. The fix defers instead of ordering: this query is the ONLY
 // place a read-only user's Plaid items are ever disconnected, and it only selects a user once
 // gracePeriod has elapsed since plaid_cleanup_pending_at was set (atomically alongside the status
-// flip to read-only by ExpireTrialIfNoOverride/CancelIfPastDueOccurrenceWithRetention/
-// UpdateSubscriptionFromPaddle — see profile_repository.go) — giving a genuine resubscriber a
+// flip to read-only by UpdateSubscriptionFromPaddle (and, before #1652 deleted them,
+// ExpireTrialIfNoOverride and the occurrence-scoped CancelIfPastDueOccurrenceWithRetention —
+// see profile_repository.go) — giving a genuine resubscriber a
 // window to become active again before Plaid is ever touched. pgxmock cannot validate the
 // EXISTS-subquery/WHERE predicates or the grace-window arithmetic here — a real DB is required.
 //

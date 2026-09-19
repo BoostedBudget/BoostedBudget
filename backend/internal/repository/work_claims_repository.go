@@ -93,14 +93,6 @@ const (
 	ActionRetentionNotice7d            = "retention_notice_7d"
 	ActionSubscriptionCancelledCleanup = "subscription_cancelled_cleanup"
 
-	// ActionTrialExpiration is Issue #1413 round-4 finding H2's fix: TrialService.ExpireTrial was
-	// the one destructive flow with no work_claims flow claim at all. Like ActionAccountDeletion,
-	// this is keyed on the bare user ID, not occurrence-scoped (see work_claims_occurrence.go) —
-	// trial expiry is conceptually "once ever" per user: GrantTrial refuses a second trial once
-	// had_trial is set, and nothing ever clears had_trial back to false, so a completed claim here
-	// can never legitimately need to recur for the same user.
-	ActionTrialExpiration = "trial_expiration"
-
 	// ActionPlaidDisconnectUser and ActionPaddleCancelSubscription are OPERATION-keyed
 	// side-effect actions (Issue #1413 Codex round-3 finding H1), not FLOW-keyed like the six
 	// actions above. Four different flows (plaid_disconnect_past_due, past_due_grace_cancel,

@@ -63,8 +63,8 @@ func (s SubscriptionStatus) IsReadOnlySubscription() bool {
 //
 // Deliberately NARROWER than IsReadOnlySubscription() above: 'past_due' IS read-only (that method
 // returns true for it), but must NOT be eligible for an IMMEDIATE Plaid-only disconnect here —
-// past_due has its own dunning timeline (past_due_service.go, PastDueConfig.PlaidDisconnectDays)
-// that exists precisely to give a paying-but-behind user time to catch up before Plaid access is
+// past_due had its own dunning timeline (the deleted past_due_service.go / PastDueConfig.PlaidDisconnectDays,
+// #1652) that existed precisely to give a paying-but-behind user time to catch up before Plaid access is
 // touched. This repair pass's 72-hour grace window is not a substitute for that longer, dedicated
 // dunning schedule; using the wider read-only definition here let an old inactive/cancelled
 // candidate that transitioned into a NEW past_due cycle before the per-item re-read bypass past_due's

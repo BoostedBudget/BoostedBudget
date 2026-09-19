@@ -22,11 +22,11 @@ func TestIssue746ProductionPaddleEnvironmentWiringNoDrift(t *testing.T) {
 			required:     `PADDLE_ENVIRONMENT = "production"`,
 		},
 		{
-			name:         "production frontend build initializes live Paddle",
+			name:         "production frontend build uses the RevenueCat Paddle app key",
 			path:         "../../../.github/workflows/deploy-production.yml",
 			sectionStart: "- name: Build frontend",
-			sectionEnd:   "run: bun run build",
-			required:     "VITE_PADDLE_ENV: production",
+			sectionEnd:   "bun run build",
+			required:     "VITE_REVENUECAT_PUBLIC_API_KEY: ${{ secrets.VITE_REVENUECAT_PUBLIC_API_KEY }}",
 		},
 	}
 

@@ -112,7 +112,7 @@ func (r *postgresSubscriptionOverrideRepository) GetOverrideByID(ctx context.Con
 // any request's `asOf` (ApplyOverride/RemoveOverride have no asOf to thread, and the admin
 // subscription-detail handler never calls UpdateOverride at all). This also matches this
 // codebase's established convention for every OTHER write-audit timestamp on this branch
-// (UpdateSubscriptionFromPaddle, UpdateTrialStatus, ClaimForDeletion, etc.) — all use the
+// (UpdateSubscriptionFromPaddle, ClaimForDeletion, etc.) — all use the
 // database's own NOW()/clock_timestamp() for `updated_at`, reserving Go-computed instant
 // parameters for read-side WHERE-clause predicates that must match a caller's own snapshot.
 // Threading asOf through here would require plumbing it through ApplyOverride/RemoveOverride's

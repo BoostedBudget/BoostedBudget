@@ -56,6 +56,12 @@ import {
 } from '@/test/mocks/savings-goals-api'
 import { mockUseGetUserProfile } from '@/test/mocks/profile-api'
 import {
+  mockUseGetCurrentSubscription,
+  mockUseGetBillingPortalUrl,
+  mockUseGetSubscriptionTiers,
+} from '@/test/mocks/subscription-api'
+import { mockSubscriptionTiersResponse } from '@/test/fixtures/subscriptionFixtures'
+import {
   mockUseGetSpendingByMerchant,
   mockUseGetSpendingByCategory,
   mockUseGetCashFlowSummary,
@@ -89,7 +95,6 @@ import {
 } from '@/test/mocks/investments-api'
 import { mockUseSavingsImpactData } from '@/test/mocks/savings-impact-hooks'
 import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
-import { mockUsePreviewPaddleSubscriptionUpdate } from '@/test/mocks/subscription-api'
 import {
   mockUseRequestDeletion,
   mockRequestDeletionMutateAsync,
@@ -163,8 +168,8 @@ const { BalanceOverview } = await import('@/features/dashboard/components/Balanc
 const { NetWorthSparkline } = await import('@/features/dashboard/components/NetWorthSparkline')
 
 const { CurrentSubscriptionDisplay } = await import('@/features/billing/components/CurrentSubscriptionDisplay')
-const { PlanChangeModal } = await import('@/features/billing/components/PlanChangeModal')
 const { SubscriptionOverrideModal } = await import('@/features/admin/components/SubscriptionOverrideModal')
+const { SubscriptionManagementPage } = await import('@/features/billing/SubscriptionManagementPage')
 
 const { AutoCategorizationRuleTable } = await import(
   '@/features/auto-categorization/components/AutoCategorizationRuleTable'
@@ -1220,65 +1225,50 @@ describe('PII coverage — Round 8: billing components (personal charge surfaces
     // scans attributes verbatim, not skipping masked ancestors for attributes).
     expect(scanForUnmaskedPII(document.body, [])).toEqual([])
   })
+})
 
-  test('PlanChangeModal masks proration_amount in upgrade preview section', () => {
-    // Provide mock tiers where 'premium' (selected) costs more than 'standard' (current)
-    // so isUpgrade=true and the proration section renders.
-    const tiers = {
-      standard: {
-        display_name: 'Standard',
-        pricing: { price_monthly: 4.99, price_yearly: 49.99, users_included: 1 },
-        limits: {},
-        features: [],
+describe('PII coverage — billing management page (RevenueCat pivot, #1652 todo 11)', () => {
+  beforeEach(() => {
+    cleanup()
+    mockUseGetCurrentSubscription.mockReturnValue({
+      data: {
+        status: 'trialing',
+        subscription_id: 'sub_rc_1',
+        tier: 'premium',
+        billing_interval: 'month',
+        amount: '8.99',
+        currency: 'USD',
+        trial_days_remaining: 5,
+        trial_ends_at: '2026-10-01T00:00:00Z',
       },
-      premium: {
-        display_name: 'Premium',
-        pricing: { price_monthly: 8.99, price_yearly: 89.99, users_included: 2 },
-        limits: {},
-        features: [],
-      },
-    }
-
-    // Override the preloaded mock to return a success state with proration data so the
-    // upgrade preview section renders synchronously on the first render.
-    mockUsePreviewPaddleSubscriptionUpdate.mockReturnValueOnce({
-      mutateAsync: mock(),
-      isPending: false,
-      isSuccess: true,
-      isError: false,
+      isLoading: false,
       error: null,
-      reset: mock(),
-      data: { proration_amount: '3.50', currency: 'USD', next_charge_date: '2026-07-01' },
-    })
+      refetch: () => Promise.resolve({ data: undefined, error: null }),
+    } as unknown as ReturnType<typeof mockUseGetCurrentSubscription>)
+    mockUseGetSubscriptionTiers.mockReturnValue({
+      data: { tiers: mockSubscriptionTiersResponse.tiers },
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    } as unknown as ReturnType<typeof mockUseGetSubscriptionTiers>)
+    mockUseGetBillingPortalUrl.mockReturnValue({
+      data: { portal_url: 'https://portal.paddle.com/123' },
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    } as unknown as ReturnType<typeof mockUseGetBillingPortalUrl>)
+    mockUseGetUserProfile.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    } as unknown as ReturnType<typeof mockUseGetUserProfile>)
+  })
 
-    render(
-      <PlanChangeModal
-        open={true}
-        currentTier="standard"
-        currentBillingInterval="month"
-        tiers={tiers as any}
-        isUpdating={false}
-        onChangePlan={mock(() => {})}
-        onClose={mock(() => {})}
-        initialTier="premium"
-        initialInterval="month"
-      />,
-      { wrapper: createWrapper() }
-    )
-    // Confirm the proration amount is actually in the DOM before asserting.
-    expect(document.body.textContent).toContain('3.50')
-    // NOTE: PlanChangeModal also renders public catalog tier prices ($8.99 etc.) in its tier
-    // selection grid — these are NOT PII. Scope the scan to just the charge <p> so catalog prices
-    // in the tier grid are not false-positives (plan fallback: "focused render of just the
-    // isUpgrade preview section"). Inside the charge paragraph, the ONLY currency-shaped text is
-    // the proration amount "USD 3.50" — if unmasked, CURRENCY_RE catches it; if masked, passes.
-    const chargePara = Array.from(document.body.querySelectorAll('p')).find(
-      (p) => p.textContent?.includes("You'll be charged")
-    ) as HTMLElement | undefined
-    expect(chargePara).not.toBeUndefined()
-    // scanForUnmaskedPII on just the charge paragraph covers both text nodes and attributes
-    // (aria-label, title, etc.) within that element — stronger than a structural assertion.
-    expect(scanForUnmaskedPII(chargePara!, [])).toEqual([])
+  test('masks the trialing "you will be charged" amount outside a DataTable column', async () => {
+    render(<SubscriptionManagementPage />, { wrapper: createWrapper() })
+    await waitFor(() => expect(document.body.textContent ?? '').toContain('8.99'))
+    expect(scanForUnmaskedPII(document.body, [])).toEqual([])
   })
 })
 
@@ -2192,9 +2182,9 @@ describe('PII coverage — Round 15: UserDetailModal target email', () => {
     expect(scanForUnmaskedPII(document.body, sentinels)).toEqual([])
   })
 
-  // Sibling: the opaque user id is deliberately NOT masked — it is the identifier an operator
-  // needs to correlate the record, and it carries no personal data.
-  test('the user id is NOT masked', async () => {
+  // #1652: customer correlation IDs remain visible to the operator, but are masked
+  // in session replay. Keep the structural label legible as the non-PII control.
+  test('the user id is masked while its structural label stays legible', async () => {
     render(
       <UserDetailModal
         user={{
@@ -2217,10 +2207,11 @@ describe('PII coverage — Round 15: UserDetailModal target email', () => {
       />,
       { wrapper: createWrapper() }
     )
-    await waitFor(() => expect(screen.getByText(/User ID: user-pii/)).toBeInTheDocument(), {
+    await waitFor(() => expect(screen.getByText('user-pii')).toBeInTheDocument(), {
       timeout: 3000,
     })
-    expect(screen.getByText(/User ID: user-pii/).closest('[data-ph-mask]')).toBeNull()
+    expect(screen.getByText('user-pii').closest('[data-ph-mask]')).not.toBeNull()
+    expect(screen.getByText('User ID:').closest('[data-ph-mask]')).toBeNull()
   })
 })
 
@@ -2605,7 +2596,7 @@ describe('PII coverage — Round 16: HealthDashboardPage', () => {
         job_backlog: {
           plaid_cleanup_outstanding_users: 0,
           plaid_cleanup_oldest_outstanding_seconds: 0,
-          manual_tier_override_oldest_uncleared_expired_seconds: 0,
+          revenuecat_oldest_expired_comp_grant_seconds: 0,
           available: true,
         },
         plaid_orphaned_items: {

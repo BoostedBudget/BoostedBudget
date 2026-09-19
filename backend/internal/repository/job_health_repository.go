@@ -15,29 +15,32 @@ type JobHealthRepository interface {
 	// remain operational work merely because their retained audit row still exists.
 	GetDeadLetterQueueSize(ctx context.Context) (int, error)
 
-	// GetOldestUnclearedExpiredManualTierOverrideAge returns how long the OLDEST currently
-	// expired-but-uncleared manual_tier_override has been sitting uncleared: zero when there are
+	// GetOldestExpiredCompGrantAge returns how long the OLDEST expired comp_* grant has been
+	// sitting in RevenueCat's stored projection (revenuecat_customers.grants): zero when there are
+	// none.
 	// none.
 	//
-	// This is the direct measure of the Issue #1413 Critical finding C1 hazard:
-	// noManualOverrideAtAllPredicate (profile_repository.go) excludes a user from the retention-
-	// notice/hard-delete queries for as long as ANY manual_tier_override survives on their row —
-	// live or lapsed — and clearing a LAPSED one is exclusively manual_tier_override_expiry_check's
-	// job. Healthy is ~0 and stays there; it climbs monotonically, in lockstep with wall-clock
-	// time, the moment that job stops actually clearing overrides — whether it's crashing,
-	// discarded into the dead-letter queue, or simply not scheduled anymore.
+	// This is the RevenueCat analogue of the retired legacy-column gauge (#1652 todo 4). The
+	// legacy manual_tier_override column is no longer written by any production path — the admin
+	// comp path records a revenuecat_operations intent instead — so a gauge fed by that column was
+	// a dead alert. The live hazard is the RC projection: revenueCatSession.Save drops expired
+	// grants before persisting, so a comp_* grant that has lapsed but is STILL in the stored
+	// grants means the refresh path has stopped projecting. While it lingers, ResolveAccess refuses
+	// the cached state (an expired grant requires refresh), so the inactive projection (retention
+	// arming + plaid_cleanup_pending_at) is never persisted and the user is stuck out of the
+	// retention pipeline. Healthy is ~0 and stays there; it climbs monotonically, in lockstep with
+	// wall-clock time, the moment the refresh path stops.
 	//
-	// Uses the exact same expiredManualTierOverridePredicate (profile_repository.go) that
-	// GetUsersWithExpiredManualTierOverride's own candidate query uses, so this gauge and that job
-	// can never disagree about which rows count.
-	GetOldestUnclearedExpiredManualTierOverrideAge(ctx context.Context) (time.Duration, error)
+	// Only comp_* grants count: a paid_* or trial_* grant lapsing is a normal subscription event,
+	// not this hazard.
+	GetOldestExpiredCompGrantAge(ctx context.Context) (time.Duration, error)
 
 	// GetOutstandingPlaidCleanupStats returns the number of users with outstanding Plaid-disconnect
 	// cleanup, and how long the OLDEST such marker has been sitting uncleared — (0, 0) when there
 	// are none.
 	//
 	// This is the direct measure of the Issue #1413 sibling hazard to
-	// GetOldestUnclearedExpiredManualTierOverrideAge above:
+	// GetOldestExpiredCompGrantAge above:
 	// RetentionCleanupCheckWorker.repairPlaidDisconnects (queue/jobs/retention_cleanup_check.go) is
 	// the ONLY place a lapsed user's Plaid bank connections are ever disconnected, and its per-user
 	// error isolation (deliberate — one user's Plaid failure must never block the GDPR notice/
@@ -127,6 +130,42 @@ type JobHealthRepository interface {
 	// migration for the measurement, and
 	// TestJobHealthRepository_Integration_DeletionResidue_IsServedByThePartialIndex for the guard.
 	GetDeletionResidueStats(ctx context.Context) (count int, newestAge time.Duration, err error)
+
+	// GetRevenueCatWebhookInboxStats returns the number of accepted RevenueCat webhook receipts
+	// not yet processed (revenuecat_webhooks.processed_at IS NULL) and how long the OLDEST such
+	// receipt has been waiting — (0, 0) when the inbox is drained.
+	//
+	// This is the RevenueCat analogue of GetOutstandingPlaidCleanupStats: a stuck-but-not-failed
+	// inbox is a silent access desync that the flow counters (RevenueCatWebhookReceivedTotal /
+	// RevenueCatWebhookFailedTotal) cannot see, because an accepted delivery that never completes
+	// is neither a receipt event nor a rejection. Served by
+	// revenuecat_webhooks_pending_idx (migration 000216), a partial index on received_at WHERE
+	// processed_at IS NULL, so the MIN() is an index probe rather than a table scan.
+	GetRevenueCatWebhookInboxStats(ctx context.Context) (count int, oldestAge time.Duration, err error)
+
+	// GetRevenueCatOperationsStats returns the RevenueCat operation-queue backlog: how many
+	// intents are pending, how many of those are errored (stage = 'pending' AND last_error <> ''),
+	// and the age of the OLDEST pending intent — (0, 0, 0) when none are pending.
+	//
+	// ⚠ `errored` is the STOCK of currently-failing intents, and is deliberately NOT the same
+	// metric as observability.RevenueCatOperationFailuresTotal, which is the FLOW counted at the
+	// failure write site. Declaring this query-derived count a `*_total` counter would produce a
+	// counter that resets whenever the stock falls — the silent alerting bug the plan's
+	// counter-vs-gauge rule names. There is no `failed` stage: a failure stays pending with
+	// last_error set and is retried.
+	GetRevenueCatOperationsStats(ctx context.Context) (pending int, errored int, oldestAge time.Duration, err error)
+
+	// GetRevenueCatCompGrantsOutstanding returns the number of currently-live comp_* grants in
+	// RevenueCat's stored projection (revenuecat_customers.grants) — a comp grant with no expiry,
+	// or one whose expiry is still in the future. It is the population whose worst case
+	// GetOldestExpiredCompGrantAge above measures.
+	GetRevenueCatCompGrantsOutstanding(ctx context.Context) (int, error)
+
+	// GetRevenueCatRefreshOverdueUsers returns the number of RevenueCat customers whose
+	// next_refresh_at is in the past — the refresh backlog. A growing value means the
+	// refresh/repair worker is not keeping up, independent of whether its own job metrics are
+	// being scraped. Served by revenuecat_customers_refresh_idx (migration 000216).
+	GetRevenueCatRefreshOverdueUsers(ctx context.Context) (int, error)
 }
 
 type jobHealthRepository struct {
@@ -137,6 +176,20 @@ type jobHealthRepository struct {
 func NewJobHealthRepository(db DB) JobHealthRepository {
 	return &jobHealthRepository{db: db}
 }
+
+// oldestExpiredCompGrantAgeQuery is GetOldestExpiredCompGrantAge's SQL, hoisted to a package-level
+// constant so a plain unit test can assert its shape without a database.
+//
+// The key prefix is matched with LIKE 'comp\_%' (the backslash escapes the underscore, which is a
+// single-character wildcard in LIKE) so only comp_* grants count.
+const oldestExpiredCompGrantAgeQuery = `
+	SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN((g->>'expires_at')::timestamptz))), 0)
+	FROM revenuecat_customers rc
+	CROSS JOIN LATERAL jsonb_array_elements(rc.grants) AS g
+	WHERE g->>'key' LIKE 'comp\_%'
+	  AND g->>'expires_at' IS NOT NULL
+	  AND (g->>'expires_at')::timestamptz < NOW()
+`
 
 func (r *jobHealthRepository) GetDeadLetterQueueSize(ctx context.Context) (int, error) {
 	query := `
@@ -150,20 +203,15 @@ func (r *jobHealthRepository) GetDeadLetterQueueSize(ctx context.Context) (int, 
 	return int(count), nil
 }
 
-func (r *jobHealthRepository) GetOldestUnclearedExpiredManualTierOverrideAge(ctx context.Context) (time.Duration, error) {
-	query := `
-		SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(manual_tier_ends_at))), 0)
-		FROM users
-		WHERE ` + expiredManualTierOverridePredicate
-
+func (r *jobHealthRepository) GetOldestExpiredCompGrantAge(ctx context.Context) (time.Duration, error) {
 	var ageSeconds float64
-	if err := r.db.QueryRow(ctx, query).Scan(&ageSeconds); err != nil {
-		return 0, fmt.Errorf("failed to query oldest uncleared expired manual tier override age: %w", err)
+	if err := r.db.QueryRow(ctx, oldestExpiredCompGrantAgeQuery).Scan(&ageSeconds); err != nil {
+		return 0, fmt.Errorf("failed to query oldest expired comp grant age: %w", err)
 	}
 	if ageSeconds < 0 {
-		// Defensive only: expiredManualTierOverridePredicate's manual_tier_ends_at < NOW() clause
-		// means every row this aggregate considers is already in the past, so NOW() - MIN(...)
-		// should never go negative — but never let a clock-skew edge case report a negative "age".
+		// Defensive only: the `expires_at < NOW()` clause means every grant this aggregate
+		// considers is already in the past, so NOW() - MIN(...) should never go negative — but
+		// never let a clock-skew edge case report a negative "age".
 		ageSeconds = 0
 	}
 	return time.Duration(ageSeconds * float64(time.Second)), nil
@@ -202,7 +250,7 @@ func (r *jobHealthRepository) GetOutstandingPlaidCleanupStats(ctx context.Contex
 		return 0, 0, fmt.Errorf("failed to query outstanding Plaid cleanup stats: %w", err)
 	}
 	if ageSeconds < 0 {
-		// Defensive only, mirroring GetOldestUnclearedExpiredManualTierOverrideAge's clamp above —
+		// Defensive only, mirroring GetOldestExpiredCompGrantAge's clamp above —
 		// the `plaid_cleanup_pending_at IS NOT NULL` clause means every row this aggregate
 		// considers already has a real timestamp in the past, so NOW() - MIN(...) should never go
 		// negative, but never let a clock-skew edge case report a negative "age".
@@ -246,4 +294,86 @@ func (r *jobHealthRepository) GetDeletionResidueStats(ctx context.Context) (int,
 		ageSeconds = 0
 	}
 	return int(count), time.Duration(ageSeconds * float64(time.Second)), nil
+}
+
+// revenueCatWebhookInboxStatsQuery is GetRevenueCatWebhookInboxStats' SQL, hoisted so a unit test
+// can pin its shape (the `processed_at IS NULL` predicate and the received_at MIN) without a
+// database. The partial index revenuecat_webhooks_pending_idx serves the predicate and the MIN.
+const revenueCatWebhookInboxStatsQuery = `
+	SELECT COUNT(*), COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(received_at))), 0)
+	FROM revenuecat_webhooks
+	WHERE processed_at IS NULL
+`
+
+// revenueCatOperationsStatsQuery is GetRevenueCatOperationsStats' SQL. `errored` counts rows that
+// are still stage='pending' but have recorded a last_error — there is no 'failed' stage.
+const revenueCatOperationsStatsQuery = `
+	SELECT COUNT(*), COUNT(*) FILTER (WHERE last_error <> ''), COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(created_at))), 0)
+	FROM revenuecat_operations
+	WHERE stage = 'pending'
+`
+
+// revenueCatCompGrantsOutstandingQuery counts currently-live comp_* grants in the stored
+// projection. The key prefix is matched with LIKE 'comp\_%' (the backslash escapes the underscore,
+// which is a single-character wildcard in LIKE), the same predicate
+// oldestExpiredCompGrantAgeQuery uses for the expired side. A grant with no expires_at is
+// permanent and therefore outstanding.
+const revenueCatCompGrantsOutstandingQuery = `
+	SELECT COUNT(*)
+	FROM revenuecat_customers rc
+	CROSS JOIN LATERAL jsonb_array_elements(rc.grants) AS g
+	WHERE g->>'key' LIKE 'comp\_%'
+	  AND (g->>'expires_at' IS NULL OR (g->>'expires_at')::timestamptz > NOW())
+`
+
+// revenueCatRefreshOverdueUsersQuery counts customers whose refresh window has elapsed. Served by
+// revenuecat_customers_refresh_idx.
+const revenueCatRefreshOverdueUsersQuery = `
+	SELECT COUNT(*)
+	FROM revenuecat_customers
+	WHERE next_refresh_at < NOW()
+`
+
+// GetRevenueCatWebhookInboxStats implements the interface doc comment above.
+func (r *jobHealthRepository) GetRevenueCatWebhookInboxStats(ctx context.Context) (int, time.Duration, error) {
+	var count int64
+	var ageSeconds float64
+	if err := r.db.QueryRow(ctx, revenueCatWebhookInboxStatsQuery).Scan(&count, &ageSeconds); err != nil {
+		return 0, 0, fmt.Errorf("failed to query RevenueCat webhook inbox stats: %w", err)
+	}
+	if ageSeconds < 0 {
+		ageSeconds = 0
+	}
+	return int(count), time.Duration(ageSeconds * float64(time.Second)), nil
+}
+
+// GetRevenueCatOperationsStats implements the interface doc comment above.
+func (r *jobHealthRepository) GetRevenueCatOperationsStats(ctx context.Context) (int, int, time.Duration, error) {
+	var pending, errored int64
+	var ageSeconds float64
+	if err := r.db.QueryRow(ctx, revenueCatOperationsStatsQuery).Scan(&pending, &errored, &ageSeconds); err != nil {
+		return 0, 0, 0, fmt.Errorf("failed to query RevenueCat operations stats: %w", err)
+	}
+	if ageSeconds < 0 {
+		ageSeconds = 0
+	}
+	return int(pending), int(errored), time.Duration(ageSeconds * float64(time.Second)), nil
+}
+
+// GetRevenueCatCompGrantsOutstanding implements the interface doc comment above.
+func (r *jobHealthRepository) GetRevenueCatCompGrantsOutstanding(ctx context.Context) (int, error) {
+	var count int64
+	if err := r.db.QueryRow(ctx, revenueCatCompGrantsOutstandingQuery).Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to query outstanding RevenueCat comp grants: %w", err)
+	}
+	return int(count), nil
+}
+
+// GetRevenueCatRefreshOverdueUsers implements the interface doc comment above.
+func (r *jobHealthRepository) GetRevenueCatRefreshOverdueUsers(ctx context.Context) (int, error) {
+	var count int64
+	if err := r.db.QueryRow(ctx, revenueCatRefreshOverdueUsersQuery).Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to query overdue RevenueCat refreshes: %w", err)
+	}
+	return int(count), nil
 }

@@ -13,6 +13,30 @@ import {
 // ── Deny-by-default ────────────────────────────────────────────────────────
 
 describe('deny-by-default', () => {
+  for (const [operationId, operationClass] of [
+    ['getAdminRevenueCatHealth', 'read'],
+    ['listAdminRevenueCatWebhooks', 'read'],
+    ['getAdminRevenueCatUser', 'read'],
+    ['replayAdminRevenueCatWebhook', 'write'],
+    ['requestAdminRevenueCatGrant', 'write'],
+    ['retryAdminRevenueCatOperation', 'write'],
+    ['refreshAdminRevenueCatUser', 'write'],
+    ['getRevenueCatSubscription', 'read'],
+    ['refreshRevenueCatSubscription', 'write'],
+    ['beginRevenueCatCheckout', 'write'],
+    ['releaseRevenueCatCheckout', 'write'],
+    ['revenuecat-webhook', 'write'],
+  ] as const) {
+    it(`explicitly excludes ${operationId} without exposing subscription controls`, () => {
+      const entry = getCapability(operationId)
+      expect(entry).toBeDefined()
+      expect(entry?.class).toBe(operationClass)
+      expect(entry?.excluded).toBe(true)
+      expect(entry?.excludedReason).toBeTruthy()
+      expect(isAllowed(operationId)).toBe(false)
+    })
+  }
+
   it('returns undefined for a completely unknown operationId', () => {
     expect(getCapability('nonExistentOperation')).toBeUndefined()
   })
@@ -151,7 +175,7 @@ describe('excluded operations', () => {
     expect(getCapability('disconnectInstitution')?.publicBoundary).toBe('bank-connections')
     expect(getCapability('acceptHouseholdInvite')?.publicBoundary).toBe('household-sharing')
     expect(getCapability('updatePrivacySettings')?.publicBoundary).toBe('household-sharing')
-    expect(getCapability('cancel-paddle-subscription')?.publicBoundary).toBe('subscription-changes')
+    expect(getCapability('refreshRevenueCatSubscription')?.publicBoundary).toBe('subscription-changes')
     expect(getCapability('requestDeletion')?.publicBoundary).toBe('account-deletion')
 
     expect(getCapability('checkRole')?.publicBoundary).toBeUndefined()
@@ -167,7 +191,6 @@ describe('excluded operations', () => {
       'getSystemHealth',
       'listAdminDeadLetterJobs',
       'bulkDeleteAdminDeadLetterJobs',
-      'grantTrial',
       'get-admin-user-subscription',
       'update-admin-user-tier'
     ]
@@ -271,9 +294,9 @@ describe('excluded operations', () => {
   })
 
   it('excludes subscription writes (subscription management stays in-app)', () => {
-    expect(isExcluded('cancel-paddle-subscription')).toBe(true)
     expect(isExcluded('create-paddle-checkout')).toBe(true)
-    expect(isExcluded('update-paddle-subscription')).toBe(true)
+    expect(isExcluded('refreshRevenueCatSubscription')).toBe(true)
+    expect(isExcluded('beginRevenueCatCheckout')).toBe(true)
   })
 
   it('excludes webhook endpoints', () => {
@@ -388,9 +411,12 @@ describe('completeness', () => {
     //   Re-derive from `bun run src/spec/index-builder.ts`, which prints the entry count it wrote.
     // +1 from #1630 B7: listAdminBudgetHierarchyAudits, the hierarchy audit's operator surface.
     // +1 from #1637: frontend-only budget plan report, explicitly excluded.
+    // +12 from #1652: RevenueCat admin, subscription and webhook surfaces, all excluded.
+    // -4 from #1652: the deleted admin trial-grant operation (todo 5) and the three deleted Paddle
+    //   self-service routes preview-update / update / cancel (todo 10).
     // +7 from #1650: Support identity, MCP telemetry, and five PostHog erasure operator
     //   endpoints, all internal/admin-only and excluded.
-    expect(ALL_OPERATION_IDS.length).toBe(220)
+    expect(ALL_OPERATION_IDS.length).toBe(228)
     for (const opId of ALL_OPERATION_IDS) {
       const entry = getCapability(opId)
       expect(entry).toBeDefined() // every known op must be classified

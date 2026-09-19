@@ -102,7 +102,7 @@ var _ services.DeadLetterService = (*MockDeadLetterService)(nil)
 // newDLQHandler creates an AdminHandler with mock DLQ service for direct handler tests.
 func newDLQHandler(svc services.DeadLetterService) *AdminHandler {
 	cfg := &config.Config{Environment: "qa"}
-	return NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
+	return NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg).
 		WithDeadLetterService(svc)
 }
 

@@ -765,13 +765,34 @@ describe('legacy migration inventory', () => {
     const retiredFrontendEvents = new Set(['first_account_linked', 'plaid_link_succeeded'])
     const retiredMCPEvents = new Set(Object.values(fixture.mcp))
     const retiredEvents = new Set([...retiredFrontendEvents, ...retiredMCPEvents])
+    // #1652 removed these from the catalog outright: their emitters died with the deleted
+    // manual-tier-override and past-due services, and the concepts they described are gone.
+    // Filtered out of the v1-fixture comparison rather than deleted from the fixture, so the
+    // historical inventory stays intact and the removal stays explicit and auditable.
+    const removedEvents = new Set([
+      'admin_subscription_override_expired',
+      'past_due_auto_cancelled',
+      'past_due_plaid_disconnected',
+    ])
+    // #1652 promoted these from legacy to active with a real bounded contract, so they are no
+    // longer part of the legacy inventory the fixture pins.
+    const promotedEvents = new Set([
+      'admin_subscription_override_applied_server',
+      'admin_subscription_override_removed_server',
+      // #1652 todo 10: promoted so the authoritative daily backstop can reuse the same event
+      // through the Gateway (a legacy zero-property contract has no generated payload to pass
+      // to CaptureEvent). The subscription-webhook fast-path emitter keeps its raw Capture call.
+      'household_over_capacity_entered',
+    ])
     expect(legacy.map((event) => event.name).sort()).toEqual(
-      fixture.legacy_events.filter((event) => !retiredEvents.has(event)),
+      fixture.legacy_events.filter((event) => !retiredEvents.has(event) && !removedEvents.has(event) && !promotedEvents.has(event)),
     )
     expect(ts).toEqual(Object.fromEntries(
       Object.entries(fixture.typescript).filter(([, event]) => !retiredFrontendEvents.has(event)),
     ))
-    expect(go).toEqual(fixture.go)
+    expect(go).toEqual(Object.fromEntries(
+      Object.entries(fixture.go).filter(([, event]) => !removedEvents.has(event) && !promotedEvents.has(event)),
+    ))
     expect(mcp).toEqual({})
     expect(fixture.mcp).toEqual({
       OAUTH_AUTHORIZED: 'mcp_oauth_authorized',
@@ -810,12 +831,22 @@ describe('legacy migration inventory', () => {
     const catalog = parseEventCatalogYaml(
       readFileSync(join(import.meta.dir, '../config/posthog_events.yaml'), 'utf8'),
     )
+    const removedContractIds = new Set([
+      'backend_admin_subscription_override_expired',
+      'backend_past_due_auto_cancelled',
+      'backend_past_due_plaid_disconnected',
+    ])
+    // #1652 todo 10 promoted this contract to active and rewrote its description to name the
+    // daily-backstop emitter, so the fixture's historical description no longer matches.
+    const promotedContractIds = new Set(['backend_household_over_capacity_entered'])
     const descriptions = Object.fromEntries(
       catalog.events
-        .filter((event) => Object.hasOwn(fixture.descriptions, event.contract_id))
+        .filter((event) => Object.hasOwn(fixture.descriptions, event.contract_id) && !promotedContractIds.has(event.contract_id))
         .map((event) => [event.contract_id, event.description]),
     )
 
-    expect(descriptions).toEqual(fixture.descriptions)
+    expect(descriptions).toEqual(Object.fromEntries(
+      Object.entries(fixture.descriptions).filter(([contractId]) => !removedContractIds.has(contractId) && !promotedContractIds.has(contractId)),
+    ))
   })
 })

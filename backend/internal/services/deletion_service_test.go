@@ -225,11 +225,6 @@ func (m *MockProfileRepositoryForDeletion) GetUsersWithExpiringTrials(ctx contex
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockProfileRepositoryForDeletion) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
-	args := m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial)
-	return args.Error(0)
-}
-
 func (m *MockProfileRepositoryForDeletion) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error {
 	args := m.Called(ctx, userID, paddleCustomerID)
 	return args.Error(0)
@@ -271,9 +266,6 @@ func (m *MockProfileRepositoryForDeletion) GetUsersNeedingRetention30dNotice(ctx
 func (m *MockProfileRepositoryForDeletion) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
 }
-func (m *MockProfileRepositoryForDeletion) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {
-	return nil, nil
-}
 
 // Dunning methods (#898)
 func (m *MockProfileRepositoryForDeletion) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
@@ -305,10 +297,6 @@ func (m *MockProfileRepositoryForDeletion) GetUsersNeedingPlaidDisconnectRepair(
 }
 
 func (m *MockProfileRepositoryForDeletion) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
-
-func (m *MockProfileRepositoryForDeletion) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
 

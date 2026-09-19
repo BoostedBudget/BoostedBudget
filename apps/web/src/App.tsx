@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, Suspense, lazy } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router'
 import { useAuth } from '@clerk/react-router'
+import { useRevenueCatIdentity } from './features/billing/hooks/useRevenueCatCheckout'
 import { Toaster } from 'sonner'
 import { useCookieState } from './shared/hooks/useCookieState'
 import {
@@ -208,6 +209,7 @@ const UsersPage = lazy(() =>
 const HealthDashboardPage = lazy(() =>
   import('./features/admin').then(m => ({ default: m.HealthDashboardPage }))
 )
+const RevenueCatPage = lazy(() => import('./features/admin/components/RevenueCatPage').then(m => ({ default: m.RevenueCatPage })))
 const WebhooksPage = lazy(() =>
   import('./features/admin').then(m => ({ default: m.WebhooksPage }))
 )
@@ -297,42 +299,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
 
   const isLandingPage = location.pathname === '/' && !isAuthenticated
 
-  // Initialize Paddle.js SDK
-  useEffect(() => {
-    const paddleToken = import.meta.env.VITE_PADDLE_CLIENT_TOKEN
-    const paddleEnv = import.meta.env.VITE_PADDLE_ENV || 'sandbox'
-
-    if (!paddleToken) {
-      console.warn('Paddle client token not configured (VITE_PADDLE_CLIENT_TOKEN)')
-      return
-    }
-
-    if (!window.Paddle) {
-      console.warn('Paddle.js SDK not loaded')
-      return
-    }
-
-    try {
-      window.Paddle.Environment.set(paddleEnv === 'production' ? 'production' : 'sandbox')
-      window.Paddle.Initialize({
-        token: paddleToken,
-        eventCallback: (event) => {
-          // Paddle events carry customer email/billing metadata — dev-only.
-          devLog('Paddle event:', event)
-
-          // Dispatch custom events for checkout lifecycle
-          if (event.name === 'checkout.completed') {
-            window.dispatchEvent(new CustomEvent('paddle:checkout.completed', { detail: event }))
-          } else if (event.name === 'checkout.closed') {
-            window.dispatchEvent(new CustomEvent('paddle:checkout.closed', { detail: event }))
-          }
-        },
-      })
-      devLog('Paddle initialized successfully', { environment: paddleEnv })
-    } catch (error) {
-      console.error('Failed to initialize Paddle:', error)
-    }
-  }, [])
+  useRevenueCatIdentity()
 
   const handleConsentChange = (
     consents: CookieConsentSettings,
@@ -629,6 +596,7 @@ function App({ analyticsPageViews }: AppProps = {}) {
               <Route index element={<Suspense fallback={<PageSkeleton />}><AdminDashboardPage /></Suspense>} />
               <Route path="users" element={<Suspense fallback={<PageSkeleton />}><UsersPage /></Suspense>} />
               <Route path="health" element={<Suspense fallback={<PageSkeleton />}><HealthDashboardPage /></Suspense>} />
+              <Route path="revenuecat" element={<Suspense fallback={<PageSkeleton />}><RevenueCatPage /></Suspense>} />
               <Route path="webhooks" element={<Suspense fallback={<PageSkeleton />}><WebhooksPage /></Suspense>} />
               <Route path="dead-letter" element={<Suspense fallback={<PageSkeleton />}><DeadLetterPage /></Suspense>} />
               {/* Issue #1497 — path matches ADMIN_ROUTES.PLAID_ORPHANED_ITEMS and the endpoint it reads. */}

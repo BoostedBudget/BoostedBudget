@@ -42,6 +42,7 @@ const authFile = join(__dirname, 'e2e/.auth/user.json');
 export default defineConfig({
   // Test directory
   testDir: './e2e',
+  globalTeardown: process.env.E2E_REVENUECAT_FIXTURE_MODE === 'simulated' ? './e2e/revenuecat-fixture.teardown.ts' : undefined,
 
   // Maximum time one test can run
   // CI runs on a shared Mac Mini (4 runners) with heavy job contention — 30s gives headroom
@@ -210,6 +211,11 @@ export default defineConfig({
   // Run your local dev server before starting the tests
   // Comment this out if you want to run tests against already running servers
   webServer: [
+    ...(process.env.E2E_REVENUECAT_FIXTURE_MODE === 'simulated' ? [{
+      command: 'bun run test:revenuecat-fixture && bun src/test/support/revenuecat-e2e-fixture.ts',
+      wait: { stdout: /RevenueCat simulated fixture ready (?<e2e_revenuecat_fixture_pid>\d+)/ },
+      timeout: 30000,
+    }] : []),
     {
       // Pass PORT, E2E_BACKEND_PORT, VITE_CLERK_PUBLISHABLE_KEY, and VITE_MCP_URL env vars to Vite.
       // E2E_BACKEND_PORT is needed for the Vite proxy configuration.

@@ -16,7 +16,6 @@ type TierConfig struct {
 	Tiers       map[domain.TierName]domain.SubscriptionTier `yaml:"tiers"`
 	DefaultTier domain.TierName                              `yaml:"default_tier"`
 	Trial       TrialConfig                                   `yaml:"trial"`
-	PastDue     PastDueConfig                                 `yaml:"past_due"`
 	mu          sync.RWMutex                                 `yaml:"-"` // Protects concurrent access
 }
 
@@ -25,12 +24,6 @@ type TrialConfig struct {
 	Enabled      bool            `yaml:"enabled"`
 	DurationDays int             `yaml:"duration_days"`
 	Tier         domain.TierName `yaml:"tier"`
-}
-
-// PastDueConfig holds past_due subscription configuration (Issue #898)
-type PastDueConfig struct {
-	PlaidDisconnectDays int `yaml:"plaid_disconnect_days"`
-	GraceDays           int `yaml:"grace_days"`
 }
 
 // Global tier config instance (singleton)
@@ -138,7 +131,6 @@ func loadTierConfigFromFile() (*TierConfig, error) {
 		Tiers       map[string]domain.SubscriptionTier `yaml:"tiers"`
 		DefaultTier string                              `yaml:"default_tier"`
 		Trial       TrialConfig                         `yaml:"trial"`
-		PastDue     PastDueConfig                       `yaml:"past_due"`
 	}
 
 	if err := yaml.Unmarshal(data, &raw); err != nil {
@@ -148,7 +140,6 @@ func loadTierConfigFromFile() (*TierConfig, error) {
 	// Convert tier keys to TierName type and populate
 	config.DefaultTier = domain.TierName(raw.DefaultTier)
 	config.Trial = raw.Trial
-	config.PastDue = raw.PastDue
 
 	for name, tier := range raw.Tiers {
 		tier.Name = domain.TierName(name)
@@ -250,11 +241,6 @@ func (tc *TierConfig) validate() error {
 		}
 	}
 
-	// Validate PastDueConfig (Issue #898)
-	if err := tc.validatePastDue(); err != nil {
-		return err
-	}
-
 	// Validate Trial config
 	if err := tc.validateTrial(); err != nil {
 		return err
@@ -273,22 +259,6 @@ func (tc *TierConfig) validateTrial() error {
 	}
 	if tc.Trial.DurationDays <= 0 {
 		return fmt.Errorf("trial.duration_days must be > 0, got %d", tc.Trial.DurationDays)
-	}
-	return nil
-}
-
-// validatePastDue checks that the past_due configuration is valid
-func (tc *TierConfig) validatePastDue() error {
-	pd := tc.PastDue
-	if pd.PlaidDisconnectDays <= 0 {
-		return fmt.Errorf("past_due.plaid_disconnect_days must be > 0, got %d", pd.PlaidDisconnectDays)
-	}
-	if pd.GraceDays <= 0 {
-		return fmt.Errorf("past_due.grace_days must be > 0, got %d", pd.GraceDays)
-	}
-	if pd.GraceDays <= pd.PlaidDisconnectDays {
-		return fmt.Errorf("past_due.grace_days (%d) must be greater than past_due.plaid_disconnect_days (%d)",
-			pd.GraceDays, pd.PlaidDisconnectDays)
 	}
 	return nil
 }
@@ -354,7 +324,6 @@ func (tc *TierConfig) Reload() error {
 	tc.Tiers = newConfig.Tiers
 	tc.DefaultTier = newConfig.DefaultTier
 	tc.Trial = newConfig.Trial
-	tc.PastDue = newConfig.PastDue
 
 	return nil
 }
@@ -365,14 +334,6 @@ func (tc *TierConfig) GetTrialConfig() TrialConfig {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 	return tc.Trial
-}
-
-// GetPastDueConfig returns the past_due configuration
-// Issue #898: Past due subscription dunning lifecycle
-func (tc *TierConfig) GetPastDueConfig() PastDueConfig {
-	tc.mu.RLock()
-	defer tc.mu.RUnlock()
-	return tc.PastDue
 }
 
 // GetTierByPriceID returns the tier name for a given Paddle price ID

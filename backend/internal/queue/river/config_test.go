@@ -18,6 +18,7 @@ func TestDefaultWorkerConfig(t *testing.T) {
 	assert.Equal(t, 20, wc.Default)
 	assert.Equal(t, 5, wc.Notifications)
 	assert.Equal(t, 3, wc.Low)
+	assert.Equal(t, 2, wc.RevenueCat)
 }
 
 // --- TotalWorkers ---
@@ -29,9 +30,9 @@ func TestTotalWorkers(t *testing.T) {
 		expected int
 	}{
 		{
-			name:     "default config sums to 38",
+			name:     "default config includes two RevenueCat workers",
 			wc:       river.DefaultWorkerConfig(),
-			expected: 38, // 10 + 20 + 5 + 3
+			expected: 40, // 10 + 20 + 5 + 3 + 2
 		},
 		{
 			name: "custom config sums correctly",
@@ -70,7 +71,8 @@ func TestToRiverQueues(t *testing.T) {
 	queues := wc.ToRiverQueues()
 
 	require.NotNil(t, queues)
-	require.Len(t, queues, 4)
+	require.Len(t, queues, 5)
+	assert.Equal(t, 2, queues["revenuecat"].MaxWorkers)
 
 	assert.Equal(t, 10, queues["critical"].MaxWorkers)
 	assert.Equal(t, 20, queues["default"].MaxWorkers)
@@ -88,6 +90,7 @@ func TestToRiverQueues_ContainsAllExpectedQueues(t *testing.T) {
 	queues := wc.ToRiverQueues()
 
 	expectedKeys := []string{"critical", "default", "notifications", "low"}
+	assert.NotContains(t, queues, "revenuecat", "a custom zero limit omits the queue")
 	for _, key := range expectedKeys {
 		_, ok := queues[key]
 		assert.True(t, ok, "expected queue %q to be present", key)
@@ -106,7 +109,7 @@ func TestDefaultConfig(t *testing.T) {
 
 	// Workers should be populated
 	require.NotNil(t, cfg.Workers)
-	assert.Equal(t, 38, cfg.Workers.TotalWorkers())
+	assert.Equal(t, 40, cfg.Workers.TotalWorkers())
 
 	// Timeouts should be non-zero
 	assert.Equal(t, 30*time.Minute, cfg.JobTimeout)

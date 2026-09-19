@@ -40,8 +40,7 @@ import (
 // retention_expires_at ~now+retentionMonths — fenced with dbNow/dbAddMonths (not time.Now()/AddDate)
 // so the assertion is immune to both Go-vs-Postgres clock drift and Go-vs-Postgres month-arithmetic
 // divergence, exactly like the Task NA Part 1 rewrites in
-// admin_user_repository_remove_tier_override_integration_test.go and
-// manual_tier_override_expiry_check_integration_test.go.
+// admin_user_repository_remove_tier_override_integration_test.go.
 func TestSetRetentionDates_Integration_ArmsClockWithPostgresArithmetic(t *testing.T) {
 	pool := connectTestDB(t)
 	enc := newTestFieldEncryptor(t)

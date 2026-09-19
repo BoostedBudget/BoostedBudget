@@ -37,7 +37,7 @@ SANDBOX=$(mktemp -d)
 trap 'rm -rf "$SANDBOX"' EXIT
 
 cat > "$SANDBOX/go.mod" <<'EOF'
-module summarizetestfixture
+module github.com/example/summarizetestfixture
 
 go 1.21
 EOF
@@ -118,6 +118,38 @@ if ! printf '%s' "$OUT_CLEAN" | grep -q "SKIPPED"; then
   pass "no skip-warning block when SKIP=0"
 else
   fail "expected no skip-warning block on a clean run, got: $OUT_CLEAN"
+fi
+
+echo ""
+echo "Test 6: a clean run reports PKG_FAIL=0 and prints no build-failure warning"
+if printf '%s' "$OUT_CLEAN" | grep -q "PKG_FAIL=0" \
+   && ! printf '%s' "$OUT_CLEAN" | grep -q "package(s) FAILED at the package level"; then
+  pass "clean run reports PKG_FAIL=0 with no build-failure warning"
+else
+  fail "expected PKG_FAIL=0 and no build-failure warning, got: $OUT_CLEAN"
+fi
+
+echo ""
+echo "Test 7: a Go BUILD failure is surfaced, not a false green (G22)"
+# A build failure emits a PACKAGE-level 'FAIL <pkg> [build failed]' line and never a
+# '--- FAIL:' line, so the pre-G22 summary printed PASS=0 FAIL=0 SKIP=0 while the command
+# exited non-zero. The fixture module path is github.com/... so the script's package-level
+# regex sees it, exactly as it sees the real backend module.
+cat > "$SANDBOX/fixture_test.go" <<'EOF'
+package summarizetestfixture
+
+import "testing"
+
+func TestBrokenBuild(t *testing.T) { undefinedSymbolForBuildFailure() }
+EOF
+OUT_BUILD=$(cd "$SANDBOX" && bash "$SCRIPT" go test ./... 2>&1)
+CODE_BUILD=$?
+if [ "$CODE_BUILD" -ne 0 ] \
+   && printf '%s' "$OUT_BUILD" | grep -q "PKG_FAIL=1" \
+   && printf '%s' "$OUT_BUILD" | grep -q "package(s) FAILED at the package level"; then
+  pass "build failure exits non-zero and is surfaced as PKG_FAIL=1 with a warning"
+else
+  fail "expected non-zero exit + PKG_FAIL=1 + warning, got exit=$CODE_BUILD output=$OUT_BUILD"
 fi
 
 echo ""

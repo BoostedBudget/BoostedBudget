@@ -36,4 +36,6 @@ export interface QueueMetrics {
   failed: number;
   pending: number;
   running: number;
+  /** Metrics could not be read; numeric placeholders are not measured zeroes */
+  unavailable?: boolean;
 }

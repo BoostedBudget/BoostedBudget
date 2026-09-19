@@ -51,7 +51,7 @@ func newResidueHealthService(t *testing.T, jobHealthRepo *MockJobHealthRepositor
 // coupled to them. Their own tests cover them.
 func stubBacklogQueries(repo *MockJobHealthRepository) {
 	repo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), nil)
-	repo.On("GetOldestUnclearedExpiredManualTierOverrideAge", mock.Anything).Return(time.Duration(0), nil)
+	repo.On("GetOldestExpiredCompGrantAge", mock.Anything).Return(time.Duration(0), nil)
 }
 
 // TestGetSystemHealth_DeletionResidue_SeededPopulationIsVisible is the brief's RED test: a residue

@@ -43,7 +43,8 @@ import type {
 import type {
   ErrorModel,
   PaddleWebhookResponseBody,
-  PlaidWebhookResponseBody
+  PlaidWebhookResponseBody,
+  RevenueCatWebhookOutputBody
 } from '../../models';
 
 import { customInstance } from '../../client';
@@ -183,4 +184,68 @@ export const useHandlePlaidWebhook = <TError = ErrorType<ErrorModel>,
         TContext
       > => {
       return useMutation(getHandlePlaidWebhookMutationOptions(options), queryClient);
+    }
+    /**
+ * @summary Receive RevenueCat webhook notifications
+ */
+export const revenuecatWebhook = (
+    revenuecatWebhookBody: BodyType<Blob>,
+ options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
+) => {
+
+
+      return customInstance<RevenueCatWebhookOutputBody>(
+      {url: `/webhooks/revenuecat`, method: 'POST',
+      headers: {'Content-Type': 'application/octet-stream', },
+      data: revenuecatWebhookBody, signal
+    },
+      options);
+    }
+
+
+
+
+export const getRevenuecatWebhookMutationOptions = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof revenuecatWebhook>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof revenuecatWebhook>>, TError,{data: BodyType<Blob>}, TContext> => {
+
+const mutationKey = ['revenuecatWebhook'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof revenuecatWebhook>>, {data: BodyType<Blob>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  revenuecatWebhook(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RevenuecatWebhookMutationResult = NonNullable<Awaited<ReturnType<typeof revenuecatWebhook>>>
+    export type RevenuecatWebhookMutationBody = BodyType<Blob>
+    export type RevenuecatWebhookMutationError = ErrorType<ErrorModel>
+
+    /**
+ * @summary Receive RevenueCat webhook notifications
+ */
+export const useRevenuecatWebhook = <TError = ErrorType<ErrorModel>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof revenuecatWebhook>>, TError,{data: BodyType<Blob>}, TContext>, request?: SecondParameter<typeof customInstance>}
+ , queryClient?: QueryClient): UseMutationResult<
+        Awaited<ReturnType<typeof revenuecatWebhook>>,
+        TError,
+        {data: BodyType<Blob>},
+        TContext
+      > => {
+      return useMutation(getRevenuecatWebhookMutationOptions(options), queryClient);
     }

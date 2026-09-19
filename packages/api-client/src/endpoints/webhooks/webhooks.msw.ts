@@ -45,13 +45,16 @@ import type {
 
 import type {
   PaddleWebhookResponseBody,
-  PlaidWebhookResponseBody
+  PlaidWebhookResponseBody,
+  RevenueCatWebhookOutputBody
 } from '../../models';
 
 
 export const getPaddleWebhookResponseMock = (overrideResponse: Partial<Extract<PaddleWebhookResponseBody, object>> = {}): PaddleWebhookResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getHandlePlaidWebhookResponseMock = (overrideResponse: Partial<Extract<PlaidWebhookResponseBody, object>> = {}): PlaidWebhookResponseBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getRevenuecatWebhookResponseMock = (overrideResponse: Partial<Extract<RevenueCatWebhookOutputBody, object>> = {}): RevenueCatWebhookOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 
 export const getPaddleWebhookMockHandler = (overrideResponse?: PaddleWebhookResponseBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<PaddleWebhookResponseBody> | PaddleWebhookResponseBody), options?: RequestHandlerOptions) => {
@@ -77,7 +80,20 @@ export const getHandlePlaidWebhookMockHandler = (overrideResponse?: PlaidWebhook
       })
   }, options)
 }
+
+export const getRevenuecatWebhookMockHandler = (overrideResponse?: RevenueCatWebhookOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<RevenueCatWebhookOutputBody> | RevenueCatWebhookOutputBody), options?: RequestHandlerOptions) => {
+  return http.post('*/webhooks/revenuecat', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getRevenuecatWebhookResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
 export const getWebhooksMock = () => [
   getPaddleWebhookMockHandler(),
-  getHandlePlaidWebhookMockHandler()
+  getHandlePlaidWebhookMockHandler(),
+  getRevenuecatWebhookMockHandler()
 ]

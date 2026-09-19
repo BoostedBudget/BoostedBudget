@@ -38,6 +38,14 @@ var (
 	// email but its custom_data.user_id does not match the calling user. Reusing would attach a different
 	// user's billing history to the current user.
 	ErrPaddleCustomerOwnershipMismatch = errors.New("paddle customer belongs to a different user")
+
+	// ErrPaddleAlreadyCancelled is returned by CancelSubscription when the subscription is already in a
+	// cancelled state in Paddle. This error is tolerated by callers that need to distinguish "already
+	// cancelled" from a fresh cancellation.
+	//
+	// #1652: relocated here from the deleted past_due_service.go, which was its only other consumer.
+	// CancelSubscription still maps paddle.ErrSubscriptionIsCanceledActionInvalid to it.
+	ErrPaddleAlreadyCancelled = errors.New("paddle subscription already cancelled")
 )
 
 // PaddleService defines the interface for Paddle payment operations.
@@ -66,25 +74,9 @@ type PaddleService interface {
 	// GetSubscription retrieves subscription details from Paddle.
 	GetSubscription(ctx context.Context, subscriptionID string) (*paddle.Subscription, error)
 
-	// UpdateSubscription changes a subscription to a different price tier.
-	// Handles proration automatically based on Paddle's billing rules.
-	UpdateSubscription(
-		ctx context.Context,
-		subscriptionID, newPriceID, prorationBillingMode string,
-	) (*paddle.Subscription, error)
-
-	// CancelSubscription cancels a subscription at the end of current billing period.
-	CancelSubscription(ctx context.Context, subscriptionID string) error
-
 	// CancelSubscriptionImmediately cancels a subscription effective immediately (no grace period).
 	// Issue #1006: Paddle cleanup during account deletion.
 	CancelSubscriptionImmediately(ctx context.Context, subscriptionID string) error
-
-	// PreviewUpdate calculates proration for a subscription tier change.
-	PreviewUpdate(
-		ctx context.Context,
-		subscriptionID, newPriceID string,
-	) (prorationAmount, currency, nextChargeDate string, err error)
 
 	// GetBillingPortalURL generates a URL for the Paddle billing portal session.
 	GetBillingPortalURL(ctx context.Context, customerID string) (string, error)
@@ -108,9 +100,7 @@ type paddleClient interface {
 	UpdateCustomer(ctx context.Context, req *paddle.UpdateCustomerRequest) (*paddle.Customer, error)
 	CreateTransaction(ctx context.Context, req *paddle.CreateTransactionRequest) (*paddle.Transaction, error)
 	GetSubscription(ctx context.Context, req *paddle.GetSubscriptionRequest) (*paddle.Subscription, error)
-	UpdateSubscription(ctx context.Context, req *paddle.UpdateSubscriptionRequest) (*paddle.Subscription, error)
 	CancelSubscription(ctx context.Context, req *paddle.CancelSubscriptionRequest) (*paddle.Subscription, error)
-	PreviewSubscriptionUpdate(ctx context.Context, req *paddle.PreviewSubscriptionUpdateRequest) (*paddle.SubscriptionPreview, error)
 }
 
 type paddleSDKClient struct {
@@ -157,16 +147,8 @@ func (c *paddleSDKClient) GetSubscription(ctx context.Context, req *paddle.GetSu
 	return c.sdk.GetSubscription(ctx, req)
 }
 
-func (c *paddleSDKClient) UpdateSubscription(ctx context.Context, req *paddle.UpdateSubscriptionRequest) (*paddle.Subscription, error) {
-	return c.sdk.UpdateSubscription(ctx, req)
-}
-
 func (c *paddleSDKClient) CancelSubscription(ctx context.Context, req *paddle.CancelSubscriptionRequest) (*paddle.Subscription, error) {
 	return c.sdk.CancelSubscription(ctx, req)
-}
-
-func (c *paddleSDKClient) PreviewSubscriptionUpdate(ctx context.Context, req *paddle.PreviewSubscriptionUpdateRequest) (*paddle.SubscriptionPreview, error) {
-	return c.sdk.PreviewSubscriptionUpdate(ctx, req)
 }
 
 // paddleService implements PaddleService with a configured Paddle SDK client
@@ -442,105 +424,6 @@ func (s *paddleService) GetSubscription(ctx context.Context, subscriptionID stri
 	return subscription, nil
 }
 
-// UpdateSubscription changes a subscription to a different price tier.
-func (s *paddleService) UpdateSubscription(
-	ctx context.Context,
-	subscriptionID, newPriceID, prorationBillingMode string,
-) (*paddle.Subscription, error) {
-	s.logger.Info("updating Paddle subscription",
-		"subscription_id", subscriptionID,
-		"new_price_id", newPriceID,
-	)
-
-	currentSub, err := s.GetSubscription(ctx, subscriptionID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch current subscription: %w", err)
-	}
-
-	prorationMode := parseProrationMode(prorationBillingMode)
-
-	patchedProrationMode := paddle.NewPatchField(prorationMode)
-
-	catalogItem := buildCatalogItem(newPriceID, currentSub)
-	updatedItems := []paddle.UpdateSubscriptionItems{
-		*paddle.NewUpdateSubscriptionItemsSubscriptionUpdateItemFromCatalog(catalogItem),
-	}
-
-	patchedItems := paddle.NewPatchField(updatedItems)
-
-	req := &paddle.UpdateSubscriptionRequest{
-		SubscriptionID:       subscriptionID,
-		Items:                patchedItems,
-		ProrationBillingMode: patchedProrationMode,
-	}
-
-	updatedSub, err := s.client.UpdateSubscription(ctx, req)
-	if err != nil {
-		s.logger.Error("failed to update Paddle subscription",
-			"subscription_id", subscriptionID,
-			"error", err,
-		)
-		return nil, fmt.Errorf("failed to update Paddle subscription: %w", err)
-	}
-
-	s.logger.Info("Paddle subscription updated successfully",
-		"subscription_id", subscriptionID,
-		"status", updatedSub.Status,
-	)
-
-	return updatedSub, nil
-}
-
-// CancelSubscription cancels a subscription at the end of the billing period.
-//
-// Issue #1413 H2: already-cancelled is mapped to ErrPaddleAlreadyCancelled (defined in
-// past_due_service.go, same package) rather than a generic wrapped error. PastDuePaddleClient's
-// interface doc has always promised this — "the implementation must tolerate
-// paddle.ErrSubscriptionIsCanceledActionInvalid by mapping it to ErrPaddleAlreadyCancelled" — but
-// nothing actually did it until now, so PastDueService.processGraceExpiry's
-// `!errors.Is(err, ErrPaddleAlreadyCancelled)` tolerance check could never match, and a retried
-// grace-cancel against an already-cancelled subscription would hard-fail instead of continuing.
-// Verified against paddle.ErrSubscriptionIsCanceledActionInvalid's definition in the vendored SDK
-// (github.com/PaddleHQ/paddle-go-sdk/v4/subscriptions.go) — the exact error code
-// CancelSubscriptionImmediately already tolerates below, just mapped to the sentinel THIS
-// method's callers expect instead of a bare nil (CancelSubscription's callers still need to know
-// "already cancelled" happened, since they take a different branch than a fresh cancellation;
-// CancelSubscriptionImmediately's caller does not distinguish the two).
-func (s *paddleService) CancelSubscription(ctx context.Context, subscriptionID string) error {
-	s.logger.Info("canceling Paddle subscription",
-		"subscription_id", subscriptionID,
-	)
-
-	effectiveFrom := paddle.EffectiveFromNextBillingPeriod
-
-	req := &paddle.CancelSubscriptionRequest{
-		SubscriptionID: subscriptionID,
-		EffectiveFrom:  &effectiveFrom,
-	}
-
-	canceledSub, err := s.client.CancelSubscription(ctx, req)
-	if err != nil {
-		if errors.Is(err, paddle.ErrSubscriptionIsCanceledActionInvalid) {
-			s.logger.Info("Paddle subscription already cancelled, tolerating",
-				"subscription_id", subscriptionID,
-			)
-			return ErrPaddleAlreadyCancelled
-		}
-		s.logger.Error("failed to cancel Paddle subscription",
-			"subscription_id", subscriptionID,
-			"error", err,
-		)
-		return fmt.Errorf("failed to cancel Paddle subscription: %w", err)
-	}
-
-	s.logger.Info("Paddle subscription canceled successfully",
-		"subscription_id", subscriptionID,
-		"status", canceledSub.Status,
-	)
-
-	return nil
-}
-
 // CancelSubscriptionImmediately cancels a subscription effective immediately (used during account deletion).
 // Issue #1006: Used during account deletion to stop billing with no grace period.
 func (s *paddleService) CancelSubscriptionImmediately(ctx context.Context, subscriptionID string) error {
@@ -574,92 +457,6 @@ func (s *paddleService) CancelSubscriptionImmediately(ctx context.Context, subsc
 	)
 
 	return nil
-}
-
-// PreviewUpdate calculates proration for a subscription tier change.
-func (s *paddleService) PreviewUpdate(
-	ctx context.Context,
-	subscriptionID, newPriceID string,
-) (prorationAmount, currency, nextChargeDate string, err error) {
-	s.logger.Info("previewing Paddle subscription update",
-		"subscription_id", subscriptionID,
-		"new_price_id", newPriceID,
-	)
-
-	currentSub, err := s.GetSubscription(ctx, subscriptionID)
-	if err != nil {
-		return "", "", "", fmt.Errorf("failed to fetch current subscription: %w", err)
-	}
-
-	catalogItem := buildCatalogItem(newPriceID, currentSub)
-	updatedItems := []paddle.PreviewSubscriptionUpdateItems{
-		*paddle.NewPreviewSubscriptionUpdateItemsSubscriptionUpdateItemFromCatalog(catalogItem),
-	}
-
-	patchedItems := paddle.NewPatchField(updatedItems)
-	prorationMode := paddle.ProrationBillingModeProratedImmediately
-	patchedProrationMode := paddle.NewPatchField(prorationMode)
-
-	req := &paddle.PreviewSubscriptionUpdateRequest{
-		SubscriptionID:       subscriptionID,
-		Items:                patchedItems,
-		ProrationBillingMode: patchedProrationMode,
-	}
-
-	preview, err := s.client.PreviewSubscriptionUpdate(ctx, req)
-	if err != nil {
-		s.logger.Error("failed to preview subscription update",
-			"subscription_id", subscriptionID,
-			"error", err,
-		)
-		return "", "", "", fmt.Errorf("failed to preview subscription update: %w", err)
-	}
-
-	var prorationAmt, curr string
-	if preview.ImmediateTransaction != nil {
-		prorationAmt = preview.ImmediateTransaction.Details.Totals.Total
-		curr = string(preview.CurrencyCode)
-	}
-
-	var nextCharge string
-	if preview.NextTransaction != nil {
-		nextCharge = preview.NextTransaction.BillingPeriod.StartsAt
-	}
-
-	s.logger.Info("subscription update preview completed",
-		"subscription_id", subscriptionID,
-		"proration_amount", prorationAmt,
-		"currency", curr,
-	)
-
-	return prorationAmt, curr, nextCharge, nil
-}
-
-// buildCatalogItem constructs a subscription catalog item, defaulting quantity to 1 if no items exist.
-func buildCatalogItem(priceID string, currentSub *paddle.Subscription) *paddle.SubscriptionUpdateItemFromCatalog {
-	quantity := 1
-	if len(currentSub.Items) > 0 {
-		quantity = currentSub.Items[0].Quantity
-	}
-	return &paddle.SubscriptionUpdateItemFromCatalog{
-		PriceID:  priceID,
-		Quantity: quantity,
-	}
-}
-
-// parseProrationMode converts a string to the corresponding ProrationBillingMode enum.
-// Defaults to ProratedImmediately for unknown values.
-func parseProrationMode(mode string) paddle.ProrationBillingMode {
-	switch mode {
-	case "prorated_immediately":
-		return paddle.ProrationBillingModeProratedImmediately
-	case "full_immediately":
-		return paddle.ProrationBillingModeFullImmediately
-	case "full_next_billing_period":
-		return paddle.ProrationBillingModeFullNextBillingPeriod
-	default:
-		return paddle.ProrationBillingModeProratedImmediately
-	}
 }
 
 // ArchiveAndAnonymizeCustomer archives the Paddle customer and anonymizes their email (GDPR PII erasure).

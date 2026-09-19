@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -18,6 +19,15 @@ import (
 type ProfileHandler struct {
 	service               services.ProfileService
 	overrideTierValidator func(tierName string) bool
+	revenueCatSummary     profileSubscriptionSummary
+}
+
+type profileSubscriptionSummary interface {
+	Summary(context.Context, *domain.User) services.RevenueCatSummary
+}
+
+func (h *ProfileHandler) SetRevenueCatSummary(summary profileSubscriptionSummary) {
+	h.revenueCatSummary = summary
 }
 
 // NewProfileHandler creates a new ProfileHandler instance.
@@ -109,6 +119,9 @@ func (h *ProfileHandler) UpdateProfile(ctx context.Context, input *UpdateProfile
 
 // enrichUserProfile computes derived fields for the user profile response.
 func (h *ProfileHandler) enrichUserProfile(ctx context.Context, user *domain.User) *domain.User {
+	if h.revenueCatSummary != nil {
+		return h.enrichRevenueCatProfile(ctx, user)
+	}
 	user.ComputeTrialDaysRemaining()
 
 	// Issue #1413: expose the effective status/comp state so the frontend stops rendering
@@ -149,6 +162,47 @@ func (h *ProfileHandler) enrichUserProfile(ctx context.Context, user *domain.Use
 		user.CompEndsAt = user.ManualTierEndsAt // nil = permanent comp
 	}
 	return user
+}
+
+func (h *ProfileHandler) enrichRevenueCatProfile(ctx context.Context, user *domain.User) *domain.User {
+	copy := *user
+	summary := h.revenueCatSummary.Summary(ctx, user)
+	copy.AccessResolved = &summary.AccessResolved
+	copy.EffectiveStatus = "unresolved"
+	copy.EffectiveTier = "premium"
+	copy.AccessSource = "unresolved"
+	copy.SubscriptionStatus = "unresolved"
+	copy.SubscriptionTier = "premium"
+	copy.IsComped = false
+	copy.CompTier = ""
+	copy.CompEndsAt = nil
+	copy.ManualTierOverride = nil
+	copy.ManualTierEndsAt = nil
+	copy.TrialStartedAt = nil
+	copy.TrialEndsAt = nil
+	copy.TrialDaysRemaining = nil
+	if summary.AccessResolved && summary.Effective != nil {
+		copy.EffectiveTier = summary.Effective.Tier
+		copy.EffectiveStatus = summary.Effective.Status
+		copy.AccessSource = string(summary.Effective.Source)
+	}
+	if summary.Own != nil {
+		copy.SubscriptionTier = summary.Own.Tier
+		copy.SubscriptionStatus = summary.Own.Status
+	}
+	if summary.Comp != nil {
+		copy.IsComped = true
+		copy.CompTier = summary.Comp.Tier
+		copy.CompEndsAt = summary.Comp.ExpiresAt
+	}
+	if summary.Trial != nil {
+		copy.TrialEndsAt = summary.Trial.ExpiresAt
+		if copy.TrialEndsAt != nil {
+			days := max(0, int(time.Until(*copy.TrialEndsAt).Hours()/24))
+			copy.TrialDaysRemaining = &days
+		}
+	}
+	return &copy
 }
 
 // RegisterProfileRoutes registers profile routes with the Huma API.

@@ -67,7 +67,6 @@ import type {
   GetAdminPaddleWebhookStatsParams,
   GetAdminPaymentFailuresParams,
   GetPaymentFailuresOutputBody,
-  GrantTrialResponseBody,
   ListAdminBudgetHierarchyAuditsOutputBody,
   ListAdminBudgetHierarchyAuditsParams,
   ListAdminDeadLetterJobsParams,
@@ -1712,69 +1711,6 @@ export function useListAdminRetentionWithheld<TData = Awaited<ReturnType<typeof 
 
 
 /**
- * Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but deliberately available in every environment — any admin can already change subscriptions through the other admin endpoints. Returns success if the user already has or had a trial.
- * @summary Grant trial subscription (admin)
- */
-export const grantTrial = (
-
- options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
-) => {
-
-
-      return customInstance<GrantTrialResponseBody>(
-      {url: `/api/v1/admin/subscription/grant-trial`, method: 'POST', signal
-    },
-      options);
-    }
-
-
-
-
-export const getGrantTrialMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof grantTrial>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof grantTrial>>, TError,void, TContext> => {
-
-const mutationKey = ['grantTrial'];
-const {mutation: mutationOptions, request: requestOptions} = options ?
-      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
-      options
-      : {...options, mutation: {...options.mutation, mutationKey}}
-      : {mutation: { mutationKey, }, request: undefined};
-
-
-
-
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof grantTrial>>, void> = () => {
-
-
-          return  grantTrial(requestOptions)
-        }
-
-
-
-
-
-
-  return  { mutationFn, ...mutationOptions }}
-
-    export type GrantTrialMutationResult = NonNullable<Awaited<ReturnType<typeof grantTrial>>>
-
-    export type GrantTrialMutationError = ErrorType<ErrorModel>
-
-    /**
- * @summary Grant trial subscription (admin)
- */
-export const useGrantTrial = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof grantTrial>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
- , queryClient?: QueryClient): UseMutationResult<
-        Awaited<ReturnType<typeof grantTrial>>,
-        TError,
-        void,
-        TContext
-      > => {
-      return useMutation(getGrantTrialMutationOptions(options), queryClient);
-    }
-    /**
  * Returns comprehensive system health metrics including database, job queues, and sync status. Requires admin role.
  * @summary Get system health metrics (admin)
  */
