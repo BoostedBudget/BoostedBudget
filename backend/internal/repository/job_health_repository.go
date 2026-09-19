@@ -139,7 +139,7 @@ type JobHealthRepository interface {
 	// inbox is a silent access desync that the flow counters (RevenueCatWebhookReceivedTotal /
 	// RevenueCatWebhookFailedTotal) cannot see, because an accepted delivery that never completes
 	// is neither a receipt event nor a rejection. Served by
-	// revenuecat_webhooks_pending_idx (migration 000214), a partial index on received_at WHERE
+	// revenuecat_webhooks_pending_idx (migration 000216), a partial index on received_at WHERE
 	// processed_at IS NULL, so the MIN() is an index probe rather than a table scan.
 	GetRevenueCatWebhookInboxStats(ctx context.Context) (count int, oldestAge time.Duration, err error)
 
@@ -164,7 +164,7 @@ type JobHealthRepository interface {
 	// GetRevenueCatRefreshOverdueUsers returns the number of RevenueCat customers whose
 	// next_refresh_at is in the past — the refresh backlog. A growing value means the
 	// refresh/repair worker is not keeping up, independent of whether its own job metrics are
-	// being scraped. Served by revenuecat_customers_refresh_idx (migration 000214).
+	// being scraped. Served by revenuecat_customers_refresh_idx (migration 000216).
 	GetRevenueCatRefreshOverdueUsers(ctx context.Context) (int, error)
 }
 

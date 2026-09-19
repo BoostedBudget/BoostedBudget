@@ -294,9 +294,9 @@ This is a **prelaunch-only** cutover, not a paid-customer migration. Keep
 registration, checkout, and admin grant writes closed for the whole inventory,
 apply, and reconciliation window. Drain old trial/subscription workers before
 starting the new version; do not run old and new access writers together.
-Take the normal database backup and apply migrations through `000217` using
+Take the normal database backup and apply migrations through `000219` using
 the existing deployment migration workflow. (Staging's maximum before this branch
-is `000213`; the branch adds `000214` through `000217`, so `000217` is the post-merge
+is `000213`; the branch adds `000216` through `000219`, so `000219` is the post-merge
 maximum. Re-derive it from `backend/migrations/` (take the highest `*.up.sql`
 version) rather than trusting this number.) Do not run down migrations against
 populated authority tables as a rollback strategy.

@@ -1,4 +1,4 @@
--- 000217_backfill_legacy_manual_tier_override.up.sql
+-- 000219_backfill_legacy_manual_tier_override.up.sql
 --
 -- One-time repair for #1652. RevenueCat is the sole access authority, and the legacy
 -- manual_tier_override/manual_tier_ends_at columns are no longer written by any production path:
