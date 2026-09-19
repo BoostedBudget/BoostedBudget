@@ -30,7 +30,13 @@ export const revenueCatCheckout = new RevenueCatCheckout({
     return {
       close: () => purchases.close(),
       purchase: async (offeringId, packageId, htmlTarget) => {
-        const offerings = await purchases.getOfferings()
+        // A failed offering fetch happened before any purchase attempt, so it is unambiguous:
+        // classify it as unavailable rather than leaving the controller to report `pending`
+        // with a retained lease. `purchases.purchase()` below stays untouched — a completed
+        // payment can reject ambiguously and must remain `pending`.
+        const offerings = await purchases.getOfferings().catch(() => {
+          throw new CheckoutUnavailableError('Checkout is unavailable')
+        })
         const offering = offerings.all[offeringId]
         const pkg = offering?.availablePackages.find(p => p.identifier === packageId)
         if (!pkg || !htmlTarget.isConnected) throw new CheckoutUnavailableError('Checkout is unavailable')
