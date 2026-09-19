@@ -57,10 +57,10 @@ follow.
 4. **Import or create the products** and associate each `paid_<tier>` entitlement
    with both its monthly and annual Paddle price IDs. Product catalog below lists
    the exact IDs from the tier catalogue.
-5. **Create the `web` offering** with all supported tier/interval packages. Do
-   **not** publish its paywall: web checkout uses direct package purchase, and the
-   paywall is retained only as an unpublished draft for possible future mobile
-   reuse (see Web checkout path).
+5. **Create the `web` offering** with all supported tier/interval packages, named
+   exactly as the Web checkout path table lists. Do **not** publish its paywall:
+   web checkout uses direct package purchase, and the paywall is retained only as
+   an unpublished draft for possible future mobile reuse (see Web checkout path).
 6. **Generate the REST v2 secret API key** for this project with only the
    permissions listed in Backend credentials.
 7. **Generate the REST v1-compatible grant API key** as a separate key; do not
@@ -95,9 +95,10 @@ In each project:
    `comp_household_3`, `comp_household_4`, `comp_household_5` without paid products.
    These identifiers are reserved for grants. Never combine trial and comp grants
    under the same entitlement, because revocation is entitlement-scoped.
-5. Create the `web` offering with all supported tier/interval packages. Leave its
-   paywall unpublished: it is a draft kept only for possible future mobile reuse.
-   Web checkout does not render the paywall (see Web checkout path).
+5. Create the `web` offering with all supported tier/interval packages, named
+   exactly as the Web checkout path table lists. Leave its paywall unpublished: it
+   is a draft kept only for possible future mobile reuse. Web checkout does not
+   render the paywall (see Web checkout path).
 6. Approve the SPA checkout domain in Paddle production. RevenueCat-presented
    checkouts require disabling Paddle abandoned-cart emails, whose checkout links
    cannot resume RevenueCat-created checkout flows.
@@ -150,6 +151,19 @@ page is the checkout UI:
    checkout intent.
 3. The web SDK performs `purchases.purchase({ rcPackage, htmlTarget })`, which
    renders the Paddle-backed checkout overlay in the page.
+
+The SDK resolves that derived key by **exact, case-sensitive package
+identifier**. The `web` offering must therefore contain exactly these ten
+packages; any other identifier (including RevenueCat's predefined
+`$rc_monthly`/`$rc_annual`) makes checkout fail with "Checkout is unavailable":
+
+| Tier | Monthly package | Annual package |
+| --- | --- | --- |
+| `premium` | `premium_monthly` | `premium_annual` |
+| `household_2` | `household_2_monthly` | `household_2_annual` |
+| `household_3` | `household_3_monthly` | `household_3_annual` |
+| `household_4` | `household_4_monthly` | `household_4_annual` |
+| `household_5` | `household_5_monthly` | `household_5_annual` |
 
 The `web` offering's paywall remains an **unpublished draft** for possible future
 mobile reuse. It must **not** be published for web: publishing it would put a

@@ -5,6 +5,13 @@ export interface CheckoutAuthority {
 
 export type CheckoutState = 'idle' | 'loading' | 'open' | 'pending' | 'confirmed' | 'cancelled' | 'unavailable'
 
+/**
+ * Raised by a `load` dependency when no purchase was attempted for a configuration reason —
+ * an unknown offering/package, or a detached mount target. It is unambiguous, unlike a purchase
+ * error, so the controller releases the lease instead of reporting a pending confirmation.
+ */
+export class CheckoutUnavailableError extends Error {}
+
 interface Dependencies {
   begin: (tier: string, billingInterval: 'month' | 'year') => Promise<{ id: string; offering: string; package: string }>
   release: (id: string) => Promise<unknown>
@@ -125,6 +132,11 @@ export class RevenueCatCheckout {
       await this.confirm(generation)
     } catch (error) {
       if (!current()) return
+      if (error instanceof CheckoutUnavailableError) {
+        if (this.lease) await this.deps.release(this.lease).catch(() => {})
+        if (current()) { this.lease = undefined; this.update('unavailable') }
+        return
+      }
       const cancelled = typeof error === 'object' && error !== null && 'errorCode' in error && error.errorCode === 1
       if (cancelled) {
         if (this.lease) await this.deps.release(this.lease).catch(() => {})
