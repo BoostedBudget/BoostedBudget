@@ -58,6 +58,7 @@ import (
 // reason is a compile-time-visible mistake (see the test below, which rejects it), not merely a
 // style nit — it is the whole point of the allowlist.
 var publicMutationAllowlist = map[string]string{
+	"revenuecat-webhook": "Authenticated by exact authorization and raw-body HMAC. Ingress writes only the durable receipt and queue job atomically; authorization projections and compatibility fields are materialized by the uncached RevenueCat worker, never cached financial data.",
 	"paddle-webhook": "Public by design — authenticated via Paddle HMAC-SHA256 signature " +
 		"verification (not Clerk), not by this middleware. The write path is async: the raw " +
 		"webhook is only persisted here; queue/jobs/subscription_webhook.go processes it and is " +

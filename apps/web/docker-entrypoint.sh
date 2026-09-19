@@ -8,9 +8,16 @@ set -e
 # Determine HTTPS redirect port (default to 443 for production)
 HTTPS_PORT="${HTTPS_PORT:-443}"
 
+# Public SDK keys are opaque ASCII identifiers, not arbitrary JavaScript strings.
+REVENUECAT_PUBLIC_API_KEY="${REVENUECAT_PUBLIC_API_KEY:-${VITE_REVENUECAT_PUBLIC_API_KEY:-}}"
+case "$REVENUECAT_PUBLIC_API_KEY" in
+  *[!a-zA-Z0-9_-]*) echo "Invalid RevenueCat public SDK key format" >&2; exit 1 ;;
+esac
+
 # Create runtime config file that will be loaded by the frontend
 cat > /usr/share/nginx/html/config.js <<EOF
 window.ENV = {
+  REVENUECAT_PUBLIC_API_KEY: '${REVENUECAT_PUBLIC_API_KEY}',
   API_URL: '${API_URL:-}',
   CLERK_PUBLISHABLE_KEY: '${CLERK_PUBLISHABLE_KEY:-${VITE_CLERK_PUBLISHABLE_KEY:-}}',
   ENVIRONMENT: '${ENVIRONMENT:-production}',

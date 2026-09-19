@@ -34,10 +34,6 @@ func TestNonPlaidWorkersRegisterWithoutPlaid(t *testing.T) {
 	}, "DLQCleanupCheckWorker registration should not panic")
 
 	assert.NotPanics(t, func() {
-		river.AddWorker(workers, NewTrialExpirationCheckWorker(TrialExpirationCheckWorkerDeps{}))
-	}, "TrialExpirationCheckWorker registration should not panic")
-
-	assert.NotPanics(t, func() {
 		river.AddWorker(workers, NewRetentionCleanupCheckWorker(RetentionCleanupCheckWorkerDeps{}))
 	}, "RetentionCleanupCheckWorker registration should not panic")
 

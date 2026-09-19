@@ -38,6 +38,12 @@ type TrialGranter interface {
 	GrantTrial(ctx context.Context, userID string) error
 }
 
+// TransactionalTrialGranter records eligibility and durable remote grant intent
+// alongside registration. It must not call the provider inside this transaction.
+type TransactionalTrialGranter interface {
+	GrantTrialTx(context.Context, pgx.Tx, string) error
+}
+
 // RegistrationService handles user registration and onboarding
 //
 // TRANSACTION SAFETY:
@@ -219,7 +225,15 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 	}
 
 	// New user - create user, identity, and privacy settings
+	txTrialGranter, transactionalTrial := s.trialGranter.(TransactionalTrialGranter)
+	if transactionalTrial && s.db == nil {
+		return nil, errors.New("transactional trial registration requires a database")
+	}
 	user := domain.NewUser(clerkUserID, email, emailVerified)
+	if transactionalTrial {
+		// Only a confirmed RevenueCat projection can activate this account.
+		user.SubscriptionStatus = string(domain.SubscriptionStatusInactive)
+	}
 	identity := domain.NewUserIdentity(user.ID, clerkUserID, email, emailVerified, true)
 	privacy := domain.NewPrivacySettings(user.ID)
 
@@ -250,7 +264,15 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 			return nil, fmt.Errorf("failed to create privacy settings: %w", err)
 		}
 
-		// Commit transaction - all 3 creations succeed atomically
+		if transactionalTrial {
+			if err = txTrialGranter.GrantTrialTx(ctx, tx, user.ID); err != nil {
+				return nil, fmt.Errorf("failed to record trial intent: %w", err)
+			}
+			user.HadTrial = true
+		}
+
+		// Commit registration and trial intent together; queue repair can recover
+		// remote issuance without ever resetting the fixed trial expiry.
 		if err = tx.Commit(ctx); err != nil {
 			return nil, fmt.Errorf("failed to commit transaction: %w", err)
 		}
@@ -269,7 +291,7 @@ func (s *registrationService) RegisterUser(ctx context.Context, clerkUserID, ema
 
 	// Issue #679: Auto-grant trial to new users
 	// Step 4: Grant trial if trial granter is configured
-	if s.trialGranter != nil {
+	if s.trialGranter != nil && !transactionalTrial {
 		if err := s.trialGranter.GrantTrial(ctx, user.ID); err != nil {
 			// Non-fatal — a failed trial grant must not block a registration whose user
 			// row has already been committed — but never silent: the empty error branch

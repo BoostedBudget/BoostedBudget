@@ -140,7 +140,7 @@ func TestDeletionStillAuthorised_Integration_UserRequested_OccurrencePin_ReReque
 	require.True(t, authorised, "sanity check: episode 1 authorised before cancellation")
 
 	// Cancel episode 1, then re-request with a schedule that is ALSO already elapsed (unlike the
-	// production TrialService path, which schedules 30 days out) — this is deliberate: it makes the
+	// legacy trial-service path (deleted in #1652), which scheduled 30 days out) — this is deliberate: it makes the
 	// kind predicate ALONE authorise episode 2, isolating the pin as the only thing that can catch
 	// the substitution.
 	require.NoError(t, repo.CancelDeletion(ctx, user.ID))

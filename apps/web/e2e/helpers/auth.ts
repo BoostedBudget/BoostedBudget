@@ -1,7 +1,7 @@
 import { Browser, BrowserContext, Page, expect, test, TestInfo } from '@playwright/test';
 import { clerk } from '@clerk/testing/playwright';
 import { ensureTestUserExists } from './clerk-admin';
-import { getAuthToken, API_BASE } from './api/client';
+import { prepareRevenueCatFixture } from './revenuecat';
 
 /**
  * Clerk Helper Functions for E2E Tests
@@ -160,13 +160,9 @@ export interface SecondIdentitySession {
  * via the `chromium` project's `storageState: authFile`).
  *
  * Calls ensureTestUserExists(email) first since the invitee may not exist yet in this
- * Clerk test tenant. Also grants a trial subscription (mirroring auth.setup.ts's
- * grant-trial call for the primary user) so the invitee can pass PremiumRoute's
- * subscription-status gate (src/auth/PremiumRoute.tsx) and reach protected routes like
- * /dashboard — a brand-new user's first profile fetch normally auto-grants a trial via
- * registration_service.go, but auth.setup.ts's own comments document a known race where
- * that grant doesn't land before the first protected-route check, hence the explicit
- * defensive call here too.
+ * Clerk test tenant. Prepares an explicitly simulated RevenueCat projection for
+ * the configured second identity in the disposable E2E database. This does not
+ * grant a real subscription or test remote trial processing.
  *
  * Caller is responsible for calling the returned close() (or context.close()) when done.
  */
@@ -210,33 +206,9 @@ export async function createSecondIdentityContext(
       // any real failure rather than throwing here.
     }
 
-    // Best-effort trial grant — same admin endpoint auth.setup.ts uses for the primary
-    // user. Not fatal if it fails (e.g. the caller is not an admin, or the auto-grant on
-    // first profile fetch already succeeded) — let the caller's own
-    // assertions be the source of truth on whether the invitee can reach protected routes.
-    const doTrialGrant = async (authToken: string | null): Promise<boolean> => {
-      try {
-        const response = await page.request.post(
-          `${API_BASE}/api/v1/admin/subscription/grant-trial`,
-          {
-            headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
-          }
-        );
-        return response.ok();
-      } catch {
-        return false;
-      }
-    };
+    await prepareRevenueCatFixture(page, email);
 
-    const token = await getAuthToken(page);
-    await doTrialGrant(token);
-
-    // Mirror auth.setup.ts's recovery path: the grant-trial call can race Clerk's
-    // session hydration (or land before the grant has propagated), leaving the invitee
-    // stuck on the pricing gate instead of /dashboard. Check page state the same way
-    // auth.setup.ts does and, if we landed on pricing, re-extract a fresh JWT and retry
-    // the grant once before handing the session back to the caller. Still best-effort —
-    // no throw here — the caller's own assertions remain the source of truth.
+    // Verify the real application route against the simulated confirmed projection.
     await page.goto('/dashboard');
     await page.waitForLoadState('domcontentloaded');
 
@@ -254,13 +226,10 @@ export async function createSecondIdentityContext(
     const initialResult = await checkPageState();
 
     if (initialResult === 'pricing' || initialResult === 'pricingLoading') {
-      const freshToken = await getAuthToken(page);
-      const granted = await doTrialGrant(freshToken);
-      if (granted) {
-        await page.goto('/dashboard');
-        await page.waitForLoadState('domcontentloaded');
-        await checkPageState();
-      }
+      await prepareRevenueCatFixture(page, email);
+      await page.goto('/dashboard');
+      await page.waitForLoadState('domcontentloaded');
+      await checkPageState();
     }
 
     return {
@@ -273,4 +242,3 @@ export async function createSecondIdentityContext(
     throw err;
   }
 }
-

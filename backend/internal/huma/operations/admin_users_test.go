@@ -10,7 +10,6 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
-	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -46,37 +45,13 @@ func (m *mockAdminUserService) GetOwnedHouseholdActiveMemberCount(ctx context.Co
 	return args.Int(0), args.Error(1)
 }
 
-// UpdateUserTier satisfies services.AdminUserService for tests in this file that don't
-// exercise tier-override updates (Issue #1413 — see admin_subscriptions_test.go for coverage).
-func (m *mockAdminUserService) UpdateUserTier(ctx context.Context, actorUserID string, targetUserID string, tier string, reason string, expiresAt *time.Time) (services.UpdateUserTierResult, error) {
-	args := m.Called(ctx, actorUserID, targetUserID, tier, reason, expiresAt)
-	if args.Get(0) == nil {
-		return services.UpdateUserTierResult{}, args.Error(1)
-	}
-	return args.Get(0).(services.UpdateUserTierResult), args.Error(1)
-}
-
-// RemoveUserTierOverride satisfies services.AdminUserService for tests in this file that don't
-// exercise tier-override removal (Issue #1414 — see admin_subscriptions_test.go for coverage).
-func (m *mockAdminUserService) RemoveUserTierOverride(ctx context.Context, actorUserID, targetUserID, reason string) (services.RemoveTierOverrideResult, error) {
-	args := m.Called(ctx, actorUserID, targetUserID, reason)
-	if args.Get(0) == nil {
-		return services.RemoveTierOverrideResult{}, args.Error(1)
-	}
-	return args.Get(0).(services.RemoveTierOverrideResult), args.Error(1)
-}
-
-// SetGDPRAnalytics (Issue #1413 Task NB, replacing Task MB's raw SetAnalytics) is not exercised
-// by these handler-level tests — analytics wiring is tested at the service layer
-// (admin_user_service_test.go); stubbed here only to satisfy the services.AdminUserService
-// interface.
-func (m *mockAdminUserService) SetGDPRAnalytics(a phclient.GDPRAnalytics) {}
+func (m *mockAdminUserService) SetRevenueCatSummary(services.RevenueCatSummaryReader) {}
 
 // TestListUsers_Success tests successful user listing
 func TestListUsers_Success(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -86,27 +61,27 @@ func TestListUsers_Success(t *testing.T) {
 	expectedResponse := &domain.AdminUserListResponse{
 		Users: []domain.AdminUserListItem{
 			{
-				ID:                   user1ID,
-				Email:                "user1@example.com",
-				SubscriptionTier:     "premium",
-				SubscriptionStatus:   "active",
-				PrimaryRegion:        "iad",
-				CreatedAt:            now,
-				LastLoginAt:          &now,
-				IsActive:             true,
-				LinkedAccountsCount:  3,
-				BoostsCount: 5,
+				ID:                  user1ID,
+				Email:               "user1@example.com",
+				SubscriptionTier:    "premium",
+				SubscriptionStatus:  "active",
+				PrimaryRegion:       "iad",
+				CreatedAt:           now,
+				LastLoginAt:         &now,
+				IsActive:            true,
+				LinkedAccountsCount: 3,
+				BoostsCount:         5,
 			},
 			{
-				ID:                   user2ID,
-				Email:                "user2@example.com",
-				SubscriptionTier:     "free",
-				SubscriptionStatus:   "trial",
-				PrimaryRegion:        "iad",
-				CreatedAt:            now,
-				IsActive:             true,
-				LinkedAccountsCount:  1,
-				BoostsCount: 2,
+				ID:                  user2ID,
+				Email:               "user2@example.com",
+				SubscriptionTier:    "free",
+				SubscriptionStatus:  "trial",
+				PrimaryRegion:       "iad",
+				CreatedAt:           now,
+				IsActive:            true,
+				LinkedAccountsCount: 1,
+				BoostsCount:         2,
 			},
 		},
 		TotalCount: 2,
@@ -144,7 +119,7 @@ func TestListUsers_Success(t *testing.T) {
 func TestListUsers_WithSearch(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -195,7 +170,7 @@ func TestListUsers_WithSearch(t *testing.T) {
 func TestListUsers_WithTierFilter(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 
@@ -235,7 +210,7 @@ func TestListUsers_WithTierFilter(t *testing.T) {
 func TestListUsers_ServiceError(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 
@@ -263,7 +238,7 @@ func TestListUsers_ServiceError(t *testing.T) {
 // TestListUsers_ServiceNotConfigured tests 503 when service is nil
 func TestListUsers_ServiceNotConfigured(t *testing.T) {
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg) // adminUserService is nil
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg) // adminUserService is nil
 
 	ctx := context.Background()
 
@@ -289,7 +264,7 @@ func TestListUsers_ServiceNotConfigured(t *testing.T) {
 func TestGetUserDetail_Success(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -297,16 +272,16 @@ func TestGetUserDetail_Success(t *testing.T) {
 
 	expectedDetail := &domain.AdminUserDetail{
 		AdminUserListItem: domain.AdminUserListItem{
-			ID:                   userID,
-			Email:                "user@example.com",
-			SubscriptionTier:     "premium",
-			SubscriptionStatus:   "active",
-			PrimaryRegion:        "iad",
-			CreatedAt:            now,
-			LastLoginAt:          &now,
-			IsActive:             true,
-			LinkedAccountsCount:  5,
-			BoostsCount: 10,
+			ID:                  userID,
+			Email:               "user@example.com",
+			SubscriptionTier:    "premium",
+			SubscriptionStatus:  "active",
+			PrimaryRegion:       "iad",
+			CreatedAt:           now,
+			LastLoginAt:         &now,
+			IsActive:            true,
+			LinkedAccountsCount: 5,
+			BoostsCount:         10,
 		},
 		TransactionsCount: 1500,
 		BudgetsCount:      4,
@@ -341,7 +316,7 @@ func TestGetUserDetail_Success(t *testing.T) {
 func TestGetUserDetail_IncludesAsOf(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -377,7 +352,7 @@ func TestGetUserDetail_IncludesAsOf(t *testing.T) {
 func TestGetUserDetail_NotFound(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -404,7 +379,7 @@ func TestGetUserDetail_NotFound(t *testing.T) {
 func TestGetUserDetail_ServiceError(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -429,7 +404,7 @@ func TestGetUserDetail_ServiceError(t *testing.T) {
 // TestGetUserDetail_ServiceNotConfigured tests 503 when service is nil
 func TestGetUserDetail_ServiceNotConfigured(t *testing.T) {
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg) // adminUserService is nil
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg) // adminUserService is nil
 
 	ctx := context.Background()
 	userID := uuid.New().String()
@@ -453,7 +428,7 @@ func TestGetUserDetail_ServiceNotConfigured(t *testing.T) {
 // than 3 characters (after trimming) is rejected with 400 Bad Request.
 func TestListUsers_SearchTooShort_Returns400(t *testing.T) {
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, new(mockAdminUserService), nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, new(mockAdminUserService), nil, nil, cfg)
 	ctx := context.Background()
 
 	for _, tc := range []struct {
@@ -489,7 +464,7 @@ func TestListUsers_SearchTooShort_Returns400(t *testing.T) {
 func TestListUsers_IncludesAsOf(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, mockService, nil, nil, cfg)
 
 	ctx := context.Background()
 	expectedResponse := &domain.AdminUserListResponse{
@@ -527,7 +502,7 @@ func TestListUsers_IncludesAsOf(t *testing.T) {
 func TestListUsers_SearchExactlyThreeChars_Succeeds(t *testing.T) {
 	mockService := new(mockAdminUserService)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, mockService, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, mockService, nil, nil, cfg)
 	ctx := context.Background()
 
 	mockService.On("ListUsers", ctx, domain.AdminUserFilters{Search: "abc"}, 1, 20, mock.Anything).

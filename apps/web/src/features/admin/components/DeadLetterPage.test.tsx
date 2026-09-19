@@ -89,6 +89,17 @@ function createWrapper() {
 }
 
 describe('DeadLetterPage', () => {
+  it('keeps RevenueCat filters available even when the stats omit those job kinds', () => {
+    render(<DeadLetterPage />, {wrapper: createWrapper()})
+    expect(screen.getByRole('option', {name: 'revenuecat_sync'})).toBeInTheDocument()
+    expect(screen.getByRole('option', {name: 'revenuecat_repair'})).toBeInTheDocument()
+  })
+  it('explains that deleting a RevenueCat dead letter does not cancel grant intent', () => {
+    render(<DeadLetterPage />, {wrapper: createWrapper()})
+    fireEvent.change(screen.getByRole('combobox', {name: 'Filter by job kind'}), {target: {value: 'revenuecat_repair'}})
+    expect(screen.getByText(/Deleting a RevenueCat dead letter does not cancel a pending grant/)).toBeInTheDocument()
+    expect(screen.getByRole('link', {name: 'Open RevenueCat operations'})).toHaveAttribute('href', '/admin/revenuecat')
+  })
   beforeEach(() => {
     mockUseListAdminDeadLetterJobs.mockClear()
     mockUseGetAdminDeadLetterJobStats.mockClear()

@@ -10,7 +10,9 @@ package database
 //  1. Nulls manual_tier_override (and manual_tier_ends_at alongside it) for any user whose override
 //     value does not name a currently-configured tier (premium/household_2/household_3/household_4/
 //     household_5) — the class PR #1443 made harmless at every read path; this makes it unreachable
-//     by clearing existing occurrences on top of admin_user_service.go's write-time validation.
+//     by clearing existing occurrences (the write-time validation that used to guard new writes was
+//     deleted in #1652, which is why this one-time cleanup — plus the read-time validator and the
+//     Issue #1453 monitoring gauge — remains the control).
 //  2. Nulls plaid_cleanup_pending_at for any inactive/cancelled user with ZERO linked_items rows at
 //     all — the residue migrations 000119/000120 left behind by stamping every eligible user
 //     regardless of whether they ever linked a single Plaid item. ClearCompletedPlaidCleanupMarkers

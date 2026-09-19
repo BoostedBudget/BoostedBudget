@@ -588,11 +588,6 @@ func (m *MockUserRepository) GetUsersWithExpiringTrials(ctx context.Context, wit
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockUserRepository) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
-	args := m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial)
-	return args.Error(0)
-}
-
 func (m *MockUserRepository) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error {
 	args := m.Called(ctx, userID, paddleCustomerID)
 	return args.Error(0)
@@ -656,14 +651,6 @@ func (m *MockUserRepository) GetUsersNeedingRetention7dNotice(ctx context.Contex
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *MockUserRepository) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {
-	args := m.Called(ctx)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).([]*domain.User), args.Error(1)
-}
-
 // Dunning methods (#898)
 
 func (m *MockUserRepository) GetUsersInPastDue(ctx context.Context) ([]domain.User, error) {
@@ -711,11 +698,6 @@ func (m *MockUserRepository) GetUsersNeedingPlaidDisconnectRepair(ctx context.Co
 }
 
 func (m *MockUserRepository) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
-	args := m.Called(ctx, userID)
-	return args.Bool(0), args.Error(1)
-}
-
-func (m *MockUserRepository) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
 	args := m.Called(ctx, userID)
 	return args.Bool(0), args.Error(1)
 }

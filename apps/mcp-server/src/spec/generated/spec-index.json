@@ -1072,16 +1072,37 @@
       ]
     },
     {
-      "operationId": "grantTrial",
-      "method": "POST",
-      "path": "/api/v1/admin/subscription/grant-trial",
-      "summary": "Grant trial subscription (admin)",
+      "operationId": "getAdminRevenueCatHealth",
+      "method": "GET",
+      "path": "/api/v1/admin/revenuecat/health",
+      "summary": "Get RevenueCat synchronization metrics",
       "tags": [
-        "Admin"
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "listAdminRevenueCatWebhooks",
+      "method": "GET",
+      "path": "/api/v1/admin/revenuecat/webhooks",
+      "summary": "List authenticated webhook receipts and processing results",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "replayAdminRevenueCatWebhook",
+      "method": "POST",
+      "path": "/api/v1/admin/revenuecat/webhooks/{event_id}/replay",
+      "summary": "Retry webhook processing or refresh a completed receipt's customer",
+      "tags": [
+        "Admin Subscriptions"
       ],
       "manifestClass": "write",
-      "excluded": true,
-      "description": "Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but deliberately available in every environment — any admin can already change subscriptions through the other admin endpoints. Returns success if the user already has or had a trial."
+      "excluded": true
     },
     {
       "operationId": "getSystemHealth",
@@ -1175,6 +1196,90 @@
           "type": "string"
         }
       ]
+    },
+    {
+      "operationId": "getAdminRevenueCatUser",
+      "method": "GET",
+      "path": "/api/v1/admin/users/{user_id}/revenuecat",
+      "summary": "Inspect confirmed access, billing and grant operations",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "requestAdminRevenueCatGrant",
+      "method": "POST",
+      "path": "/api/v1/admin/users/{user_id}/revenuecat/grants",
+      "summary": "Request a trial or complimentary entitlement change",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "write",
+      "excluded": true,
+      "description": "Saves an audited, retryable operation. Pending does not mean access has been applied.",
+      "requestBody": [
+        {
+          "name": "class",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "comp",
+            "trial"
+          ]
+        },
+        {
+          "name": "expires_at",
+          "type": "string",
+          "format": "date-time",
+          "required": true
+        },
+        {
+          "name": "reason",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "revoke",
+          "type": "boolean",
+          "required": true
+        },
+        {
+          "name": "tier",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "premium",
+            "household_2",
+            "household_3",
+            "household_4",
+            "household_5"
+          ]
+        }
+      ]
+    },
+    {
+      "operationId": "retryAdminRevenueCatOperation",
+      "method": "POST",
+      "path": "/api/v1/admin/users/{user_id}/revenuecat/operations/{operation_id}/retry",
+      "summary": "Retry a pending grant operation",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "write",
+      "excluded": true
+    },
+    {
+      "operationId": "refreshAdminRevenueCatUser",
+      "method": "POST",
+      "path": "/api/v1/admin/users/{user_id}/revenuecat/refresh",
+      "summary": "Queue a customer subscription refresh",
+      "tags": [
+        "Admin Subscriptions"
+      ],
+      "manifestClass": "write",
+      "excluded": true
     },
     {
       "operationId": "get-admin-user-subscription",
@@ -14991,6 +15096,28 @@
       ]
     },
     {
+      "operationId": "getRevenueCatSubscription",
+      "method": "GET",
+      "path": "/api/v1/subscription/authority",
+      "summary": "Get confirmed subscription access and separate billing details",
+      "tags": [
+        "Subscription"
+      ],
+      "manifestClass": "read",
+      "excluded": true
+    },
+    {
+      "operationId": "refreshRevenueCatSubscription",
+      "method": "POST",
+      "path": "/api/v1/subscription/authority/refresh",
+      "summary": "Refresh subscription confirmation",
+      "tags": [
+        "Subscription"
+      ],
+      "manifestClass": "write",
+      "excluded": true
+    },
+    {
       "operationId": "get-billing-portal-url",
       "method": "GET",
       "path": "/api/v1/subscription/billing-portal",
@@ -15013,19 +15140,6 @@
           "description": "URL to Paddle billing portal"
         }
       ]
-    },
-    {
-      "operationId": "cancel-paddle-subscription",
-      "method": "POST",
-      "path": "/api/v1/subscription/cancel",
-      "summary": "Cancel subscription",
-      "tags": [
-        "Subscription",
-        "Paddle"
-      ],
-      "manifestClass": "write",
-      "excluded": true,
-      "description": "Cancels subscription at end of current billing period. User retains access until period ends."
     },
     {
       "operationId": "create-paddle-checkout",
@@ -15059,6 +15173,51 @@
       ]
     },
     {
+      "operationId": "beginRevenueCatCheckout",
+      "method": "POST",
+      "path": "/api/v1/subscription/checkout-intents",
+      "summary": "Coordinate a RevenueCat checkout for the signed-in account",
+      "tags": [
+        "Subscription"
+      ],
+      "manifestClass": "write",
+      "excluded": true,
+      "requestBody": [
+        {
+          "name": "billing_interval",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "month",
+            "year"
+          ]
+        },
+        {
+          "name": "tier",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "premium",
+            "household_2",
+            "household_3",
+            "household_4",
+            "household_5"
+          ]
+        }
+      ]
+    },
+    {
+      "operationId": "releaseRevenueCatCheckout",
+      "method": "DELETE",
+      "path": "/api/v1/subscription/checkout-intents/{intent_id}",
+      "summary": "Close this account's checkout coordination lease",
+      "tags": [
+        "Subscription"
+      ],
+      "manifestClass": "write",
+      "excluded": true
+    },
+    {
       "operationId": "get-current-subscription",
       "method": "GET",
       "path": "/api/v1/subscription/current",
@@ -15079,6 +15238,11 @@
           "type": "string",
           "required": true,
           "description": "Subscription amount"
+        },
+        {
+          "name": "authority",
+          "type": "object",
+          "description": "Confirmed access independent of paid billing details"
         },
         {
           "name": "billing_interval",
@@ -15156,37 +15320,6 @@
       ]
     },
     {
-      "operationId": "preview-paddle-subscription-update",
-      "method": "POST",
-      "path": "/api/v1/subscription/preview-update",
-      "summary": "Preview subscription tier change",
-      "tags": [
-        "Subscription",
-        "Paddle"
-      ],
-      "manifestClass": "write",
-      "excluded": true,
-      "description": "Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details.",
-      "requestBody": [
-        {
-          "name": "billing_interval",
-          "type": "string",
-          "required": true,
-          "enum": [
-            "month",
-            "year"
-          ],
-          "description": "Billing interval for new tier (month or year)"
-        },
-        {
-          "name": "new_tier",
-          "type": "string",
-          "required": true,
-          "description": "New subscription tier to preview"
-        }
-      ]
-    },
-    {
       "operationId": "getSubscriptionTiers",
       "method": "GET",
       "path": "/api/v1/subscription/tiers",
@@ -15212,56 +15345,6 @@
           "type": "object",
           "required": true,
           "description": "Map of tier names to tier configurations"
-        }
-      ]
-    },
-    {
-      "operationId": "update-paddle-subscription",
-      "method": "POST",
-      "path": "/api/v1/subscription/update",
-      "summary": "Update subscription tier",
-      "tags": [
-        "Subscription",
-        "Paddle"
-      ],
-      "manifestClass": "write",
-      "excluded": true,
-      "description": "Updates subscription to a different tier or billing interval. Handles proration automatically.",
-      "requestBody": [
-        {
-          "name": "billing_interval",
-          "type": "string",
-          "required": true,
-          "enum": [
-            "month",
-            "year"
-          ],
-          "description": "Billing interval (month or year)"
-        },
-        {
-          "name": "current_billing_interval",
-          "type": "string",
-          "enum": [
-            "month",
-            "year"
-          ],
-          "description": "Current billing interval, used server-side to detect and reject no-op updates"
-        },
-        {
-          "name": "new_tier",
-          "type": "string",
-          "required": true,
-          "description": "New subscription tier"
-        },
-        {
-          "name": "proration_billing_mode",
-          "type": "string",
-          "enum": [
-            "prorated_immediately",
-            "full_immediately",
-            "full_next_billing_period"
-          ],
-          "description": "Proration mode (prorated_immediately, full_immediately, full_next_billing_period)"
         }
       ]
     },
@@ -19786,6 +19869,14 @@
       },
       "responseBody": [
         {
+          "name": "access_resolved",
+          "type": "boolean"
+        },
+        {
+          "name": "access_source",
+          "type": "string"
+        },
+        {
           "name": "clerk_user_id",
           "type": "string",
           "required": true
@@ -19968,6 +20059,8 @@
         }
       ],
       "compactResponseBody": [
+        "access_resolved",
+        "access_source",
         "comp_ends_at",
         "comp_tier",
         "deletion_requested_at",
@@ -20066,6 +20159,18 @@
       "manifestClass": "write",
       "excluded": true,
       "description": "Receives and processes webhook notifications from Plaid. Validates JWT signature and stores for async processing."
+    },
+    {
+      "operationId": "revenuecat-webhook",
+      "method": "POST",
+      "path": "/webhooks/revenuecat",
+      "summary": "Receive RevenueCat webhook notifications",
+      "tags": [
+        "Webhooks",
+        "RevenueCat"
+      ],
+      "manifestClass": "write",
+      "excluded": true
     }
   ]
 }

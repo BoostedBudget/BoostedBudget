@@ -583,6 +583,8 @@ components:
           type: string
         reverted_tier:
           type: string
+        stage:
+          type: string
       required:
         - message
         - removed
@@ -631,6 +633,101 @@ components:
         - cursor_expires_at
         - cursor_user_id
       type: object
+    AdminRevenueCatGrantInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AdminRevenueCatGrantInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        class:
+          enum:
+            - comp
+            - trial
+          type: string
+        expires_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        reason:
+          maxLength: 1000
+          minLength: 1
+          type: string
+        revoke:
+          type: boolean
+        tier:
+          enum:
+            - premium
+            - household_2
+            - household_3
+            - household_4
+            - household_5
+          type: string
+      required:
+        - class
+        - tier
+        - expires_at
+        - revoke
+        - reason
+      type: object
+    AdminRevenueCatHealthOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AdminRevenueCatHealthOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        available:
+          type: boolean
+        configured:
+          type: boolean
+        metrics:
+          anyOf:
+            - $ref: "#/components/schemas/RevenueCatHealth"
+            - enum:
+                - null
+              type: "null"
+      required:
+        - available
+        - configured
+        - metrics
+      type: object
+    AdminRevenueCatUserOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/AdminRevenueCatUserOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        operations:
+          items:
+            $ref: "#/components/schemas/RevenueCatOperation"
+          type:
+            - array
+            - "null"
+        state:
+          anyOf:
+            - $ref: "#/components/schemas/RevenueCatState"
+            - enum:
+                - null
+              type: "null"
+        summary:
+          $ref: "#/components/schemas/RevenueCatSummary"
+      required:
+        - summary
+        - state
+        - operations
+      type: object
     AdminSubscriptionDetailOutputBody:
       additionalProperties: false
       properties:
@@ -647,6 +744,8 @@ components:
         as_of:
           format: date-time
           type: string
+        authority:
+          $ref: "#/components/schemas/RevenueCatSummary"
         base_tier:
           type: string
         deletion_requested_at:
@@ -736,6 +835,8 @@ components:
           type: string
         message:
           type: string
+        stage:
+          type: string
       required:
         - message
       type: object
@@ -749,6 +850,8 @@ components:
           format: uri
           readOnly: true
           type: string
+        access_resolved:
+          type: boolean
         as_of:
           format: date-time
           type: string
@@ -768,6 +871,8 @@ components:
           format: date-time
           type: string
         effective_status:
+          type: string
+        effective_tier:
           type: string
         email:
           type: string
@@ -794,8 +899,10 @@ components:
           format: int64
           type: integer
         subscription_status:
+          description: Observed own-access projection used for sorting; see effective_status and access_resolved for live authority
           type: string
         subscription_tier:
+          description: Observed own-access projection used for tier filtering and sorting; see effective_tier for live aggregate access
           type: string
         transactions_count:
           format: int64
@@ -820,6 +927,8 @@ components:
     AdminUserListItem:
       additionalProperties: false
       properties:
+        access_resolved:
+          type: boolean
         boosts_count:
           format: int64
           type: integer
@@ -833,6 +942,8 @@ components:
           format: date-time
           type: string
         effective_status:
+          type: string
+        effective_tier:
           type: string
         email:
           type: string
@@ -859,8 +970,10 @@ components:
           format: int64
           type: integer
         subscription_status:
+          description: Observed own-access projection used for sorting; see effective_status and access_resolved for live authority
           type: string
         subscription_tier:
+          description: Observed own-access projection used for tier filtering and sorting; see effective_tier for live aggregate access
           type: string
       required:
         - id
@@ -1842,35 +1955,6 @@ components:
           description: Status message
           type: string
       required:
-        - message
-      type: object
-    CancelSubscriptionOutputBody:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/CancelSubscriptionOutputBody.json
-          format: uri
-          readOnly: true
-          type: string
-        ends_at:
-          description: Date subscription ends
-          examples:
-            - "2026-03-01"
-          type: string
-        message:
-          description: Cancellation confirmation message
-          examples:
-            - Subscription will be cancelled at end of billing period
-          type: string
-        subscription_id:
-          description: Cancelled Paddle subscription ID
-          examples:
-            - sub_01h1234567890
-          type: string
-      required:
-        - subscription_id
         - message
       type: object
     CancelTransferSuggestionInputBody:
@@ -3624,6 +3708,30 @@ components:
         - enum
         - display
       type: object
+    EffectiveEntitlement:
+      additionalProperties: false
+      properties:
+        HouseholdID:
+          type:
+            - string
+            - "null"
+        PayerUserID:
+          type:
+            - string
+            - "null"
+        Source:
+          type: string
+        Status:
+          type: string
+        Tier:
+          type: string
+      required:
+        - Tier
+        - Status
+        - Source
+        - PayerUserID
+        - HouseholdID
+      type: object
     ErrorDetail:
       additionalProperties: false
       properties:
@@ -3957,6 +4065,9 @@ components:
           examples:
             - "9.99"
           type: string
+        authority:
+          $ref: "#/components/schemas/RevenueCatSummary"
+          description: Confirmed access independent of paid billing details
         billing_interval:
           description: Billing interval (month/year)
           examples:
@@ -4217,26 +4328,6 @@ components:
           type: integer
       required:
         - count
-      type: object
-    GrantTrialResponseBody:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/GrantTrialResponseBody.json
-          format: uri
-          readOnly: true
-          type: string
-        message:
-          description: Description of the result
-          type: string
-        success:
-          description: Whether the trial was granted successfully
-          type: boolean
-      required:
-        - success
-        - message
       type: object
     HoldingSnapshotHistory:
       additionalProperties: false
@@ -4783,19 +4874,19 @@ components:
       properties:
         available:
           type: boolean
-        manual_tier_override_oldest_uncleared_expired_seconds:
-          format: int64
-          type: integer
         plaid_cleanup_oldest_outstanding_seconds:
           format: int64
           type: integer
         plaid_cleanup_outstanding_users:
           format: int64
           type: integer
+        revenuecat_oldest_expired_comp_grant_seconds:
+          format: int64
+          type: integer
       required:
         - plaid_cleanup_outstanding_users
         - plaid_cleanup_oldest_outstanding_seconds
-        - manual_tier_override_oldest_uncleared_expired_seconds
+        - revenuecat_oldest_expired_comp_grant_seconds
         - available
       type: object
     LargestTransactionItem:
@@ -6089,70 +6180,6 @@ components:
         - name
         - conditions
       type: object
-    PreviewUpdateInputBody:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/PreviewUpdateInputBody.json
-          format: uri
-          readOnly: true
-          type: string
-        billing_interval:
-          description: Billing interval for new tier (month or year)
-          enum:
-            - month
-            - year
-          examples:
-            - month
-          type: string
-        new_tier:
-          description: New subscription tier to preview
-          examples:
-            - household_2
-          minLength: 1
-          type: string
-      required:
-        - new_tier
-        - billing_interval
-      type: object
-    PreviewUpdateOutputBody:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/PreviewUpdateOutputBody.json
-          format: uri
-          readOnly: true
-          type: string
-        currency:
-          description: Currency code (USD, EUR, etc.)
-          examples:
-            - USD
-          type: string
-        next_charge_amount:
-          description: Amount of next regular charge
-          examples:
-            - "12.99"
-          type: string
-        next_charge_date:
-          description: Date of next regular charge
-          examples:
-            - "2026-02-26"
-          type: string
-        proration_amount:
-          description: Amount to charge (positive) or credit (negative) immediately
-          examples:
-            - "5.00"
-          type: string
-      required:
-        - proration_amount
-        - currency
-        - next_charge_date
-        - next_charge_amount
-      type: object
     Primary:
       additionalProperties: false
       properties:
@@ -6280,6 +6307,9 @@ components:
         running:
           format: int64
           type: integer
+        unavailable:
+          description: Metrics could not be read; numeric placeholders are not measured zeroes
+          type: boolean
       required:
         - pending
         - running
@@ -6777,6 +6807,437 @@ components:
         - message
         - scheduled_at
         - cancellation_token
+      type: object
+    RevenueCatAccess:
+      additionalProperties: false
+      properties:
+        expires_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        source:
+          type: string
+        status:
+          type: string
+        tier:
+          type: string
+      required:
+        - tier
+        - status
+        - source
+        - expires_at
+      type: object
+    RevenueCatBilling:
+      additionalProperties: false
+      properties:
+        auto_renewal_status:
+          type: string
+        current_period_ends_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        ends_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        environment:
+          type: string
+        id:
+          type: string
+        management_url:
+          type: string
+        product_id:
+          type: string
+        status:
+          type: string
+        store:
+          type: string
+        store_subscription_identifier:
+          type: string
+      required:
+        - id
+        - product_id
+        - store_subscription_identifier
+        - status
+        - store
+        - environment
+        - auto_renewal_status
+        - current_period_ends_at
+        - ends_at
+        - management_url
+      type: object
+    RevenueCatCheckoutBeginInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RevenueCatCheckoutBeginInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        billing_interval:
+          enum:
+            - month
+            - year
+          type: string
+        tier:
+          enum:
+            - premium
+            - household_2
+            - household_3
+            - household_4
+            - household_5
+          type: string
+      required:
+        - tier
+        - billing_interval
+      type: object
+    RevenueCatCheckoutIntent:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RevenueCatCheckoutIntent.json
+          format: uri
+          readOnly: true
+          type: string
+        expires_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        offering:
+          type: string
+        package:
+          type: string
+      required:
+        - id
+        - expires_at
+        - offering
+        - package
+      type: object
+    RevenueCatCheckoutReleaseOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RevenueCatCheckoutReleaseOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        status:
+          type: string
+      required:
+        - status
+      type: object
+    RevenueCatGrant:
+      additionalProperties: false
+      properties:
+        expires_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        key:
+          type: string
+      required:
+        - key
+        - expires_at
+      type: object
+    RevenueCatHealth:
+      additionalProperties: false
+      properties:
+        access_failures:
+          format: int64
+          type: integer
+        billing_failures:
+          format: int64
+          type: integer
+        customers:
+          format: int64
+          type: integer
+        deliveries:
+          format: int64
+          type: integer
+        events:
+          format: int64
+          type: integer
+        failed_operations:
+          format: int64
+          type: integer
+        failed_webhooks:
+          format: int64
+          type: integer
+        oldest_pending_received_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        pending_operations:
+          format: int64
+          type: integer
+        processed_events:
+          format: int64
+          type: integer
+        processing_attempts:
+          format: int64
+          type: integer
+        stale_active_customers:
+          format: int64
+          type: integer
+        unresolved_customers:
+          format: int64
+          type: integer
+      required:
+        - customers
+        - unresolved_customers
+        - stale_active_customers
+        - access_failures
+        - billing_failures
+        - pending_operations
+        - failed_operations
+        - events
+        - deliveries
+        - processing_attempts
+        - processed_events
+        - failed_webhooks
+        - oldest_pending_received_at
+      type: object
+    RevenueCatOperation:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RevenueCatOperation.json
+          format: uri
+          readOnly: true
+          type: string
+        actor_id:
+          type:
+            - string
+            - "null"
+        attempts:
+          format: int64
+          type: integer
+        class:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        expires_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        id:
+          type: string
+        key:
+          type: string
+        last_error:
+          type: string
+        reason:
+          type: string
+        revoke:
+          type: boolean
+        stage:
+          type: string
+        user_id:
+          type: string
+        version:
+          format: int64
+          type: integer
+      required:
+        - id
+        - user_id
+        - class
+        - key
+        - expires_at
+        - revoke
+        - version
+        - actor_id
+        - reason
+        - stage
+        - attempts
+        - created_at
+      type: object
+    RevenueCatState:
+      additionalProperties: false
+      properties:
+        access_error:
+          type: string
+        access_updated_at:
+          format: date-time
+          type: string
+        billing:
+          items:
+            $ref: "#/components/schemas/RevenueCatBilling"
+          type:
+            - array
+            - "null"
+        billing_error:
+          type: string
+        billing_updated_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        erasure_confirmed_at:
+          format: date-time
+          type: string
+        erasure_started_at:
+          format: date-time
+          type: string
+        grants:
+          items:
+            $ref: "#/components/schemas/RevenueCatGrant"
+          type:
+            - array
+            - "null"
+        pending_operations:
+          format: int64
+          type: integer
+        user_id:
+          type: string
+      required:
+        - user_id
+        - grants
+        - access_updated_at
+        - billing
+        - billing_updated_at
+        - pending_operations
+      type: object
+    RevenueCatSummary:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RevenueCatSummary.json
+          format: uri
+          readOnly: true
+          type: string
+        access_resolved:
+          type: boolean
+        as_of:
+          description: Evaluation timestamp for this observed access summary, not a historical database snapshot
+          format: date-time
+          type: string
+        billing:
+          items:
+            $ref: "#/components/schemas/RevenueCatBilling"
+          type:
+            - array
+            - "null"
+        billing_available:
+          type: boolean
+        comp:
+          anyOf:
+            - $ref: "#/components/schemas/RevenueCatAccess"
+            - enum:
+                - null
+              type: "null"
+        effective:
+          anyOf:
+            - $ref: "#/components/schemas/EffectiveEntitlement"
+            - enum:
+                - null
+              type: "null"
+        own:
+          anyOf:
+            - $ref: "#/components/schemas/RevenueCatAccess"
+            - enum:
+                - null
+              type: "null"
+        paid:
+          anyOf:
+            - $ref: "#/components/schemas/RevenueCatAccess"
+            - enum:
+                - null
+              type: "null"
+        pending_operations:
+          format: int64
+          type: integer
+        trial:
+          anyOf:
+            - $ref: "#/components/schemas/RevenueCatAccess"
+            - enum:
+                - null
+              type: "null"
+      required:
+        - as_of
+        - access_resolved
+        - effective
+        - own
+        - paid
+        - comp
+        - trial
+        - billing_available
+        - billing
+        - pending_operations
+      type: object
+    RevenueCatWebhookOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RevenueCatWebhookOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        status:
+          description: Receipt status, not confirmation of access
+          type: string
+      required:
+        - status
+      type: object
+    RevenueCatWebhookReceipt:
+      additionalProperties: false
+      properties:
+        attempts:
+          description: Processing attempts, not webhook deliveries
+          format: int64
+          type: integer
+        deliveries:
+          description: Authenticated deliveries successfully persisted, including duplicates
+          format: int64
+          type: integer
+        event_id:
+          type: string
+        event_type:
+          type: string
+        last_error:
+          type: string
+        last_received_at:
+          format: date-time
+          type: string
+        processed_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        received_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+      required:
+        - event_id
+        - user_id
+        - event_type
+        - received_at
+        - last_received_at
+        - processed_at
+        - deliveries
+        - attempts
+        - last_error
       type: object
     ReviewSummaryResponse:
       additionalProperties: false
@@ -8762,81 +9223,6 @@ components:
           format: double
           type: number
       type: object
-    UpdateSubscriptionInputBody:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/UpdateSubscriptionInputBody.json
-          format: uri
-          readOnly: true
-          type: string
-        billing_interval:
-          description: Billing interval (month or year)
-          enum:
-            - month
-            - year
-          examples:
-            - month
-          type: string
-        current_billing_interval:
-          description: Current billing interval, used server-side to detect and reject no-op updates
-          enum:
-            - month
-            - year
-          examples:
-            - month
-          type: string
-        new_tier:
-          description: New subscription tier
-          examples:
-            - household_2
-          minLength: 1
-          type: string
-        proration_billing_mode:
-          description: Proration mode (prorated_immediately, full_immediately, full_next_billing_period)
-          enum:
-            - prorated_immediately
-            - full_immediately
-            - full_next_billing_period
-          examples:
-            - prorated_immediately
-          type: string
-      required:
-        - new_tier
-        - billing_interval
-      type: object
-    UpdateSubscriptionOutputBody:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          examples:
-            - https://api.boostedbudget.com/schemas/UpdateSubscriptionOutputBody.json
-          format: uri
-          readOnly: true
-          type: string
-        message:
-          description: Human-readable update message
-          examples:
-            - Subscription upgraded successfully
-          type: string
-        status:
-          description: Subscription status
-          examples:
-            - active
-          type: string
-        subscription_id:
-          description: Paddle subscription ID
-          examples:
-            - sub_01h1234567890
-          type: string
-      required:
-        - subscription_id
-        - status
-        - message
-      type: object
     UpdateTransactionCategoryBody:
       additionalProperties: false
       properties:
@@ -8958,6 +9344,10 @@ components:
             - https://api.boostedbudget.com/schemas/User.json
           format: uri
           readOnly: true
+          type: string
+        access_resolved:
+          type: boolean
+        access_source:
           type: string
         clerk_user_id:
           type: string
@@ -10440,16 +10830,15 @@ paths:
       summary: List accounts withheld from retention deletion (admin)
       tags:
         - Admin
-  /api/v1/admin/subscription/grant-trial:
-    post:
-      description: Grants a 60-day trial to the authenticated admin user. Used by E2E testing, but deliberately available in every environment — any admin can already change subscriptions through the other admin endpoints. Returns success if the user already has or had a trial.
-      operationId: grantTrial
+  /api/v1/admin/revenuecat/health:
+    get:
+      operationId: getAdminRevenueCatHealth
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/GrantTrialResponseBody"
+                $ref: "#/components/schemas/AdminRevenueCatHealthOutputBody"
           description: OK
         default:
           content:
@@ -10459,9 +10848,79 @@ paths:
           description: Error
       security:
         - clerk: []
-      summary: Grant trial subscription (admin)
+      summary: Get RevenueCat synchronization metrics
       tags:
-        - Admin
+        - Admin Subscriptions
+  /api/v1/admin/revenuecat/webhooks:
+    get:
+      operationId: listAdminRevenueCatWebhooks
+      parameters:
+        - explode: false
+          in: query
+          name: limit
+          schema:
+            default: 20
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+        - explode: false
+          in: query
+          name: offset
+          schema:
+            default: 0
+            format: int64
+            minimum: 0
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/RevenueCatWebhookReceipt"
+                type:
+                  - array
+                  - "null"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: List authenticated webhook receipts and processing results
+      tags:
+        - Admin Subscriptions
+  /api/v1/admin/revenuecat/webhooks/{event_id}/replay:
+    post:
+      operationId: replayAdminRevenueCatWebhook
+      parameters:
+        - in: path
+          name: event_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevenueCatWebhookOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Retry webhook processing or refresh a completed receipt's customer
+      tags:
+        - Admin Subscriptions
   /api/v1/admin/system/health:
     get:
       description: Returns comprehensive system health metrics including database, job queues, and sync status. Requires admin role.
@@ -10596,6 +11055,126 @@ paths:
       summary: Get user details (admin)
       tags:
         - Admin
+  /api/v1/admin/users/{user_id}/revenuecat:
+    get:
+      operationId: getAdminRevenueCatUser
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminRevenueCatUserOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Inspect confirmed access, billing and grant operations
+      tags:
+        - Admin Subscriptions
+  /api/v1/admin/users/{user_id}/revenuecat/grants:
+    post:
+      description: Saves an audited, retryable operation. Pending does not mean access has been applied.
+      operationId: requestAdminRevenueCatGrant
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminRevenueCatGrantInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevenueCatOperation"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Request a trial or complimentary entitlement change
+      tags:
+        - Admin Subscriptions
+  /api/v1/admin/users/{user_id}/revenuecat/operations/{operation_id}/retry:
+    post:
+      operationId: retryAdminRevenueCatOperation
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: operation_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevenueCatWebhookOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Retry a pending grant operation
+      tags:
+        - Admin Subscriptions
+  /api/v1/admin/users/{user_id}/revenuecat/refresh:
+    post:
+      operationId: refreshAdminRevenueCatUser
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevenueCatWebhookOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Queue a customer subscription refresh
+      tags:
+        - Admin Subscriptions
   /api/v1/admin/users/{user_id}/subscription:
     get:
       description: View a user's subscription tier, manual overrides, and effective limits.
@@ -15831,6 +16410,48 @@ paths:
       summary: Get my savings impact
       tags:
         - SavingsImpact
+  /api/v1/subscription/authority:
+    get:
+      operationId: getRevenueCatSubscription
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevenueCatSummary"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Get confirmed subscription access and separate billing details
+      tags:
+        - Subscription
+  /api/v1/subscription/authority/refresh:
+    post:
+      operationId: refreshRevenueCatSubscription
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevenueCatSummary"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Refresh subscription confirmation
+      tags:
+        - Subscription
   /api/v1/subscription/billing-portal:
     get:
       description: Returns URL to Paddle billing portal where users can manage payment methods and view billing history.
@@ -15851,29 +16472,6 @@ paths:
       security:
         - clerk: []
       summary: Get billing portal URL
-      tags:
-        - Subscription
-        - Paddle
-  /api/v1/subscription/cancel:
-    post:
-      description: Cancels subscription at end of current billing period. User retains access until period ends.
-      operationId: cancel-paddle-subscription
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CancelSubscriptionOutputBody"
-          description: OK
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ErrorModel"
-          description: Error
-      security:
-        - clerk: []
-      summary: Cancel subscription
       tags:
         - Subscription
         - Paddle
@@ -15906,6 +16504,61 @@ paths:
       tags:
         - Subscription
         - Paddle
+  /api/v1/subscription/checkout-intents:
+    post:
+      operationId: beginRevenueCatCheckout
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevenueCatCheckoutBeginInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevenueCatCheckoutIntent"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Coordinate a RevenueCat checkout for the signed-in account
+      tags:
+        - Subscription
+  /api/v1/subscription/checkout-intents/{intent_id}:
+    delete:
+      operationId: releaseRevenueCatCheckout
+      parameters:
+        - in: path
+          name: intent_id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevenueCatCheckoutReleaseOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      security:
+        - clerk: []
+      summary: Close this account's checkout coordination lease
+      tags:
+        - Subscription
   /api/v1/subscription/current:
     get:
       description: Fetches current subscription details from Paddle API with live status, billing info, and tier information.
@@ -15926,35 +16579,6 @@ paths:
       security:
         - clerk: []
       summary: Get current subscription
-      tags:
-        - Subscription
-        - Paddle
-  /api/v1/subscription/preview-update:
-    post:
-      description: Calculates proration amount when upgrading or downgrading subscription tier. Shows immediate charge/credit and next billing details.
-      operationId: preview-paddle-subscription-update
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PreviewUpdateInputBody"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PreviewUpdateOutputBody"
-          description: OK
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ErrorModel"
-          description: Error
-      security:
-        - clerk: []
-      summary: Preview subscription tier change
       tags:
         - Subscription
         - Paddle
@@ -15982,35 +16606,6 @@ paths:
       summary: Get subscription tiers
       tags:
         - Subscription
-  /api/v1/subscription/update:
-    post:
-      description: Updates subscription to a different tier or billing interval. Handles proration automatically.
-      operationId: update-paddle-subscription
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateSubscriptionInputBody"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/UpdateSubscriptionOutputBody"
-          description: OK
-        default:
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ErrorModel"
-          description: Error
-      security:
-        - clerk: []
-      summary: Update subscription tier
-      tags:
-        - Subscription
-        - Paddle
   /api/v1/tags:
     get:
       description: Retrieves all tags for the authenticated user.
@@ -17447,6 +18042,43 @@ paths:
       summary: Handle Plaid webhook
       tags:
         - Webhooks
+  /webhooks/revenuecat:
+    post:
+      operationId: revenuecat-webhook
+      parameters:
+        - in: header
+          name: Authorization
+          schema:
+            type: string
+        - in: header
+          name: X-RevenueCat-Webhook-Signature
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              contentMediaType: application/octet-stream
+              format: binary
+              type: string
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevenueCatWebhookOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Receive RevenueCat webhook notifications
+      tags:
+        - Webhooks
+        - RevenueCat
 servers:
   - description: Production (iad/us-east-1)
     url: https://api.boostedbudget.com

@@ -163,7 +163,7 @@ func setupAdminPaddleWebhooksAPI(t *testing.T) (humatest.TestAPI, *MockPaddleWeb
 	mockAdminSvc := new(MockAdminService)
 
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, mockAdminSvc, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, mockAdminSvc, nil, nil, nil, cfg).
 		WithPaddleWebhookRepo(mockWebhookRepo).
 		WithJobQueue(mockJobQueue)
 	RegisterAdminPaddleWebhooksOperations(api, handler)
@@ -198,7 +198,7 @@ func TestListPaddleWebhooks_OperationRegistered(t *testing.T) {
 func TestListPaddleWebhooks_ReturnsEvents(t *testing.T) {
 	mockWebhookRepo := new(MockPaddleWebhookRepository)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg).
 		WithPaddleWebhookRepo(mockWebhookRepo)
 
 	evt := *newTestWebhookEvent("webhook-uuid-1")
@@ -224,7 +224,7 @@ func TestListPaddleWebhooks_ReturnsEvents(t *testing.T) {
 func TestListPaddleWebhooks_WithFilters(t *testing.T) {
 	mockWebhookRepo := new(MockPaddleWebhookRepository)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg).
 		WithPaddleWebhookRepo(mockWebhookRepo)
 
 	eventType := "subscription.updated"
@@ -247,7 +247,7 @@ func TestListPaddleWebhooks_WithFilters(t *testing.T) {
 func TestListPaddleWebhooks_EmptyResult(t *testing.T) {
 	mockWebhookRepo := new(MockPaddleWebhookRepository)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg).
 		WithPaddleWebhookRepo(mockWebhookRepo)
 
 	mockWebhookRepo.On("ListWebhookEvents", mock.Anything, domain.WebhookEventFilters{}, 20, 0).
@@ -266,7 +266,7 @@ func TestListPaddleWebhooks_EmptyResult(t *testing.T) {
 
 func TestListPaddleWebhooks_NilRepo_Returns503(t *testing.T) {
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg)
 
 	input := &ListPaddleWebhooksInput{Limit: 20, Offset: 0}
 	out, err := handler.ListPaddleWebhooks(context.Background(), input)
@@ -278,7 +278,7 @@ func TestListPaddleWebhooks_NilRepo_Returns503(t *testing.T) {
 func TestGetPaddleWebhookDetail_Success(t *testing.T) {
 	mockWebhookRepo := new(MockPaddleWebhookRepository)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg).
 		WithPaddleWebhookRepo(mockWebhookRepo)
 
 	evt := newTestWebhookEvent("wh-uuid-1")
@@ -298,7 +298,7 @@ func TestGetPaddleWebhookDetail_Success(t *testing.T) {
 func TestGetPaddleWebhookDetail_NotFound(t *testing.T) {
 	mockWebhookRepo := new(MockPaddleWebhookRepository)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg).
 		WithPaddleWebhookRepo(mockWebhookRepo)
 
 	mockWebhookRepo.On("GetByID", mock.Anything, "nonexistent").
@@ -315,7 +315,7 @@ func TestGetPaddleWebhookDetail_NotFound(t *testing.T) {
 
 func TestGetPaddleWebhookDetail_NilRepo_Returns503(t *testing.T) {
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg)
 
 	input := &GetPaddleWebhookDetailInput{ID: "any-id"}
 	out, err := handler.GetPaddleWebhookDetail(context.Background(), input)
@@ -328,7 +328,7 @@ func TestReplayPaddleWebhook_Success(t *testing.T) {
 	mockWebhookRepo := new(MockPaddleWebhookRepository)
 	mockJobQueue := new(MockAdminJobQueue)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg).
 		WithPaddleWebhookRepo(mockWebhookRepo).
 		WithJobQueue(mockJobQueue)
 
@@ -357,7 +357,7 @@ func TestReplayPaddleWebhook_Success(t *testing.T) {
 func TestReplayPaddleWebhook_NotFound(t *testing.T) {
 	mockWebhookRepo := new(MockPaddleWebhookRepository)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg).
 		WithPaddleWebhookRepo(mockWebhookRepo)
 
 	mockWebhookRepo.On("GetByID", mock.Anything, "nonexistent").
@@ -374,7 +374,7 @@ func TestReplayPaddleWebhook_NotFound(t *testing.T) {
 
 func TestReplayPaddleWebhook_NilRepo_Returns503(t *testing.T) {
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg)
 
 	input := &ReplayPaddleWebhookInput{ID: "any-id"}
 	out, err := handler.ReplayPaddleWebhook(context.Background(), input)
@@ -389,7 +389,7 @@ func TestReplayPaddleWebhook_InvalidSignature_Rejected(t *testing.T) {
 	mockWebhookRepo := new(MockPaddleWebhookRepository)
 	mockJobQueue := new(MockAdminJobQueue)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg).
 		WithPaddleWebhookRepo(mockWebhookRepo).
 		WithJobQueue(mockJobQueue)
 
@@ -411,7 +411,7 @@ func TestReplayPaddleWebhook_NilQueue_StillSucceeds(t *testing.T) {
 	mockWebhookRepo := new(MockPaddleWebhookRepository)
 	cfg := &config.Config{Environment: "qa"}
 	// No job queue configured
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg).
 		WithPaddleWebhookRepo(mockWebhookRepo)
 
 	evt := newTestWebhookEvent("wh-noqueue-1")
@@ -432,7 +432,7 @@ func TestReplayPaddleWebhook_NilQueue_StillSucceeds(t *testing.T) {
 func TestGetPaddleWebhookStats_Success(t *testing.T) {
 	mockWebhookRepo := new(MockPaddleWebhookRepository)
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg).
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg).
 		WithPaddleWebhookRepo(mockWebhookRepo)
 
 	stats := &domain.WebhookStatsResponse{
@@ -479,7 +479,7 @@ func TestGetPaddleWebhookStats_TimeRangeConversion(t *testing.T) {
 
 func TestGetPaddleWebhookStats_NilRepo_Returns503(t *testing.T) {
 	cfg := &config.Config{Environment: "qa"}
-	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, nil, cfg)
+	handler := NewAdminHandler(nil, nil, nil, nil, nil, nil, cfg)
 
 	input := &GetPaddleWebhookStatsInput{TimeRange: "24h"}
 	out, err := handler.GetPaddleWebhookStats(context.Background(), input)

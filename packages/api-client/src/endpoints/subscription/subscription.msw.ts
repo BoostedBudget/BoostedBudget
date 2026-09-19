@@ -44,32 +44,58 @@ import type {
 } from 'msw';
 
 import type {
-  CancelSubscriptionOutputBody,
   CheckoutOutputBody,
   GetBillingPortalURLOutputBody,
   GetCurrentSubscriptionOutputBody,
-  PreviewUpdateOutputBody,
-  SubscriptionTiersResponse,
-  UpdateSubscriptionOutputBody
+  RevenueCatCheckoutIntent,
+  RevenueCatCheckoutReleaseOutputBody,
+  RevenueCatSummary,
+  SubscriptionTiersResponse
 } from '../../models';
 
 
-export const getGetBillingPortalUrlResponseMock = (overrideResponse: Partial<Extract<GetBillingPortalURLOutputBody, object>> = {}): GetBillingPortalURLOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), portal_url: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getGetRevenueCatSubscriptionResponseMock = (overrideResponse: Partial<Extract<RevenueCatSummary, object>> = {}): RevenueCatSummary => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), access_resolved: faker.datatype.boolean(), as_of: faker.date.past().toISOString().slice(0, 19) + 'Z', billing: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({auto_renewal_status: faker.string.alpha({length: {min: 10, max: 20}}), current_period_ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), environment: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), management_url: faker.string.alpha({length: {min: 10, max: 20}}), product_id: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), store: faker.string.alpha({length: {min: 10, max: 20}}), store_subscription_identifier: faker.string.alpha({length: {min: 10, max: 20}})})), null]), billing_available: faker.datatype.boolean(), comp: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), effective: faker.helpers.arrayElement([{HouseholdID: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), PayerUserID: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), Source: faker.string.alpha({length: {min: 10, max: 20}}), Status: faker.string.alpha({length: {min: 10, max: 20}}), Tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), own: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), paid: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), pending_operations: faker.number.int(), trial: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), ...overrideResponse})
 
-export const getCancelPaddleSubscriptionResponseMock = (overrideResponse: Partial<Extract<CancelSubscriptionOutputBody, object>> = {}): CancelSubscriptionOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), ends_at: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), subscription_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getRefreshRevenueCatSubscriptionResponseMock = (overrideResponse: Partial<Extract<RevenueCatSummary, object>> = {}): RevenueCatSummary => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), access_resolved: faker.datatype.boolean(), as_of: faker.date.past().toISOString().slice(0, 19) + 'Z', billing: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({auto_renewal_status: faker.string.alpha({length: {min: 10, max: 20}}), current_period_ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), environment: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), management_url: faker.string.alpha({length: {min: 10, max: 20}}), product_id: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), store: faker.string.alpha({length: {min: 10, max: 20}}), store_subscription_identifier: faker.string.alpha({length: {min: 10, max: 20}})})), null]), billing_available: faker.datatype.boolean(), comp: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), effective: faker.helpers.arrayElement([{HouseholdID: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), PayerUserID: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), Source: faker.string.alpha({length: {min: 10, max: 20}}), Status: faker.string.alpha({length: {min: 10, max: 20}}), Tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), own: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), paid: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), pending_operations: faker.number.int(), trial: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), ...overrideResponse})
+
+export const getGetBillingPortalUrlResponseMock = (overrideResponse: Partial<Extract<GetBillingPortalURLOutputBody, object>> = {}): GetBillingPortalURLOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), portal_url: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getCreatePaddleCheckoutResponseMock = (overrideResponse: Partial<Extract<CheckoutOutputBody, object>> = {}): CheckoutOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), checkout_url: faker.string.alpha({length: {min: 10, max: 20}}), transaction_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getGetCurrentSubscriptionResponseMock = (overrideResponse: Partial<Extract<GetCurrentSubscriptionOutputBody, object>> = {}): GetCurrentSubscriptionOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), amount: faker.string.alpha({length: {min: 10, max: 20}}), billing_interval: faker.string.alpha({length: {min: 10, max: 20}}), cancel_at_period_end: faker.datatype.boolean(), comp_ends_at: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), currency: faker.string.alpha({length: {min: 10, max: 20}}), current_period_end: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), is_comped: faker.datatype.boolean(), next_billing_date: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), scheduled_change_at: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), status: faker.string.alpha({length: {min: 10, max: 20}}), subscription_id: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}}), trial_days_remaining: faker.helpers.arrayElement([faker.number.int(), undefined]), trial_ends_at: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), ...overrideResponse})
+export const getBeginRevenueCatCheckoutResponseMock = (overrideResponse: Partial<Extract<RevenueCatCheckoutIntent, object>> = {}): RevenueCatCheckoutIntent => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), expires_at: faker.date.past().toISOString().slice(0, 19) + 'Z', id: faker.string.alpha({length: {min: 10, max: 20}}), offering: faker.string.alpha({length: {min: 10, max: 20}}), package: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getPreviewPaddleSubscriptionUpdateResponseMock = (overrideResponse: Partial<Extract<PreviewUpdateOutputBody, object>> = {}): PreviewUpdateOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), currency: faker.string.alpha({length: {min: 10, max: 20}}), next_charge_amount: faker.string.alpha({length: {min: 10, max: 20}}), next_charge_date: faker.string.alpha({length: {min: 10, max: 20}}), proration_amount: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getReleaseRevenueCatCheckoutResponseMock = (overrideResponse: Partial<Extract<RevenueCatCheckoutReleaseOutputBody, object>> = {}): RevenueCatCheckoutReleaseOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+
+export const getGetCurrentSubscriptionResponseMock = (overrideResponse: Partial<Extract<GetCurrentSubscriptionOutputBody, object>> = {}): GetCurrentSubscriptionOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), amount: faker.string.alpha({length: {min: 10, max: 20}}), authority: faker.helpers.arrayElement([{$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), access_resolved: faker.datatype.boolean(), as_of: faker.date.past().toISOString().slice(0, 19) + 'Z', billing: faker.helpers.arrayElement([Array.from({ length: faker.number.int({min: 1, max: 10}) }, (_, i) => i + 1).map(() => ({auto_renewal_status: faker.string.alpha({length: {min: 10, max: 20}}), current_period_ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), ends_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), environment: faker.string.alpha({length: {min: 10, max: 20}}), id: faker.string.alpha({length: {min: 10, max: 20}}), management_url: faker.string.alpha({length: {min: 10, max: 20}}), product_id: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), store: faker.string.alpha({length: {min: 10, max: 20}}), store_subscription_identifier: faker.string.alpha({length: {min: 10, max: 20}})})), null]), billing_available: faker.datatype.boolean(), comp: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), effective: faker.helpers.arrayElement([{HouseholdID: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), PayerUserID: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), null]), Source: faker.string.alpha({length: {min: 10, max: 20}}), Status: faker.string.alpha({length: {min: 10, max: 20}}), Tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), own: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), paid: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,]), pending_operations: faker.number.int(), trial: faker.helpers.arrayElement([{expires_at: faker.helpers.arrayElement([faker.date.past().toISOString().slice(0, 19) + 'Z', null]), source: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}})},null,])}, undefined]), billing_interval: faker.string.alpha({length: {min: 10, max: 20}}), cancel_at_period_end: faker.datatype.boolean(), comp_ends_at: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), currency: faker.string.alpha({length: {min: 10, max: 20}}), current_period_end: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), is_comped: faker.datatype.boolean(), next_billing_date: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), scheduled_change_at: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), status: faker.string.alpha({length: {min: 10, max: 20}}), subscription_id: faker.string.alpha({length: {min: 10, max: 20}}), tier: faker.string.alpha({length: {min: 10, max: 20}}), trial_days_remaining: faker.helpers.arrayElement([faker.number.int(), undefined]), trial_ends_at: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), ...overrideResponse})
 
 export const getGetSubscriptionTiersResponseMock = (overrideResponse: Partial<Extract<SubscriptionTiersResponse, object>> = {}): SubscriptionTiersResponse => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), default_tier: faker.string.alpha({length: {min: 10, max: 20}}), tiers: {
         [faker.string.alphanumeric(5)]: {description: faker.string.alpha({length: {min: 10, max: 20}}), display_name: faker.string.alpha({length: {min: 10, max: 20}}), features: {advanced_reports: faker.datatype.boolean(), api_access: faker.datatype.boolean(), custom_categories: faker.datatype.boolean(), custom_tags: faker.datatype.boolean(), priority_support: faker.datatype.boolean()}, limits: {transaction_history_days: faker.number.int()}, name: faker.string.alpha({length: {min: 10, max: 20}}), pricing: {mobile_price_yearly: faker.number.float({fractionDigits: 2}), paddle_price_id_monthly: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), paddle_price_id_yearly: faker.helpers.arrayElement([faker.string.alpha({length: {min: 10, max: 20}}), undefined]), price_monthly: faker.number.float({fractionDigits: 2}), price_yearly: faker.number.float({fractionDigits: 2}), users_included: faker.number.int()}}
       }, ...overrideResponse})
 
-export const getUpdatePaddleSubscriptionResponseMock = (overrideResponse: Partial<Extract<UpdateSubscriptionOutputBody, object>> = {}): UpdateSubscriptionOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), message: faker.string.alpha({length: {min: 10, max: 20}}), status: faker.string.alpha({length: {min: 10, max: 20}}), subscription_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
+export const getGetRevenueCatSubscriptionMockHandler = (overrideResponse?: RevenueCatSummary | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<RevenueCatSummary> | RevenueCatSummary), options?: RequestHandlerOptions) => {
+  return http.get('*/api/v1/subscription/authority', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getGetRevenueCatSubscriptionResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getRefreshRevenueCatSubscriptionMockHandler = (overrideResponse?: RevenueCatSummary | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<RevenueCatSummary> | RevenueCatSummary), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/subscription/authority/refresh', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getRefreshRevenueCatSubscriptionResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
 
 export const getGetBillingPortalUrlMockHandler = (overrideResponse?: GetBillingPortalURLOutputBody | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<GetBillingPortalURLOutputBody> | GetBillingPortalURLOutputBody), options?: RequestHandlerOptions) => {
   return http.get('*/api/v1/subscription/billing-portal', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
@@ -78,18 +104,6 @@ export const getGetBillingPortalUrlMockHandler = (overrideResponse?: GetBillingP
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getGetBillingPortalUrlResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
-
-export const getCancelPaddleSubscriptionMockHandler = (overrideResponse?: CancelSubscriptionOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<CancelSubscriptionOutputBody> | CancelSubscriptionOutputBody), options?: RequestHandlerOptions) => {
-  return http.post('*/api/v1/subscription/cancel', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getCancelPaddleSubscriptionResponseMock(),
       { status: 200
       })
   }, options)
@@ -107,6 +121,30 @@ export const getCreatePaddleCheckoutMockHandler = (overrideResponse?: CheckoutOu
   }, options)
 }
 
+export const getBeginRevenueCatCheckoutMockHandler = (overrideResponse?: RevenueCatCheckoutIntent | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<RevenueCatCheckoutIntent> | RevenueCatCheckoutIntent), options?: RequestHandlerOptions) => {
+  return http.post('*/api/v1/subscription/checkout-intents', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getBeginRevenueCatCheckoutResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
+export const getReleaseRevenueCatCheckoutMockHandler = (overrideResponse?: RevenueCatCheckoutReleaseOutputBody | ((info: Parameters<Parameters<typeof http.delete>[1]>[0]) => Promise<RevenueCatCheckoutReleaseOutputBody> | RevenueCatCheckoutReleaseOutputBody), options?: RequestHandlerOptions) => {
+  return http.delete('*/api/v1/subscription/checkout-intents/:intentId', async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {await delay(500);
+
+
+    return HttpResponse.json(overrideResponse !== undefined
+    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
+    : getReleaseRevenueCatCheckoutResponseMock(),
+      { status: 200
+      })
+  }, options)
+}
+
 export const getGetCurrentSubscriptionMockHandler = (overrideResponse?: GetCurrentSubscriptionOutputBody | ((info: Parameters<Parameters<typeof http.get>[1]>[0]) => Promise<GetCurrentSubscriptionOutputBody> | GetCurrentSubscriptionOutputBody), options?: RequestHandlerOptions) => {
   return http.get('*/api/v1/subscription/current', async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {await delay(500);
 
@@ -114,18 +152,6 @@ export const getGetCurrentSubscriptionMockHandler = (overrideResponse?: GetCurre
     return HttpResponse.json(overrideResponse !== undefined
     ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
     : getGetCurrentSubscriptionResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
-
-export const getPreviewPaddleSubscriptionUpdateMockHandler = (overrideResponse?: PreviewUpdateOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<PreviewUpdateOutputBody> | PreviewUpdateOutputBody), options?: RequestHandlerOptions) => {
-  return http.post('*/api/v1/subscription/preview-update', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getPreviewPaddleSubscriptionUpdateResponseMock(),
       { status: 200
       })
   }, options)
@@ -142,24 +168,13 @@ export const getGetSubscriptionTiersMockHandler = (overrideResponse?: Subscripti
       })
   }, options)
 }
-
-export const getUpdatePaddleSubscriptionMockHandler = (overrideResponse?: UpdateSubscriptionOutputBody | ((info: Parameters<Parameters<typeof http.post>[1]>[0]) => Promise<UpdateSubscriptionOutputBody> | UpdateSubscriptionOutputBody), options?: RequestHandlerOptions) => {
-  return http.post('*/api/v1/subscription/update', async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {await delay(500);
-
-
-    return HttpResponse.json(overrideResponse !== undefined
-    ? (typeof overrideResponse === "function" ? await overrideResponse(info) : overrideResponse)
-    : getUpdatePaddleSubscriptionResponseMock(),
-      { status: 200
-      })
-  }, options)
-}
 export const getSubscriptionMock = () => [
+  getGetRevenueCatSubscriptionMockHandler(),
+  getRefreshRevenueCatSubscriptionMockHandler(),
   getGetBillingPortalUrlMockHandler(),
-  getCancelPaddleSubscriptionMockHandler(),
   getCreatePaddleCheckoutMockHandler(),
+  getBeginRevenueCatCheckoutMockHandler(),
+  getReleaseRevenueCatCheckoutMockHandler(),
   getGetCurrentSubscriptionMockHandler(),
-  getPreviewPaddleSubscriptionUpdateMockHandler(),
-  getGetSubscriptionTiersMockHandler(),
-  getUpdatePaddleSubscriptionMockHandler()
+  getGetSubscriptionTiersMockHandler()
 ]

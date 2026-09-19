@@ -79,7 +79,7 @@ export function DeadLetterPage() {
   const isEmpty = !isLoading && !error && jobs.length === 0
 
   // Populate kind dropdown from stats
-  const kindOptions = statsData?.by_kind ? Object.keys(statsData.by_kind) : []
+  const kindOptions = [...new Set(['revenuecat_sync', 'revenuecat_repair', ...Object.keys(statsData?.by_kind ?? {})])]
 
   const { sizing, onSizingChange, columnVisibility, onColumnVisibilityChange } = useTablePreferences(
     'admin-dead-letter',
@@ -309,6 +309,11 @@ export function DeadLetterPage() {
           </button>
         </div>
       </header>
+
+      {(filters.kind.startsWith('revenuecat_') || data?.jobs?.some(job => job.kind.startsWith('revenuecat_'))) && <div className="rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
+        <p>Deleting a RevenueCat dead letter does not cancel a pending grant or erase its operation history. Repair jobs may retry the saved intent. Use the user's RevenueCat diagnostics to inspect or recover the operation.</p>
+        <a href="/admin/revenuecat" className="text-primary underline">Open RevenueCat operations</a>
+      </div>}
 
       {statsData && (
         <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">

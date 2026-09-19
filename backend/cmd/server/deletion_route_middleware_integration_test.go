@@ -69,14 +69,16 @@ func (s *stubDeletionService) CancelDeletion(context.Context, string) error { re
 func (s *stubDeletionService) ExecuteDeletion(context.Context, string, repository.DeletionClaimKind) error {
 	return nil
 }
-func (s *stubDeletionService) SetPlaidCleanupService(services.PlaidItemCleanupService)   {}
-func (s *stubDeletionService) SetPaddleCleanupService(services.PaddleDeletionCleaner)    {}
-func (s *stubDeletionService) SetAnalytics(phclient.Analytics)                           {}
-func (s *stubDeletionService) SetHouseholdReader(services.HouseholdReader)               {}
-func (s *stubDeletionService) SetHouseholdInviteRevoker(services.HouseholdInviteRevoker) {}
-func (s *stubDeletionService) SetDB(repository.DB)                                       {}
-func (s *stubDeletionService) SetWorkClaimsRepo(repository.WorkClaimsRepository)         {}
-func (s *stubDeletionService) SetCache(cache.Purger, *cache.Generations, queue.JobQueue) {}
+func (s *stubDeletionService) SetPlaidCleanupService(services.PlaidItemCleanupService)        {}
+func (s *stubDeletionService) SetPaddleCleanupService(services.PaddleDeletionCleaner)         {}
+func (s *stubDeletionService) SetAnalytics(phclient.Analytics)                                {}
+func (s *stubDeletionService) SetHouseholdReader(services.HouseholdReader)                    {}
+func (s *stubDeletionService) SetHouseholdInviteRevoker(services.HouseholdInviteRevoker)      {}
+func (s *stubDeletionService) SetDB(repository.DB)                                            {}
+func (s *stubDeletionService) SetWorkClaimsRepo(repository.WorkClaimsRepository)              {}
+func (s *stubDeletionService) SetSubscriptionCleanupGuard(services.SubscriptionCleanupGuard)  {}
+func (s *stubDeletionService) SetRevenueCatCleanupService(services.RevenueCatDeletionCleaner) {}
+func (s *stubDeletionService) SetCache(cache.Purger, *cache.Generations, queue.JobQueue)      {}
 
 // clerkStub injects exactly the context keys internal/huma/middleware/clerk.go's attach() sets on
 // the JWT path. UserIDKey matters as much as the claims: the cache-invalidation middleware gates its

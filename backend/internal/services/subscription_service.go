@@ -163,18 +163,14 @@ func (s *SubscriptionService) GetEffectiveSubscriptionAt(
 	// (Issue #1413) names a real configured tier — see effectiveTierNameAt's doc comment.
 	tierName := domain.TierName(s.effectiveTierNameAt(user, now))
 
-	// If a household entitlement resolver is injected, let it override the tier — but
-	// fail open on any resolver error so an entitlements-table hiccup never breaks
-	// limit/feature resolution for solo users too. The error is logged (not silently
-	// dropped) so a systemic entitlement-resolution outage is visible in production.
+	// A configured authority must succeed. Legacy user fields are not a fallback
+	// entitlement during an outage; callers preserve reads but deny protected writes.
 	if s.entitlementResolver != nil {
 		eff, err := s.entitlementResolver.ResolveEffectiveEntitlementAt(ctx, user, now)
 		if err != nil {
-			slog.Warn("household entitlement resolution failed; falling back to own tier",
-				"user_id", user.ID, "error", err)
-		} else {
-			tierName = domain.TierName(eff.Tier)
+			return nil, fmt.Errorf("subscription entitlement resolution failed: %w", err)
 		}
+		tierName = domain.TierName(eff.Tier)
 	}
 
 	// Get tier configuration for the effective tier

@@ -367,7 +367,7 @@ func TestClaimForDeletion_Integration_UnknownKind_FailsClosed(t *testing.T) {
 //
 // This test previously asserted the opposite — that an expired override still permits the
 // claim — on the theory that the retention-kind claim predicate should use the "still live right
-// now" rule (noActiveManualOverridePredicate), matching CancelIfPastDueOccurrenceWithRetention/ExpireTrialIfNoOverride. That
+// now" rule (noActiveManualOverridePredicate), matching the deleted CancelIfPastDueOccurrenceWithRetention and ExpireTrialIfNoOverride (#1652). That
 // was the C1 bug, not a documented rule: the retention *queries* that select this same user as a
 // deletion candidate (GetUsersWithExpiredRetention) were correctly changed to exclude ANY
 // override, live or lapsed (noManualOverrideAtAllPredicate) — see that constant's doc comment for

@@ -25,6 +25,10 @@ function createMemoryWrapper(initialUrl = '/') {
 }
 
 describe('useDeadLetterFilters', () => {
+  it('opens a RevenueCat job kind from an operations link', () => {
+    const { result } = renderHook(() => useDeadLetterFilters(), {wrapper: createMemoryWrapper('/admin/dead-letter?kind=revenuecat_sync')})
+    expect(result.current.apiParams.kind).toBe('revenuecat_sync')
+  })
   beforeEach(() => {
     window.history.replaceState({}, '', '/')
   })

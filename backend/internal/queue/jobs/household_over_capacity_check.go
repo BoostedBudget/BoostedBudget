@@ -16,6 +16,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
@@ -102,8 +103,7 @@ type HouseholdOverCapacityCheckRepository interface {
 }
 
 // HouseholdOverCapacityUserRepository defines the owner-lookup method needed to
-// recompute the owner's current effective-tier seat count on every scan pass — the
-// same technique paddle_checkout.go's checkDowngradeSeatCapacity (Task 5) uses.
+// recompute the owner's current effective-tier seat count on every scan pass.
 type HouseholdOverCapacityUserRepository interface {
 	GetUserByID(ctx context.Context, id string) (*domain.User, error)
 }
@@ -150,6 +150,7 @@ type HouseholdOverCapacityEmailService interface {
 // HouseholdOverCapacityCheckWorker processes household over-capacity check jobs. It is
 // the AUTHORITATIVE reconciler for the over-capacity grace lifecycle (see package doc).
 type HouseholdOverCapacityCheckWorker struct {
+	ownAccessResolver services.OwnAccessResolver
 	river.WorkerDefaults[HouseholdOverCapacityCheckArgs]
 
 	repo         HouseholdOverCapacityCheckRepository
@@ -158,6 +159,10 @@ type HouseholdOverCapacityCheckWorker struct {
 	emailService HouseholdOverCapacityEmailService
 	tierConfig   *config.TierConfig
 	logger       *slog.Logger
+	// analytics reports an over-capacity entry this backstop discovered, reusing the existing
+	// household_over_capacity_entered event. Optional/nil-safe: unwired, every capture is skipped
+	// and the pass behaves identically.
+	analytics phclient.ProductAnalytics
 	// cacheGens is optional (nil = cache invalidation disabled/not wired); see
 	// SetCacheInvalidation. Issue #1531 Task 10b-2a-iii.
 	cacheGens *cache.Generations
@@ -202,6 +207,23 @@ func NewHouseholdOverCapacityCheckWorker(deps HouseholdOverCapacityCheckWorkerDe
 // is a safe no-op.
 func (w *HouseholdOverCapacityCheckWorker) SetCacheInvalidation(gens *cache.Generations) {
 	w.cacheGens = gens
+}
+
+func (w *HouseholdOverCapacityCheckWorker) SetOwnAccessResolver(resolver services.OwnAccessResolver) {
+	w.ownAccessResolver = resolver
+}
+
+// SetAnalytics wires the consent-aware Gateway used to report an over-capacity entry this
+// backstop discovered. Nil-safe: an unset value makes every capture a no-op and the pass behaves
+// identically, mirroring RetentionCleanupCheckWorker.SetAnalytics.
+func (w *HouseholdOverCapacityCheckWorker) SetAnalytics(analytics phclient.ProductAnalytics) {
+	w.analytics = analytics
+}
+func (w *HouseholdOverCapacityCheckWorker) ownerAccess(ctx context.Context, owner *domain.User) (domain.RevenueCatAccess, error) {
+	if w.ownAccessResolver != nil {
+		return w.ownAccessResolver.ResolveOwnAccessAt(ctx, owner.ID, time.Now())
+	}
+	return domain.RevenueCatAccess{Tier: w.effectiveTierName(owner), Status: owner.ComputeEffectiveStatus()}, nil
 }
 
 // bumpCacheForHousehold invalidates householdID's cached household-scoped analytics after a
@@ -338,7 +360,11 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 	// manual_tier_override (#1413) — grace is moot, members already fall back to their own
 	// tier via the entitlement resolver's owner-read-only branch, which reads the same
 	// effective status so the two can never disagree.
-	if domain.SubscriptionStatus(owner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
+	access, err := w.ownerAccess(ctx, owner)
+	if err != nil {
+		return err
+	}
+	if domain.SubscriptionStatus(access.Status).IsReadOnlySubscription() {
 		if h.OverCapacitySince != nil {
 			if err := w.repo.ClearOverCapacity(ctx, h.ID); err != nil {
 				return fmt.Errorf("failed to clear over-capacity for read-only-owner household %s: %w", h.ID, err)
@@ -347,7 +373,7 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		return nil
 	}
 
-	tier, err := w.tierConfig.GetTier(domain.TierName(w.effectiveTierName(owner)))
+	tier, err := w.tierConfig.GetTier(domain.TierName(access.Tier))
 	if err != nil {
 		return fmt.Errorf("failed to resolve tier for owner %s: %w", h.OwnerUserID, err)
 	}
@@ -385,7 +411,11 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 	if err != nil {
 		return fmt.Errorf("failed to re-fetch owner %s for fresh read-only check: %w", h.OwnerUserID, err)
 	}
-	if domain.SubscriptionStatus(freshOwner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
+	freshAccess, err := w.ownerAccess(ctx, freshOwner)
+	if err != nil {
+		return err
+	}
+	if domain.SubscriptionStatus(freshAccess.Status).IsReadOnlySubscription() {
 		if h.OverCapacitySince != nil {
 			if err := w.repo.ClearOverCapacity(ctx, h.ID); err != nil {
 				return fmt.Errorf("failed to clear over-capacity for read-only-owner household %s (fresh re-check): %w", h.ID, err)
@@ -393,7 +423,7 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		}
 		return nil
 	}
-	freshTier, err := w.tierConfig.GetTier(domain.TierName(w.effectiveTierName(freshOwner)))
+	freshTier, err := w.tierConfig.GetTier(domain.TierName(freshAccess.Tier))
 	if err != nil {
 		return fmt.Errorf("failed to resolve fresh tier for owner %s: %w", h.OwnerUserID, err)
 	}
@@ -481,6 +511,17 @@ func (w *HouseholdOverCapacityCheckWorker) processHousehold(ctx context.Context,
 		// enforce, and email the owner a fabricated, incorrect deadline. effectiveSince
 		// is always the true value, whichever writer got there first.
 		h.OverCapacitySince = &effectiveSince
+		// Reuse the existing household_over_capacity_entered event: this is the same product
+		// state transition the subscription-webhook fast path reports, discovered by the
+		// authoritative backstop instead. A distinct name would fork the dashboard. The capture
+		// is a pure side effect and fires only on the NULL-to-value transition, so a re-run over
+		// an already-flagged household emits nothing.
+		if w.analytics != nil {
+			w.analytics.CaptureEvent(ctx, h.OwnerUserID, phclient.HouseholdOverCapacityEnteredPayload{
+				ActiveCount: int64(activeCount),
+				SeatLimit:   int64(seatLimit),
+			})
+		}
 	}
 
 	// In grace — either already, or just entered via Case 3 above. Branch on where

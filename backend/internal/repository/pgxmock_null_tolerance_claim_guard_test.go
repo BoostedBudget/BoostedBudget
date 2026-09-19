@@ -459,11 +459,24 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 // 69 -> 73 (#1637): added budget_plan_repository_test.go, budget_expense_rows_test.go,
 // budget_expense_snapshot_test.go, and savings_flow_provenance_test.go. They assert query shape,
 // transaction boundaries, and mapping, not driver NULL tolerance. No files removed.
+// #1652 adds services/registration_revenuecat_test.go: transaction-order tests,
+// no NULL-tolerance claims. Included in TestNoUndisclosedPgxmockNullToleranceClaim.
+// #1652 adds services/revenuecat_household_projection_test.go and
+// revenuecat_compatibility_test.go: SQL/session behavior and typed scan fixtures,
+// no claims about real PostgreSQL NULL tolerance. Both pass the claim sweep.
+// #1652 additionally adds revenuecat_retention_guard_test.go and
+// revenuecat_checkout_repository_test.go: lock/transaction and checkout admission
+// contracts only, with no driver NULL-tolerance claims.
 // 73 -> 74 (#1650): added analytics_authority_repository_test.go, which pins consent/identity
 // locking and fail-closed query behavior. It makes no driver NULL-tolerance claim. No files removed.
 // 74 -> 75 (#1650): added posthog_erasure_outbox_test.go, which asserts transactional statement
 // ordering, encrypted identity capture, and two separated operator confirmations. It makes no
 // driver NULL-tolerance claim. No files removed.
+// 80 -> 81 (#1652 todo 10): added services/household_entitlement_projection_analytics_test.go,
+// which drives AcceptInvite through the real PostHog Gateway and asserts the household projection
+// event's name, exact properties, and consent boundary. It makes no driver NULL-tolerance claim.
+// No files removed.
+//
 // 75 -> 76 (#1683 Task 4): added audit_log_repository_test.go, which pins the metadata INSERT shape
 // (VALUES (NULL, plus all four metadata columns), the erasure redaction SET clause, and the
 // pgxmock-bound metadata write including NULL binding for absent metadata. It makes no
@@ -476,4 +489,19 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 // fourteen privacy_settings columns explicitly and the audit metadata binds []byte(nil) for
 // `changes`, so it is clean under TestNoUndisclosedPgxmockNullToleranceClaim above. No file was
 // added or removed — the file already existed without the import.
-const pgxmockSweepFileCount = 77
+//
+// ⚠ VERIFIED (#1652 × #1688 merge): 83 is the guard-computed count, not a placeholder. It is the
+// value TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean itself derives — that test's
+// Equal assertion walks backend/internal exactly as described above and returns 83 — and the same
+// walk reproduced independently with a shell equivalent returns 83 as well. The merge combined two
+// disjoint additions to the pgxmock-importing set: this branch (#1652) added the RevenueCat
+// test files — services/registration_revenuecat_test.go,
+// services/revenuecat_household_projection_test.go, repository/revenuecat_compatibility_test.go,
+// repository/revenuecat_retention_guard_test.go, repository/revenuecat_checkout_repository_test.go,
+// and (todo 10) services/household_entitlement_projection_analytics_test.go — while staging (#1688)
+// added repository/audit_log_repository_test.go and services/privacy_service_test.go. Every one of
+// these is clean under TestNoUndisclosedPgxmockNullToleranceClaim above: none asserts that the
+// driver tolerates a NULL cell it scanned (the RevenueCat files test transaction order, SQL/session
+// shape, lock/checkout contracts, and household projection; the #1688 pair tests metadata INSERT
+// shape and the Begin/Commit/Rollback boundary). No file was removed on either side.
+const pgxmockSweepFileCount = 83

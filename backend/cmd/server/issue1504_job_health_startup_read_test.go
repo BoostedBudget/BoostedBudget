@@ -31,17 +31,27 @@ import (
 // stubJobHealthRepo is repository.JobHealthRepository with canned answers. errAll makes every read
 // fail, which is the only way to exercise the "a failed read must publish nothing" half.
 type stubJobHealthRepo struct {
-	overrideAge  time.Duration
+	compGrantAge time.Duration
 	plaidCount   int
 	plaidOldest  time.Duration
 	residueCount int
 	residueAge   time.Duration
 	deadLetters  int
-	errAll       error
+
+	// #1652 todo 12: the RevenueCat backlog gauges.
+	webhookInboxPending   int
+	webhookInboxOldest    time.Duration
+	operationsPending     int
+	operationsErrored     int
+	operationsOldest      time.Duration
+	compGrantsOutstanding int
+	refreshOverdueUsers   int
+
+	errAll error
 }
 
-func (s *stubJobHealthRepo) GetOldestUnclearedExpiredManualTierOverrideAge(context.Context) (time.Duration, error) {
-	return s.overrideAge, s.errAll
+func (s *stubJobHealthRepo) GetOldestExpiredCompGrantAge(context.Context) (time.Duration, error) {
+	return s.compGrantAge, s.errAll
 }
 
 func (s *stubJobHealthRepo) GetOutstandingPlaidCleanupStats(context.Context) (int, time.Duration, error) {
@@ -56,18 +66,41 @@ func (s *stubJobHealthRepo) GetDeadLetterQueueSize(context.Context) (int, error)
 	return s.deadLetters, s.errAll
 }
 
+func (s *stubJobHealthRepo) GetRevenueCatWebhookInboxStats(context.Context) (int, time.Duration, error) {
+	return s.webhookInboxPending, s.webhookInboxOldest, s.errAll
+}
+
+func (s *stubJobHealthRepo) GetRevenueCatOperationsStats(context.Context) (int, int, time.Duration, error) {
+	return s.operationsPending, s.operationsErrored, s.operationsOldest, s.errAll
+}
+
+func (s *stubJobHealthRepo) GetRevenueCatCompGrantsOutstanding(context.Context) (int, error) {
+	return s.compGrantsOutstanding, s.errAll
+}
+
+func (s *stubJobHealthRepo) GetRevenueCatRefreshOverdueUsers(context.Context) (int, error) {
+	return s.refreshOverdueUsers, s.errAll
+}
+
 // resetJobHealthGauges returns every gauge this collector feeds to its UNPUBLISHED state, so each
 // test starts from "nothing has measured this" rather than from a previous test's reading. Without
 // this the absence assertions below would be satisfiable by test ordering.
 func resetJobHealthGauges(t *testing.T) {
 	t.Helper()
 	reset := func() {
-		observability.ManualTierOverrideOldestUnclearedExpiredSeconds.DeleteLabelValues()
+		observability.RevenueCatOldestExpiredCompGrantSeconds.DeleteLabelValues()
 		observability.PlaidCleanupOutstandingUsers.DeleteLabelValues()
 		observability.PlaidCleanupOldestOutstandingSeconds.DeleteLabelValues()
 		observability.DeletionResidueRecords.DeleteLabelValues()
 		observability.DeletionResidueNewestSeconds.DeleteLabelValues()
 		observability.DeadLetterQueueSize.DeleteLabelValues()
+		observability.RevenueCatWebhookInboxPending.DeleteLabelValues()
+		observability.RevenueCatOldestUnprocessedWebhookSeconds.DeleteLabelValues()
+		observability.RevenueCatOperationsPending.DeleteLabelValues()
+		observability.RevenueCatOperationsErrored.DeleteLabelValues()
+		observability.RevenueCatOldestPendingOperationAgeSeconds.DeleteLabelValues()
+		observability.RevenueCatCompGrantsOutstanding.DeleteLabelValues()
+		observability.RevenueCatRefreshOverdueUsers.DeleteLabelValues()
 	}
 	reset()
 	t.Cleanup(reset)
@@ -81,12 +114,20 @@ func TestStartJobHealthMetricsCollector_PublishesAMeasurementBeforeTheFirstTick(
 	resetJobHealthGauges(t)
 
 	repo := &stubJobHealthRepo{
-		overrideAge:  90 * time.Minute,
+		compGrantAge: 90 * time.Minute,
 		plaidCount:   2,
 		plaidOldest:  3 * time.Hour,
 		residueCount: 3,
 		residueAge:   45 * time.Second,
 		deadLetters:  7,
+
+		webhookInboxPending:   4,
+		webhookInboxOldest:    2 * time.Minute,
+		operationsPending:     5,
+		operationsErrored:     1,
+		operationsOldest:      10 * time.Minute,
+		compGrantsOutstanding: 6,
+		refreshOverdueUsers:   8,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -106,8 +147,17 @@ func TestStartJobHealthMetricsCollector_PublishesAMeasurementBeforeTheFirstTick(
 	// exactly the same defect on the other three.
 	assert.Equal(t, float64(2), testutil.ToFloat64(observability.PlaidCleanupOutstandingUsers))
 	assert.Equal(t, float64(3*60*60), testutil.ToFloat64(observability.PlaidCleanupOldestOutstandingSeconds))
-	assert.Equal(t, float64(90*60), testutil.ToFloat64(observability.ManualTierOverrideOldestUnclearedExpiredSeconds))
+	assert.Equal(t, float64(90*60), testutil.ToFloat64(observability.RevenueCatOldestExpiredCompGrantSeconds))
 	assert.Equal(t, float64(7), testutil.ToFloat64(observability.DeadLetterQueueSize))
+
+	// #1652 todo 12: the RevenueCat backlog gauges ride the same initial read.
+	assert.Equal(t, float64(4), testutil.ToFloat64(observability.RevenueCatWebhookInboxPending))
+	assert.Equal(t, float64(2*60), testutil.ToFloat64(observability.RevenueCatOldestUnprocessedWebhookSeconds))
+	assert.Equal(t, float64(5), testutil.ToFloat64(observability.RevenueCatOperationsPending))
+	assert.Equal(t, float64(1), testutil.ToFloat64(observability.RevenueCatOperationsErrored))
+	assert.Equal(t, float64(10*60), testutil.ToFloat64(observability.RevenueCatOldestPendingOperationAgeSeconds))
+	assert.Equal(t, float64(6), testutil.ToFloat64(observability.RevenueCatCompGrantsOutstanding))
+	assert.Equal(t, float64(8), testutil.ToFloat64(observability.RevenueCatRefreshOverdueUsers))
 }
 
 // ⚠ THE SIBLING THAT MAKES THE TEST ABOVE FAIL IN BOTH DIRECTIONS. A genuinely clean database must
@@ -162,8 +212,13 @@ func TestStartJobHealthMetricsCollector_AFailedStartupReadPublishesNothing(t *te
 		"a failed read must leave the series absent; publishing 0 would assert that no GDPR deletion has ever been left with a cancelled subscription, which nothing checked")
 	assert.Equal(t, 0, testutil.CollectAndCount(observability.DeletionResidueNewestSeconds))
 	assert.Equal(t, 0, testutil.CollectAndCount(observability.PlaidCleanupOutstandingUsers))
-	assert.Equal(t, 0, testutil.CollectAndCount(observability.ManualTierOverrideOldestUnclearedExpiredSeconds))
+	assert.Equal(t, 0, testutil.CollectAndCount(observability.RevenueCatOldestExpiredCompGrantSeconds))
 	assert.Equal(t, 0, testutil.CollectAndCount(observability.DeadLetterQueueSize))
+	assert.Equal(t, 0, testutil.CollectAndCount(observability.RevenueCatWebhookInboxPending))
+	assert.Equal(t, 0, testutil.CollectAndCount(observability.RevenueCatOperationsPending))
+	assert.Equal(t, 0, testutil.CollectAndCount(observability.RevenueCatOperationsErrored))
+	assert.Equal(t, 0, testutil.CollectAndCount(observability.RevenueCatCompGrantsOutstanding))
+	assert.Equal(t, 0, testutil.CollectAndCount(observability.RevenueCatRefreshOverdueUsers))
 }
 
 // writerFunc adapts a function to io.Writer so the test can observe slog output without a buffer and

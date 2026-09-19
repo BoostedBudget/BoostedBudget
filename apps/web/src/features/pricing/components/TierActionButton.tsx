@@ -1,41 +1,42 @@
 import { useClerk } from '@clerk/react-router'
+import { Link } from 'react-router'
 import { Button } from '@/components/ui/button'
-import { usePaddleCheckout } from '../../billing/hooks/usePaddleCheckout'
-import { classifyTierChange } from '../../subscription/lib/tierDirection'
+import { useRevenueCatCheckout } from '../../billing/hooks/useRevenueCatCheckout'
+import { BillingPortalButton } from '../../billing/components/BillingPortalButton'
 import type { PricingState } from '../hooks/usePricingContext'
-import type { SubscriptionTier, TierName } from '../../subscription/types'
+import type { TierName } from '../../subscription/types'
 
 interface TierActionButtonProps {
   tierKey: TierName
   billingInterval: 'month' | 'year'
   pricingState: PricingState
-  tiers: Record<TierName, SubscriptionTier> | null
-  onChangePlan: (tier: TierName, interval: 'month' | 'year') => void
+  /** The provider's resolved management portal — the single self-service action (#1652). */
+  billingPortalUrl?: string
+  isLoadingPortal?: boolean
+  portalError?: unknown
 }
 
 export function TierActionButton({
   tierKey,
   billingInterval,
   pricingState,
-  tiers,
-  onChangePlan,
+  billingPortalUrl,
+  isLoadingPortal,
+  portalError,
 }: TierActionButtonProps) {
   const { openSignUp } = useClerk()
-  const { checkout, isLoading } = usePaddleCheckout()
+  const { checkout, isLoading } = useRevenueCatCheckout()
 
   const handleCheckout = async () => {
-    try {
-      const response = await checkout({ tier: tierKey, billingInterval })
-      if (window.Paddle) {
-        window.Paddle.Checkout.open({ transactionId: response.transaction_id })
-      }
-    } catch {
-      // Error handling done by usePaddleCheckout
-    }
+    await checkout(tierKey, billingInterval)
   }
 
   if (pricingState.status === 'loading') {
     return <Button disabled className="w-full">Loading...</Button>
+  }
+
+  if (pricingState.status === 'unresolved') {
+    return <Button asChild variant="outline" className="w-full"><Link to="/billing/manage">Check subscription status</Link></Button>
   }
 
   if (pricingState.status === 'signed-out') {
@@ -59,13 +60,8 @@ export function TierActionButton({
     )
   }
 
-  // Issue #1413: comped users keep full commerce functionality. Their own comped tier reads as
-  // "Current Plan" (nothing to buy); every other tier is a normal, functional Subscribe CTA — a
-  // comped user may legitimately want to buy, e.g. if their comp has an end date.
+  // Complimentary access is independent of a paid plan, including the same tier.
   if (pricingState.status === 'comped') {
-    if (pricingState.tier === tierKey) {
-      return <Button disabled className="w-full">Current Plan</Button>
-    }
     return (
       <Button onClick={handleCheckout} disabled={isLoading} className="w-full">
         {isLoading ? 'Loading...' : 'Subscribe'}
@@ -73,34 +69,14 @@ export function TierActionButton({
     )
   }
 
-  if (pricingState.status === 'past_due') {
-    return <Button disabled className="w-full">Update Payment</Button>
-  }
-
-  if (
-    pricingState.status === 'active' ||
-    pricingState.status === 'trialing' ||
-    pricingState.status === 'cancelled'
-  ) {
-    const direction = tiers
-      ? classifyTierChange(pricingState.tier, pricingState.billingInterval, tierKey, billingInterval, tiers)
-      : 'same'
-
-    if (direction === 'same') {
-      return <Button disabled className="w-full">Current Plan</Button>
-    }
-
-    const label =
-      direction === 'upgrade' ? 'Upgrade' :
-      direction === 'downgrade' ? 'Downgrade' :
-      billingInterval === 'year' ? 'Switch to Yearly' : 'Switch to Monthly'
-
-    return (
-      <Button onClick={() => onChangePlan(tierKey, billingInterval)} className="w-full">
-        {label}
-      </Button>
-    )
-  }
-
-  return <Button disabled className="w-full">Subscribe</Button>
+  // Any paid subscription (active, trialing, cancelled, past_due, paused) is managed through the
+  // provider's own portal. #1652 removed the in-app Paddle update/cancel/preview mutations, so
+  // there is exactly one self-service action here — no per-tier Upgrade/Downgrade/Resubscribe.
+  return (
+    <BillingPortalButton
+      billingPortalUrl={billingPortalUrl}
+      isLoadingPortal={!!isLoadingPortal}
+      error={portalError}
+    />
+  )
 }

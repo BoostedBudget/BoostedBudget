@@ -62,7 +62,9 @@ func (m *MockDeletionService) SetDB(db repository.DB)                           
 
 // SetWorkClaimsRepo (Issue #1413 Critical finding C2) is not exercised by these
 // account-deletion job tests; stubbed to satisfy the expanded interface.
-func (m *MockDeletionService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository) {}
+func (m *MockDeletionService) SetWorkClaimsRepo(repo repository.WorkClaimsRepository)         {}
+func (m *MockDeletionService) SetSubscriptionCleanupGuard(services.SubscriptionCleanupGuard)  {}
+func (m *MockDeletionService) SetRevenueCatCleanupService(services.RevenueCatDeletionCleaner) {}
 
 func (m *MockDeletionService) SetAnalytics(a phclient.Analytics) {
 	m.Called(a)

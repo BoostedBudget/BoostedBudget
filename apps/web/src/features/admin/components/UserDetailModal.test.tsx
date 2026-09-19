@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from 'bun:test'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { UserDetailModal } from './UserDetailModal'
 
 // Mock user data
@@ -27,6 +28,13 @@ const mockUser = {
 }
 
 describe('UserDetailModal', () => {
+  it('offers RevenueCat diagnostics without exposing the user ID unmasked', async () => {
+    render(<QueryClientProvider client={new QueryClient({defaultOptions: {queries: {retry: false}}})}><UserDetailModal user={{...mockUser, as_of: '2026-09-13T10:00:00Z', effective_status: 'active', is_admin: false, referrals_count: 0}} loading={false} open={true} onClose={() => {}} /></QueryClientProvider>)
+    expect(screen.getByRole('button', {name: 'Show RevenueCat diagnostics'})).toBeInTheDocument()
+    expect(screen.getByText('user-1').closest('[data-ph-mask]')).not.toBeNull()
+    await userEvent.click(screen.getByRole('button', {name: 'Show RevenueCat diagnostics'}))
+    expect(screen.getByRole('dialog').className).toContain('sm:max-w-[1100px]')
+  })
   const mockOnClose = vi.fn()
 
   beforeEach(() => {

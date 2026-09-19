@@ -35,4 +35,5 @@ export interface AdminSubscriptionTierOutputBody {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   message: string;
+  stage?: string;
 }

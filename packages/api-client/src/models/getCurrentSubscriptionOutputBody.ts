@@ -30,12 +30,15 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { RevenueCatSummary } from './revenueCatSummary';
 
 export interface GetCurrentSubscriptionOutputBody {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
   /** Subscription amount */
   amount: string;
+  /** Confirmed access independent of paid billing details */
+  authority?: RevenueCatSummary;
   /** Billing interval (month/year) */
   billing_interval: string;
   /** Whether the subscription is scheduled to cancel at end of current period */

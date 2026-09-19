@@ -735,7 +735,7 @@ func TestPlaidCleanup_SideEffectClaimWon_PlaidCalledExactlyOnceThenReleased(t *t
 }
 
 // TestPlaidCleanup_NoClaimsRepoConfigured_FailsLoudly proves this is a required capability, not
-// an optional one — mirroring DeletionService/PastDueService's nil-claims-repo behavior.
+// an optional one — mirroring DeletionService/the deleted PastDueService's nil-claims-repo behavior.
 func TestPlaidCleanup_NoClaimsRepoConfigured_FailsLoudly(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-no-claims"

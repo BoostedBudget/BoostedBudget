@@ -218,12 +218,12 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 	}
 
 	// Get queue metrics for all queues
-	queues := []string{"critical", "default", "notifications", "low"}
+	queues := []string{"critical", "default", "notifications", "low", "revenuecat"}
 	for _, queue := range queues {
 		metrics, err := s.getQueueMetrics(ctx, queue)
 		if err != nil {
 			// Log error but continue - partial data is better than none
-			response.JobQueues[queue] = domain.QueueMetrics{}
+			response.JobQueues[queue] = domain.QueueMetrics{Unavailable: true}
 			continue
 		}
 		response.JobQueues[queue] = *metrics
@@ -631,7 +631,7 @@ func (s *systemHealthService) getJobBacklogMetrics(ctx context.Context) (*domain
 	// keeps that single signal simple and matches every other getX() helper in this service
 	// (getPaddleMetrics, getDeadLetterMetrics): one query error zero-values the whole metrics
 	// struct for that section, never a partially-populated one.
-	oldestUnclearedExpired, err := s.jobHealthRepo.GetOldestUnclearedExpiredManualTierOverrideAge(ctx)
+	compGrantAge, err := s.jobHealthRepo.GetOldestExpiredCompGrantAge(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -639,7 +639,7 @@ func (s *systemHealthService) getJobBacklogMetrics(ctx context.Context) (*domain
 	return &domain.JobBacklogMetrics{
 		PlaidCleanupOutstandingUsers:                    int64(outstandingUsers),
 		PlaidCleanupOldestOutstandingSeconds:            int64(oldestOutstanding.Seconds()),
-		ManualTierOverrideOldestUnclearedExpiredSeconds: int64(oldestUnclearedExpired.Seconds()),
+		RevenueCatOldestExpiredCompGrantSeconds:         int64(compGrantAge.Seconds()),
 		// Both queries above succeeded — this is a VERIFIED backlog snapshot (possibly a real
 		// zero), not an unknown. Issue #1458 follow-up G16.
 		Available: true,
@@ -847,7 +847,7 @@ func (s *systemHealthService) calculateOverallStatus(response *domain.SystemHeal
 
 	// Degraded: High pending jobs or dead letter queue issues
 	for _, metrics := range response.JobQueues {
-		if metrics.Pending > 100 {
+		if metrics.Unavailable || metrics.Pending > 100 {
 			return "degraded"
 		}
 	}

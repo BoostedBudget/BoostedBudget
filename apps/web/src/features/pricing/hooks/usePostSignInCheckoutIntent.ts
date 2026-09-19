@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useUser } from '@clerk/react-router'
-import { useCreatePaddleCheckout } from '@boostedbudget/api-client/endpoints/subscription/subscription'
-import type { CreateCheckoutInputBody } from '@boostedbudget/api-client/models'
+import { revenueCatCheckout } from '../../billing/revenueCatRuntime'
 
 const INTENT_KEY = 'checkout_intent'
 const INTENT_TTL_MS = 10 * 60 * 1000
@@ -28,29 +27,18 @@ function readAndClearIntent(): CheckoutIntent | null {
 }
 
 export function usePostSignInCheckoutIntent() {
-  const { isLoaded, isSignedIn } = useUser()
-  const mutation = useCreatePaddleCheckout()
+  const { isLoaded, isSignedIn, user } = useUser()
   const firedRef = useRef(false)
 
   useEffect(() => {
-    if (!isLoaded || !isSignedIn) return
+    if (!isLoaded || !isSignedIn || !user?.id) return
     if (firedRef.current) return
 
     const intent = readAndClearIntent()
     if (!intent) return
 
     firedRef.current = true
-    mutation.mutateAsync({
-      data: {
-        tier: intent.tier,
-        billing_interval: intent.billingInterval,
-      } as CreateCheckoutInputBody,
-    }).then((response) => {
-      if (window.Paddle) {
-        window.Paddle.Checkout.open({ transactionId: response.transaction_id })
-      }
-    }).catch(() => {
-      // Silently fail — user can re-try from pricing page
-    })
-  }, [isLoaded, isSignedIn, mutation])
+    revenueCatCheckout.setIdentity(user.id)
+    void revenueCatCheckout.start(intent.tier, intent.billingInterval)
+  }, [isLoaded, isSignedIn, user?.id])
 }

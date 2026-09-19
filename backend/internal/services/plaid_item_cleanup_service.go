@@ -94,7 +94,7 @@ var ErrCleanupAborted = errors.New("plaid item cleanup aborted before completion
 var ErrItemNoLongerEligible = errors.New("linked item is no longer a cleanup candidate: nothing was sent to Plaid")
 
 // plaidDisconnectSideEffectLease is the lease requested for repository.ActionPlaidDisconnectUser.
-// Shorter than the 15-minute FLOW-claim leases (accountDeletionClaimLease, pastDueClaimLease,
+// Shorter than the 15-minute FLOW-claim leases (accountDeletionClaimLease, the deleted pastDueClaimLease,
 // subscriptionCancelledCleanupClaimLease): this claim only needs to outlive the Plaid calls in
 // cleanupItems's loop, not any surrounding DB/CAS work the calling flow does before or after.
 const plaidDisconnectSideEffectLease = 10 * time.Minute
@@ -432,7 +432,7 @@ type PlaidItemCleanupService interface {
 	// SetWorkClaimsRepo wires the durable work-claims mechanism RemoveAllUserItems and
 	// DisconnectAllUserItemsIfEligible require for EXCLUSIVITY on repository.ActionPlaidDisconnectUser
 	// before any Plaid /item/remove call (Issue #1413 Codex round-3 finding H1). Mirrors
-	// DeletionService/PastDueService/SubscriptionWebhookWorker's SetWorkClaimsRepo — like theirs,
+	// DeletionService/the deleted PastDueService/SubscriptionWebhookWorker's SetWorkClaimsRepo — like theirs,
 	// this is NOT an optional capability: a nil claims repo makes both methods fail loudly rather
 	// than silently disconnecting Plaid items with no cross-flow exclusivity at all.
 	//

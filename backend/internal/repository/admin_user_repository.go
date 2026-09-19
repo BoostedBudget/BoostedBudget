@@ -486,7 +486,7 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // subscription_status at all — so removing a comp from a 'trial' user whose trial_ends_at has
 // already passed leaves them at raw 'trial', not normalized to 'inactive'. Do NOT "fix" this by
 // normalizing status here: GetUsersWithExpiredTrials selects on raw subscription_status =
-// 'trial', so a silent normalization would make TrialService.ExpireTrial's job never reselect
+// 'trial', so a silent normalization would make the legacy trial-expiry job (deleted in #1652) never reselect
 // this user again, and its retention-clock side effect (SetRetentionDates) would never run — the
 // only side effect that survives this reasoning today. (A pre-round-7 version of this comment
 // also cited a Plaid disconnect ExpireTrial performed directly; that no longer exists — the
@@ -502,9 +502,9 @@ func (r *adminUserRepository) GetOwnedHouseholdActiveMemberCount(ctx context.Con
 // CURRENT write (anchored on the lapse instant or on clock_timestamp(), never COALESCE — COALESCE
 // was removed in ROUND 18 and must not be reintroduced). Deliberately narrower than
 // should_rearm_retention's ('inactive', 'cancelled', 'past_due') — 'past_due' is excluded here for
-// the SAME reason plaidDisconnectRepairEligibleStatusPredicate excludes it: past_due has its own
-// dunning timeline (past_due_service.go, PastDueConfig.PlaidDisconnectDays) and must never be
-// immediately Plaid-disconnected by this repair pass. A comp removed while the reverted status is
+// the SAME reason plaidDisconnectRepairEligibleStatusPredicate excludes it: past_due had its own
+// dunning timeline (the deleted past_due_service.go / PastDueConfig.PlaidDisconnectDays, #1652) and
+// must never be immediately Plaid-disconnected by this repair pass. A comp removed while the reverted status is
 // 'past_due' leaves plaid_cleanup_pending_at untouched — it should already be NULL (past_due is
 // never a state that sets this marker), and past_due's own dunning flow owns that user's Plaid
 // fate instead.
@@ -854,13 +854,13 @@ const removeUserTierOverrideQuery = `
 	)
 	` + removeUserTierOverrideUpdate
 
-// removeUserTierOverrideIfMatchesQuery is the CAS-guarded removal used by the manual tier
-// override expiry worker (Issue #1413 High finding H4, Codex review): the worker selects expired
-// candidates via GetUsersWithExpiredManualTierOverride, then calls
-// RemoveUserTierOverrideIfMatches with the override values it observed at selection time. If an
+// removeUserTierOverrideIfMatchesQuery is the CAS-guarded removal (Issue #1413 High finding H4,
+// Codex review): the caller passes the override values it observed at selection time, and if an
 // admin has since extended or replaced the override, the CAS clause below fails to match, the
-// "prior" CTE returns zero rows, and the clear does not happen — the worker's stale decision
-// never overwrites the admin's fresh one.
+// "prior" CTE returns zero rows, and the clear does not happen — the caller's stale decision
+// never overwrites the admin's fresh one. #1652 deleted its production caller (the manual tier
+// override expiry worker); the method is retained and exercised by
+// admin_user_repository_remove_tier_override_integration_test.go.
 const removeUserTierOverrideIfMatchesQuery = `
 	WITH prior AS (
 	` + removeUserTierOverrideSelectPrior + removeUserTierOverrideCASClause + `
@@ -973,21 +973,21 @@ func (r *adminUserRepository) RemoveUserTierOverride(ctx context.Context, actorU
 // RemoveUserTierOverrideIfMatches clears a user's manual tier override ONLY IF its current
 // manual_tier_override and manual_tier_ends_at still match expectedOverride/expectedEndsAt —
 // the values the caller observed when it decided to remove the override (Issue #1413 High
-// finding H4, Codex review). Used by the daily manual-tier-override-expiry job: it selects
-// expired candidates via GetUsersWithExpiredManualTierOverride, then calls this method rather
-// than the unconditional RemoveUserTierOverride, so an admin who extends or replaces the
-// override in the window between the select and this call is not overwritten by the worker's
-// now-stale decision.
+// finding H4, Codex review). It exists so a caller that selected candidates earlier can call
+// this method rather than the unconditional RemoveUserTierOverride, so an admin who extends or
+// replaces the override in the window between the select and this call is not overwritten by the
+// caller's now-stale decision. #1652 deleted its production caller (the manual tier override
+// expiry worker); the method is retained and exercised by
+// admin_user_repository_remove_tier_override_integration_test.go.
 //
 // Returns claimed=false with a nil error — never an error — when the CAS predicate does not
 // match (the target is missing/soft-deleted, or an admin changed the override under us). Per
 // the claim-then-act pattern, this is a normal, expected outcome: the caller should log and
-// skip, not retry or alert — the expiry job runs again the next day and will pick the user up
-// then if they are still genuinely eligible.
+// skip, not retry or alert.
 //
 // The admin-initiated path (RemoveUserTierOverride, above) keeps its existing unconditional
 // behaviour and signature untouched — this is a distinct method precisely so the CAS is opt-in
-// for the one caller (the expiry worker) that needs it.
+// for a caller that needs it.
 func (r *adminUserRepository) RemoveUserTierOverrideIfMatches(
 	ctx context.Context, actorUserID, targetUserID, reason string, retentionMonths int,
 	expectedOverride *string, expectedEndsAt *time.Time,

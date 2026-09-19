@@ -125,4 +125,6 @@ cd "${REPO_ROOT}/apps/web"
 # but the local path supports narrowing a run (CLAUDE.md's own workflow uses
 # `bun run test:e2e -- --reporter=line`), and silently dropping that here would be a gratuitous
 # difference between the two drivers.
+export E2E_REVENUECAT_FIXTURE_MODE=simulated
+unset REVENUECAT_PROJECT_ID REVENUECAT_ENVIRONMENT REVENUECAT_SECRET_API_KEY REVENUECAT_GRANT_API_KEY REVENUECAT_WEBHOOK_AUTHORIZATION REVENUECAT_WEBHOOK_SIGNING_SECRET
 exec bunx playwright test "$@"
