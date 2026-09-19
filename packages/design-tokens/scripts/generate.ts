@@ -2,10 +2,17 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  contrastTokens,
   darkSemanticTokens,
+  elevationTokens,
+  focusTokens,
   foundationTokens,
   lightSemanticTokens,
+  motionTokens,
+  spacingTokens,
   tailwindThemeTokens,
+  touchTargetTokens,
+  typographyTokens,
   type CssTokenMap,
 } from '../src/tokens'
 
@@ -24,6 +31,34 @@ function declarations(tokens: CssTokenMap, indentation = '  '): string {
 
 function themeBlock(): string {
   return `@theme inline {\n${declarations(tailwindThemeTokens)}\n}`
+}
+
+// Mobile-only. Emitted by `renderNativewindCss` alone so `renderWebCss` stays byte-identical.
+// The contrast tokens need three parts: `@theme inline` aliases (so each utility compiles to a
+// flipping `var()` reference rather than an inlined literal), a `:root, :host` block holding the
+// light literals, and a media-gated `:root, :host` block holding the dark literals. The
+// `:root, :host` form deliberately does not match the `/:root\s*\{/` shape the existing
+// generated-css parity test counts.
+function mobileThemeBlock(): string {
+  const scaleTokens = {
+    ...typographyTokens,
+    ...spacingTokens,
+    ...elevationTokens,
+    ...motionTokens,
+    ...focusTokens,
+  }
+  const touchDeclarations = Object.entries(touchTargetTokens)
+    .map(([name, value]) => `  --bb-touch-${name}: ${value};`)
+    .join('\n')
+  const contrastAliases = Object.keys(contrastTokens.light)
+    .map((name) => `  --color-${name}: var(--${name});`)
+    .join('\n')
+
+  const themeInline = `@theme inline {\n${declarations(scaleTokens)}\n${touchDeclarations}\n${contrastAliases}\n}`
+  const lightBlock = `:root, :host {\n${declarations(contrastTokens.light)}\n}`
+  const darkBlock = `@media (prefers-color-scheme: dark) {\n  :root, :host {\n${declarations(contrastTokens.dark, '    ')}\n  }\n}`
+
+  return `${themeInline}\n\n${lightBlock}\n\n${darkBlock}`
 }
 
 export function renderWebCss(): string {
@@ -48,6 +83,8 @@ ${declarations({ ...lightSemanticTokens, ...foundationTokens })}
 }
 
 ${themeBlock()}
+
+${mobileThemeBlock()}
 
 @media (prefers-color-scheme: dark) {
   :root {
