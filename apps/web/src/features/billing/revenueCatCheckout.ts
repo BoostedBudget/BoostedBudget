@@ -6,11 +6,11 @@ export interface CheckoutAuthority {
 export type CheckoutState = 'idle' | 'loading' | 'open' | 'pending' | 'confirmed' | 'cancelled' | 'unavailable'
 
 interface Dependencies {
-  begin: () => Promise<{ id: string; offering: string }>
+  begin: (tier: string, billingInterval: 'month' | 'year') => Promise<{ id: string; offering: string; package: string }>
   release: (id: string) => Promise<unknown>
   refresh: () => Promise<CheckoutAuthority>
   load: (userId: string, isCurrent: () => boolean) => Promise<{
-    present: (offering: string, target: HTMLElement, purchaseTarget: HTMLElement) => Promise<unknown>
+    purchase: (offeringId: string, packageId: string, htmlTarget: HTMLElement) => Promise<unknown>
     close: () => void
   }>
 }
@@ -82,7 +82,7 @@ export class RevenueCatCheckout {
     }
   }
 
-  async start() {
+  async start(tier: string, billingInterval: 'month' | 'year') {
     if (!this.userId || this.busy) return
     this.busy = true
     const generation = this.generation
@@ -104,19 +104,18 @@ export class RevenueCatCheckout {
       // Admission still precedes all offering/paywall interaction.
       sdk = await this.deps.load(userId, current)
       if (!current()) return
-      const intent = await this.deps.begin()
+      const intent = await this.deps.begin(tier, billingInterval)
       if (!current()) return
       this.lease = intent.id
-      targets = [document.createElement('div'), document.createElement('div')]
+      targets = [document.createElement('div')]
       this.targets = targets
-      for (const target of targets) {
-        target.setAttribute('data-ph-mask', '')
-        target.className = 'fixed inset-0 z-[100] overflow-auto pointer-events-none [&>*]:pointer-events-auto'
-        document.body.append(target)
-      }
+      const target = targets[0]!
+      target.setAttribute('data-ph-mask', '')
+      target.className = 'fixed inset-0 z-[100] overflow-auto pointer-events-none [&>*]:pointer-events-auto'
+      document.body.append(target)
       this.update('open')
-      // Removing SDK DOM need not settle presentPaywall. Our cancellation must.
-      await Promise.race([sdk.present(intent.offering, targets[0]!, targets[1]!), cancelled])
+      // Removing SDK DOM need not settle the purchase. Our cancellation must.
+      await Promise.race([sdk.purchase(intent.offering, intent.package, targets[0]!), cancelled])
       if (!current()) return
       await this.confirm(generation)
     } catch (error) {

@@ -11,9 +11,9 @@ export function useRevenueCatCheckout() {
   return {
     state,
     isLoading: state === 'loading' || state === 'open',
-    checkout: () => {
+    checkout: (tier: string, billingInterval: 'month' | 'year') => {
       revenueCatCheckout.setIdentity(userId ?? null)
-      return revenueCatCheckout.start()
+      return revenueCatCheckout.start(tier, billingInterval)
     },
     retry: () => revenueCatCheckout.retry(),
   }

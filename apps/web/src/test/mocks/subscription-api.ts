@@ -7,7 +7,10 @@ import type { RevenueCatSummary } from '@boostedbudget/api-client/models'
 
 export const mockRefreshRevenueCatSubscription = mock<() => Promise<RevenueCatSummary>>(() =>
   Promise.resolve({ access_resolved: false, paid: null } as unknown as RevenueCatSummary))
-export const mockBeginRevenueCatCheckout = mock(() => Promise.resolve({ id: 'intent_test', offering: 'web', expires_at: '2026-10-01T00:00:00Z' }))
+// #1652: the adapter calls the raw generated client with the request body directly — the `{ data }`
+// wrapper belongs to the generated mutation hook. The intent response now names the package.
+export const mockBeginRevenueCatCheckout = mock((_body: { tier: string; billing_interval: 'month' | 'year' }) =>
+  Promise.resolve({ id: 'intent_test', offering: 'web', package: 'premium_monthly', expires_at: '2026-10-01T00:00:00Z' }))
 export const mockReleaseRevenueCatCheckout = mock(() => Promise.resolve())
 
 // === useGetSubscriptionTiers ===

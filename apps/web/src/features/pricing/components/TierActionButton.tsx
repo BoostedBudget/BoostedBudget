@@ -28,7 +28,7 @@ export function TierActionButton({
   const { checkout, isLoading } = useRevenueCatCheckout()
 
   const handleCheckout = async () => {
-    await checkout()
+    await checkout(tierKey, billingInterval)
   }
 
   if (pricingState.status === 'loading') {
