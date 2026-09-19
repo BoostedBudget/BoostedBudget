@@ -2518,7 +2518,7 @@ func main() {
 		// Register Huma profile routes (Issue #559: Huma migration)
 		humaProfileHandler := operations.NewProfileHandler(profileService)
 		humaProfileHandler.SetRevenueCatSummary(revenueCatSummaryService)
-		operations.RegisterRevenueCatSubscriptionRoutes(humaAPI, operations.NewRevenueCatSubscriptionHandler(profileRepo, revenueCatSummaryService, revenueCatService).WithCheckout(repository.NewRevenueCatCheckoutRepository(db, fieldEncryptor)))
+		operations.RegisterRevenueCatSubscriptionRoutes(humaAPI, operations.NewRevenueCatSubscriptionHandler(profileRepo, revenueCatSummaryService, revenueCatService).WithCheckout(repository.NewRevenueCatCheckoutRepository(db, fieldEncryptor)).WithTierConfig(tierConfig))
 		// Issue #1413 round-5: same validator as profileRepo above, so the profile response's
 		// derived comp fields (effective_status/is_comped/comp_tier) can never report a comp the
 		// access-granting path would reject.
