@@ -34,6 +34,10 @@ func TestTransactionSelectColumns(t *testing.T) {
 		"reviewed", "reviewed_at",
 		// #1569 tombstone provenance, appended last so no existing scan offset moves.
 		"deleted_at", "deleted_reason", "deleted_by",
+		// #1684: the logical user-account link, appended last for the same reason — the list is
+		// positionally coupled to scanTransactionDestSliceWithState, and the #1569 tombstone
+		// columns set that precedent.
+		"user_account_id",
 	}
 
 	t.Run("exact order and count match scanTransactions destinations", func(t *testing.T) {
@@ -64,6 +68,67 @@ func TestTransactionSelectColumns(t *testing.T) {
 			seen[col] = true
 		}
 	})
+}
+
+// TestScanTransactions_ProjectsUserAccountID pins that a row scanned through scanTransactions
+// carries a non-nil UserAccountID when the column is populated. It builds its rows with an INLINE
+// column list rather than the shared canonical-list builder so it does not become a 36th
+// positional builder for T2 to update.
+func TestScanTransactions_ProjectsUserAccountID(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	repo := NewTransactionRepository(mock, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	userID := "user-123"
+	limit := 10
+	offset := 0
+
+	extID := "plaid_tx_1"
+	userAccountID := "ua-1"
+	now := time.Now()
+
+	rows := pgxmock.NewRows([]string{
+		"id", "user_id", "account_id", "linked_item_id",
+		"source", "external_transaction_id", "external_metadata",
+		"amount", "date", "authorized_date", "name", "merchant_name", "merchant_id",
+		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url",
+		"payment_channel", "pending", "user_notes", "created_at", "updated_at",
+		"tags", "tags_source",
+		"category_override_kind", "pfc_primary_override", "pfc_detailed_override",
+		"custom_category_override_id", "category_source", "category_override_date",
+		"effective_pfc_primary", "effective_pfc_detailed", "effective_category_name",
+		"reviewed", "reviewed_at",
+		"deleted_at", "deleted_reason", "deleted_by",
+		"user_account_id",
+	}).AddRow(
+		"tx-1", userID, "account-1", "item-1",
+		"plaid", &extID, nil,
+		-50.00, now, nil, "Transaction 1", nil, nil,
+		nil, nil, nil, nil,
+		nil, false, nil, now, now,
+		nil, nil,
+		nil, nil, nil, nil, nil, nil,
+		nil, nil, nil,
+		false, nil,
+		nil, nil, nil,
+		&userAccountID,
+	)
+
+	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE user_id").
+		WithArgs(userID, limit, offset).
+		WillReturnRows(rows)
+
+	transactions, err := repo.GetByUserID(ctx, userID, limit, offset)
+	require.NoError(t, err)
+	require.Len(t, transactions, 1)
+	require.NotNil(t, transactions[0].UserAccountID,
+		"scanTransactions must project user_account_id into UserAccountID")
+	assert.Equal(t, userAccountID, *transactions[0].UserAccountID)
+
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // TestTransactionRepository_CreateBatch_Success tests batch transaction creation
