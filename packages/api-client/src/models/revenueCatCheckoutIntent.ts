@@ -37,4 +37,5 @@ export interface RevenueCatCheckoutIntent {
   expires_at: string;
   id: string;
   offering: string;
+  package: string;
 }

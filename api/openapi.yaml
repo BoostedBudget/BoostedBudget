@@ -6869,6 +6869,33 @@ components:
         - ends_at
         - management_url
       type: object
+    RevenueCatCheckoutBeginInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://api.boostedbudget.com/schemas/RevenueCatCheckoutBeginInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        billing_interval:
+          enum:
+            - month
+            - year
+          type: string
+        tier:
+          enum:
+            - premium
+            - household_2
+            - household_3
+            - household_4
+            - household_5
+          type: string
+      required:
+        - tier
+        - billing_interval
+      type: object
     RevenueCatCheckoutIntent:
       additionalProperties: false
       properties:
@@ -6886,10 +6913,13 @@ components:
           type: string
         offering:
           type: string
+        package:
+          type: string
       required:
         - id
         - expires_at
         - offering
+        - package
       type: object
     RevenueCatCheckoutReleaseOutputBody:
       additionalProperties: false
@@ -16477,6 +16507,12 @@ paths:
   /api/v1/subscription/checkout-intents:
     post:
       operationId: beginRevenueCatCheckout
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevenueCatCheckoutBeginInputBody"
+        required: true
       responses:
         "200":
           content:

@@ -12,7 +12,7 @@ import (
 )
 
 type RevenueCatCheckoutRepository interface {
-	Begin(context.Context, string) (domain.RevenueCatCheckoutIntent, error)
+	Begin(context.Context, string, string) (domain.RevenueCatCheckoutIntent, error)
 	Release(context.Context, string, string) error
 }
 type revenueCatCheckoutRepository struct {
@@ -27,7 +27,7 @@ func NewRevenueCatCheckoutRepository(db DB, enc *appcrypto.FieldEncryptor) Reven
 // Begin serializes first-party checkout admission with refresh/grants for this
 // customer. The public SDK remains callable outside this flow; this is an
 // ordinary double-window guard, not a security boundary against direct purchases.
-func (r *revenueCatCheckoutRepository) Begin(ctx context.Context, userID string) (domain.RevenueCatCheckoutIntent, error) {
+func (r *revenueCatCheckoutRepository) Begin(ctx context.Context, userID, packageID string) (domain.RevenueCatCheckoutIntent, error) {
 	out := domain.RevenueCatCheckoutIntent{}
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -55,7 +55,7 @@ func (r *revenueCatCheckoutRepository) Begin(ctx context.Context, userID string)
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return out, err
 	}
-	out = domain.RevenueCatCheckoutIntent{ID: uuid.NewString(), ExpiresAt: now.Add(30 * time.Minute), Offering: "web"}
+	out = domain.RevenueCatCheckoutIntent{ID: uuid.NewString(), ExpiresAt: now.Add(30 * time.Minute), Offering: "web", Package: packageID}
 	if _, err := tx.Exec(ctx, `INSERT INTO revenuecat_checkout_intents(id,user_id,expires_at) VALUES($1,$2,$3)`, out.ID, userID, out.ExpiresAt); err != nil {
 		return domain.RevenueCatCheckoutIntent{}, err
 	}
