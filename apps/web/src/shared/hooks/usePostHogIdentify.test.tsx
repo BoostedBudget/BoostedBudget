@@ -1,24 +1,45 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
-import { renderHook } from '@testing-library/react'
+import { act, renderHook } from '@testing-library/react'
 import { createMockClerkUser, mockClerkUser, mockUseUser } from '@/test/mocks/clerk'
 import { mockUseGetPrivacySettings } from '@/test/mocks/privacy-api'
 import {
   mockApplyProductAnalyticsAuthority,
-  mockDenyProductAnalytics,
   mockListenForAnalyticsWithdrawal,
   mockSetAnalyticsLifecyclePending,
   mockSetProductAnalyticsScope,
 } from '@/test/mocks/posthog'
-import { usePostHogIdentify } from './usePostHogIdentify'
+import { usePostHogIdentify, type AnalyticsLifecycle } from './usePostHogIdentify'
 import { privacySettingsQueryKey } from '../privacy/privacyQueryKey'
+import type { AnalyticsLifecycleSnapshot } from '../lib/analyticsLifecycle'
 
-const lifecycle = {
-  applyAuthority: mockApplyProductAnalyticsAuthority,
-  deny: mockDenyProductAnalytics,
-  listenForWithdrawal: mockListenForAnalyticsWithdrawal,
-  setPending: mockSetAnalyticsLifecyclePending,
-  setScope: mockSetProductAnalyticsScope,
-  setPersonProperties: () => {},
+function createLifecycle() {
+  let listener: ((next: AnalyticsLifecycleSnapshot) => void) | undefined
+  let current: AnalyticsLifecycleSnapshot = {
+    generation: 1,
+    state: 'denied',
+    scope: 'user-a',
+    withdrawn: false,
+  }
+  const setPersonProperties = mock((_properties: Record<string, unknown>) => {})
+
+  return {
+    apply: mockApplyProductAnalyticsAuthority,
+    getSnapshot: () => ({ ...current }),
+    listenForWithdrawal: mockListenForAnalyticsWithdrawal,
+    setPending: mockSetAnalyticsLifecyclePending,
+    setPersonProperties,
+    setScope: mockSetProductAnalyticsScope,
+    subscribe: (next: (value: AnalyticsLifecycleSnapshot) => void) => {
+      listener = next
+      return () => { listener = undefined }
+    },
+    publish(next: Partial<AnalyticsLifecycleSnapshot>) {
+      current = { ...current, ...next }
+      listener?.(current)
+    },
+  } satisfies AnalyticsLifecycle & {
+    publish: (next: Partial<AnalyticsLifecycleSnapshot>) => void
+  }
 }
 
 type PrivacyResult = {
@@ -29,11 +50,11 @@ type PrivacyResult = {
   refetch: () => Promise<unknown>
 }
 
-function setSignedIn(userId = 'user-a'): void {
+function setSignedIn(userId = 'user-a', overrides: Record<string, unknown> = {}): void {
   mockUseUser.mockReturnValue(createMockClerkUser({
     isLoaded: true,
     isSignedIn: true,
-    user: { ...mockClerkUser, id: userId },
+    user: { ...mockClerkUser, id: userId, ...overrides },
   }))
 }
 
@@ -49,16 +70,18 @@ function setPrivacy(result: Partial<PrivacyResult>): void {
 }
 
 describe('usePostHogIdentify consent authority', () => {
+  let lifecycle: ReturnType<typeof createLifecycle>
+
   beforeEach(() => {
     mockUseUser.mockClear()
     mockUseGetPrivacySettings.mockClear()
     mockApplyProductAnalyticsAuthority.mockClear()
-    mockDenyProductAnalytics.mockClear()
     mockSetAnalyticsLifecyclePending.mockClear()
     mockSetProductAnalyticsScope.mockClear()
     mockListenForAnalyticsWithdrawal.mockClear()
     mockUseUser.mockReturnValue(createMockClerkUser({ isLoaded: true, user: null }))
     setPrivacy({})
+    lifecycle = createLifecycle()
   })
 
   for (const cookie of [true, false, null]) {
@@ -78,19 +101,15 @@ describe('usePostHogIdentify consent authority', () => {
 
         renderHook(() => usePostHogIdentify(cookie, lifecycle))
 
-        if (server === 'true') {
-          expect(mockApplyProductAnalyticsAuthority).toHaveBeenCalledTimes(1)
-          expect(mockApplyProductAnalyticsAuthority.mock.calls[0]?.slice(0, 2)).toEqual(['user-a', 'user-a'])
-          expect(mockDenyProductAnalytics).not.toHaveBeenCalled()
-        } else {
-          expect(mockApplyProductAnalyticsAuthority).not.toHaveBeenCalled()
-          expect(mockDenyProductAnalytics).toHaveBeenCalledTimes(1)
-        }
+        const calls = mockApplyProductAnalyticsAuthority.mock.calls
+        expect(calls).toHaveLength(1)
+        expect(calls[0]?.[0]?.scope).toBe('user-a')
+        expect(calls[0]?.[0]?.purposes.analytics).toBe(server === 'true')
       })
     }
   }
 
-  it('stays pending without init, capture, or identify while signed-in privacy is loading', () => {
+  it('stays pending without applying authority while signed-in privacy is loading', () => {
     setSignedIn()
     setPrivacy({ isLoading: true, isFetching: true })
 
@@ -98,17 +117,23 @@ describe('usePostHogIdentify consent authority', () => {
 
     expect(mockSetAnalyticsLifecyclePending).toHaveBeenCalledTimes(1)
     expect(mockApplyProductAnalyticsAuthority).not.toHaveBeenCalled()
-    expect(mockDenyProductAnalytics).not.toHaveBeenCalled()
   })
 
   it.each([
-    [true, 1, 0],
-    [false, 0, 1],
-    [null, 0, 1],
-  ])('uses signed-out anonymous cookie %s as authority', (cookie, grants, denials) => {
+    [true, true],
+    [false, false],
+    [null, false],
+  ])('uses signed-out anonymous cookie %s as analytics authority', (cookie, analytics) => {
     renderHook(() => usePostHogIdentify(cookie, lifecycle))
-    expect(mockApplyProductAnalyticsAuthority).toHaveBeenCalledTimes(grants)
-    expect(mockDenyProductAnalytics).toHaveBeenCalledTimes(denials)
+
+    const calls = mockApplyProductAnalyticsAuthority.mock.calls
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.[0]?.scope).toBe('anonymous')
+    expect(calls[0]?.[0]?.purposes).toEqual({
+      analytics,
+      identifiedDiagnostics: false,
+      interactionCapture: false,
+    })
   })
 
   it('does not identify again on same-user rerenders', () => {
@@ -123,10 +148,9 @@ describe('usePostHogIdentify consent authority', () => {
 
   it('tears down A before granting B on a direct user switch', () => {
     const calls: string[] = []
-    mockDenyProductAnalytics.mockImplementation(() => { calls.push('deny') })
     mockSetProductAnalyticsScope.mockImplementation(scope => { calls.push(`scope:${scope}`) })
-    mockApplyProductAnalyticsAuthority.mockImplementation((_scope, id) => {
-      calls.push(`grant:${id}`)
+    mockApplyProductAnalyticsAuthority.mockImplementation((authority) => {
+      calls.push(`grant:${authority.distinctId ?? 'anonymous'}`)
       return Promise.resolve()
     })
     setSignedIn('user-a')
@@ -147,10 +171,9 @@ describe('usePostHogIdentify consent authority', () => {
 
   it('tears down the user before reconsidering an anonymous grant on logout', () => {
     const calls: string[] = []
-    mockDenyProductAnalytics.mockImplementation(() => { calls.push('deny') })
     mockSetProductAnalyticsScope.mockImplementation(scope => { calls.push(`scope:${scope}`) })
-    mockApplyProductAnalyticsAuthority.mockImplementation((_scope, id) => {
-      calls.push(`grant:${id ?? 'anonymous'}`)
+    mockApplyProductAnalyticsAuthority.mockImplementation((authority) => {
+      calls.push(`grant:${authority.distinctId ?? 'anonymous'}`)
       return Promise.resolve()
     })
     setSignedIn('user-a')
@@ -171,5 +194,60 @@ describe('usePostHogIdentify consent authority', () => {
     expect(mockListenForAnalyticsWithdrawal).toHaveBeenCalledTimes(1)
     unmount()
     expect(cleanup).toHaveBeenCalledTimes(1)
+  })
+
+  it('ships only the Clerk display name and never the email', () => {
+    setSignedIn('user-a', {
+      fullName: 'NAME_SENTINEL',
+      firstName: 'FIRST_SENTINEL',
+      primaryEmailAddress: {
+        emailAddress: 'EMAIL_SENTINEL@example.com',
+        verification: { status: 'verified' },
+      },
+    })
+    setPrivacy({ data: { gdpr_analytics_consent: true } })
+
+    renderHook(() => usePostHogIdentify(false, lifecycle))
+
+    const serialized = JSON.stringify(mockApplyProductAnalyticsAuthority.mock.calls)
+    expect(serialized).toContain('NAME_SENTINEL')
+    expect(serialized).not.toContain('EMAIL_SENTINEL')
+    const personProperties = mockApplyProductAnalyticsAuthority.mock.calls[0]?.[0]?.personProperties
+    expect(new Set(Object.keys(personProperties ?? {}))).toEqual(new Set(['name']))
+    expect(personProperties?.name).toBe('NAME_SENTINEL')
+  })
+
+  it('falls back to the Clerk first name when no full name exists', () => {
+    setSignedIn('user-a', { fullName: null, firstName: 'FIRST_SENTINEL' })
+    setPrivacy({ data: { gdpr_analytics_consent: true } })
+
+    renderHook(() => usePostHogIdentify(false, lifecycle))
+
+    expect(mockApplyProductAnalyticsAuthority.mock.calls[0]?.[0]?.personProperties).toEqual({
+      name: 'FIRST_SENTINEL',
+    })
+  })
+
+  it('never calls setPersonProperties with a non-name key', () => {
+    setSignedIn('user-a', { fullName: 'NAME_SENTINEL' })
+    setPrivacy({ data: { gdpr_analytics_consent: true } })
+    renderHook(() => usePostHogIdentify(false, lifecycle))
+
+    for (const call of lifecycle.setPersonProperties.mock.calls) {
+      expect(Object.keys(call[0] as Record<string, unknown>)).toEqual(['name'])
+    }
+  })
+
+  it('re-invokes apply after a clearWithdrawal render', () => {
+    setSignedIn()
+    setPrivacy({ data: { gdpr_analytics_consent: true } })
+    renderHook(() => usePostHogIdentify(false, lifecycle))
+    expect(mockApplyProductAnalyticsAuthority).toHaveBeenCalledTimes(1)
+
+    act(() => { lifecycle.publish({ withdrawn: true }) })
+    expect(mockApplyProductAnalyticsAuthority).toHaveBeenCalledTimes(2)
+
+    act(() => { lifecycle.publish({ withdrawn: false }) })
+    expect(mockApplyProductAnalyticsAuthority).toHaveBeenCalledTimes(3)
   })
 })

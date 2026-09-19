@@ -146,6 +146,7 @@ describe('App', () => {
       const Wrapper = createMemoryWrapper(['/'])
       const analyticsPageViews = {
         capture: mockPosthogCapture,
+        setRoute: mock(() => {}),
         getSnapshot: getAnalyticsLifecycleSnapshot,
         subscribe: subscribeToAnalyticsLifecycle,
       }
@@ -190,6 +191,7 @@ describe('App', () => {
     const Wrapper = createMemoryWrapper(['/legal/cookie-policy'])
     const analyticsPageViews = {
       capture: mockPosthogCapture,
+      setRoute: mock(() => {}),
       getSnapshot: getAnalyticsLifecycleSnapshot,
       subscribe: subscribeToAnalyticsLifecycle,
     }

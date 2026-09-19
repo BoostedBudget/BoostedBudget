@@ -21,8 +21,9 @@ type PrivacySettings struct {
 	// Analytics cookies consent (Google Analytics, usage tracking)
 	GDPRAnalyticsConsent bool `json:"gdpr_analytics_consent" db:"gdpr_analytics_consent"`
 
-	// Advertising cookies consent (GDPR consent category)
-	GDPRAdvertisingConsent bool `json:"gdpr_advertising_consent" db:"gdpr_advertising_consent"`
+	// Interaction capture (session replay) consent. Opt-in, and only meaningful while
+	// gdpr_analytics_consent is true — see Validate.
+	GDPRInteractionCaptureConsent bool `json:"gdpr_interaction_capture_consent" db:"gdpr_interaction_capture_consent"`
 
 	// When user last updated their consent preferences
 	GDPRConsentTimestamp time.Time `json:"gdpr_consent_timestamp" db:"gdpr_consent_timestamp"`
@@ -38,6 +39,11 @@ type PrivacySettings struct {
 	// Aggregate stats preference (include anonymized data in aggregate statistics)
 	IncludeInAggregateStats bool `json:"include_in_aggregate_stats" db:"include_in_aggregate_stats"`
 
+	// Identified diagnostics preference (attach the user's name — never email — to their
+	// PostHog person profile so support conversations can be tied to an account).
+	// Opt-OUT, mirroring IncludeInAggregateStats.
+	IdentifiedDiagnosticsEnabled bool `json:"identified_diagnostics_enabled" db:"identified_diagnostics_enabled"`
+
 	// Timestamps
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
@@ -49,14 +55,15 @@ type PrivacySettings struct {
 type UpdatePrivacySettingsRequest struct {
 	// Note: GDPRNecessaryConsent is intentionally not updatable - always true
 	// Attempting to set it to false will result in validation error
-	GDPRNecessaryConsent   *bool `json:"gdpr_necessary_consent,omitempty"`
-	GDPRAnalyticsConsent   *bool `json:"gdpr_analytics_consent,omitempty"`
-	GDPRAdvertisingConsent *bool `json:"gdpr_advertising_consent,omitempty"`
-	MarketingEmailsEnabled  *bool `json:"marketing_emails_enabled,omitempty"`
-	ProductUpdatesEnabled   *bool `json:"product_updates_enabled,omitempty"`
-	SecurityAlertsEnabled   *bool `json:"security_alerts_enabled,omitempty"`
-	DataSharingEnabled      *bool `json:"data_sharing_enabled,omitempty"`
-	IncludeInAggregateStats *bool `json:"include_in_aggregate_stats,omitempty"`
+	GDPRNecessaryConsent          *bool `json:"gdpr_necessary_consent,omitempty"`
+	GDPRAnalyticsConsent          *bool `json:"gdpr_analytics_consent,omitempty"`
+	GDPRInteractionCaptureConsent *bool `json:"gdpr_interaction_capture_consent,omitempty"`
+	MarketingEmailsEnabled        *bool `json:"marketing_emails_enabled,omitempty"`
+	ProductUpdatesEnabled         *bool `json:"product_updates_enabled,omitempty"`
+	SecurityAlertsEnabled         *bool `json:"security_alerts_enabled,omitempty"`
+	DataSharingEnabled            *bool `json:"data_sharing_enabled,omitempty"`
+	IncludeInAggregateStats       *bool `json:"include_in_aggregate_stats,omitempty"`
+	IdentifiedDiagnosticsEnabled  *bool `json:"identified_diagnostics_enabled,omitempty"`
 }
 
 // NewPrivacySettings creates a new PrivacySettings object with GDPR-compliant defaults
@@ -67,10 +74,9 @@ func NewPrivacySettings(userID string) *PrivacySettings {
 		UserID: userID,
 		// GDPR compliance: necessary consent always true
 		GDPRNecessaryConsent: true,
-		// Opt-in model: analytics and advertising default to false
-		GDPRAnalyticsConsent:   false,
-		GDPRAdvertisingConsent: false,
-		GDPRConsentTimestamp:   now,
+		// Opt-in model: analytics defaults to false
+		GDPRAnalyticsConsent: false,
+		GDPRConsentTimestamp: now,
 		// Email preferences: marketing opt-in, updates/security opt-out
 		MarketingEmailsEnabled: false,
 		ProductUpdatesEnabled:  true,
@@ -79,11 +85,22 @@ func NewPrivacySettings(userID string) *PrivacySettings {
 		DataSharingEnabled: false,
 		// Aggregate stats: opt-out model (included by default)
 		IncludeInAggregateStats: true,
+		// Identified diagnostics: opt-out model (name attached by default)
+		IdentifiedDiagnosticsEnabled: true,
+		// Interaction capture (session replay): opt-in model
+		GDPRInteractionCaptureConsent: false,
 		// Timestamps
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 }
+
+var (
+	// ErrInteractionCaptureRequiresAnalytics refuses a merged privacy state that enables
+	// interaction capture while analytics consent is withheld.
+	ErrInteractionCaptureRequiresAnalytics = errors.New(
+		"gdpr_interaction_capture_consent requires gdpr_analytics_consent to be enabled")
+)
 
 // Validate ensures the update request is GDPR-compliant
 // Returns an error if user attempts to disable necessary consent
@@ -91,6 +108,17 @@ func (req *UpdatePrivacySettingsRequest) Validate() error {
 	// GDPR compliance: necessary consent cannot be disabled
 	if req.GDPRNecessaryConsent != nil && !*req.GDPRNecessaryConsent {
 		return errors.New("gdpr_necessary_consent cannot be disabled - required for app functionality")
+	}
+	return nil
+}
+
+// Validate enforces invariants on the MERGED settings state — the state that will actually be
+// persisted, after ApplyTo has folded the request into the stored row. It refuses interaction
+// capture while analytics consent is withheld; interaction capture depends on analytics consent
+// and can never be granted without it.
+func (s *PrivacySettings) Validate() error {
+	if s.GDPRInteractionCaptureConsent && !s.GDPRAnalyticsConsent {
+		return ErrInteractionCaptureRequiresAnalytics
 	}
 	return nil
 }
@@ -104,9 +132,6 @@ func (req *UpdatePrivacySettingsRequest) ApplyTo(settings *PrivacySettings) {
 	// Apply each field if present in the update request
 	if req.GDPRAnalyticsConsent != nil {
 		settings.GDPRAnalyticsConsent = *req.GDPRAnalyticsConsent
-	}
-	if req.GDPRAdvertisingConsent != nil {
-		settings.GDPRAdvertisingConsent = *req.GDPRAdvertisingConsent
 	}
 	if req.MarketingEmailsEnabled != nil {
 		settings.MarketingEmailsEnabled = *req.MarketingEmailsEnabled
@@ -122,6 +147,22 @@ func (req *UpdatePrivacySettingsRequest) ApplyTo(settings *PrivacySettings) {
 	}
 	if req.IncludeInAggregateStats != nil {
 		settings.IncludeInAggregateStats = *req.IncludeInAggregateStats
+	}
+	if req.GDPRInteractionCaptureConsent != nil {
+		settings.GDPRInteractionCaptureConsent = *req.GDPRInteractionCaptureConsent
+	}
+	if req.IdentifiedDiagnosticsEnabled != nil {
+		settings.IdentifiedDiagnosticsEnabled = *req.IdentifiedDiagnosticsEnabled
+	}
+
+	// Delta-triggered downgrade cascade: an explicit analytics withdrawal that does NOT address
+	// interaction capture withdraws the dependent purpose too (interaction capture can never
+	// outlive analytics consent — see Validate). A request that sets interaction capture
+	// explicitly is honored verbatim, so a contradictory request is rejected by Validate rather
+	// than silently rewritten. Identified diagnostics is a separate purpose and never cascades.
+	if req.GDPRAnalyticsConsent != nil && !*req.GDPRAnalyticsConsent &&
+		req.GDPRInteractionCaptureConsent == nil {
+		settings.GDPRInteractionCaptureConsent = false
 	}
 
 	// Update timestamps

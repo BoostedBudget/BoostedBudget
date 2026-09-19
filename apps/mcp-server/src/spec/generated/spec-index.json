@@ -19704,11 +19704,6 @@
           "required": true
         },
         {
-          "name": "gdpr_advertising_consent",
-          "type": "boolean",
-          "required": true
-        },
-        {
           "name": "gdpr_analytics_consent",
           "type": "boolean",
           "required": true
@@ -19720,6 +19715,11 @@
           "required": true
         },
         {
+          "name": "gdpr_interaction_capture_consent",
+          "type": "boolean",
+          "required": true
+        },
+        {
           "name": "gdpr_necessary_consent",
           "type": "boolean",
           "required": true
@@ -19727,6 +19727,11 @@
         {
           "name": "id",
           "type": "string",
+          "required": true
+        },
+        {
+          "name": "identified_diagnostics_enabled",
+          "type": "boolean",
           "required": true
         },
         {
@@ -19763,11 +19768,12 @@
       ],
       "compactResponseBody": [
         "data_sharing_enabled",
-        "gdpr_advertising_consent",
         "gdpr_analytics_consent",
         "gdpr_consent_timestamp",
+        "gdpr_interaction_capture_consent",
         "gdpr_necessary_consent",
         "id",
+        "identified_diagnostics_enabled",
         "include_in_aggregate_stats",
         "marketing_emails_enabled",
         "product_updates_enabled",
@@ -19791,15 +19797,19 @@
           "type": "boolean"
         },
         {
-          "name": "gdpr_advertising_consent",
-          "type": "boolean"
-        },
-        {
           "name": "gdpr_analytics_consent",
           "type": "boolean"
         },
         {
+          "name": "gdpr_interaction_capture_consent",
+          "type": "boolean"
+        },
+        {
           "name": "gdpr_necessary_consent",
+          "type": "boolean"
+        },
+        {
+          "name": "identified_diagnostics_enabled",
           "type": "boolean"
         },
         {

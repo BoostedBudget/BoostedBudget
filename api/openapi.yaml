@@ -6206,17 +6206,19 @@ components:
           type: string
         data_sharing_enabled:
           type: boolean
-        gdpr_advertising_consent:
-          type: boolean
         gdpr_analytics_consent:
           type: boolean
         gdpr_consent_timestamp:
           format: date-time
           type: string
+        gdpr_interaction_capture_consent:
+          type: boolean
         gdpr_necessary_consent:
           type: boolean
         id:
           type: string
+        identified_diagnostics_enabled:
+          type: boolean
         include_in_aggregate_stats:
           type: boolean
         marketing_emails_enabled:
@@ -6235,13 +6237,14 @@ components:
         - user_id
         - gdpr_necessary_consent
         - gdpr_analytics_consent
-        - gdpr_advertising_consent
+        - gdpr_interaction_capture_consent
         - gdpr_consent_timestamp
         - marketing_emails_enabled
         - product_updates_enabled
         - security_alerts_enabled
         - data_sharing_enabled
         - include_in_aggregate_stats
+        - identified_diagnostics_enabled
         - created_at
         - updated_at
       type: object
@@ -9113,11 +9116,13 @@ components:
           type: string
         data_sharing_enabled:
           type: boolean
-        gdpr_advertising_consent:
-          type: boolean
         gdpr_analytics_consent:
           type: boolean
+        gdpr_interaction_capture_consent:
+          type: boolean
         gdpr_necessary_consent:
+          type: boolean
+        identified_diagnostics_enabled:
           type: boolean
         include_in_aggregate_stats:
           type: boolean
