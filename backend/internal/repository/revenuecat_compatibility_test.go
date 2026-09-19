@@ -55,6 +55,36 @@ func TestRevenueCatFinishFailureRecordsTheOperationFailureFlow(t *testing.T) {
 	assert.Equal(t, before+1, testutil.ToFloat64(observability.RevenueCatOperationFailuresTotal.WithLabelValues(observability.RevenueCatGrantClassComp)))
 }
 
+// TestRevenueCatFinishAbandonedRecordsTerminalFlow pins the terminal write: an abandoned operation
+// increments the abandonment counter and must NOT increment the retryable-failure counter, whose
+// stock companion only counts rows still stage='pending'.
+func TestRevenueCatFinishAbandonedRecordsTerminalFlow(t *testing.T) {
+	db, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer db.Close()
+	s := &revenueCatSession{q: db, userID: "user"}
+	db.ExpectExec("UPDATE revenuecat_operations SET stage").
+		WithArgs("op", "user", "abandoned", "provider_unavailable").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	beforeAbandoned := testutil.ToFloat64(observability.RevenueCatOperationAbandonmentsTotal.WithLabelValues(observability.RevenueCatGrantClassComp))
+	beforeFailed := testutil.ToFloat64(observability.RevenueCatOperationFailuresTotal.WithLabelValues(observability.RevenueCatGrantClassComp))
+	require.NoError(t, s.FinishOperation(context.Background(), "op", "abandoned", "provider_unavailable", "comp"))
+	require.NoError(t, db.ExpectationsWereMet())
+	assert.Equal(t, beforeAbandoned+1, testutil.ToFloat64(observability.RevenueCatOperationAbandonmentsTotal.WithLabelValues(observability.RevenueCatGrantClassComp)),
+		"an abandoned operation is a terminal outcome and must increment the abandonment counter")
+	assert.Equal(t, beforeFailed, testutil.ToFloat64(observability.RevenueCatOperationFailuresTotal.WithLabelValues(observability.RevenueCatGrantClassComp)),
+		"an abandoned operation must not count as a retryable failure: it has left the pending population")
+}
+
+func TestRevenueCatPendingOperationsQuery_ExcludesTerminalStages(t *testing.T) {
+	assert.Contains(t, revenueCatPendingOperationsQuery, "stage='pending'")
+	assert.NotContains(t, revenueCatPendingOperationsQuery, "'abandoned'",
+		"an abandoned operation must never be selected for retry")
+	assert.NotContains(t, revenueCatPendingOperationsQuery, "'applied'")
+	assert.NotContains(t, revenueCatPendingOperationsQuery, "'superseded'")
+}
+
 // TestRevenueCatFinishNonPendingRowCountsNothing guards against over-counting: an UPDATE that
 // matched no pending row is a no-op, not an application or a failure.
 func TestRevenueCatFinishNonPendingRowCountsNothing(t *testing.T) {

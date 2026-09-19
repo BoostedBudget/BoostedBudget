@@ -55,6 +55,12 @@ func revenueCatTestDB(t *testing.T) (*pgxpool.Pool, string) {
 		_, err = pool.Exec(context.Background(), string(erasureMigration))
 		require.NoError(t, err)
 	}
+	abandonedMigration, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000220_revenuecat_operation_abandoned.up.sql"))
+	require.NoError(t, err)
+	for range 2 {
+		_, err = pool.Exec(context.Background(), string(abandonedMigration))
+		require.NoError(t, err)
+	}
 	id := uuid.NewString()
 	_, err = pool.Exec(context.Background(), `INSERT INTO users(id) VALUES($1)`, id)
 	require.NoError(t, err)
@@ -262,4 +268,41 @@ func TestRevenueCatRepository_PendingOperationsFairToNewIntent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
 	require.Equal(t, next.ID, pending[0].ID, "permanent older failures must not starve new intents")
+}
+
+func TestRevenueCatRepository_AbandonedOperationLeavesThePendingSetAndProjectionGate(t *testing.T) {
+	pool, id := revenueCatTestDB(t)
+	repo := NewRevenueCatRepository(pool, newTestFieldEncryptor(t))
+	ctx := context.Background()
+	op := domain.RevenueCatOperation{UserID: id, Class: "comp", Key: "comp_premium", Reason: "never converges", CreatedAt: time.Now()}
+	require.NoError(t, repo.RequestOperation(ctx, &op))
+	require.NoError(t, repo.WithCustomer(ctx, id, func(s RevenueCatSession) error {
+		return s.FinishOperation(ctx, op.ID, "abandoned", "provider_unavailable", op.Class)
+	}))
+
+	pending, err := repo.PendingOperations(ctx, 10)
+	require.NoError(t, err)
+	require.Empty(t, pending, "an abandoned operation must not be re-enqueued for retry")
+
+	state, err := repo.Read(ctx, id)
+	require.NoError(t, err)
+	require.Zero(t, state.PendingOperations, "an abandoned operation must not gate the projection")
+
+	// The Save projection gate is NOT EXISTS(... stage='pending'): with the row abandoned, an
+	// inactive projection now applies instead of being skipped. Seed a live status first so the
+	// assertion distinguishes "gate opened" from the column's inactive default.
+	_, err = pool.Exec(ctx, `UPDATE users SET subscription_status='active' WHERE id=$1`, id)
+	require.NoError(t, err)
+	require.NoError(t, repo.WithCustomer(ctx, id, func(s RevenueCatSession) error {
+		return s.Save(ctx, domain.RevenueCatState{UserID: id, AccessUpdatedAt: time.Now()})
+	}))
+	var status string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT subscription_status FROM users WHERE id=$1`, id).Scan(&status))
+	require.Equal(t, "inactive", status, "an abandoned operation must no longer block the inactive projection")
+
+	down, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000220_revenuecat_operation_abandoned.down.sql"))
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, string(down))
+	require.ErrorContains(t, err, "abandoned operations exist",
+		"the rollback must refuse rather than strand the terminal audit row")
 }

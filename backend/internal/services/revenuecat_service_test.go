@@ -131,6 +131,31 @@ func TestRevenueCatService_IdentityFailureRecordsRetryAttempt(t *testing.T) {
 	require.Zero(t, p.granted)
 }
 
+func TestProcessOperationAbandonsAfterAttemptCap(t *testing.T) {
+	r := &rcTestStore{ops: map[string]domain.RevenueCatOperation{
+		"op": {ID: "op", UserID: "u", Class: "comp", Key: "comp_premium", Stage: "pending", Attempts: revenueCatMaxOperationAttempts},
+	}}
+	p := &rcTestProvider{fetchErr: errors.New("outage")}
+	s := NewRevenueCatService(r, p, rcTestProfile{})
+	require.Error(t, s.ProcessOperation(context.Background(), "u", "op"))
+	require.Equal(t, "abandoned", r.ops["op"].Stage,
+		"a permanently non-converging operation must stop being retried once it reaches the cap")
+	require.Equal(t, "provider_unavailable", r.ops["op"].LastError)
+	require.Equal(t, revenueCatMaxOperationAttempts+1, r.ops["op"].Attempts)
+}
+
+func TestProcessOperationStaysPendingBelowCap(t *testing.T) {
+	r := &rcTestStore{ops: map[string]domain.RevenueCatOperation{
+		"op": {ID: "op", UserID: "u", Class: "comp", Key: "comp_premium", Stage: "pending", Attempts: revenueCatMaxOperationAttempts - 1},
+	}}
+	p := &rcTestProvider{fetchErr: errors.New("outage")}
+	s := NewRevenueCatService(r, p, rcTestProfile{})
+	require.Error(t, s.ProcessOperation(context.Background(), "u", "op"))
+	require.Equal(t, "pending", r.ops["op"].Stage, "below the cap the operation must stay retryable")
+	require.Equal(t, "provider_unavailable", r.ops["op"].LastError)
+	require.Equal(t, revenueCatMaxOperationAttempts, r.ops["op"].Attempts)
+}
+
 type rcTestProvider struct {
 	grants                         []rc.Entitlement
 	billing                        []rc.Subscription
