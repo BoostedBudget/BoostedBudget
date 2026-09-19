@@ -1,22 +1,18 @@
 import { describe, expect, it } from 'bun:test'
-import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Color from 'colorjs.io'
 import * as tokens from '../src/tokens'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const fixturePath = resolve(packageRoot, 'test/fixtures/web.css.pre-1658')
 
 // Accessed dynamically so this file still LOADS before the new maps exist; the
 // tests then fail on their own assertions rather than on a module-resolution error.
 const t = tokens as unknown as Record<string, unknown>
 
-function read(path: string): string {
-  return readFileSync(path, 'utf8')
-}
-
-function generateStdout(): { web: string; nativewind: string } {
+// `--stdout` emits web.css, then nativewind.css, then native.ts. The web slice
+// is owned by `desktop-stability.test.ts`; this suite only needs nativewind.
+function generateNativewindCss(): string {
   const result = Bun.spawnSync({
     cmd: [process.execPath, 'run', 'scripts/generate.ts', '--stdout'],
     cwd: packageRoot,
@@ -26,10 +22,7 @@ function generateStdout(): { web: string; nativewind: string } {
   const separator = '\n--- nativewind.css ---\n'
   const separatorIndex = stdout.indexOf(separator)
   expect(separatorIndex).toBeGreaterThan(-1)
-  return {
-    web: stdout.slice(0, separatorIndex),
-    nativewind: stdout.slice(separatorIndex + separator.length),
-  }
+  return stdout.slice(separatorIndex + separator.length)
 }
 
 function contrastRatio(foreground: string, background: string): number {
@@ -88,13 +81,8 @@ const expectedScaleKeys = {
 } as const
 
 describe('mobile token scales', () => {
-  it('keeps generated/web.css byte-identical to the pre-change fixture', () => {
-    const { web } = generateStdout()
-    expect(web).toBe(read(fixturePath))
-  })
-
   it('emits every new scale into generated/nativewind.css', () => {
-    const { nativewind: css } = generateStdout()
+    const css = generateNativewindCss()
 
     const typography = t.typographyTokens as Record<string, string> | undefined
     const spacing = t.spacingTokens as Record<string, string> | undefined
@@ -156,7 +144,7 @@ describe('mobile token scales', () => {
   })
 
   it('emits a Tailwind utility for every declared namespace', async () => {
-    const { nativewind: css } = generateStdout()
+    const css = generateNativewindCss()
     const themeBlocks = [...css.matchAll(/@theme inline \{([^}]+)\}/g)]
       .map((match) => match[1])
       .join('\n')
