@@ -40,6 +40,7 @@ func makeDateOnlyKeysetRow(id, userID string, txDate time.Time, authorizedDate *
 		nil, nil, nil,
 		false, nil,
 		nil, nil, nil,
+		nil, // #1684 user_account_id
 	}
 }
 
