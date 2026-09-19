@@ -2496,16 +2496,16 @@ func (r *transactionRepository) getBudgetCategoryTransactions(ctx context.Contex
 // GetByUserAccountID retrieves all transactions for a specific user_account.
 // Issue #171: Provides stable queries across re-links since user_account_id survives re-links.
 //
-// NOTE: This SELECT includes user_account_id at position 5. Everything either side of it is
-// transactionSelectColumns itself, so the two cannot drift apart (#1569).
+// It selects transactionSelectExpr verbatim — user_account_id is part of the canonical list now
+// (#1684), so there is no separate projection or spliced scan destination to keep in sync.
 func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID string, userAccountID string) ([]domain.Transaction, error) {
 	query := fmt.Sprintf(`
-		SELECT id, user_id, account_id, linked_item_id, user_account_id, %s
+		SELECT %s
 		FROM transactions
 		WHERE user_id = $1 AND user_account_id = $2
 		  AND deleted_at IS NULL
 		ORDER BY date DESC, created_at DESC
-	`, strings.Join(transactionSelectColumns[4:], ", "))
+	`, transactionSelectExpr)
 
 	rows, err := r.db.Query(ctx, query, userID, userAccountID)
 	if err != nil {
@@ -2513,37 +2513,7 @@ func (r *transactionRepository) GetByUserAccountID(ctx context.Context, userID s
 	}
 	defer rows.Close()
 
-	var transactions []domain.Transaction
-
-	for rows.Next() {
-		var tx domain.Transaction
-		shared, state := r.scanTransactionDestSliceWithState(&tx)
-
-		// user_account_id is projected at position 5, between linked_item_id and source, so the
-		// destination slice is the shared one with &tx.UserAccountID spliced in at the same index.
-		// Splicing beats a hand-written copy of the list: #1569 appended three columns to
-		// transactionSelectColumns and the two hand-maintained copies that existed then
-		// (scanTransactions, GetByExternalID) both silently went out of sync.
-		dest := make([]any, 0, len(shared)+1)
-		dest = append(dest, shared[:4]...)
-		dest = append(dest, &tx.UserAccountID)
-		dest = append(dest, shared[4:]...)
-
-		if err := rows.Scan(dest...); err != nil {
-			return nil, fmt.Errorf("failed to scan transaction: %w", err)
-		}
-		if err := r.postScanTransactionState(&tx, state); err != nil {
-			return nil, err
-		}
-
-		transactions = append(transactions, tx)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating transaction rows: %w", err)
-	}
-
-	return transactions, nil
+	return r.scanTransactions(rows)
 }
 
 // UpdateEffectiveCategoryNameByCustomCategoryID bulk-updates effective_category_name

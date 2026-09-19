@@ -274,6 +274,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		).
 		AddRow(
 			"tx-2", userID, "account-2", "item-1",
@@ -286,6 +287,7 @@ func TestTransactionRepository_GetByUserID_Success(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	// Expect SELECT query
@@ -331,6 +333,7 @@ func TestTransactionRepository_GetByAccountID_Success(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	// Expect chain-aware SELECT query (subquery expands via user_account_id)
@@ -375,6 +378,7 @@ func TestTransactionRepository_GetByAccountID_ChainAware(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	// Chain subquery includes replaced account in result
@@ -420,6 +424,7 @@ func TestTransactionRepository_GetBySource_Success(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	// Expect SELECT query (source is passed as string, not domain type)
@@ -467,6 +472,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_NoFilters(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	// Expect SELECT query with only user_id filter (FROM transactions t with t. prefix)
@@ -519,6 +525,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_DateRange(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	// Expect SELECT query with date range filter (FROM transactions t, t.-qualified columns)
@@ -569,6 +576,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_AccountID(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	// Chain-expanded WHERE clause (account_id appears twice for subquery; t. prefix on cols)
@@ -620,6 +628,7 @@ func TestTransactionRepository_ChainExpand_AccountID(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	// Chain-expanded WHERE clause with activeAccountID twice (subquery + fallback; t. prefix)
@@ -670,6 +679,7 @@ func TestTransactionRepository_ChainExpand_AccountIDs(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	// Chain-expanded WHERE with IN subquery (args appear twice; t. prefix)
@@ -720,6 +730,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Search(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	// Expect SELECT query with ILIKE search (3 ILIKE conditions, single pattern arg via JOINs)
@@ -769,6 +780,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_PFCPrimaries(t *testing.T)
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t.user_id(.+)AND \(t.effective_pfc_primary IN`).
@@ -817,6 +829,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_Pending(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	// Expect SELECT query with pending filter (t. prefix)
@@ -872,6 +885,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_MultipleFilters(t *testing
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	// Issue #1109: chain-expanded account_id filter uses subquery; accountID appears twice. (t. prefix)
@@ -981,6 +995,7 @@ func TestTransactionRepository_GetByExternalID_Success(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	// Expect SELECT query with WHERE source = $1 AND external_transaction_id_blind_idx = $2 AND user_id = $3
@@ -1059,6 +1074,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsTags(t *testing.T) 
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t\.user_id`).
@@ -1112,6 +1128,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_ReturnsCategoryOverride(t 
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	mock.ExpectQuery(`SELECT (.+) FROM transactions t WHERE t\.user_id`).
@@ -1162,6 +1179,7 @@ func TestTransactionRepository_GetByID_ReturnsCategoryOverrideFields(t *testing.
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	mock.ExpectQuery("SELECT (.+) FROM transactions WHERE id").
@@ -2555,7 +2573,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 	// Build rows matching the SELECT query column order in GetByUserAccountID
 	// Note: category_source must be raw string (not *string) for sql.NullString scanning
 	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "account_id", "linked_item_id", "user_account_id",
+		"id", "user_id", "account_id", "linked_item_id",
 		"source", "external_transaction_id", "external_metadata",
 		"amount", "date", "authorized_date", "name", "merchant_name", "merchant_id",
 		"pfc_primary", "pfc_detailed", "pfc_confidence_level", "pfc_category_icon_url", "payment_channel", "pending", "user_notes",
@@ -2565,9 +2583,10 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 		"effective_pfc_primary", "effective_pfc_detailed", "effective_category_name",
 		"reviewed", "reviewed_at",
 		"deleted_at", "deleted_reason", "deleted_by",
+		"user_account_id",
 	}).
 		AddRow(
-			"tx-uuid-1", userID, "account-old", "item-old", &userAccountID,
+			"tx-uuid-1", userID, "account-old", "item-old",
 			"plaid", &externalID1, nil,
 			-50.00, now, nil, "Starbucks", ptrStr("Starbucks Corp"), nil,
 			nil, nil, nil, nil, nil, false, nil,
@@ -2576,9 +2595,10 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			&userAccountID, // #1684 user_account_id
 		).
 		AddRow(
-			"tx-uuid-2", userID, "account-new", "item-new", &userAccountID,
+			"tx-uuid-2", userID, "account-new", "item-new",
 			"plaid", &externalID2, nil,
 			-25.00, now, nil, "Coffee", nil, nil,
 			nil, nil, nil, nil, nil, false, nil,
@@ -2587,6 +2607,7 @@ func TestTransactionRepository_GetByUserAccountID(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			&userAccountID, // #1684 user_account_id
 		)
 
 	mock.ExpectQuery("SELECT.*FROM transactions.*WHERE user_id.*AND user_account_id").
@@ -2654,6 +2675,7 @@ func testTxRow(id, userID, accountID, itemID, name string, amount float64, now t
 		nil, nil, nil,
 		false, nil, // reviewed, reviewed_at
 		nil, nil, nil, // #1569 deleted_at, deleted_reason, deleted_by
+		nil, // #1684 user_account_id
 	}
 }
 
@@ -2968,6 +2990,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			&userAccountID, // #1684 user_account_id
 		).
 		AddRow(
 			"tx-2", userID, "account-new-2", "item-1",
@@ -2980,6 +3003,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			&userAccountID, // #1684 user_account_id
 		)
 
 	// The WHERE clause must contain user_account_id filter.
@@ -2995,6 +3019,12 @@ func TestTransactionRepository_GetByUserIDWithFilters_UserAccountID(t *testing.T
 	// Verify both chain members are returned despite different account_ids
 	assert.Equal(t, "account-old-1", transactions[0].AccountID)
 	assert.Equal(t, "account-new-2", transactions[1].AccountID)
+	// #1684: the canonical projection carries user_account_id on every row, so the stable
+	// logical-account identifier must survive the scan rather than come back nil.
+	require.NotNil(t, transactions[0].UserAccountID)
+	require.NotNil(t, transactions[1].UserAccountID)
+	assert.Equal(t, userAccountID, *transactions[0].UserAccountID)
+	assert.Equal(t, userAccountID, *transactions[1].UserAccountID)
 
 	err = mock.ExpectationsWereMet()
 	assert.NoError(t, err)
@@ -3148,6 +3178,7 @@ func makeKeysetRow(id, userID string, amount float64, txDate time.Time, merchant
 		nil, nil, nil,
 		false, nil, // reviewed, reviewed_at
 		nil, nil, nil, // #1569 deleted_at, deleted_reason, deleted_by
+		nil, // #1684 user_account_id
 	}
 }
 
@@ -3527,6 +3558,7 @@ func TestTransactionRepository_GetByUserIDWithFilters_MerchantID(t *testing.T) {
 			nil, nil, nil,
 			false, nil,
 			nil, nil, nil,
+			nil, // #1684 user_account_id
 		)
 
 	// WHERE clause must include merchant_id filter.
