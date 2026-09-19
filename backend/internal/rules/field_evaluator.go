@@ -292,19 +292,27 @@ func matchDate(txDate time.Time, op domain.RuleConditionOperator, value interfac
 	return false, nil
 }
 
+// matchPFC compares the RAW provider PFC category (tx.PFCPrimary / tx.PFCDetailed), never the
+// EFFECTIVE category. #1684 Defect 3.
+//
+// A rule's ACTION writes a category override (applyCategoryOverride), and GetEffectiveCategory
+// reports that override as the active category. If a condition read the effective category, a rule
+// that sets a PFC override would destroy the very condition that selected its row: the override it
+// just wrote becomes the subject on the next evaluation and the condition stops matching. A
+// condition describes the SOURCE data the bank reported, and must be stable under the rule's own
+// action. Reading raw also unblocks a future re-application pass, which can re-run rules over
+// already-categorized rows without the first pass's output changing the second pass's conditions.
+//
+// ⚠ matchPFC is SHARED by preview, the added path, and the modified path, so this is a deliberate
+// semantics change on every path — recorded as a residual/release note in #1684 T7.
+//
+// An absent raw value matches NOTHING, including a negative predicate: matchText rejects an empty
+// subject, so a nil/empty PFC makes `neq` false rather than vacuously true (the same house rule
+// TestAccountIDEvaluator_NoIdentityMatchesNothingIncludingNeq pins for account identity).
 func matchPFC(tx *domain.Transaction, field domain.RuleConditionField, op domain.RuleConditionOperator, value interface{}) bool {
-	effective := tx.GetEffectiveCategory()
-	if effective == nil || effective.Kind != domain.EffectiveCategoryKindPFC {
-		return false
+	subject := tx.PFCPrimary
+	if field == domain.FieldPFCDetailed {
+		subject = tx.PFCDetailed
 	}
-	var subject *string
-	if field == domain.FieldPFCPrimary {
-		subject = effective.PFCPrimary
-	} else {
-		subject = effective.PFCDetailed
-	}
-	if subject == nil {
-		return false
-	}
-	return matchText(*subject, op, value)
+	return matchText(textOf(subject), op, value)
 }
