@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -28,7 +27,6 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/redisclient"
-	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 )
 
 // newCacheTestGenerations returns a real cache.Generations backed by a fake (in-memory) Redis
@@ -416,87 +414,4 @@ func TestHouseholdService_SetAccountShareVisibility_BumpsOtherMemberAndHousehold
 	assert.NotEqual(t, preHousehold, postHousehold, "the household scope must change")
 
 	require.NoError(t, pool.ExpectationsWereMet())
-}
-
-// TestAdminUserService_UpdateUserTier_DoesNotBumpCache pins the CORRECTED behaviour after the
-// Issue #1531 Task 10b-2b revert: an admin tier-override write must NOT bump any cache
-// generation at all. An independent trace of all four cached namespaces (analytics,
-// analytics_rows, dashprefs, identity — entitlement is HardDisabled and can never be enabled)
-// found none of them reference SubscriptionTier/ManualTierOverride/tierConfig, so there is
-// nothing here to invalidate. AdminUserService no longer has any cache-wiring setter at all
-// (removed along with the bump); gens below is constructed independently of the service purely
-// to prove the service has no way to reach it.
-func TestAdminUserService_UpdateUserTier_DoesNotBumpCache(t *testing.T) {
-	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
-
-	ctx := context.Background()
-	actorID := uuid.New().String()
-	targetID := uuid.New().String()
-	tier := "household_2"
-	reason := "manual override"
-
-	mockRepo.On("UpdateUserTier", ctx, actorID, targetID, tier, reason, (*time.Time)(nil)).
-		Return(repository.UpdateTierRow{}, nil)
-
-	gens := newCacheTestGenerations()
-	preActor, err := gens.Get(ctx, cache.ScopeUser, actorID)
-	require.NoError(t, err)
-	preTarget, err := gens.Get(ctx, cache.ScopeUser, targetID)
-	require.NoError(t, err)
-
-	_, err = service.UpdateUserTier(ctx, actorID, targetID, tier, reason, nil)
-	require.NoError(t, err)
-
-	postTarget, err := gens.Get(ctx, cache.ScopeUser, targetID)
-	require.NoError(t, err)
-	assert.Equal(t, preTarget, postTarget,
-		"the TARGET user's cache generation must NOT change — tier data feeds no cached namespace")
-
-	postActor, err := gens.Get(ctx, cache.ScopeUser, actorID)
-	require.NoError(t, err)
-	assert.Equal(t, preActor, postActor,
-		"the ACTING ADMIN's own cache generation must NOT change either")
-
-	mockRepo.AssertExpectations(t)
-}
-
-// TestAdminUserService_RemoveUserTierOverride_DoesNotBumpCache mirrors
-// TestAdminUserService_UpdateUserTier_DoesNotBumpCache for the removal path.
-func TestAdminUserService_RemoveUserTierOverride_DoesNotBumpCache(t *testing.T) {
-	mockRepo := new(MockAdminUserRepository)
-	service := NewAdminUserService(mockRepo, nil, nil, 0, nil)
-
-	ctx := context.Background()
-	actorID := uuid.New().String()
-	targetID := uuid.New().String()
-	reason := "no longer needed"
-	priorOverride := "household_3"
-
-	mockRepo.On("RemoveUserTierOverride", ctx, actorID, targetID, reason, 0).Return(repository.RemoveTierOverrideRow{
-		PriorManualTierOverride: &priorOverride,
-		Removed:                 true,
-		RevertedTier:            "premium",
-		RevertedStatus:          "active",
-	}, nil)
-
-	gens := newCacheTestGenerations()
-	preActor, err := gens.Get(ctx, cache.ScopeUser, actorID)
-	require.NoError(t, err)
-	preTarget, err := gens.Get(ctx, cache.ScopeUser, targetID)
-	require.NoError(t, err)
-
-	_, err = service.RemoveUserTierOverride(ctx, actorID, targetID, reason)
-	require.NoError(t, err)
-
-	postTarget, err := gens.Get(ctx, cache.ScopeUser, targetID)
-	require.NoError(t, err)
-	assert.Equal(t, preTarget, postTarget,
-		"the TARGET user's cache generation must NOT change — their override was cleared, but tier data feeds no cached namespace")
-
-	postActor, err := gens.Get(ctx, cache.ScopeUser, actorID)
-	require.NoError(t, err)
-	assert.Equal(t, preActor, postActor, "the ACTING ADMIN's own cache generation must NOT change from this call")
-
-	mockRepo.AssertExpectations(t)
 }

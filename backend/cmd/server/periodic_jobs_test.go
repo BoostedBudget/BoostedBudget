@@ -1,6 +1,6 @@
 package main
 
-// Issue #1448: every one of the 18 periodic River jobs registered by main.go must carry
+// Issue #1448: every one of the 14 periodic River jobs registered by main.go must carry
 // (1) a real dedup guarantee (queue-level UniqueOpts, or — for BudgetPeriodCloseCheck — its
 // own documented DB-level exactly-once marker), (2) RunOnStart: true, and (3) a non-empty,
 // stable PeriodicJobOpts.ID so River restores nextRunAt across restarts/leader elections
@@ -26,24 +26,20 @@ import (
 
 // allNonNilPeriodicJobsDeps returns a periodicJobsDeps with every worker field populated by a
 // real (zero-configured) worker instance, so buildPeriodicJobSpecs produces the full set of
-// 18 specs — one per periodic job main.go registers when every dependency is present.
+// 14 specs — one per periodic job main.go registers when every dependency is present.
 func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 	return periodicJobsDeps{
-		scheduledDeletionCheckWorker:        jobs.NewScheduledDeletionCheckWorker(jobs.ScheduledDeletionCheckWorkerDeps{}),
-		itemCleanupCheckWorker:              jobs.NewItemCleanupCheckWorker(jobs.ItemCleanupCheckWorkerDeps{}),
-		trialExpirationCheckWorker:          jobs.NewTrialExpirationCheckWorker(jobs.TrialExpirationCheckWorkerDeps{}),
-		pastDueCheckWorker:                  jobs.NewPastDueCheckWorker(jobs.PastDueCheckWorkerDeps{}),
-		paddleReconciliationWorker:          jobs.NewPaddleReconciliationWorker(jobs.PaddleReconciliationWorkerDeps{}),
-		retentionCleanupCheckWorker:         jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{}),
-		manualTierOverrideExpiryCheckWorker: jobs.NewManualTierOverrideExpiryCheckWorker(jobs.ManualTierOverrideExpiryCheckWorkerDeps{}),
-		householdMemberCleanupCheckWorker:   jobs.NewHouseholdMemberCleanupCheckWorker(jobs.HouseholdMemberCleanupCheckWorkerDeps{}),
-		householdOverCapacityCheckWorker:    jobs.NewHouseholdOverCapacityCheckWorker(jobs.HouseholdOverCapacityCheckWorkerDeps{}),
-		dlqCleanupCheckWorker:               jobs.NewDLQCleanupCheckWorker(jobs.DLQCleanupCheckWorkerDeps{}),
-		budgetPeriodCloseCheckWorker:        jobs.NewBudgetPeriodCloseCheckWorker(jobs.BudgetPeriodCloseCheckWorkerDeps{}),
-		savingsStatsWorker:                  jobs.NewSavingsStatsWorker(jobs.SavingsStatsWorkerDeps{}),
-		portfolioSnapshotWorker:             jobs.NewPortfolioSnapshotWorker(jobs.PortfolioSnapshotWorkerDeps{}),
-		ruleQuarantineCensusWorker:          jobs.NewRuleQuarantineCensusWorker(jobs.RuleQuarantineCensusWorkerDeps{}),
-		balanceSnapshotDispatchWorker:       jobs.NewBalanceSnapshotDispatchWorker(jobs.BalanceSnapshotDispatchWorkerDeps{}),
+		scheduledDeletionCheckWorker:      jobs.NewScheduledDeletionCheckWorker(jobs.ScheduledDeletionCheckWorkerDeps{}),
+		itemCleanupCheckWorker:            jobs.NewItemCleanupCheckWorker(jobs.ItemCleanupCheckWorkerDeps{}),
+		retentionCleanupCheckWorker:       jobs.NewRetentionCleanupCheckWorker(jobs.RetentionCleanupCheckWorkerDeps{}),
+		householdMemberCleanupCheckWorker: jobs.NewHouseholdMemberCleanupCheckWorker(jobs.HouseholdMemberCleanupCheckWorkerDeps{}),
+		householdOverCapacityCheckWorker:  jobs.NewHouseholdOverCapacityCheckWorker(jobs.HouseholdOverCapacityCheckWorkerDeps{}),
+		dlqCleanupCheckWorker:             jobs.NewDLQCleanupCheckWorker(jobs.DLQCleanupCheckWorkerDeps{}),
+		budgetPeriodCloseCheckWorker:      jobs.NewBudgetPeriodCloseCheckWorker(jobs.BudgetPeriodCloseCheckWorkerDeps{}),
+		savingsStatsWorker:                jobs.NewSavingsStatsWorker(jobs.SavingsStatsWorkerDeps{}),
+		portfolioSnapshotWorker:           jobs.NewPortfolioSnapshotWorker(jobs.PortfolioSnapshotWorkerDeps{}),
+		ruleQuarantineCensusWorker:        jobs.NewRuleQuarantineCensusWorker(jobs.RuleQuarantineCensusWorkerDeps{}),
+		balanceSnapshotDispatchWorker:     jobs.NewBalanceSnapshotDispatchWorker(jobs.BalanceSnapshotDispatchWorkerDeps{}),
 		// Issue #1497. Only the RETRY worker appears here, because only it is nil-guardable: the
 		// orphan-token purge has no periodicJobsDeps field at all — its registration is unconditional
 		// on purpose, so there is nothing to set and nothing that could omit it. That asymmetry is
@@ -54,20 +50,25 @@ func allNonNilPeriodicJobsDeps() periodicJobsDeps {
 }
 
 // TestBuildPeriodicJobSpecs_Count proves every nil-guarded worker (plus the always-on jobs)
-// produces exactly one spec when non-nil — 16 nil-guarded workers + 2 unconditional jobs
-// (idempotency cleanup, and Issue #1497's orphan-token purge) = 18.
+// produces exactly one spec when non-nil — 13 nil-guarded workers + 2 unconditional jobs
+// (idempotency cleanup, and Issue #1497's orphan-token purge) = 15.
 //
 // ⚠ THIS COUNT MOVED TWICE INDEPENDENTLY AND THE TWO INCREMENTS ARE BOTH REAL. #1625 Task 18 fix
 // round 1 added the rule quarantine census (nil-guarded), 16 -> 17 on staging; #1626 Phase 3
 // Defect 3 added the balance snapshot dispatch (nil-guarded), 16 -> 17 on this branch. Merging the
-// two branches means BOTH specs exist, so the count is 18 — a resolution that kept only one side's
+// two branches means BOTH specs exist, so the count was 18 — a resolution that kept only one side's
 // number would have left an unwired worker, and `periodicJobsDeps` fields are nil-safe by design
 // so nothing else in the suite would have said so.
+//
+// #1652 removed the trial expiration check spec (its worker and TrialService are deleted; the
+// Args/Kind survive only for the drain), 18 -> 17. Todo 6 removed the past-due spec, 17 -> 16.
+// Todo 7 removed the paddle reconciliation and manual-tier-override specs, taking this to 14; each
+// todo decremented by the specs IT removed so the tree stayed green between commits.
 func TestBuildPeriodicJobSpecs_Count(t *testing.T) {
 	specs := buildPeriodicJobSpecs(allNonNilPeriodicJobsDeps())
 
-	if len(specs) != 19 {
-		t.Fatalf("expected 19 periodic job specs when every worker is non-nil, got %d", len(specs))
+	if len(specs) != 15 {
+		t.Fatalf("expected 15 periodic job specs when every worker is non-nil, got %d", len(specs))
 	}
 }
 
@@ -106,8 +107,8 @@ func TestBuildPeriodicJobSpecs_NilWorkerOmitsItsSpec(t *testing.T) {
 
 	specs := buildPeriodicJobSpecs(deps)
 
-	if len(specs) != 18 {
-		t.Fatalf("expected 18 specs with itemCleanupCheckWorker nil, got %d", len(specs))
+	if len(specs) != 14 {
+		t.Fatalf("expected 14 specs with itemCleanupCheckWorker nil, got %d", len(specs))
 	}
 	for _, s := range specs {
 		if s.name == "item cleanup check" {
@@ -352,7 +353,7 @@ func TestBuildPeriodicJobSpecs_BalanceSnapshotDispatchRunsDailyAtTheChosenUTCHou
 
 // TestBuildPeriodicJobSpecs_EveryOtherSpecStillUsesItsInterval is the sibling assertion, and it is
 // not decoration: without it, the test above passes just as well if someone attached a schedule to
-// EVERY periodic job, which would change 17 unrelated jobs' cadence semantics as a side effect of
+// EVERY periodic job, which would change 13 unrelated jobs' cadence semantics as a side effect of
 // this one addition.
 func TestBuildPeriodicJobSpecs_EveryOtherSpecStillUsesItsInterval(t *testing.T) {
 	for _, s := range buildPeriodicJobSpecs(allNonNilPeriodicJobsDeps()) {

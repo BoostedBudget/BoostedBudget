@@ -94,6 +94,7 @@ func (m *mockHouseholdService) DeclineInvite(ctx context.Context, callerUserID, 
 	return args.Error(0)
 }
 func (m *mockHouseholdService) SetAnalytics(a phclient.Analytics)                         {}
+func (m *mockHouseholdService) SetProductAnalytics(a phclient.ProductAnalytics)           {}
 func (m *mockHouseholdService) SetMemberProfileResolver(r services.MemberProfileResolver) {}
 func (m *mockHouseholdService) SetCacheInvalidation(gens *cache.Generations)              {}
 

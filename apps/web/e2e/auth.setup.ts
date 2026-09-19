@@ -1,6 +1,6 @@
 import { clerk } from '@clerk/testing/playwright';
 import { test as setup } from '@playwright/test';
-import { getAuthToken, API_BASE } from './helpers/api/client';
+import { prepareRevenueCatFixture } from './helpers/revenuecat';
 
 const authFile = 'e2e/.auth/user.json';
 
@@ -101,42 +101,8 @@ setup('authenticate', async ({ page }) => {
     console.log('   ⚠️  Clerk session not detected within 15s, continuing...');
   }
 
-  // Issue #698: Grant trial subscription for E2E test user
-  // This ensures the test user has an active subscription so PremiumRoute allows access to /dashboard
-  console.log('   Granting trial subscription for E2E test...');
-
-  const authToken = await getAuthToken(page);
-  if (authToken) {
-    console.log('   ✓ Extracted Clerk JWT for API calls');
-  }
-
-  const doTrialGrant = async (token: string | null): Promise<boolean> => {
-    try {
-      const trialResponse = await page.request.post(
-        `${API_BASE}/api/v1/admin/subscription/grant-trial`,
-        {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        }
-      );
-      if (trialResponse.ok()) {
-        const body = await trialResponse.json();
-        console.log(`   ✓ Trial grant: ${body.message}`);
-        return true;
-      } else {
-        const body = await trialResponse.text();
-        console.log(`   [Warning] Trial grant failed: ${trialResponse.status()} - ${body}`);
-        return false;
-      }
-    } catch (error) {
-      console.log(`   [Warning] Trial grant request error: ${error}`);
-      return false;
-    }
-  };
-
-  const trialGranted = await doTrialGrant(authToken);
-  if (!trialGranted) {
-    console.log('   [Info] Trial grant failed — DB seeding should provide subscription');
-  }
+  console.log('   Preparing simulated RevenueCat access for the configured test identity...');
+  await prepareRevenueCatFixture(page, email);
 
   // Verify by accessing protected page
   // This confirms the session is properly established
@@ -180,24 +146,19 @@ setup('authenticate', async ({ page }) => {
 
   console.log(`   [Diagnostic] Page showing: ${result}`);
 
-  // Recovery: if we landed on pricing, the trial grant likely failed due to a race on the
-  // first attempt. Now the session is stable — re-extract the JWT and retry the grant.
+  // Recheck the fixture if navigation raced the previous profile response.
   if (result === 'pricing' || result === 'pricingLoading') {
-    console.log('   [Recovery] Pricing page detected — retrying trial grant with fresh JWT...');
-    const freshToken = await getAuthToken(page);
-    const granted = await doTrialGrant(freshToken);
-    if (granted) {
-      await page.goto('/dashboard');
-      await page.waitForLoadState('domcontentloaded');
-      result = await Promise.race([
-        dashboard.waitFor({ timeout: 30000 }).then(() => 'dashboard' as const),
-        profileError.waitFor({ timeout: 30000 }).then(() => 'profileError' as const),
-        pricing.waitFor({ timeout: 30000 }).then(() => 'pricing' as const),
-        pricingLoading.waitFor({ timeout: 30000 }).then(() => 'pricingLoading' as const),
-        pricingError.waitFor({ timeout: 30000 }).then(() => 'pricingError' as const),
-      ]).catch(() => 'timeout' as const);
-      console.log(`   [Diagnostic] Page showing after recovery: ${result}`);
-    }
+    await prepareRevenueCatFixture(page, email);
+    await page.goto('/dashboard');
+    await page.waitForLoadState('domcontentloaded');
+    result = await Promise.race([
+      dashboard.waitFor({ timeout: 30000 }).then(() => 'dashboard' as const),
+      profileError.waitFor({ timeout: 30000 }).then(() => 'profileError' as const),
+      pricing.waitFor({ timeout: 30000 }).then(() => 'pricing' as const),
+      pricingLoading.waitFor({ timeout: 30000 }).then(() => 'pricingLoading' as const),
+      pricingError.waitFor({ timeout: 30000 }).then(() => 'pricingError' as const),
+    ]).catch(() => 'timeout' as const);
+    console.log(`   [Diagnostic] Page showing after recovery: ${result}`);
   }
 
   if (result !== 'dashboard') {

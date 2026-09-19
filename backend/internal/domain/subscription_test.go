@@ -248,7 +248,7 @@ func TestSubscriptionStatus_IsReadOnlySubscription(t *testing.T) {
 // TestSubscriptionStatus_IsEligibleForPlaidDisconnectRepair is the RED test for Issue #1413
 // round-8 High 4 (Codex review): this method must be NARROWER than IsReadOnlySubscription() above
 // — specifically, past_due must be excluded, even though it IS read-only — because past_due has
-// its own dunning timeline (past_due_service.go) that this repair pass's 72-hour grace window must
+// its own dunning timeline (the deleted past_due_service.go, #1652) that this repair pass's 72-hour grace window must
 // not bypass.
 func TestSubscriptionStatus_IsEligibleForPlaidDisconnectRepair(t *testing.T) {
 	tests := []struct {

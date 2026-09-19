@@ -49,7 +49,7 @@ tables: households, household_members, household_invites, household_share_consen
 phrase: your membership of a household, its invitations, its sharing consents, and the accounts shared into it (and the household itself, if you are its only member)
 
 ### item 11
-tables: subscription_entitlements, paddle_transactions, user_subscription_overrides, referrals, referral_codes
+tables: subscription_entitlements, paddle_transactions, user_subscription_overrides, referrals, referral_codes, revenuecat_customers, revenuecat_operations, revenuecat_webhooks, revenuecat_checkout_intents
 phrase: your subscription, billing and payment records, and your referrals
 
 ### item 12

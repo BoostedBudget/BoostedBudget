@@ -4,6 +4,18 @@
 **Status:** Accepted
 **Issue:** #1451
 
+> **Amendment (#1652, 2026-09-15):** The trial-expiry leg below was rehomed to RevenueCat. The
+> legacy `TrialService`/`ExpireTrial` flow — and the file that held it — has been deleted; an
+> RC-resolved access lapse (an expired paid/comp grant dropping off) now arms the same
+> `plaid_cleanup_pending_at` marker through `revenueCatSession.Save`. The grace numbers and the
+> reasoning in this record are unchanged; only the code that arms the clock moved.
+>
+> **Second amendment (#1652, same round):** the past-due (14-day) leg was deleted outright with the
+> past-due worker and its `PastDueService`. Paddle's own dunning owns cancellation, RevenueCat
+> cannot originate Paddle cancels, and the Plaid disconnect is now owned by the same RevenueCat
+> retention path as trial expiry. The asymmetry this record describes is now two-way, not
+> three-way; the past-due row and its citations are removed below.
+
 ---
 
 ## Context
@@ -11,15 +23,16 @@
 **This is a decision record, not a bug report.** It exists so a future reader who notices the
 inconsistency below does not "fix" it into uniformity without first reading why it exists.
 
-Three separate paths cause a user to lose subscription access, and each waits a different amount
+Two separate paths cause a user to lose subscription access, and each waits a different amount
 of wall-clock time before an **irreversible external Plaid disconnect call** removes their linked
-bank items. The three numbers are three orders of magnitude apart:
+bank items. The two numbers are three orders of magnitude apart. (A third path — past-due dunning,
+at 14 days, resolved through `config/subscription_tiers.yaml`'s `plaid_disconnect_days` — existed
+until #1652 deleted the past-due worker and its `PastDueService`; it is no longer a live path.)
 
 | Path | Grace before Plaid disconnect | Where |
 |---|---|---|
 | Deliberate cancellation (`processSubscriptionCanceled`) | **0s** — inline, in the same webhook handler, immediately after the `cancelled` status write | `backend/internal/queue/jobs/subscription_webhook.go:841` (function), `:860` (cancelled write), `:977` (`DisconnectAllUserItems` call) |
-| Trial expiry (`ExpireTrial` → repair pass) | **72–96h** — deferred to `RetentionCleanupCheckWorker`'s repair pass, gated on `plaid_cleanup_pending_at` + a 72h floor, running on a roughly-daily cadence | `backend/internal/services/trial_service.go:224` (`ExpireTrial`); marker stamped by `ExpireTrialIfNoOverride`, `backend/internal/repository/profile_repository.go:3197-3208`; grace constant `plaidDisconnectRepairGracePeriod = 72 * time.Hour`, `backend/internal/queue/jobs/retention_cleanup_check.go:57` |
-| Past due (`PastDueService`) | **14 days** | `config/subscription_tiers.yaml:100` (`plaid_disconnect_days: 14`); consumed at `backend/internal/services/past_due_service.go:286` (`processPlaidDisconnectWindow`, defined at `:646`) |
+| Trial expiry (now RevenueCat-resolved) | **72–96h** — deferred to `RetentionCleanupCheckWorker`'s repair pass, gated on `plaid_cleanup_pending_at` + a 72h floor, running on a roughly-daily cadence | retention armed by `revenueCatSession.Save` when an RC-resolved grant lapses, `backend/internal/repository/revenuecat_repository.go:175-185`; marker stamped by `ExpireTrialIfNoOverride`, `backend/internal/repository/profile_repository.go:3197-3208`; grace constant `plaidDisconnectRepairGracePeriod = 72 * time.Hour`, `backend/internal/queue/jobs/retention_cleanup_check.go:57` |
 
 The 72–96h range for trial expiry is not two separate numbers for the same event: the grace
 constant itself is a flat 72h, but `RetentionCleanupCheckWorker` only ticks roughly once a day
@@ -27,9 +40,10 @@ constant itself is a flat 72h, but `RetentionCleanupCheckWorker` only ticks roug
 marker that becomes eligible right after one tick isn't picked up until the next — worst case
 adds close to another 24h on top of the 72h floor, hence "72–96h" rather than a single number.
 
-**All three numbers were verified against the current code, not transcribed from the ticket on
-faith** — see the file:line citations above. They match the ticket's table exactly; no
-discrepancy was found.
+**Both remaining numbers were verified against the current code, not transcribed from the ticket
+on faith** — see the file:line citations above. The ticket's third row (past-due, 14 days) was
+deliberately dropped with the path itself in #1652; no discrepancy was found in the two that
+remain.
 
 ---
 
@@ -56,7 +70,7 @@ not equally ambiguous.
 ⚠️ This is the part of the record that matters most, and the part most likely to be dropped by a
 future summary.
 
-`ExpireTrial`'s own doc comment (`trial_service.go:210-223`) states a *technical* premise for why
+`ExpireTrial`'s own doc comment stated a *technical* premise for why
 the trial-expiry disconnect can't be safely ordered inline with the status flip: **no ordering of
 a status flip and an irreversible Plaid call is fully safe**, because `/subscription/checkout`
 staying reachable for read-only users means the user can always resume paying between the flip and
@@ -108,10 +122,8 @@ exists.
 ## References
 
 - `backend/internal/queue/jobs/subscription_webhook.go:836-1015` — `processSubscriptionCanceled`, the inline zero-grace path
-- `backend/internal/services/trial_service.go:193-359` — `ExpireTrial`, and its doc comment explaining why no ordering of the status flip and the Plaid call is safe
+- `backend/internal/repository/revenuecat_repository.go:163-185` — `revenueCatSession.Save`, which since #1652 owns retention arming when an RC-resolved grant lapses (the legacy `ExpireTrial` and its ordering doc comment were deleted with the trial service in #1652)
 - `backend/internal/repository/profile_repository.go:3170-3210` — `ExpireTrialIfNoOverride`, which stamps `plaid_cleanup_pending_at` atomically with the trial→inactive CAS
 - `backend/internal/queue/jobs/retention_cleanup_check.go:29-57` — `plaidDisconnectRepairGracePeriod` (72h) and the rationale for that specific value
-- `backend/internal/services/past_due_service.go:160-206,281-289` — `PastDueService`'s ordering contract and the `plaidDisconnectDays` threshold
-- `config/subscription_tiers.yaml:100-101` — `plaid_disconnect_days: 14`, `grace_days: 21`
 - Issue #1451 — this decision record's source ticket, filed from the round-3 gap analysis of PR #1443
 - Issue #1413 / PR #1443 — the work that introduced the 72h trial-expiry deferral and the comp-safety re-check pattern cited above

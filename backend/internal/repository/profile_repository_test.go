@@ -1464,10 +1464,9 @@ func TestGetEffectiveSubscriptionStatusByUserID_NoRows_ReturnsErrUserNotFound(t 
 // ─── Issue #1413 G2: malformed manual_tier_override must not grant access ──────────────────
 //
 // manual_tier_override is an unconstrained VARCHAR(50) with no CHECK constraint, so it can hold
-// a value that names no configured tier at all — a legacy row, a direct SQL write, a data
-// migration, or a write made while the tier config was nil (see
-// TestAdminUserService_UpdateUserTier_NilTierConfig_SkipsValidation in admin_user_service_test.go
-// for why write-time validation alone cannot prevent this). Before this fix,
+// a value that names no configured tier at all — a legacy row, a direct SQL write, or a data
+// migration. (#1652 deleted the admin override service path's write-time validation, so nothing
+// on the write side checks this any more.) Before this fix,
 // GetEffectiveSubscriptionStatusByUserID only checked "non-empty and not expired" and would
 // return "active" for ANY such value, which the read-only middleware (clerk.go) treats as full
 // write access. The fix validates the override value against an injected tier-name validator on
@@ -1558,8 +1557,8 @@ func TestGetEffectiveSubscriptionStatusByUserID_ValidOverride_WithValidator_Gran
 // can leave a running server without one. Failing closed here regardless (denying every comp
 // whenever a validator merely happens not to be wired) would turn any future construction site
 // that forgets to call SetOverrideTierValidator into an instant, silent outage for every
-// currently-comped user. This is the SAME nil-safe convention admin_user_service.go's write-time
-// check already uses (see TestAdminUserService_UpdateUserTier_NilTierConfig_SkipsValidation).
+// currently-comped user. This mirrors the nil-safe convention the now-deleted admin write-time
+// check used before #1652.
 func TestGetEffectiveSubscriptionStatusByUserID_MalformedOverride_NoValidatorConfigured_GrantsActive(t *testing.T) {
 	mock, repo := setupMockDB(t) // no SetOverrideTierValidator call — validator left nil
 	defer mock.Close()

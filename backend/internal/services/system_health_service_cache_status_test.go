@@ -76,7 +76,7 @@ func TestSystemHealth_CacheEnabled_WiredIntoGetSystemHealth(t *testing.T) {
 	mockPool.On("Ping", mock.Anything).Return(nil)
 	mockPool.On("GetStats").Return(PoolStats{MaxConns: 100})
 
-	queues := []string{"critical", "default", "notifications", "low"}
+	queues := []string{"critical", "default", "notifications", "low", "revenuecat"}
 	for _, q := range queues {
 		mockHealthRepo.On("GetRiverJobStats", mock.Anything, q).Return(&domain.QueueMetrics{}, nil)
 		mockHealthRepo.On("GetRiverJobsCompletedLastHour", mock.Anything, q).Return(int64(0), nil)

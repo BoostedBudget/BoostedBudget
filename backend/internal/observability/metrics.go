@@ -268,33 +268,39 @@ var (
 		Help: "Current number of unresolved jobs in the dead letter queue. Absent until measured from the database.",
 	})
 
-	// ManualTierOverrideOldestUnclearedExpiredSeconds tracks the age (in seconds) of the OLDEST
-	// manual_tier_override that has expired (manual_tier_ends_at in the past) but has not yet been
-	// cleared. Issue #1413 Task P4: the direct measure of the Critical finding C1 hazard —
-	// noManualOverrideAtAllPredicate (profile_repository.go) excludes a user from retention notice/
-	// hard-delete for as long as ANY override survives on their row, live or lapsed, and clearing a
-	// LAPSED one is exclusively manual_tier_override_expiry_check's job. Healthy is ~0; it climbs
-	// monotonically, in lockstep with wall-clock time, the moment that job stops clearing overrides
-	// — independent of whether that job's own jobs_completed_total/JobLastSuccessTimestamp metrics
-	// are even being scraped. Refreshed periodically from repository.JobHealthRepository (see
-	// cmd/server/main.go's startJobHealthMetricsCollector — lives there, not here, because
+	// RevenueCatOldestExpiredCompGrantSeconds tracks the age (in seconds) of the OLDEST expired
+	// comp_* grant still present in RevenueCat's stored projection
+	// (revenuecat_customers.grants). #1652 todo 4: this replaced the retired legacy-column gauge,
+	// which was fed only by manual_tier_override — a column no production path writes any more (the
+	// admin comp path records a revenuecat_operations intent instead), so that alert could never
+	// fire.
+	//
+	// The live hazard: revenueCatSession.Save drops expired grants before persisting, so a comp_*
+	// grant that has lapsed but is STILL in the stored grants means the refresh path has stopped
+	// projecting. While it lingers, ResolveAccess refuses the cached state (an expired grant
+	// requires refresh), so the inactive projection (retention arming + plaid_cleanup_pending_at)
+	// is never persisted and the user is stuck out of the retention pipeline. Healthy is ~0; it
+	// climbs monotonically, in lockstep with wall-clock time, the moment the refresh path stops —
+	// independent of whether the refresh worker's own jobs_completed_total/JobLastSuccessTimestamp
+	// metrics are even being scraped. Refreshed periodically from repository.JobHealthRepository
+	// (see cmd/server/main.go's startJobHealthMetricsCollector — lives there, not here, because
 	// internal/repository already imports internal/observability, so the reverse dependency this
 	// collector needs would be an import cycle if placed in this package).
 	//
 	// ⚠ AN UnmeasuredGauge (see above): absent until startJobHealthMetricsCollector's first successful
 	// read, rather than publishing a reassuring 0 from process start. Rules:
 	//
-	//	manual_tier_override_oldest_uncleared_expired_seconds > 86400
+	//	revenuecat_oldest_expired_comp_grant_seconds > 86400
 	//	  for: 1h
-	//	absent(manual_tier_override_oldest_uncleared_expired_seconds)
+	//	absent(revenuecat_oldest_expired_comp_grant_seconds)
 	//	  for: 1h
-	ManualTierOverrideOldestUnclearedExpiredSeconds = UnmeasuredGauge(prometheus.GaugeOpts{
-		Name: "manual_tier_override_oldest_uncleared_expired_seconds",
-		Help: "Age in seconds of the oldest expired-but-uncleared manual_tier_override; 0 when none exist. Absent until the collector has actually read the database, so alert on absence too.",
+	RevenueCatOldestExpiredCompGrantSeconds = UnmeasuredGauge(prometheus.GaugeOpts{
+		Name: "revenuecat_oldest_expired_comp_grant_seconds",
+		Help: "Age in seconds of the oldest expired comp_* grant still present in RevenueCat's stored projection; 0 when none exist. Absent until the collector has actually read the database, so alert on absence too.",
 	})
 
 	// PlaidCleanupOutstandingUsers and PlaidCleanupOldestOutstandingSeconds are the Issue #1413
-	// direct measure of the sibling hazard to the manual-tier-override one above:
+	// direct measure of the sibling hazard to the RevenueCat comp-grant one above:
 	// RetentionCleanupCheckWorker.repairPlaidDisconnects (backend/internal/queue/jobs/retention_cleanup_check.go)
 	// is the ONLY place a lapsed user's Plaid bank connections are ever disconnected, and its
 	// per-user error isolation (`errorCount++; continue` — deliberate: one user's Plaid failure
@@ -306,7 +312,7 @@ var (
 	//
 	// Both are refreshed together from repository.JobHealthRepository.GetOutstandingPlaidCleanupStats
 	// (see cmd/server/main.go's startJobHealthMetricsCollector — lives there, not here, for the
-	// same import-cycle reason ManualTierOverrideOldestUnclearedExpiredSeconds's collector does).
+	// same import-cycle reason RevenueCatOldestExpiredCompGrantSeconds's collector does).
 	//
 	// Healthy is 0 for both. CRITICAL: "plaid_cleanup_pending_at IS NOT NULL" alone is NOT a valid
 	// proxy for "cleanup outstanding" — migration 000119 stamped that marker on EVERY inactive/
@@ -423,8 +429,8 @@ var (
 	// schedule naturally retries).
 	//
 	// Issue #1413 #1453 (Codex review, PR #1443 follow-up): also incremented from TWO more call
-	// sites outside this worker — services.PastDueService's grace-expiry disconnect
-	// (past_due_service.go) and queue/jobs.SubscriptionWebhookWorker's cancellation handler
+	// sites outside this worker — services.PastDueService's grace-expiry disconnect (deleted in
+	// #1652) and queue/jobs.SubscriptionWebhookWorker's cancellation handler
 	// (subscription_webhook.go) — each brought into line with repairPlaidDisconnects's identical
 	// bounded-retry-then-Error-log pattern for the SAME underlying write
 	// (ClearPlaidCleanupPendingIfMatches after an already-successful synchronous disconnect).
@@ -521,9 +527,9 @@ var (
 	// the MOST RECENT RetentionCleanupCheckWorker pass, whose manual_tier_override is non-empty but
 	// does not name a currently-configured tier (config/subscription_tiers.yaml). Migration 000127
 	// backfilled every such row to NULL as a one-time cleanup; this gauge exists to catch a FUTURE
-	// writer reintroducing the class — a legacy row, a direct SQL write, or a write made while
-	// tierConfig was nil, all of which admin_user_service.go's write-time validation
-	// (SetOverrideTierValidator / tierConfig.GetTier) cannot see, since none of them go through it.
+	// writer reintroducing the class — a legacy row or a direct SQL write — since #1652 deleted
+	// the admin override service path that used to validate every writer against tierConfig, and
+	// neither of these goes through a validated writer.
 	//
 	// A gauge, not a counter: this reports the CURRENT outstanding count each pass observes (via
 	// profileRepository.GetUsersWithMalformedTierOverride), not a cumulative total of every row ever

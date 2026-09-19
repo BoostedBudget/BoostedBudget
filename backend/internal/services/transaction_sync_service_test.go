@@ -2059,11 +2059,6 @@ func (m *mockProfileRepoForCursorTests) GetUsersWithExpiringTrials(ctx context.C
 	return args.Get(0).([]*domain.User), args.Error(1)
 }
 
-func (m *mockProfileRepoForCursorTests) UpdateTrialStatus(ctx context.Context, userID string, status string, trialStartedAt, trialEndsAt *time.Time, hadTrial bool) error {
-	args := m.Called(ctx, userID, status, trialStartedAt, trialEndsAt, hadTrial)
-	return args.Error(0)
-}
-
 // Issue #44, #45, #46: Paddle integration support
 func (m *mockProfileRepoForCursorTests) UpdatePaddleCustomerID(ctx context.Context, userID, paddleCustomerID string) error {
 	args := m.Called(ctx, userID, paddleCustomerID)
@@ -2105,9 +2100,6 @@ func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention30dNotice(ctx co
 func (m *mockProfileRepoForCursorTests) GetUsersNeedingRetention7dNotice(ctx context.Context) ([]*domain.User, error) {
 	return nil, nil
 }
-func (m *mockProfileRepoForCursorTests) GetUsersWithExpiredManualTierOverride(ctx context.Context) ([]*domain.User, error) {
-	return nil, nil
-}
 func (m *mockProfileRepoForCursorTests) SetPastDueStartedAt(ctx context.Context, userID string, t time.Time) error {
 	return nil
 }
@@ -2134,9 +2126,6 @@ func (m *mockProfileRepoForCursorTests) GetUsersNeedingPlaidDisconnectRepair(ctx
 	return []*domain.User{}, nil
 }
 func (m *mockProfileRepoForCursorTests) ClaimPlaidDisconnectIfPastDue(ctx context.Context, userID string) (bool, error) {
-	return false, nil
-}
-func (m *mockProfileRepoForCursorTests) ExpireTrialIfNoOverride(ctx context.Context, userID string) (bool, error) {
 	return false, nil
 }
 

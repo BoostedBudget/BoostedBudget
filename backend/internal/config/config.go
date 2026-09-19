@@ -201,6 +201,15 @@ type Config struct {
 	// exists to enforce).
 	PaddleWebhookTimestampToleranceSeconds int
 
+	// RevenueCat owns subscription access; Paddle remains the billing provider.
+	// Secret keys are server-only. The SPA uses a separate public web API key.
+	RevenueCatProjectID            string
+	RevenueCatSecretAPIKey         string
+	RevenueCatGrantAPIKey          string
+	RevenueCatEnvironment          string
+	RevenueCatWebhookAuthorization string
+	RevenueCatWebhookSigningSecret string
+
 	// Encryption
 	EncryptionKey string
 
@@ -331,6 +340,12 @@ func Load() (*Config, error) {
 		PaddleWebhookTimestampToleranceSeconds: getEnvAsBoundedPositiveInt(
 			"PADDLE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS", 5, PaddleWebhookTimestampToleranceMaxSeconds,
 		),
+		RevenueCatProjectID:            getEnv("REVENUECAT_PROJECT_ID", ""),
+		RevenueCatSecretAPIKey:         getEnv("REVENUECAT_SECRET_API_KEY", ""),
+		RevenueCatGrantAPIKey:          getEnv("REVENUECAT_GRANT_API_KEY", ""),
+		RevenueCatEnvironment:          getEnv("REVENUECAT_ENVIRONMENT", ""),
+		RevenueCatWebhookAuthorization: getEnv("REVENUECAT_WEBHOOK_AUTHORIZATION", ""),
+		RevenueCatWebhookSigningSecret: getEnv("REVENUECAT_WEBHOOK_SIGNING_SECRET", ""),
 
 		// Encryption
 		EncryptionKey: getEnv("ENCRYPTION_KEY", ""),
@@ -432,6 +447,8 @@ func Load() (*Config, error) {
 		if err := cfg.validate(); err != nil {
 			return nil, err
 		}
+	} else if err := cfg.validateRevenueCat(); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil
@@ -440,6 +457,7 @@ func Load() (*Config, error) {
 // validate checks that required configuration is present for the production and staging environments
 func (c *Config) validate() error {
 	var errs []error
+	errs = append(errs, c.validateRevenueCat())
 
 	// Core infrastructure (always required)
 	if c.DatabaseURL == "" {

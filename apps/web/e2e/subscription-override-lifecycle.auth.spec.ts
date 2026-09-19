@@ -231,7 +231,10 @@ async function mockLifecycleRoutes(page: Page, state: OverrideState, captured: C
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ message: 'Subscription tier updated successfully' }),
+      body: JSON.stringify({
+        stage: 'pending',
+        message: 'Complimentary access change queued. Access changes only after RevenueCat confirms it.',
+      }),
     })
   })
 
@@ -245,10 +248,8 @@ async function mockLifecycleRoutes(page: Page, state: OverrideState, captured: C
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        message: 'Override removed',
-        removed: true,
-        reverted_status: 'inactive',
-        reverted_tier: BASE_TIER,
+        stage: 'pending',
+        message: 'Complimentary access removal queued. Paid access and trials are unchanged.',
       }),
     })
   })
@@ -301,7 +302,7 @@ test.describe('Subscription override lifecycle', () => {
     await page.getByLabel(/reason/i).fill(APPLY_REASON)
     await page.getByRole('button', { name: 'Save Override' }).click()
 
-    await expect(page.getByText('Subscription tier updated successfully')).toBeVisible()
+    await expect(page.getByText('Complimentary access change queued. Access changes only after RevenueCat confirms it.')).toBeVisible()
 
     // The mutation reached the backend contract with exactly what the form showed.
     expect(captured.apply).toEqual({
@@ -353,7 +354,7 @@ test.describe('Subscription override lifecycle', () => {
     await confirmDialog.getByLabel(/type "REMOVE" to confirm/i).fill('REMOVE')
     await confirmDialog.getByRole('button', { name: 'Remove Override' }).click()
 
-    await expect(page.getByText('Subscription override removed successfully')).toBeVisible()
+    await expect(page.getByText('Complimentary access removal queued. Paid access and trials are unchanged.')).toBeVisible()
 
     // Point 3's highest-value assertion (same rationale as admin-subscription-override.auth.spec.ts):
     // the reason must reach the request BODY, the whole reason the endpoint is POST not DELETE.

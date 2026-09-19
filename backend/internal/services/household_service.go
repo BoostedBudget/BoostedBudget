@@ -263,6 +263,9 @@ type HouseholdService interface {
 	ResolveScope(ctx context.Context, requestingUserID, scopeParam string) (*domain.HouseholdScope, error)
 
 	SetAnalytics(a phclient.Analytics)
+	// SetProductAnalytics wires the consent-aware Gateway for generated product events
+	// (currently the household entitlement projection). Nil-safe, like SetAnalytics.
+	SetProductAnalytics(a phclient.ProductAnalytics)
 	// SetMemberProfileResolver wires optional (nil-safe) Clerk name/avatar enrichment for
 	// ListMembers. #1367 — Phase 3 Round 2 (GT-3).
 	SetMemberProfileResolver(r MemberProfileResolver)
@@ -292,7 +295,11 @@ type householdService struct {
 	emailService    EmailService
 	enc             *appcrypto.FieldEncryptor
 	analytics       phclient.Analytics
-	memberProfiles  MemberProfileResolver
+	// productAnalytics is the consent-aware Gateway used for generated product events. Kept
+	// separate from analytics (the legacy raw shape) so the existing household events are
+	// untouched; nil-safe, so an unwired value makes every capture a no-op.
+	productAnalytics phclient.ProductAnalytics
+	memberProfiles   MemberProfileResolver
 
 	// cacheGens mints/bumps generation tokens for household writes that affect users OTHER
 	// than the acting HTTP caller (Issue #1531 Task 10b-2b) — nil when cache invalidation is
@@ -342,6 +349,12 @@ func NewHouseholdService(
 // SetAnalytics wires in the optional, nil-safe PostHog analytics client.
 func (s *householdService) SetAnalytics(a phclient.Analytics) {
 	s.analytics = a
+}
+
+// SetProductAnalytics wires the consent-aware Gateway used for generated product events.
+// Nil-safe: an unset value makes every CaptureEvent a no-op, mirroring SetAnalytics.
+func (s *householdService) SetProductAnalytics(a phclient.ProductAnalytics) {
+	s.productAnalytics = a
 }
 
 func (s *householdService) capture(userID, event string) {
@@ -758,8 +771,7 @@ func (s *householdService) removeMemberTx(ctx context.Context, tx pgx.Tx, househ
 	// only EVER checked) when the household is currently in over-capacity grace —
 	// households never in grace skip this entirely, no extra queries. Re-counts
 	// activeCount POST-removal (the removal above already committed within this same
-	// tx) against the owner's CURRENT effective-tier seat count (same technique as
-	// paddle_checkout.go's checkDowngradeSeatCapacity — Task 5), so an owner manually
+	// tx) against the owner's CURRENT effective-tier seat count, so an owner manually
 	// removing members during grace gets immediate credit without waiting for the next
 	// daily household_over_capacity_check worker run (Task 6, Part C).
 	//
@@ -779,7 +791,11 @@ func (s *householdService) removeMemberTx(ctx context.Context, tx pgx.Tx, househ
 		if err != nil {
 			return nil, err
 		}
-		ownerTier, err := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
+		ownerAccess, err := s.ownAccessInTransaction(ctx, tx, owner)
+		if err != nil {
+			return nil, err
+		}
+		ownerTier, err := s.tierConfig.GetTier(domain.TierName(ownerAccess.Tier))
 		if err != nil {
 			return nil, err
 		}
@@ -918,14 +934,18 @@ func (s *householdService) OffboardExcessMembers(ctx context.Context, householdI
 	// outcome, not an error; the caller (the daily worker's autoOffboard) already clears
 	// the over-capacity flag unconditionally after any successful call here, regardless of
 	// queue length.
-	if domain.SubscriptionStatus(owner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
+	ownerAccess, cerr := s.ownAccessInTransaction(ctx, tx, owner)
+	if cerr != nil {
+		return nil, cerr
+	}
+	if domain.SubscriptionStatus(ownerAccess.Status).IsReadOnlySubscription() {
 		if cerr = tx.Commit(ctx); cerr != nil {
 			return nil, cerr
 		}
 		return []QueuedRemovalEmail{}, nil
 	}
 
-	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
+	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(ownerAccess.Tier))
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -1216,7 +1236,20 @@ func (s *householdService) CreateInvite(ctx context.Context, ownerUserID, invite
 		return nil, cerr
 	}
 
-	tier, cerr := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
+	if s.revenueCatEnabled() {
+		owner, cerr = s.lockAndGetUser(ctx, tx, ownerUserID)
+		if cerr != nil {
+			return nil, cerr
+		}
+	}
+	ownerAccess, cerr := s.ownAccessInTransaction(ctx, tx, owner)
+	if cerr != nil {
+		return nil, cerr
+	}
+	if !domain.SubscriptionStatus(ownerAccess.Status).IsActiveSubscription() {
+		return nil, domain.ErrOwnerPlanInactive
+	}
+	tier, cerr := s.tierConfig.GetTier(domain.TierName(ownerAccess.Tier))
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -1393,7 +1426,11 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	}
 
 	// (3b) Paying-invitee guard (decision #6): block any live Paddle billing relationship.
-	if callerHasLivePaddleSubscription(caller) {
+	callerPaid, cerr := s.callerHasLiveBillingInTransaction(ctx, tx, caller)
+	if cerr != nil {
+		return nil, cerr
+	}
+	if callerPaid {
 		cerr = &domain.InviteeHasActivePaidSubscriptionError{EligibleAfter: caller.SubscriptionEndsAt}
 		return nil, cerr
 	}
@@ -1437,7 +1474,11 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	if cerr != nil {
 		return nil, cerr
 	}
-	if owner.DeletionRequestedAt != nil || domain.SubscriptionStatus(owner.ComputeEffectiveStatus()).IsReadOnlySubscription() {
+	ownerAccess, cerr := s.ownAccessInTransaction(ctx, tx, owner)
+	if cerr != nil {
+		return nil, cerr
+	}
+	if owner.DeletionRequestedAt != nil || domain.SubscriptionStatus(ownerAccess.Status).IsReadOnlySubscription() {
 		cerr = domain.ErrOwnerPlanInactive
 		return nil, cerr
 	}
@@ -1453,7 +1494,7 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		s.acceptInviteAfterOwnerCheckHook()
 	}
 
-	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(s.effectiveTierName(owner)))
+	ownerTier, cerr := s.tierConfig.GetTier(domain.TierName(ownerAccess.Tier))
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -1501,8 +1542,15 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 		// into household_members.prior_subscription_tier, later read back to revert a member's
 		// tier when they leave the household — effectiveTierName falls back to the raw tier
 		// instead.
-		priorTier := s.effectiveTierName(caller)
-		priorStatus := caller.SubscriptionStatus
+		callerAccess, accessErr := s.ownAccessInTransaction(ctx, tx, caller)
+		if accessErr != nil {
+			return nil, accessErr
+		}
+		priorTier := callerAccess.Tier
+		priorStatus := callerAccess.Status
+		if !s.revenueCatEnabled() {
+			priorStatus = caller.SubscriptionStatus
+		}
 		member = &domain.HouseholdMember{
 			HouseholdID:             inv.HouseholdID,
 			UserID:                  callerUserID,
@@ -1569,7 +1617,7 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	}
 
 	// (10) Insert the household entitlement (payer == owner satisfies the composite FK).
-	if cerr = entRepo.CreateHouseholdEntitlement(ctx, callerUserID, string(ownerTier.Name), owner.ComputeEffectiveStatus(), ownerUserID, inv.HouseholdID); cerr != nil {
+	if cerr = entRepo.CreateHouseholdEntitlement(ctx, callerUserID, string(ownerTier.Name), ownerAccess.Status, ownerUserID, inv.HouseholdID); cerr != nil {
 		return nil, cerr
 	}
 
@@ -1583,6 +1631,10 @@ func (s *householdService) AcceptInvite(ctx context.Context, callerUserID, rawTo
 	}
 
 	s.capture(callerUserID, phclient.EventHouseholdInviteAccepted)
+	// The household entitlement projection was just materialized for the joiner: the owner's
+	// resolved tier, the occupied seat count after the join, and the tier's included seat limit.
+	// Emitted only after commit, so a rejected or rolled-back join emits nothing.
+	s.captureHouseholdProjection(ctx, ownerUserID, string(ownerTier.Name), activeCount+1, ownerTier.Pricing.UsersIncluded)
 	// Issue #1531 Task 10b-2b: bump the joiner, the owner, the household, and every existing
 	// member — the joiner's own household context just appeared, and every existing member's
 	// household-scoped analytics (e.g. combined spending) now include the new joiner's data.

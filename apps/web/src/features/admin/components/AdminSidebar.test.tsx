@@ -14,6 +14,10 @@ function renderWithRouter(ui: React.ReactElement, initialEntries: string[] = ['/
 }
 
 describe('AdminSidebar', () => {
+  it('links to RevenueCat operations', () => {
+    renderWithRouter(<AdminSidebar />)
+    expect(screen.getByRole('link', {name: 'RevenueCat'})).toHaveAttribute('href', '/admin/revenuecat')
+  })
   it('should render all sidebar navigation items', () => {
     renderWithRouter(<AdminSidebar />)
 

@@ -21,6 +21,14 @@
 # `-v` is added automatically if not already present in the arguments (needed to see
 # individual --- PASS/FAIL/SKIP lines; without it this script has nothing to count).
 #
+# THE SECOND PROBLEM this closes (G22, #1652): the tally above counts only `^--- FAIL:` lines,
+# but a Go BUILD failure emits a PACKAGE-level `FAIL <pkg> [build failed]` line and never a
+# `--- FAIL:` line. So a package that does not compile printed `PASS=0 FAIL=0 SKIP=0` — a
+# summary that reads green — while the command exited non-zero. The counter that would have
+# caught it, PKG_COUNT, was computed and never printed. The summary now prints PKG= (packages
+# seen) and PKG_FAIL= (package-level FAIL lines), and a PKG_FAIL>0 run prints a loud warning
+# naming the failing packages, so a build failure can never again read as a clean tally.
+#
 # Exit code: the underlying `go test` invocation's real exit code — this script only adds a
 # summary, it never changes pass/fail.
 set -uo pipefail
@@ -72,11 +80,20 @@ PASS_COUNT=$(grep -c '^--- PASS:' "$OUTPUT_FILE" || true)
 FAIL_COUNT=$(grep -c '^--- FAIL:' "$OUTPUT_FILE" || true)
 SKIP_COUNT=$(grep -c '^--- SKIP:' "$OUTPUT_FILE" || true)
 PKG_COUNT=$(grep -cE '^(ok|FAIL|---)\s+github\.com/' "$OUTPUT_FILE" || true)
+PKG_FAIL_COUNT=$(grep -cE '^FAIL\s+github\.com/' "$OUTPUT_FILE" || true)
 
 echo ""
 echo "========================================"
-echo "go test summary: PASS=$PASS_COUNT FAIL=$FAIL_COUNT SKIP=$SKIP_COUNT"
+echo "go test summary: PASS=$PASS_COUNT FAIL=$FAIL_COUNT SKIP=$SKIP_COUNT PKG=$PKG_COUNT PKG_FAIL=$PKG_FAIL_COUNT"
 echo "========================================"
+
+if [ "$PKG_FAIL_COUNT" -gt 0 ]; then
+  echo ""
+  echo "⚠️  $PKG_FAIL_COUNT package(s) FAILED at the package level (e.g. a build failure)."
+  echo "    These emit 'FAIL <pkg> [build failed]' and NEVER a '--- FAIL:' line, so"
+  echo "    FAIL=$FAIL_COUNT above does NOT mean green. Failing packages:"
+  grep -E '^FAIL\s+github\.com/' "$OUTPUT_FILE" | sed -E 's/^FAIL[[:space:]]+([^[:space:]]+).*/  - \1/'
+fi
 
 if [ "$SKIP_COUNT" -gt 0 ]; then
   echo ""

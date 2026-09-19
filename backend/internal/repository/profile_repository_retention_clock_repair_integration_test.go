@@ -5,7 +5,7 @@ package repository
 // Integration tests for GetUsersNeedingRetentionClockRepair / RepairRetentionClock (Issue #1413
 // round-3 finding H5 residual, belt-and-braces repair path).
 //
-// CancelIfPastDueOccurrenceWithRetention closes the specific race on the past-due grace-cancel path going
+// The deleted CancelIfPastDueOccurrenceWithRetention (#1652) closed the specific race on the past-due grace-cancel path going
 // forward, but this repair path also catches: (a) any row already stuck read-only-status with a
 // NULL retention_expires_at from before that fix existed, and (b) any other, currently-unknown
 // path that might leave a user in this state. pgxmock cannot validate the WHERE predicates or

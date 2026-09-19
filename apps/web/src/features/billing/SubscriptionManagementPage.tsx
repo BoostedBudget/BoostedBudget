@@ -1,23 +1,23 @@
-import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router'
-import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
-import { ANALYTICS_EVENTS } from '../../shared/analytics'
 import { CreditCard, Gift } from 'lucide-react'
 import { useSubscriptionManagement } from './hooks/useSubscriptionManagement'
 import { useSubscriptionTiers } from '../subscription/hooks/useSubscriptionTiers'
 import { BillingDetails } from './components/BillingDetails'
 import { CurrentSubscriptionDisplay } from './components/CurrentSubscriptionDisplay'
-import { PlanChangeModal } from './components/PlanChangeModal'
-import { CancelConfirmationModal } from './components/CancelConfirmationModal'
+import { BillingPortalButton } from './components/BillingPortalButton'
 import { SubscriptionManagementSkeleton } from './components/SubscriptionManagementSkeleton'
 import { SubscriptionErrorState } from './components/SubscriptionErrorState'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { Alert } from '@/components/ui/alert'
-import { toast } from 'sonner'
 import { getSubscriptionPresentation } from '@/features/subscription/lib/subscriptionPresentation'
 import type { GetCurrentSubscriptionOutputBody } from '@boostedbudget/api-client/models'
 import type { SubscriptionTier } from '../subscription/types'
+import { useGetCurrentSubscription } from '@boostedbudget/api-client/endpoints/subscription/subscription'
+import { SubscriptionAuthorityDetails } from './components/SubscriptionAuthorityDetails'
+import { RevenueCatCheckoutStatus } from './components/RevenueCatCheckoutStatus'
+import { useRevenueCatCheckout } from './hooks/useRevenueCatCheckout'
+import { useAuth } from '@clerk/react-router'
 
 /**
  * Issue #1413: complimentary-access view for admin-comped users. Reuses CurrentSubscriptionDisplay
@@ -85,8 +85,22 @@ function ComplimentaryView({
  * Issue #772: GAP 2 - Wire up subscription management components
  */
 export function SubscriptionManagementPage() {
+  const { userId } = useAuth()
+  const { data, refetch, error } = useGetCurrentSubscription({ query: { queryKey: ['/api/v1/subscription/current', userId], enabled: !!userId } })
+  const { retry, isLoading } = useRevenueCatCheckout()
+  return <>
+    <SubscriptionAuthorityDetails summary={data?.authority} />
+    <div className="max-w-[800px] mx-auto px-8 pt-4">
+      {data && error && <p role="status">Subscription details could not be refreshed. Showing the last observed details.</p>}
+      <RevenueCatCheckoutStatus />
+      <Button variant="outline" disabled={isLoading} onClick={async () => { await retry(); await refetch() }}>Refresh subscription status</Button>
+    </div>
+    <SubscriptionManagementContent />
+  </>
+}
+
+function SubscriptionManagementContent() {
   const navigate = useNavigate()
-  const trackEvent = useTrackEvent()
   const {
     subscription,
     isLoadingSubscription,
@@ -95,37 +109,18 @@ export function SubscriptionManagementPage() {
     isComped,
     compEndsAt,
     billingPortalUrl,
-    updateSubscription,
-    isUpdating,
-    updateError,
-    cancelSubscription,
-    isCanceling,
-    cancelError,
+    isLoadingBillingPortal,
+    billingPortalError,
     refetchSubscription,
   } = useSubscriptionManagement()
 
   const { tiers, loading: tiersLoading } = useSubscriptionTiers()
 
-  // Track page view on mount
-  useEffect(() => {
-    trackEvent(ANALYTICS_EVENTS.SUBSCRIPTION_MANAGED)
-  }, [trackEvent])
-
-  // Modal state
-  const [showPlanChangeModal, setShowPlanChangeModal] = useState(false)
-  const [showCancelModal, setShowCancelModal] = useState(false)
-
-  // Handle subscription errors
-  useEffect(() => {
-    if (updateError) toast.error(updateError.message)
-    if (cancelError) toast.error(cancelError.message)
-  }, [updateError, cancelError])
-
   if (isLoadingSubscription || tiersLoading) {
     return <SubscriptionManagementSkeleton />
   }
 
-  if (subscriptionError) {
+  if (subscriptionError && !subscription) {
     return (
       <SubscriptionErrorState
         message={subscriptionError.message}
@@ -155,7 +150,7 @@ export function SubscriptionManagementPage() {
   // Issue #1413: admin-comped users get real access, even when the subscription endpoint 404s
   // (checked before hasNoSubscription/!subscription below — an isComped user should never see the
   // "No Active Subscription" empty state).
-  if (isComped) {
+  if (isComped && !subscription?.subscription_id) {
     const compedTierData = subscription
       ? tiers?.tiers[subscription.tier as keyof typeof tiers.tiers]
       : undefined
@@ -170,7 +165,11 @@ export function SubscriptionManagementPage() {
     )
   }
 
-  if (hasNoSubscription || !subscription) {
+  if (subscription?.status === 'unresolved') {
+    return <SubscriptionErrorState message="Subscription status could not be confirmed. Refresh subscription status to try again." onRetry={() => refetchSubscription()} />
+  }
+
+  if (hasNoSubscription || !subscription || (!subscription.subscription_id && subscription.status !== 'trial')) {
     return (
       <div className="max-w-[800px] mx-auto p-8">
         <EmptyState
@@ -185,74 +184,18 @@ export function SubscriptionManagementPage() {
 
   const currentTierData = tiers?.tiers[subscription.tier as keyof typeof tiers.tiers]
 
-  const handleUpdateSubscription = async (
-    targetTier: string,
-    billingInterval: 'month' | 'year',
-    prorationBillingMode: 'prorated_immediately' | 'full_immediately' | 'full_next_billing_period',
-    message: string,
-    closeModal: () => void,
-  ) => {
-    try {
-      await updateSubscription({
-        newTier: targetTier,
-        billingInterval,
-        currentBillingInterval: subscription.billing_interval as 'month' | 'year',
-        prorationBillingMode,
-      })
-      toast.success(message)
-      closeModal()
-      refetchSubscription()
-    } catch {
-      // Error handled by useEffect
-    }
-  }
-
-  const handlePlanChange = (
-    targetTier: string,
-    billingInterval: 'month' | 'year',
-    prorationBillingMode: 'prorated_immediately' | 'full_next_billing_period',
-  ) => {
-    const message = prorationBillingMode === 'prorated_immediately'
-      ? 'Subscription upgraded successfully!'
-      : 'Subscription will change at the end of your billing period'
-    return handleUpdateSubscription(
-      targetTier,
-      billingInterval,
-      prorationBillingMode,
-      message,
-      () => setShowPlanChangeModal(false),
-    )
-  }
-
-  const handleCancel = async () => {
-    try {
-      await cancelSubscription()
-      toast.success('Subscription cancelled successfully')
-      setShowCancelModal(false)
-      refetchSubscription()
-    } catch {
-      // Error handled by useEffect
-    }
-  }
-
-  const handleOpenPlanChangeModal = () => {
-    trackEvent(ANALYTICS_EVENTS.CHECKOUT_STARTED)
-    setShowPlanChangeModal(true)
-  }
-
   const nextBillingDate =
     subscription.next_billing_date ?? subscription.current_period_end ?? ''
 
-  // Helper to build subscription data for modals
-  const getModalSubscriptionData = () => ({
-    tier: subscription.tier,
-    status: subscription.status,
-    billing_interval: subscription.billing_interval,
-    amount: subscription.amount,
-    currency: subscription.currency,
-    next_billing_date: nextBillingDate,
-    features: formatTierFeatures(currentTierData),
-  })
+  // #1652: the single self-service action. Plan changes, cancellation and payment-method updates
+  // all happen in the provider's own portal — the in-app Paddle mutations are gone.
+  const manageSubscription = (
+    <BillingPortalButton
+      billingPortalUrl={billingPortalUrl}
+      isLoadingPortal={isLoadingBillingPortal}
+      error={billingPortalError}
+    />
+  )
 
   // Render based on subscription status
   if (subscription.status === 'trial') {
@@ -320,63 +263,10 @@ export function SubscriptionManagementPage() {
 
         <div className="rounded-lg bg-card p-6 shadow-sm space-y-2">
           <p className="text-sm text-muted-foreground">Your plan will automatically activate after your trial ends.</p>
-          <p className="text-sm text-muted-foreground">You'll be charged {subscription.currency} {actualAmount}/{billingPeriod} starting on {trialEndDate}.</p>
+          <p className="text-sm text-muted-foreground">You'll be charged <span data-ph-mask>{`${subscription.currency} ${actualAmount}/${billingPeriod}`}</span> starting on {trialEndDate}.</p>
         </div>
 
-        <div className="space-y-3">
-          <Button
-            onClick={handleOpenPlanChangeModal}
-            disabled={isUpdating}
-            variant="outline"
-            className="w-full"
-          >
-            Change Plan
-          </Button>
-
-          <Button
-            onClick={() => setShowCancelModal(true)}
-            disabled={isCanceling}
-            variant="destructive"
-            className="w-full"
-          >
-            Cancel Subscription
-          </Button>
-
-          {billingPortalUrl && (
-            <Button
-              asChild
-              variant="outline"
-              className="w-full"
-            >
-              <a href={billingPortalUrl} target="_blank" rel="noopener noreferrer">
-                Manage Billing
-              </a>
-            </Button>
-          )}
-        </div>
-
-        {/* Plan Change Modal */}
-        {showPlanChangeModal && currentTierData && tiers?.tiers && (
-          <PlanChangeModal
-            open={showPlanChangeModal}
-            currentTier={subscription.tier}
-            currentBillingInterval={subscription.billing_interval as 'month' | 'year'}
-            tiers={tiers.tiers}
-            isUpdating={isUpdating}
-            onChangePlan={handlePlanChange}
-            onClose={() => setShowPlanChangeModal(false)}
-          />
-        )}
-
-        {/* Cancel Modal */}
-        {showCancelModal && currentTierData && (
-          <CancelConfirmationModal
-            open={showCancelModal}
-            subscription={getModalSubscriptionData()}
-            onConfirm={handleCancel}
-            onClose={() => setShowCancelModal(false)}
-          />
-        )}
+        {manageSubscription}
       </div>
     )
   }
@@ -394,9 +284,7 @@ export function SubscriptionManagementPage() {
           </p>
         </div>
 
-        <Button onClick={() => navigate('/pricing')} className="w-full">
-          Resubscribe
-        </Button>
+        {manageSubscription}
       </div>
     )
   }
@@ -409,16 +297,7 @@ export function SubscriptionManagementPage() {
           <p className="text-sm text-destructive">Your payment is past due. Please update your payment method to continue using BoostedBudget.</p>
         </div>
 
-        {billingPortalUrl && (
-          <Button
-            asChild
-            className="w-full"
-          >
-            <a href={billingPortalUrl} target="_blank" rel="noopener noreferrer">
-              Update Payment Method
-            </a>
-          </Button>
-        )}
+        {manageSubscription}
       </div>
     )
   }
@@ -448,48 +327,7 @@ export function SubscriptionManagementPage() {
         portalUrl={billingPortalUrl}
       />
 
-      <div className="space-y-3">
-        <Button
-          onClick={handleOpenPlanChangeModal}
-          disabled={isUpdating}
-          variant="outline"
-          className="w-full"
-        >
-          Change Plan
-        </Button>
-
-        <Button
-          onClick={() => setShowCancelModal(true)}
-          disabled={isCanceling}
-          variant="destructive"
-          className="w-full"
-        >
-          Cancel Subscription
-        </Button>
-      </div>
-
-      {/* Plan Change Modal */}
-      {showPlanChangeModal && currentTierData && tiers?.tiers && (
-        <PlanChangeModal
-          open={showPlanChangeModal}
-          currentTier={subscription.tier}
-          currentBillingInterval={subscription.billing_interval as 'month' | 'year'}
-          tiers={tiers.tiers}
-          isUpdating={isUpdating}
-          onChangePlan={handlePlanChange}
-          onClose={() => setShowPlanChangeModal(false)}
-        />
-      )}
-
-      {/* Cancel Modal */}
-      {showCancelModal && currentTierData && (
-        <CancelConfirmationModal
-          open={showCancelModal}
-          subscription={getModalSubscriptionData()}
-          onConfirm={handleCancel}
-          onClose={() => setShowCancelModal(false)}
-        />
-      )}
+      {manageSubscription}
     </div>
   )
 }

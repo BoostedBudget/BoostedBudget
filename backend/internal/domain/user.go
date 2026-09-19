@@ -32,6 +32,8 @@ type User struct {
 	// Effective status/comp fields (Issue #1413) — computed, not stored in DB.
 	// Populated by a later task (see EffectiveTier precedent above).
 	EffectiveStatus string     `json:"effective_status,omitempty"`
+	AccessResolved  *bool      `json:"access_resolved,omitempty"` // nil only for legacy/unconfigured readers
+	AccessSource    string     `json:"access_source,omitempty"`
 	IsComped        bool       `json:"is_comped"` // No omitempty: frontend must always see this key, never distinguish false from absent.
 	CompTier        string     `json:"comp_tier,omitempty"`
 	CompEndsAt      *time.Time `json:"comp_ends_at,omitempty"`
@@ -210,11 +212,9 @@ type User struct {
 	//     within one repair-pass interval.
 	//
 	// In short: writers owe correctness; the backstop owes recovery. Neither excuses the other. The
-	// known SET sites are: UpdateSubscriptionFromPaddle, CancelIfPastDueOccurrenceWithRetention,
-	// ExpireTrialIfNoOverride, UpdateTrialStatus (all profile_repository.go — this last one's own
-	// eligible-status branch COALESCEs a fresh value in exactly like its siblings; see its doc
-	// comment for the "granting a trial to a cancelled user with an outstanding marker" case this
-	// closes), AdminUserRepository's
+	// known SET sites are: UpdateSubscriptionFromPaddle, the deleted CancelIfPastDueOccurrenceWithRetention
+	// (#1652), and the deleted ExpireTrialIfNoOverride/UpdateTrialStatus (#1652) (all
+	// profile_repository.go), AdminUserRepository's
 	// removeUserTierOverrideUpdate (admin_user_repository.go, shared by RemoveUserTierOverride/
 	// RemoveUserTierOverrideIfMatches), profileRepository.StampMissingPlaidCleanupMarkers
 	// (profile_repository.go) — the one exception to "begins on a status transition" in the episode
@@ -273,7 +273,7 @@ type User struct {
 	// "the backstop will catch it eventually" bounds how long a violation can persist, it does not
 	// excuse a writer from getting this right in the first place. The known CLEAR sites are:
 	// UpdateSubscriptionFromPaddle, ClearRetentionDates,
-	// ClearPlaidCleanupPending/ClearPlaidCleanupPendingIfMatches, UpdateTrialStatus,
+	// ClearPlaidCleanupPending/ClearPlaidCleanupPendingIfMatches,
 	// ClearCompletedPlaidCleanupMarkers, and ClearMarkersOnEligibleStatus (all profile_repository.go).
 	// AdminUserRepository's
 	// updateUserTierQuery (comp grant/extend)

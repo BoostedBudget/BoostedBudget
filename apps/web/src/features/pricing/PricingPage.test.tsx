@@ -260,20 +260,28 @@ describe('PricingPage', () => {
       expect(currentPlanElements.length).toBeGreaterThan(0)
     })
 
-    it('should show directional buttons for non-current tiers', () => {
+    it('offers the single Manage subscription action on every tier card', () => {
+      mockUseGetBillingPortalUrl.mockReturnValue({
+        data: { portal_url: 'https://portal.paddle.com/active' },
+        isLoading: false,
+        error: null,
+      })
       renderWithProviders(<PricingPage />)
 
-      // Active premium user — all 4 household tiers are upgrades
-      const upgradeButtons = screen.getAllByRole('button', { name: /upgrade/i })
-      expect(upgradeButtons.length).toBe(4)
+      const manageLinks = screen.getAllByRole('link', { name: /manage subscription/i })
+      expect(manageLinks.length).toBe(5)
+      manageLinks.forEach((link) =>
+        expect(link).toHaveAttribute('href', 'https://portal.paddle.com/active')
+      )
+      expect(screen.queryByRole('button', { name: /upgrade|downgrade|switch to/i })).toBeNull()
     })
 
-    it('should disable button for current tier', () => {
+    it('shows a disabled Manage subscription control while the portal URL is unresolved', () => {
       renderWithProviders(<PricingPage />)
 
-      const currentPlanButtons = screen.getAllByRole('button', { name: /current plan/i })
-      expect(currentPlanButtons.length).toBeGreaterThan(0)
-      expect(currentPlanButtons[0]).toBeDisabled()
+      const manageButtons = screen.getAllByRole('button', { name: /manage subscription/i })
+      expect(manageButtons.length).toBe(5)
+      manageButtons.forEach((btn) => expect(btn).toBeDisabled())
     })
   })
 
@@ -597,7 +605,7 @@ describe('PricingPage', () => {
       expect(currentPlanElements.length).toBeGreaterThan(0)
     })
 
-    it('should show directional buttons for non-current tiers when user has active subscription', () => {
+    it('offers the single Manage subscription action when the user has an active subscription', () => {
       mockUseGetCurrentSubscription.mockReturnValue({
         data: activeSubscription,
         isLoading: false,
@@ -607,9 +615,9 @@ describe('PricingPage', () => {
 
       renderWithProviders(<PricingPage />)
 
-      // Active premium → 4 household tiers are all upgrades
-      const upgradeButtons = screen.getAllByRole('button', { name: /upgrade/i })
-      expect(upgradeButtons.length).toBe(4)
+      const manageButtons = screen.getAllByRole('button', { name: /manage subscription/i })
+      expect(manageButtons.length).toBe(5)
+      expect(screen.queryByRole('button', { name: /upgrade/i })).toBeNull()
     })
   })
 
@@ -667,10 +675,11 @@ describe('PricingPage', () => {
         expect(currentPlanElements.length).toBeGreaterThan(0)
       })
 
-      it('shows directional buttons for other tiers', () => {
+      it('offers the single Manage subscription action for other tiers', () => {
         renderWithProviders(<PricingPage />)
-        const upgradeButtons = screen.getAllByRole('button', { name: /upgrade/i })
-        expect(upgradeButtons.length).toBe(4)
+        const manageButtons = screen.getAllByRole('button', { name: /manage subscription/i })
+        expect(manageButtons.length).toBe(5)
+        expect(screen.queryByRole('button', { name: /upgrade/i })).toBeNull()
       })
     })
 
@@ -706,19 +715,19 @@ describe('PricingPage', () => {
         expect(currentPlanElements.length).toBeGreaterThan(0)
       })
 
-      it('shows Resubscribe button for current cancelled tier', () => {
+      it('offers the single Manage subscription link for the current cancelled tier', () => {
         renderWithProviders(<PricingPage />)
-        const resubscribeButton = screen.getByRole('button', { name: /resubscribe/i })
-        expect(resubscribeButton).toBeInTheDocument()
+        const manageLinks = screen.getAllByRole('link', { name: /manage subscription/i })
+        expect(manageLinks.length).toBe(5)
+        manageLinks.forEach((link) =>
+          expect(link).toHaveAttribute('href', 'https://portal.paddle.com/123')
+        )
       })
 
-      it('shows directional CTAs (Upgrade/Downgrade/Switch) for other tiers', () => {
+      it('does not render in-app plan-change CTAs for other tiers', () => {
         renderWithProviders(<PricingPage />)
         expect(screen.queryAllByRole('button', { name: /change plan/i }).length).toBe(0)
-        const directionalButtons = screen.getAllByRole('button', {
-          name: /upgrade|downgrade|switch to/i,
-        })
-        expect(directionalButtons.length).toBeGreaterThan(0)
+        expect(screen.queryByRole('button', { name: /upgrade|downgrade|switch to/i })).toBeNull()
       })
 
       it('shows Cancels on {date} label on current tier card when scheduled_change_at is set', () => {
@@ -770,23 +779,25 @@ describe('PricingPage', () => {
         expect(screen.getByText(/your subscription has expired/i)).toBeInTheDocument()
       })
 
-      it('shows Update Payment Method button for current past_due tier', () => {
+      it('offers the single Manage subscription link for a past_due subscriber', () => {
         mockUseGetBillingPortalUrl.mockReturnValue({
           data: { portal_url: 'https://portal.paddle.com/past-due' },
           isLoading: false,
           error: null,
         })
         renderWithProviders(<PricingPage />)
-        expect(screen.getByRole('button', { name: /update payment method/i })).toBeInTheDocument()
+        const manageLinks = screen.getAllByRole('link', { name: /manage subscription/i })
+        expect(manageLinks.length).toBe(5)
+        manageLinks.forEach((link) =>
+          expect(link).toHaveAttribute('href', 'https://portal.paddle.com/past-due')
+        )
       })
 
-      it('shows disabled Update Payment buttons for non-current tiers', () => {
+      it('shows disabled Manage subscription controls while the portal URL is unresolved', () => {
         renderWithProviders(<PricingPage />)
-        // TierActionButton for past_due non-current tiers shows "Update Payment" (exact).
-        // BillingPortalButton for the current tier shows "Update Payment Method" — excluded here.
-        const updatePaymentButtons = screen.getAllByRole('button', { name: /^Update Payment$/i })
-        expect(updatePaymentButtons.length).toBe(4) // 4 non-current tiers
-        updatePaymentButtons.forEach(btn => expect(btn).toBeDisabled())
+        const manageButtons = screen.getAllByRole('button', { name: /manage subscription/i })
+        expect(manageButtons.length).toBe(5)
+        manageButtons.forEach((btn) => expect(btn).toBeDisabled())
       })
     })
 
@@ -842,7 +853,7 @@ describe('PricingPage', () => {
         expect(screen.getByText(/complimentary premium, provided by boostedbudget/i)).toBeInTheDocument()
       })
 
-      it('shows Current Plan for the comped tier and an enabled Subscribe for every other tier', () => {
+      it('allows complimentary users to purchase any paid tier', () => {
         mockUseGetCurrentSubscription.mockReturnValue({
           data: {
             status: 'active',
@@ -859,11 +870,10 @@ describe('PricingPage', () => {
 
         renderWithProviders(<PricingPage />)
 
-        const currentPlanButtons = screen.getAllByRole('button', { name: /current plan/i })
-        expect(currentPlanButtons.length).toBeGreaterThan(0)
+        expect(screen.queryByRole('button', { name: /current plan/i })).toBeNull()
 
         const subscribeButtons = screen.getAllByRole('button', { name: /^subscribe$/i })
-        expect(subscribeButtons.length).toBe(4)
+        expect(subscribeButtons.length).toBe(5)
         subscribeButtons.forEach((btn) => expect(btn).not.toBeDisabled())
       })
 

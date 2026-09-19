@@ -46,9 +46,14 @@ var readOnlyExactAllowedPaths = map[string]bool{
 // like /subscription/cancel — so a lapsed owner can disband, and a member under a lapsed
 // owner can self-leave to regain access via their own subscription.
 var readOnlyMethodExactAllowedPaths = map[string]map[string]bool{
+	http.MethodPost: {
+		"/api/v1/subscription/checkout-intents":  true, // admission performs its own fresh billing checks
+		"/api/v1/subscription/authority/refresh": true, // provider confirmation is recovery, not paid-feature use
+	},
 	http.MethodDelete: {
-		"/api/v1/households/me":                  true, // disband
-		"/api/v1/households/me/members/{userId}": true, // self-leave / owner-removes
+		"/api/v1/subscription/checkout-intents/{intent_id}": true, // closes only a coordination lease
+		"/api/v1/households/me":                             true, // disband
+		"/api/v1/households/me/members/{userId}":            true, // self-leave / owner-removes
 	},
 }
 

@@ -190,10 +190,8 @@ test.describe('Admin subscription override', () => {
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify({
-            message: 'Override removed',
-            removed: true,
-            reverted_status: 'active',
-            reverted_tier: 'premium',
+            stage: 'pending',
+            message: 'Complimentary access removal queued. Paid access and trials are unchanged.',
           }),
         })
       }
@@ -214,7 +212,7 @@ test.describe('Admin subscription override', () => {
     await confirmDialog.getByLabel(/type "REMOVE" to confirm/i).fill('REMOVE')
     await confirmDialog.getByRole('button', { name: 'Remove Override' }).click()
 
-    await expect(page.getByText('Subscription override removed successfully')).toBeVisible()
+    await expect(page.getByText('Complimentary access removal queued. Paid access and trials are unchanged.')).toBeVisible()
 
     // Point 3's highest-value assertion: the reason must reach the request BODY (the whole
     // reason the endpoint is POST rather than DELETE), not just the URL/method.
@@ -236,10 +234,8 @@ test.describe('Admin subscription override', () => {
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify({
-            message: 'Override removed',
-            removed: true,
-            reverted_status: 'active',
-            reverted_tier: 'premium',
+            stage: 'pending',
+            message: 'Complimentary access removal queued. Paid access and trials are unchanged.',
           }),
         })
       }

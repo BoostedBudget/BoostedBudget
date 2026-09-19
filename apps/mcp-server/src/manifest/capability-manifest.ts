@@ -357,13 +357,19 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   excluded('listAdminPaddleWebhooks', REASON_ADMIN),
   excluded('getAdminPaddleWebhookStats', REASON_ADMIN),
   excluded('getAdminPaddleWebhookDetail', REASON_ADMIN),
+  excluded('getAdminRevenueCatHealth', REASON_ADMIN),
+  excluded('listAdminRevenueCatWebhooks', REASON_ADMIN),
+  excluded('getAdminRevenueCatUser', REASON_ADMIN),
+  excludedWrite('replayAdminRevenueCatWebhook', REASON_ADMIN),
+  excludedWrite('requestAdminRevenueCatGrant', REASON_ADMIN),
+  excludedWrite('retryAdminRevenueCatOperation', REASON_ADMIN),
+  excludedWrite('refreshAdminRevenueCatUser', REASON_ADMIN),
   // Hard destruction, in bulk: `DELETE FROM dead_letter_jobs <where>`
   // (dead_letter_job_repository.go:248).
   destructive('bulkDeleteAdminDeadLetterJobs', { excluded: true, reason: REASON_ADMIN }),
   excludedWrite('addAdminDeadLetterJobNotes', REASON_ADMIN),
   excludedWrite('retryAdminDeadLetterJob', REASON_ADMIN),
   excludedWrite('fireWebhook', REASON_ADMIN),
-  excludedWrite('grantTrial', REASON_ADMIN),
   excludedWrite('replayAdminPaddleWebhook', REASON_ADMIN),
   // Hard destruction: `DELETE FROM dead_letter_jobs` (dead_letter_job_repository.go:187).
   destructive('deleteAdminDeadLetterJob', { excluded: true, reason: REASON_ADMIN }),
@@ -624,10 +630,16 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('get-current-subscription'),
   read('getSubscriptionTiers'),
   read('get-billing-portal-url'),
-  excludedWrite('cancel-paddle-subscription', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
+  excluded('getRevenueCatSubscription', REASON_SUBSCRIPTION_INAPP),
+  excludedWrite('refreshRevenueCatSubscription', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
+  excludedWrite('beginRevenueCatCheckout', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
+  // Release closes a checkout intent; it does not destroy its retained history.
+  excludedWrite('releaseRevenueCatCheckout', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
+  // #1652 deleted the three Paddle self-service routes (preview-update / update / cancel) in
+  // favour of the RevenueCat-resolved management URL; their manifest entries went with them.
+  // `create-paddle-checkout` survives — HandleCreateCheckoutSession still exists and already
+  // returns 409 under RevenueCat.
   excludedWrite('create-paddle-checkout', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
-  excludedWrite('preview-paddle-subscription-update', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
-  excludedWrite('update-paddle-subscription', REASON_SUBSCRIPTION_INAPP, 'subscription-changes'),
 
   // ── Merchants (Issue #957: merchant name handling + MCP exposure) ────────
   // Reads: always available for browsing and duplicate detection.
@@ -711,6 +723,7 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
 
   // ── Webhooks + QA ────────────────────────────────────────────────────────
   excludedWrite('paddle-webhook', REASON_WEBHOOK),
+  excludedWrite('revenuecat-webhook', REASON_WEBHOOK),
   excludedWrite('handlePlaidWebhook', REASON_WEBHOOK),
   excludedWrite('qaAuthBypass', REASON_QA)
 ]

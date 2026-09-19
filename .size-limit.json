@@ -24,6 +24,12 @@
     "gzip": true
   },
   {
+    "name": "revenuecat",
+    "path": "apps/web/dist/assets/revenuecat-*.js",
+    "limit": "264 KB",
+    "gzip": true
+  },
+  {
     "name": "charts",
     "path": "apps/web/dist/assets/charts-*.js",
     "limit": "230 KB",
@@ -38,7 +44,7 @@
   {
     "name": "shared",
     "path": "apps/web/dist/assets/shared-*.js",
-    "limit": "57 KB",
+    "limit": "56 KB",
     "gzip": true
   },
   {
@@ -62,7 +68,7 @@
   {
     "name": "admin",
     "path": "apps/web/dist/assets/admin-*.js",
-    "limit": "24 KB",
+    "limit": "30 KB",
     "gzip": true
   },
   {

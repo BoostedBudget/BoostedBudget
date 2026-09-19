@@ -34,6 +34,7 @@
 export interface AdminUserDetail {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  access_resolved?: boolean;
   as_of: string;
   boosts_count: number;
   budgets_count: number;
@@ -41,6 +42,7 @@ export interface AdminUserDetail {
   deletion_requested_at?: string;
   deletion_scheduled_at?: string;
   effective_status: string;
+  effective_tier?: string;
   email: string;
   id: string;
   is_active: boolean;
@@ -51,7 +53,9 @@ export interface AdminUserDetail {
   manual_tier_override?: string;
   primary_region: string;
   referrals_count: number;
+  /** Observed own-access projection used for sorting; see effective_status and access_resolved for live authority */
   subscription_status: string;
+  /** Observed own-access projection used for tier filtering and sorting; see effective_tier for live aggregate access */
   subscription_tier: string;
   transactions_count: number;
 }

@@ -106,6 +106,12 @@ services:
       - "8080:8080"  # QA backend port
     environment:
       PORT: "8080"
+      REVENUECAT_PROJECT_ID: "${REVENUECAT_PROJECT_ID:-}"
+      REVENUECAT_SECRET_API_KEY: "${REVENUECAT_SECRET_API_KEY:-}"
+      REVENUECAT_GRANT_API_KEY: "${REVENUECAT_GRANT_API_KEY:-}"
+      REVENUECAT_ENVIRONMENT: "${REVENUECAT_ENVIRONMENT:-}"
+      REVENUECAT_WEBHOOK_AUTHORIZATION: "${REVENUECAT_WEBHOOK_AUTHORIZATION:-}"
+      REVENUECAT_WEBHOOK_SIGNING_SECRET: "${REVENUECAT_WEBHOOK_SIGNING_SECRET:-}"
       ENVIRONMENT: "qa"
       VERSION: "${VERSION:-qa-dev}"
       PRIMARY_REGION: "${PRIMARY_REGION:-iad}"
@@ -159,6 +165,7 @@ services:
       API_URL: ""  # Empty = use nginx proxy with relative /api/* URLs (fixes CORS for Tailscale access)
       VITE_API_URL: ""  # Empty = use nginx proxy with relative /api/* URLs
       VITE_CLERK_PUBLISHABLE_KEY: "${CLERK_PUBLISHABLE_KEY}"
+      REVENUECAT_PUBLIC_API_KEY: "${VITE_REVENUECAT_PUBLIC_API_KEY:-}"
     volumes:
       - ./apps/web/cert.pem:/etc/nginx/ssl/cert.pem:ro  # SSL cert (CI/CD restores from GitHub secrets)
       - ./apps/web/key.pem:/etc/nginx/ssl/key.pem:ro    # SSL key (CI/CD restores from GitHub secrets)

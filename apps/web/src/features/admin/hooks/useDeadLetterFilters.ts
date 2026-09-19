@@ -59,8 +59,8 @@ const DEFAULT_FILTERS: DeadLetterFilters = {
 }
 
 export function useDeadLetterFilters(): UseDeadLetterFiltersResult {
-  const [filters, setFilters] = useState<DeadLetterFilters>(DEFAULT_FILTERS)
   const [searchParams, setSearchParams] = useSearchParams()
+  const [filters, setFilters] = useState<DeadLetterFilters>(() => ({...DEFAULT_FILTERS, kind: searchParams.get('kind') ?? ''}))
 
   // Parse sort from URL
   const sort = useMemo<SortState>(
