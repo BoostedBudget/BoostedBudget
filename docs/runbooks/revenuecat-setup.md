@@ -57,8 +57,10 @@ follow.
 4. **Import or create the products** and associate each `paid_<tier>` entitlement
    with both its monthly and annual Paddle price IDs. Product catalog below lists
    the exact IDs from the tier catalogue.
-5. **Create the `web` offering** with all supported tier/interval packages and
-   publish its web paywall.
+5. **Create the `web` offering** with all supported tier/interval packages. Do
+   **not** publish its paywall: web checkout uses direct package purchase, and the
+   paywall is retained only as an unpublished draft for possible future mobile
+   reuse (see Web checkout path).
 6. **Generate the REST v2 secret API key** for this project with only the
    permissions listed in Backend credentials.
 7. **Generate the REST v1-compatible grant API key** as a separate key; do not
@@ -93,8 +95,9 @@ In each project:
    `comp_household_3`, `comp_household_4`, `comp_household_5` without paid products.
    These identifiers are reserved for grants. Never combine trial and comp grants
    under the same entitlement, because revocation is entitlement-scoped.
-5. Create the `web` offering with all supported tier/interval packages and publish
-   its web paywall. Configure responsive layouts, keyboard access, and branding.
+5. Create the `web` offering with all supported tier/interval packages. Leave its
+   paywall unpublished: it is a draft kept only for possible future mobile reuse.
+   Web checkout does not render the paywall (see Web checkout path).
 6. Approve the SPA checkout domain in Paddle production. RevenueCat-presented
    checkouts require disabling Paddle abandoned-cart emails, whose checkout links
    cannot resume RevenueCat-created checkout flows.
@@ -134,6 +137,24 @@ source of truth and re-read it before the bootstrap's catalog validation.
 
 References: [Paddle integration](https://www.revenuecat.com/docs/web/integrations/paddle),
 [Web paywalls](https://www.revenuecat.com/docs/web/paywalls).
+
+## Web checkout path
+
+Web checkout does not use the RevenueCat-hosted paywall. The app's own pricing
+page is the checkout UI:
+
+1. The SPA calls `POST /api/v1/subscription/checkout-intents` with
+   `{ tier, billing_interval }`.
+2. The backend derives the RevenueCat package key as
+   `"{tier}_{monthly|annual}"` (for example `premium_annual`) and returns the
+   checkout intent.
+3. The web SDK performs `purchases.purchase({ rcPackage, htmlTarget })`, which
+   renders the Paddle-backed checkout overlay in the page.
+
+The `web` offering's paywall remains an **unpublished draft** for possible future
+mobile reuse. It must **not** be published for web: publishing it would put a
+second, RevenueCat-hosted checkout in front of users instead of the app's pricing
+page.
 
 ## Backend credentials
 
@@ -334,10 +355,11 @@ to local users; the CLI cannot discover those through local identity inventory.
    detail. Do not open purchases while bootstrap operations are unresolved.
 4. In staging, create an account and confirm a 60-day card-free trial. Repeat login
    and retry processing: the expiry must stay fixed.
-5. Make an actual Paddle sandbox purchase via the paywall. Confirm the paid plan
-   and effective access on our page and in admin diagnostics. Check browser
-   network/CSP errors and any enforcing edge policy for RevenueCat SDK/API and
-   paywall assets; a successful frontend build does not validate those policies.
+5. Make an actual Paddle sandbox purchase through the app's pricing page (direct
+   package purchase, not the paywall). Confirm the paid plan and effective access
+   on our page and in admin diagnostics. Check browser network/CSP errors and any
+   enforcing edge policy for the RevenueCat SDK/API and the Paddle checkout
+   overlay; a successful frontend build does not validate those policies.
 6. Exercise plan changes, cancellation, recovery and grants. Revoke a comp on a paid
    account and verify that paid access survives.
 7. Exercise processing failure and DLQ retry; verify the same operation recovers
