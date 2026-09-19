@@ -15181,7 +15181,30 @@
         "Subscription"
       ],
       "manifestClass": "write",
-      "excluded": true
+      "excluded": true,
+      "requestBody": [
+        {
+          "name": "billing_interval",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "month",
+            "year"
+          ]
+        },
+        {
+          "name": "tier",
+          "type": "string",
+          "required": true,
+          "enum": [
+            "premium",
+            "household_2",
+            "household_3",
+            "household_4",
+            "household_5"
+          ]
+        }
+      ]
     },
     {
       "operationId": "releaseRevenueCatCheckout",
