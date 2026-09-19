@@ -2,7 +2,7 @@
 
 package database
 
-// Integration tests for migration 000217 — the one-time repair of legacy manual_tier_override /
+// Integration tests for migration 000219 — the one-time repair of legacy manual_tier_override /
 // manual_tier_ends_at rows for users RevenueCat has confirmed inactive (#1652 todo 4, Part B).
 //
 // The migration reads "RevenueCat confirms inactive" from RC's own stored projection
@@ -13,7 +13,7 @@ package database
 // Run with:
 //
 //	DATABASE_URL=postgres://... go test ./internal/database/... \
-//	  -run TestMigration000217 -tags integration -v
+//	  -run TestMigration000219 -tags integration -v
 
 import (
 	"context"
@@ -62,7 +62,7 @@ func readMig211Override(t *testing.T, tx pgx.Tx, userID string) (*string, *time.
 	return override, endsAt
 }
 
-func TestMigration000217_BackfillLegacyManualTierOverride(t *testing.T) {
+func TestMigration000219_BackfillLegacyManualTierOverride(t *testing.T) {
 	pool := connectMigrationTestDB(t)
 	ctx := context.Background()
 	tx, err := pool.Begin(ctx)
@@ -100,9 +100,9 @@ func TestMigration000217_BackfillLegacyManualTierOverride(t *testing.T) {
 	deleted := seedMig211User(t, tx, "deleted", true)
 	seedMig211Customer(t, tx, deleted, `[]`, &refreshed)
 
-	upSQL := readMigrationFile(t, "000217_backfill_legacy_manual_tier_override.up.sql")
+	upSQL := readMigrationFile(t, "000219_backfill_legacy_manual_tier_override.up.sql")
 	_, err = tx.Exec(ctx, upSQL)
-	require.NoError(t, err, "migration 000217 failed")
+	require.NoError(t, err, "migration 000219 failed")
 
 	for _, tc := range []struct {
 		name     string
@@ -132,10 +132,10 @@ func TestMigration000217_BackfillLegacyManualTierOverride(t *testing.T) {
 
 	// Idempotency: re-applying the up migration is a no-op and must not error.
 	_, err = tx.Exec(ctx, upSQL)
-	require.NoError(t, err, "migration 000217 must be idempotent")
+	require.NoError(t, err, "migration 000219 must be idempotent")
 
 	// The down migration is a bounded no-op and must not error.
-	downSQL := readMigrationFile(t, "000217_backfill_legacy_manual_tier_override.down.sql")
+	downSQL := readMigrationFile(t, "000219_backfill_legacy_manual_tier_override.down.sql")
 	_, err = tx.Exec(ctx, downSQL)
-	require.NoError(t, err, "migration 000217 down must be a safe no-op")
+	require.NoError(t, err, "migration 000219 down must be a safe no-op")
 }
