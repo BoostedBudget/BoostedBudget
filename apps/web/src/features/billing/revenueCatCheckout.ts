@@ -15,7 +15,7 @@ interface Dependencies {
   }>
 }
 
-/** One SDK session at a time. SDK close() stops tracking; it does not dismiss a paywall. */
+/** One SDK session at a time. SDK close() stops tracking; it does not dismiss the purchase overlay. */
 export class RevenueCatCheckout {
   state: CheckoutState = 'idle'
   private userId: string | null = null
@@ -23,7 +23,7 @@ export class RevenueCatCheckout {
   private busy = false
   private cancelActive?: () => void
   private lease?: string
-  private targets: HTMLElement[] = []
+  private target?: HTMLElement
   private listeners = new Set<() => void>()
 
   constructor(private readonly deps: Dependencies) {}
@@ -40,8 +40,10 @@ export class RevenueCatCheckout {
   }
 
   private destroyTargets() {
-    this.targets.forEach(target => { target.replaceChildren(); target.remove() })
-    this.targets = []
+    if (!this.target) return
+    this.target.replaceChildren()
+    this.target.remove()
+    this.target = undefined
   }
 
   setIdentity(userId: string | null) {
@@ -90,32 +92,35 @@ export class RevenueCatCheckout {
     const current = () => generation === this.generation
     let sdk: Awaited<ReturnType<Dependencies['load']>> | undefined
     let sdkClosed = false
-    let targets: HTMLElement[] = []
+    let target: HTMLElement | undefined
     const closeSDK = () => {
       if (sdk && !sdkClosed) { sdkClosed = true; sdk.close() }
     }
-    const removeTargets = () => targets.forEach(target => { target.replaceChildren(); target.remove() })
+    const removeTarget = () => {
+      if (!target) return
+      target.replaceChildren()
+      target.remove()
+    }
     const cancelled = new Promise<void>(resolve => {
-      this.cancelActive = () => { closeSDK(); removeTargets(); resolve() }
+      this.cancelActive = () => { closeSDK(); removeTarget(); resolve() }
     })
     this.update('loading')
     try {
       // Configuration failure must not strand a checkout lease for thirty minutes.
-      // Admission still precedes all offering/paywall interaction.
+      // Admission still precedes all offering/purchase interaction.
       sdk = await this.deps.load(userId, current)
       if (!current()) return
       const intent = await this.deps.begin(tier, billingInterval)
       if (!current()) return
       this.lease = intent.id
-      targets = [document.createElement('div')]
-      this.targets = targets
-      const target = targets[0]!
+      target = document.createElement('div')
+      this.target = target
       target.setAttribute('data-ph-mask', '')
       target.className = 'fixed inset-0 z-[100] overflow-auto pointer-events-none [&>*]:pointer-events-auto'
       document.body.append(target)
       this.update('open')
       // Removing SDK DOM need not settle the purchase. Our cancellation must.
-      await Promise.race([sdk.purchase(intent.offering, intent.package, targets[0]!), cancelled])
+      await Promise.race([sdk.purchase(intent.offering, intent.package, target), cancelled])
       if (!current()) return
       await this.confirm(generation)
     } catch (error) {
@@ -127,9 +132,9 @@ export class RevenueCatCheckout {
       } else this.update(this.lease ? 'pending' : 'unavailable')
     } finally {
       closeSDK()
-      removeTargets()
+      removeTarget()
       if (current()) {
-        this.targets = []
+        this.target = undefined
         this.cancelActive = undefined
         this.busy = false
       }
