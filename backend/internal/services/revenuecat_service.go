@@ -498,7 +498,8 @@ func (s *RevenueCatService) ProcessOperation(ctx context.Context, userID, operat
 		attempted = &op
 		if identityErr != nil {
 			workErr = identityErr
-			return session.FinishOperation(ctx, op.ID, "pending", revenueCatErrorCode(identityErr), op.Class)
+			stage, message := revenueCatOperationOutcome(op, workErr)
+			return session.FinishOperation(ctx, op.ID, stage, message, op.Class)
 		}
 		state, err := session.Read(ctx)
 		if err != nil {
@@ -511,11 +512,7 @@ func (s *RevenueCatService) ProcessOperation(ctx context.Context, userID, operat
 		if workErr == nil {
 			workErr = s.applyOperation(ctx, session, customer, op, &state)
 		}
-		stage, message := "applied", ""
-		if workErr != nil {
-			stage = "pending"
-			message = revenueCatErrorCode(workErr)
-		}
+		stage, message := revenueCatOperationOutcome(op, workErr)
 		return session.FinishOperation(ctx, op.ID, stage, message, op.Class)
 	})
 	if err != nil {
@@ -534,6 +531,20 @@ func (s *RevenueCatService) ProcessOperation(ctx context.Context, userID, operat
 	}
 	return workErr
 }
+
+// revenueCatOperationOutcome maps a provider or identity failure to the stage FinishOperation
+// writes. A success is 'applied'; a failure below the attempt cap stays 'pending' and is retried; a
+// failure at or above the cap is written to the terminal 'abandoned' stage.
+func revenueCatOperationOutcome(op domain.RevenueCatOperation, workErr error) (string, string) {
+	if workErr == nil {
+		return "applied", ""
+	}
+	if op.Attempts >= revenueCatMaxOperationAttempts {
+		return "abandoned", revenueCatErrorCode(workErr)
+	}
+	return "pending", revenueCatErrorCode(workErr)
+}
+
 func (s *RevenueCatService) applyOperation(ctx context.Context, session repository.RevenueCatSession, customer string, op domain.RevenueCatOperation, state *domain.RevenueCatState) error {
 	now := time.Now()
 	grants, err := s.provider.FetchEntitlements(ctx, customer)
@@ -603,6 +614,15 @@ func sameRevenueCatExpiry(a, b *time.Time) bool {
 // operation can never match by exact equality. A genuine finite comp is always far
 // below this horizon; only another effectively-permanent grant satisfies a nil op.
 const revenueCatPermanentHorizon = 10 * 365 * 24 * time.Hour
+
+// revenueCatMaxOperationAttempts bounds how many times one operation may fail before it is
+// abandoned. A permanently non-converging operation — a provider outage that never clears, or an
+// intent the provider never reflects — otherwise stays stage='pending' forever: every failure
+// rewrites 'pending', every repair pass re-enqueues it, and each attempt re-applies provider side
+// effects (revoke/grant). At the repair worker's one-minute cadence, 500 attempts is roughly eight
+// hours of continuous failure, far beyond any transient outage, after which the operation is written
+// to the terminal 'abandoned' stage and drops out of every stage='pending' read.
+const revenueCatMaxOperationAttempts = 500
 
 func revenueCatGrantMatches(g rc.Entitlement, op domain.RevenueCatOperation, now time.Time) bool {
 	if g.LookupKey != op.Key {
