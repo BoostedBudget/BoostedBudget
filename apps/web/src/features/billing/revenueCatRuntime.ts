@@ -4,7 +4,7 @@ import {
   refreshRevenueCatSubscription,
 } from '@boostedbudget/api-client/endpoints/subscription/subscription'
 import { RevenueCatCheckoutBeginInputBodyTier } from '@boostedbudget/api-client/models'
-import { RevenueCatCheckout } from './revenueCatCheckout'
+import { CheckoutUnavailableError, RevenueCatCheckout } from './revenueCatCheckout'
 
 // The pricing UI and the post-sign-in intent both hand us plain strings; the API accepts only a
 // known tier. Parse at the boundary so an unknown value never reaches the request.
@@ -16,7 +16,7 @@ function isCheckoutTier(tier: string): tier is RevenueCatCheckoutBeginInputBodyT
 
 export const revenueCatCheckout = new RevenueCatCheckout({
   begin: (tier, billingInterval) => {
-    if (!isCheckoutTier(tier)) throw new Error('Checkout is unavailable')
+    if (!isCheckoutTier(tier)) throw new CheckoutUnavailableError('Checkout is unavailable')
     return beginRevenueCatCheckout({ tier, billing_interval: billingInterval })
   },
   release: id => releaseRevenueCatCheckout(id),
@@ -33,7 +33,7 @@ export const revenueCatCheckout = new RevenueCatCheckout({
         const offerings = await purchases.getOfferings()
         const offering = offerings.all[offeringId]
         const pkg = offering?.availablePackages.find(p => p.identifier === packageId)
-        if (!pkg || !htmlTarget.isConnected) throw new Error('Checkout is unavailable')
+        if (!pkg || !htmlTarget.isConnected) throw new CheckoutUnavailableError('Checkout is unavailable')
         return purchases.purchase({ rcPackage: pkg, htmlTarget })
       },
     }

@@ -1,5 +1,5 @@
 import { describe, expect, it, mock } from 'bun:test'
-import { RevenueCatCheckout } from './revenueCatCheckout'
+import { CheckoutUnavailableError, RevenueCatCheckout } from './revenueCatCheckout'
 
 const MOUNT_CLASS = 'fixed inset-0 z-[100] overflow-auto pointer-events-none [&>*]:pointer-events-auto'
 
@@ -98,6 +98,14 @@ describe('RevenueCat checkout authority and identity', () => {
       expect(s.controller.state).toBe(expected)
       expect(s.release.mock.calls.length).toBe(expected === 'cancelled' ? 1 : 0)
     }
+  })
+
+  it('releases the lease and reports unavailable when the SDK cannot resolve the package', async () => {
+    const s = setup()
+    s.purchaseResult.reject(new CheckoutUnavailableError('Checkout is unavailable'))
+    await s.controller.start('premium', 'month')
+    expect(s.controller.state).toBe('unavailable')
+    expect(s.release).toHaveBeenCalledWith('lease')
   })
 
   it('cancels a removed purchase surface without waiting for its SDK promise and protects the next session', async () => {
