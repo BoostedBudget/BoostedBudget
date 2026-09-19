@@ -18,6 +18,7 @@ func TestRevenueCatProductionWiring(t *testing.T) {
 	for _, fragment := range []string{
 		"WithRevenueCatBilling(services.NewRevenueCatBillingService(revenueCatSummaryService, paddleService, paddleService.GetClient()))",
 		"WithCheckout(repository.NewRevenueCatCheckoutRepository(db, fieldEncryptor))",
+		"WithTierConfig(tierConfig)",
 		"revenuecat.NewClient(revenuecat.Config{", "repository.NewRevenueCatRepository(db, fieldEncryptor, cfg.RetentionPeriodMonths)",
 		"profileRepo.EnableRevenueCatRetentionGuard()",
 		"services.NewRevenueCatService(revenueCatRepo, revenueCatClient, profileRepo)",
