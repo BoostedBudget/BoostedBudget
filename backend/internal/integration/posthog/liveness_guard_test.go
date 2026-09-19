@@ -249,10 +249,11 @@ func TestEveryCatalogEventHasALiveEmitter(t *testing.T) {
 		"catalog events with no production emitter and no allowlist entry (add an emitter, or allowlist with a reason)")
 }
 
-// livenessAllowlist pins the catalog entries with no production emitter TODAY. Every entry is a
-// PRE-EXISTING pre-#1650 orphan — none is introduced by #1652, and none is emitted by any Go or TS
-// production file. The guard's value is that a NEW orphan, or an emitter deleted from an event not
-// listed here, still fails. Do not add an entry for a new event; give it an emitter.
+// livenessAllowlist pins the catalog entries with no production emitter TODAY: pre-existing
+// pre-#1650 orphans, plus #1683 vendor-reserved SDK events with no production emitter. None is
+// introduced by #1652, and none is emitted by any Go or TS production file. The guard's value is
+// that a NEW orphan, or an emitter deleted from an event not listed here, still fails. Do not add
+// an entry for a new event; give it an emitter.
 var livenessAllowlist = map[string]string{
 	// The analytics-*_viewed family was declared for the pre-#1650 analytics surface that the
 	// insights surface replaced; no production TS reference remains for any of them.
@@ -272,6 +273,12 @@ var livenessAllowlist = map[string]string{
 	"datatable_column_pinned":                "pre-#1650 orphan; no production TS reference remains",
 	"transfer_suggestion_match_declined":     "pre-#1650 orphan; no production TS reference remains",
 	"invalid_signature_webhook_rejected":     "pre-#1650 backend orphan; the ingress guard it documents was never wired to emit it",
+
+	// Vendor-reserved posthog-js SDK events (#1683). These are emitted directly by the browser
+	// SDK itself, not by any call site in our Go or TS trees, so no production emitter can exist.
+	"$snapshot":   "vendor-reserved posthog-js SDK event emitted directly by the browser SDK, not by our code (#1683)",
+	"$$heatmap":   "vendor-reserved posthog-js SDK event emitted directly by the browser SDK, not by our code (#1683)",
+	"$web_vitals": "vendor-reserved posthog-js SDK event emitted directly by the browser SDK, not by our code (#1683)",
 }
 
 // TestLivenessGuardDetectsOrphanedEvent is the meta-test: a fabricated active event with a symbol
