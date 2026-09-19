@@ -30,13 +30,14 @@ func TestRevenueCatCheckoutIntentLocksCustomerAndPreventsSecondWindow(t *testing
 			db.ExpectCommit()
 		}
 		repo := NewRevenueCatCheckoutRepository(db, nil)
-		intent, err := repo.Begin(context.Background(), "user")
+		intent, err := repo.Begin(context.Background(), "user", "premium_annual")
 		if alreadyOpen {
 			require.ErrorIs(t, err, domain.ErrRevenueCatCheckoutInProgress)
 		} else {
 			require.NoError(t, err)
 			require.NotEmpty(t, intent.ID)
 			require.Equal(t, "web", intent.Offering)
+			require.Equal(t, "premium_annual", intent.Package)
 			require.True(t, intent.ExpiresAt.After(now))
 		}
 		require.NoError(t, db.ExpectationsWereMet())

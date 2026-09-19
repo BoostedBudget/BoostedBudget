@@ -21,13 +21,15 @@ func (p *subscriptionRCProfiles) GetUserByID(_ context.Context, id string) (*dom
 
 type subscriptionRCCheckout struct {
 	userID     string
+	packageID  string
 	releasedID string
 	err        error
 }
 
-func (r *subscriptionRCCheckout) Begin(_ context.Context, userID string) (domain.RevenueCatCheckoutIntent, error) {
+func (r *subscriptionRCCheckout) Begin(_ context.Context, userID, packageID string) (domain.RevenueCatCheckoutIntent, error) {
 	r.userID = userID
-	return domain.RevenueCatCheckoutIntent{ID: "intent", Offering: "web", ExpiresAt: time.Now().Add(time.Minute)}, r.err
+	r.packageID = packageID
+	return domain.RevenueCatCheckoutIntent{ID: "intent", Offering: "web", Package: packageID, ExpiresAt: time.Now().Add(time.Minute)}, r.err
 }
 func (r *subscriptionRCCheckout) Release(_ context.Context, userID, id string) error {
 	r.userID = userID
@@ -35,17 +37,28 @@ func (r *subscriptionRCCheckout) Release(_ context.Context, userID, id string) e
 	return r.err
 }
 
+// revenueCatBeginInput builds the dedicated begin-checkout input. Its Body is an anonymous
+// struct, so fields are assigned after construction rather than in a composite literal.
+func revenueCatBeginInput(userID, tier, interval string) *RevenueCatCheckoutBeginInput {
+	in := &RevenueCatCheckoutBeginInput{AuthenticatedInput: inputs.AuthenticatedInput{UserID: userID}}
+	in.Body.Tier = tier
+	in.Body.BillingInterval = interval
+	return in
+}
+
 func TestRevenueCatCheckoutAdmissionRefreshesServerStateBeforeOpening(t *testing.T) {
 	r := &subscriptionRCRefresh{}
 	c := &subscriptionRCCheckout{}
-	h := NewRevenueCatSubscriptionHandler(&subscriptionRCProfiles{}, profileRevenueCatSummary{}, r).WithCheckout(c)
-	out, err := h.BeginCheckout(context.Background(), &RevenueCatSubscriptionInput{AuthenticatedInput: inputs.AuthenticatedInput{UserID: "authenticated"}})
+	h := NewRevenueCatSubscriptionHandler(&subscriptionRCProfiles{}, profileRevenueCatSummary{}, r).WithCheckout(c).WithTierConfig(literalAdminSubscriptionsTierConfig())
+	out, err := h.BeginCheckout(context.Background(), revenueCatBeginInput("authenticated", "premium", "year"))
 	require.NoError(t, err)
 	require.Equal(t, "authenticated", r.id)
 	require.Equal(t, "authenticated", c.userID)
+	require.Equal(t, "premium_annual", c.packageID)
 	require.Equal(t, "web", out.Body.Offering)
+	require.Equal(t, "premium_annual", out.Body.Package)
 	c.err = domain.ErrRevenueCatExistingSubscription
-	_, err = h.BeginCheckout(context.Background(), &RevenueCatSubscriptionInput{AuthenticatedInput: inputs.AuthenticatedInput{UserID: "authenticated"}})
+	_, err = h.BeginCheckout(context.Background(), revenueCatBeginInput("authenticated", "premium", "year"))
 	var status huma.StatusError
 	require.ErrorAs(t, err, &status)
 	require.Equal(t, 409, status.GetStatus())
@@ -53,10 +66,64 @@ func TestRevenueCatCheckoutAdmissionRefreshesServerStateBeforeOpening(t *testing
 
 func TestRevenueCatCheckoutAdmissionDoesNotOpenDuringRefreshFailure(t *testing.T) {
 	c := &subscriptionRCCheckout{}
-	h := NewRevenueCatSubscriptionHandler(&subscriptionRCProfiles{}, profileRevenueCatSummary{}, &subscriptionRCRefresh{err: domain.ErrRevenueCatUnresolved}).WithCheckout(c)
-	_, err := h.BeginCheckout(context.Background(), &RevenueCatSubscriptionInput{AuthenticatedInput: inputs.AuthenticatedInput{UserID: "authenticated"}})
+	h := NewRevenueCatSubscriptionHandler(&subscriptionRCProfiles{}, profileRevenueCatSummary{}, &subscriptionRCRefresh{err: domain.ErrRevenueCatUnresolved}).WithCheckout(c).WithTierConfig(literalAdminSubscriptionsTierConfig())
+	_, err := h.BeginCheckout(context.Background(), revenueCatBeginInput("authenticated", "premium", "month"))
 	require.Error(t, err)
 	require.Empty(t, c.userID)
+}
+
+func TestRevenueCatCheckoutAdmissionRejectsUnknownTierOrInterval(t *testing.T) {
+	for _, tc := range []struct{ name, tier, interval string }{
+		{"unknown tier", "not_a_tier", "month"},
+		{"unknown interval", "premium", "week"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &subscriptionRCCheckout{}
+			h := NewRevenueCatSubscriptionHandler(&subscriptionRCProfiles{}, profileRevenueCatSummary{}, &subscriptionRCRefresh{}).WithCheckout(c).WithTierConfig(literalAdminSubscriptionsTierConfig())
+			_, err := h.BeginCheckout(context.Background(), revenueCatBeginInput("authenticated", tc.tier, tc.interval))
+			var status huma.StatusError
+			require.ErrorAs(t, err, &status)
+			require.Equal(t, 400, status.GetStatus())
+			require.Empty(t, c.userID, "an invalid request must never reach checkout")
+		})
+	}
+}
+
+func TestRevenueCatCheckoutAdmissionMapsConflictStates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"existing subscription", domain.ErrRevenueCatExistingSubscription},
+		{"checkout in progress", domain.ErrRevenueCatCheckoutInProgress},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewRevenueCatSubscriptionHandler(&subscriptionRCProfiles{}, profileRevenueCatSummary{}, &subscriptionRCRefresh{}).WithCheckout(&subscriptionRCCheckout{err: tc.err}).WithTierConfig(literalAdminSubscriptionsTierConfig())
+			_, err := h.BeginCheckout(context.Background(), revenueCatBeginInput("authenticated", "premium", "month"))
+			var status huma.StatusError
+			require.ErrorAs(t, err, &status)
+			require.Equal(t, 409, status.GetStatus())
+		})
+	}
+}
+
+func TestRevenueCatCheckoutAdmissionFailsClosedWhenUnwired(t *testing.T) {
+	tierConfig := literalAdminSubscriptionsTierConfig()
+	for _, tc := range []struct {
+		name string
+		h    *RevenueCatSubscriptionHandler
+	}{
+		{"checkout unwired", NewRevenueCatSubscriptionHandler(&subscriptionRCProfiles{}, profileRevenueCatSummary{}, &subscriptionRCRefresh{}).WithTierConfig(tierConfig)},
+		{"refresh unwired", (&RevenueCatSubscriptionHandler{}).WithCheckout(&subscriptionRCCheckout{}).WithTierConfig(tierConfig)},
+		{"tier config unwired", NewRevenueCatSubscriptionHandler(&subscriptionRCProfiles{}, profileRevenueCatSummary{}, &subscriptionRCRefresh{}).WithCheckout(&subscriptionRCCheckout{})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.h.BeginCheckout(context.Background(), revenueCatBeginInput("authenticated", "premium", "month"))
+			var status huma.StatusError
+			require.ErrorAs(t, err, &status)
+			require.Equal(t, 503, status.GetStatus())
+		})
+	}
 }
 
 func TestRevenueCatCheckoutReleaseUsesAuthenticatedAccount(t *testing.T) {

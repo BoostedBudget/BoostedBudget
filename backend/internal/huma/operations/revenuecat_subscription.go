@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/maxnussbaum/BoostedBudget/internal/config"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
@@ -18,14 +19,20 @@ type revenueCatSubscriptionRefresh interface {
 	Refresh(context.Context, string) (domain.RevenueCatState, error)
 }
 type RevenueCatSubscriptionHandler struct {
-	profiles revenueCatSubscriptionProfiles
-	summary  profileSubscriptionSummary
-	refresh  revenueCatSubscriptionRefresh
-	checkout repository.RevenueCatCheckoutRepository
+	profiles   revenueCatSubscriptionProfiles
+	summary    profileSubscriptionSummary
+	refresh    revenueCatSubscriptionRefresh
+	checkout   repository.RevenueCatCheckoutRepository
+	tierConfig *config.TierConfig
 }
 
 func (h *RevenueCatSubscriptionHandler) WithCheckout(checkout repository.RevenueCatCheckoutRepository) *RevenueCatSubscriptionHandler {
 	h.checkout = checkout
+	return h
+}
+
+func (h *RevenueCatSubscriptionHandler) WithTierConfig(tierConfig *config.TierConfig) *RevenueCatSubscriptionHandler {
+	h.tierConfig = tierConfig
 	return h
 }
 
@@ -59,17 +66,35 @@ func (h *RevenueCatSubscriptionHandler) ReleaseCheckout(ctx context.Context, inp
 	return out, nil
 }
 
-func (h *RevenueCatSubscriptionHandler) BeginCheckout(ctx context.Context, input *RevenueCatSubscriptionInput) (*RevenueCatCheckoutOutput, error) {
+type RevenueCatCheckoutBeginInput struct {
+	inputs.AuthenticatedInput
+	Body struct {
+		Tier            string `json:"tier" enum:"premium,household_2,household_3,household_4,household_5"`
+		BillingInterval string `json:"billing_interval" enum:"month,year"`
+	}
+}
+
+func (h *RevenueCatSubscriptionHandler) BeginCheckout(ctx context.Context, input *RevenueCatCheckoutBeginInput) (*RevenueCatCheckoutOutput, error) {
 	if input.UserID == "" {
 		return nil, huma.Error401Unauthorized("Sign in to subscribe.")
 	}
-	if h.checkout == nil || h.refresh == nil {
+	if h.checkout == nil || h.refresh == nil || h.tierConfig == nil {
 		return nil, huma.Error503ServiceUnavailable("Checkout is unavailable. Try again shortly.")
+	}
+	if _, err := h.tierConfig.GetTier(domain.TierName(input.Body.Tier)); err != nil {
+		return nil, huma.Error400BadRequest("Choose a valid subscription tier.")
+	}
+	if err := validateBillingInterval(input.Body.BillingInterval); err != nil {
+		return nil, err
+	}
+	pkg, ok := domain.RevenueCatPackageKey(input.Body.Tier, input.Body.BillingInterval)
+	if !ok {
+		return nil, huma.Error400BadRequest("Choose a valid subscription tier and billing interval.")
 	}
 	if _, err := h.refresh.Refresh(ctx, input.UserID); err != nil {
 		return nil, huma.Error503ServiceUnavailable("Your existing subscription could not be checked. Try again shortly.")
 	}
-	intent, err := h.checkout.Begin(ctx, input.UserID)
+	intent, err := h.checkout.Begin(ctx, input.UserID, pkg)
 	if errors.Is(err, domain.ErrRevenueCatExistingSubscription) {
 		return nil, huma.Error409Conflict("You already have a paid subscription. Manage that subscription instead.")
 	}

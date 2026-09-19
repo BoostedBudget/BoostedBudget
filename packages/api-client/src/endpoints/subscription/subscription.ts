@@ -55,6 +55,7 @@ import type {
   ErrorModel,
   GetBillingPortalURLOutputBody,
   GetCurrentSubscriptionOutputBody,
+  RevenueCatCheckoutBeginInputBody,
   RevenueCatCheckoutIntent,
   RevenueCatCheckoutReleaseOutputBody,
   RevenueCatSummary,
@@ -427,13 +428,15 @@ export const useCreatePaddleCheckout = <TError = ErrorType<ErrorModel>,
  * @summary Coordinate a RevenueCat checkout for the signed-in account
  */
 export const beginRevenueCatCheckout = (
-
+    revenueCatCheckoutBeginInputBody: BodyType<NonReadonly<RevenueCatCheckoutBeginInputBody>>,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<RevenueCatCheckoutIntent>(
-      {url: `/api/v1/subscription/checkout-intents`, method: 'POST', signal
+      {url: `/api/v1/subscription/checkout-intents`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: revenueCatCheckoutBeginInputBody, signal
     },
       options);
     }
@@ -442,8 +445,8 @@ export const beginRevenueCatCheckout = (
 
 
 export const getBeginRevenueCatCheckoutMutationOptions = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof beginRevenueCatCheckout>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
-): UseMutationOptions<Awaited<ReturnType<typeof beginRevenueCatCheckout>>, TError,void, TContext> => {
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof beginRevenueCatCheckout>>, TError,{data: BodyType<NonReadonly<RevenueCatCheckoutBeginInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
+): UseMutationOptions<Awaited<ReturnType<typeof beginRevenueCatCheckout>>, TError,{data: BodyType<NonReadonly<RevenueCatCheckoutBeginInputBody>>}, TContext> => {
 
 const mutationKey = ['beginRevenueCatCheckout'];
 const {mutation: mutationOptions, request: requestOptions} = options ?
@@ -455,10 +458,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
 
 
-      const mutationFn: MutationFunction<Awaited<ReturnType<typeof beginRevenueCatCheckout>>, void> = () => {
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof beginRevenueCatCheckout>>, {data: BodyType<NonReadonly<RevenueCatCheckoutBeginInputBody>>}> = (props) => {
+          const {data} = props ?? {};
 
-
-          return  beginRevenueCatCheckout(requestOptions)
+          return  beginRevenueCatCheckout(data,requestOptions)
         }
 
 
@@ -469,18 +472,18 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
   return  { mutationFn, ...mutationOptions }}
 
     export type BeginRevenueCatCheckoutMutationResult = NonNullable<Awaited<ReturnType<typeof beginRevenueCatCheckout>>>
-
+    export type BeginRevenueCatCheckoutMutationBody = BodyType<NonReadonly<RevenueCatCheckoutBeginInputBody>>
     export type BeginRevenueCatCheckoutMutationError = ErrorType<ErrorModel>
 
     /**
  * @summary Coordinate a RevenueCat checkout for the signed-in account
  */
 export const useBeginRevenueCatCheckout = <TError = ErrorType<ErrorModel>,
-    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof beginRevenueCatCheckout>>, TError,void, TContext>, request?: SecondParameter<typeof customInstance>}
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof beginRevenueCatCheckout>>, TError,{data: BodyType<NonReadonly<RevenueCatCheckoutBeginInputBody>>}, TContext>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient): UseMutationResult<
         Awaited<ReturnType<typeof beginRevenueCatCheckout>>,
         TError,
-        void,
+        {data: BodyType<NonReadonly<RevenueCatCheckoutBeginInputBody>>},
         TContext
       > => {
       return useMutation(getBeginRevenueCatCheckoutMutationOptions(options), queryClient);

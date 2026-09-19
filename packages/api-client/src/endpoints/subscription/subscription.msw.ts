@@ -62,7 +62,7 @@ export const getGetBillingPortalUrlResponseMock = (overrideResponse: Partial<Ext
 
 export const getCreatePaddleCheckoutResponseMock = (overrideResponse: Partial<Extract<CheckoutOutputBody, object>> = {}): CheckoutOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), checkout_url: faker.string.alpha({length: {min: 10, max: 20}}), transaction_id: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
-export const getBeginRevenueCatCheckoutResponseMock = (overrideResponse: Partial<Extract<RevenueCatCheckoutIntent, object>> = {}): RevenueCatCheckoutIntent => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), expires_at: faker.date.past().toISOString().slice(0, 19) + 'Z', id: faker.string.alpha({length: {min: 10, max: 20}}), offering: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
+export const getBeginRevenueCatCheckoutResponseMock = (overrideResponse: Partial<Extract<RevenueCatCheckoutIntent, object>> = {}): RevenueCatCheckoutIntent => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), expires_at: faker.date.past().toISOString().slice(0, 19) + 'Z', id: faker.string.alpha({length: {min: 10, max: 20}}), offering: faker.string.alpha({length: {min: 10, max: 20}}), package: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 
 export const getReleaseRevenueCatCheckoutResponseMock = (overrideResponse: Partial<Extract<RevenueCatCheckoutReleaseOutputBody, object>> = {}): RevenueCatCheckoutReleaseOutputBody => ({$schema: faker.helpers.arrayElement([faker.internet.url(), undefined]), status: faker.string.alpha({length: {min: 10, max: 20}}), ...overrideResponse})
 

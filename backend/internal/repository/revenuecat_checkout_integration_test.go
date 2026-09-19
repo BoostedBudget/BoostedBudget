@@ -31,7 +31,7 @@ func TestRevenueCatCheckoutConcurrencyAndReleaseOwnership(t *testing.T) {
 	errs := make(chan error, 2)
 	for range 2 {
 		wg.Add(1)
-		go func() { defer wg.Done(); intent, e := repo.Begin(ctx, id); intents <- intent; errs <- e }()
+		go func() { defer wg.Done(); intent, e := repo.Begin(ctx, id, "premium_monthly"); intents <- intent; errs <- e }()
 	}
 	wg.Wait()
 	close(intents)
@@ -55,11 +55,12 @@ func TestRevenueCatCheckoutConcurrencyAndReleaseOwnership(t *testing.T) {
 		}
 	}
 	require.WithinDuration(t, time.Now().Add(30*time.Minute), intent.ExpiresAt, time.Minute)
+	require.Equal(t, "premium_monthly", intent.Package, "the derived package must round-trip from real Postgres")
 	require.NoError(t, repo.Release(ctx, uuid.NewString(), intent.ID))
-	_, err = repo.Begin(ctx, id)
+	_, err = repo.Begin(ctx, id, "premium_monthly")
 	require.ErrorIs(t, err, domain.ErrRevenueCatCheckoutInProgress, "another account cannot release the lease")
 	require.NoError(t, repo.Release(ctx, id, intent.ID))
-	_, err = repo.Begin(ctx, id)
+	_, err = repo.Begin(ctx, id, "premium_monthly")
 	require.NoError(t, err)
 	var count int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM revenuecat_checkout_intents WHERE user_id=$1`, id).Scan(&count))
