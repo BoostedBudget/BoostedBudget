@@ -490,6 +490,18 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 // `changes`, so it is clean under TestNoUndisclosedPgxmockNullToleranceClaim above. No file was
 // added or removed — the file already existed without the import.
 //
-// ⚠ PROVISIONAL (#1652 × #1688 merge): 83 is a placeholder so the tree compiles; the true count is
-// re-derived from the guard in a follow-up task. Do not treat 83 as verified.
+// ⚠ VERIFIED (#1652 × #1688 merge): 83 is the guard-computed count, not a placeholder. It is the
+// value TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean itself derives — that test's
+// Equal assertion walks backend/internal exactly as described above and returns 83 — and the same
+// walk reproduced independently with a shell equivalent returns 83 as well. The merge combined two
+// disjoint additions to the pgxmock-importing set: this branch (#1652) added the RevenueCat
+// test files — services/registration_revenuecat_test.go,
+// services/revenuecat_household_projection_test.go, repository/revenuecat_compatibility_test.go,
+// repository/revenuecat_retention_guard_test.go, repository/revenuecat_checkout_repository_test.go,
+// and (todo 10) services/household_entitlement_projection_analytics_test.go — while staging (#1688)
+// added repository/audit_log_repository_test.go and services/privacy_service_test.go. Every one of
+// these is clean under TestNoUndisclosedPgxmockNullToleranceClaim above: none asserts that the
+// driver tolerates a NULL cell it scanned (the RevenueCat files test transaction order, SQL/session
+// shape, lock/checkout contracts, and household projection; the #1688 pair tests metadata INSERT
+// shape and the Begin/Commit/Rollback boundary). No file was removed on either side.
 const pgxmockSweepFileCount = 83
