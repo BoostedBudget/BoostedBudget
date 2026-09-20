@@ -7,7 +7,8 @@
     ".": "./src/tokens.ts",
     "./web.css": "./generated/web.css",
     "./nativewind.css": "./generated/nativewind.css",
-    "./native": "./generated/native.ts"
+    "./native": "./generated/native.ts",
+    "./nativewind-exclude.json": "./generated/nativewind-exclude.json"
   },
   "scripts": {
     "generate": "bun run scripts/generate.ts",
