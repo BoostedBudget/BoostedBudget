@@ -30,4 +30,27 @@ export default [
       '@typescript-eslint/no-require-imports': 'off',
     },
   },
+  {
+    // These paths do not run inside React Native. The Playwright spec executes in a real browser
+    // (and its `page.evaluate` callbacks are browser source), and the static-file server runs as a
+    // Bun process. The base block above declares only the React Native / jest globals, so without
+    // this every `document`/`window`/`Response`/`console` reference is a spurious `no-undef`.
+    files: ['e2e/**/*.ts', 'scripts/**/*.ts'],
+    languageOptions: {
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        console: 'readonly',
+        performance: 'readonly',
+        getComputedStyle: 'readonly',
+        requestAnimationFrame: 'readonly',
+        Element: 'readonly',
+        HTMLElement: 'readonly',
+        CSSAnimation: 'readonly',
+        Request: 'readonly',
+        Response: 'readonly',
+        Blob: 'readonly',
+      },
+    },
+  },
 ]

@@ -189,3 +189,99 @@ export const tailwindThemeTokens = {
   'color-sidebar-ring': 'var(--sidebar-ring)',
   'color-skeleton': 'var(--skeleton)',
 } as const satisfies CssTokenMap
+
+// Mobile-only scales, emitted exclusively through `mobileThemeBlock()` into `nativewind.css`.
+// Keys are Tailwind-namespace-shaped (`--spacing-bb-4` yields `p-bb-4`, `--text-bb-body` yields
+// `text-bb-body`, `--transition-duration-bb-fast` yields `duration-bb-fast`); a variable outside a
+// known namespace produces no utility. Plain `as const`, not `satisfies CssTokenMap`, because the
+// numeric touch-target scale would fail that string-valued alias.
+export const typographyTokens = {
+  'font-bb-sans':
+    "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+  'font-bb-mono':
+    "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+  'text-bb-xs': '0.75rem',
+  'text-bb-sm': '0.875rem',
+  'text-bb-body': '1rem',
+  'text-bb-lg': '1.125rem',
+  'text-bb-xl': '1.25rem',
+  'text-bb-2xl': '1.5rem',
+  'text-bb-3xl': '1.875rem',
+  'text-bb-4xl': '2.25rem',
+  'leading-bb-tight': '1.25',
+  'leading-bb-snug': '1.375',
+  'leading-bb-normal': '1.5',
+  'leading-bb-relaxed': '1.625',
+  'font-weight-bb-regular': '400',
+  'font-weight-bb-medium': '500',
+  'font-weight-bb-semibold': '600',
+  'font-weight-bb-bold': '700',
+  'tracking-bb-tight': '-0.025em',
+  'tracking-bb-normal': '0em',
+  'tracking-bb-wide': '0.025em',
+} as const
+
+export const spacingTokens = {
+  'spacing-bb-0': '0px',
+  'spacing-bb-1': '4px',
+  'spacing-bb-2': '8px',
+  'spacing-bb-3': '12px',
+  'spacing-bb-4': '16px',
+  'spacing-bb-5': '20px',
+  'spacing-bb-6': '24px',
+  'spacing-bb-8': '32px',
+  'spacing-bb-10': '40px',
+  'spacing-bb-12': '48px',
+  'spacing-bb-16': '64px',
+} as const
+
+export const elevationTokens = {
+  'shadow-bb-sm': '0 1px 2px 0 rgb(0 0 0 / 0.05)',
+  'shadow-bb-md': '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)',
+  'shadow-bb-lg': '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
+} as const
+
+export const motionTokens = {
+  'transition-duration-bb-fast': '150ms',
+  'transition-duration-bb-normal': '250ms',
+  'transition-duration-bb-slow': '400ms',
+  'ease-bb-standard': 'cubic-bezier(0.4, 0, 0.2, 1)',
+  'ease-bb-decelerate': 'cubic-bezier(0, 0, 0.2, 1)',
+  'ease-bb-accelerate': 'cubic-bezier(0.4, 0, 1, 1)',
+} as const
+
+// Numeric (not CSS) values: consumed by the native adapter and by primitive `minHeight`/`minWidth`
+// floors. Emitted as `--bb-touch-min` / `--bb-touch-comfortable` so the generic `--min` name never
+// leaks into the global custom-property namespace.
+export const touchTargetTokens = {
+  min: 44,
+  comfortable: 48,
+} as const
+
+export const focusTokens = {
+  'bb-focus-ring-width': '2px',
+  'bb-focus-ring-offset': '2px',
+  'bb-focus-ring-color': 'var(--ring)',
+} as const
+
+// Contrast remediation. These are ADDITIVE derived colours that fix four pairs the existing
+// semantic palette cannot satisfy at 4.5:1. They are emitted ONLY through `mobileThemeBlock()`
+// into `nativewind.css` — never into `lightSemanticTokens`/`darkSemanticTokens`/`tailwindThemeTokens`
+// — so `generated/web.css` stays byte-identical. The `*-text` tokens are darker body text on a
+// neutral surface; the `*-strong` tokens are darker filled surfaces that let the near-white
+// `info-foreground` / `destructive-foreground` clear 4.5:1. The dark half flips to lighter body
+// text and a darker filled surface.
+export const contrastTokens = {
+  light: {
+    'bb-info-text': 'oklch(0.5 0.167 253.226)',
+    'bb-danger-text': 'oklch(0.5 0.245 27.325)',
+    'bb-info-strong': 'oklch(0.5 0.167 253.226)',
+    'bb-danger-strong': 'oklch(0.5 0.245 27.325)',
+  },
+  dark: {
+    'bb-info-text': 'oklch(0.72 0.167 253.226)',
+    'bb-danger-text': 'oklch(0.72 0.245 27.325)',
+    'bb-info-strong': 'oklch(0.48 0.167 253.226)',
+    'bb-danger-strong': 'oklch(0.48 0.245 27.325)',
+  },
+} as const

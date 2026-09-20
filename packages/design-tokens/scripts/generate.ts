@@ -1,11 +1,19 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import Color from 'colorjs.io'
 import {
+  contrastTokens,
   darkSemanticTokens,
+  elevationTokens,
+  focusTokens,
   foundationTokens,
   lightSemanticTokens,
+  motionTokens,
+  spacingTokens,
   tailwindThemeTokens,
+  touchTargetTokens,
+  typographyTokens,
   type CssTokenMap,
 } from '../src/tokens'
 
@@ -24,6 +32,34 @@ function declarations(tokens: CssTokenMap, indentation = '  '): string {
 
 function themeBlock(): string {
   return `@theme inline {\n${declarations(tailwindThemeTokens)}\n}`
+}
+
+// Mobile-only. Emitted by `renderNativewindCss` alone so `renderWebCss` stays byte-identical.
+// The contrast tokens need three parts: `@theme inline` aliases (so each utility compiles to a
+// flipping `var()` reference rather than an inlined literal), a `:root, :host` block holding the
+// light literals, and a media-gated `:root, :host` block holding the dark literals. The
+// `:root, :host` form deliberately does not match the `/:root\s*\{/` shape the existing
+// generated-css parity test counts.
+function mobileThemeBlock(): string {
+  const scaleTokens = {
+    ...typographyTokens,
+    ...spacingTokens,
+    ...elevationTokens,
+    ...motionTokens,
+    ...focusTokens,
+  }
+  const touchDeclarations = Object.entries(touchTargetTokens)
+    .map(([name, value]) => `  --bb-touch-${name}: ${value};`)
+    .join('\n')
+  const contrastAliases = Object.keys(contrastTokens.light)
+    .map((name) => `  --color-${name}: var(--${name});`)
+    .join('\n')
+
+  const themeInline = `@theme inline {\n${declarations(scaleTokens)}\n${touchDeclarations}\n${contrastAliases}\n}`
+  const lightBlock = `:root, :host {\n${declarations(contrastTokens.light)}\n}`
+  const darkBlock = `@media (prefers-color-scheme: dark) {\n  :root, :host {\n${declarations(contrastTokens.dark, '    ')}\n  }\n}`
+
+  return `${themeInline}\n\n${lightBlock}\n\n${darkBlock}`
 }
 
 export function renderWebCss(): string {
@@ -49,6 +85,8 @@ ${declarations({ ...lightSemanticTokens, ...foundationTokens })}
 
 ${themeBlock()}
 
+${mobileThemeBlock()}
+
 @media (prefers-color-scheme: dark) {
   :root {
 ${declarations(darkSemanticTokens, '    ')}
@@ -57,13 +95,116 @@ ${declarations(darkSemanticTokens, '    ')}
 `
 }
 
+// React Native / StyleSheet projection of the same oklch source. Colours are converted to sRGB
+// hex/rgba (never `oklch()`/`var()`), numeric scales become unitless numbers, and font families
+// stay strings. `foundationTokens` is deliberately NOT projected: it is a map of `var(--…)` and
+// `color-mix()` aliases, not literal colours, so it cannot be colour-converted.
+const NUMERIC_VALUE = /^-?\d*\.?\d+(px|rem|em|ms)?$/
+
+function toNativeNumber(value: string): number {
+  const trimmed = value.trim()
+  if (trimmed.endsWith('rem')) return Number.parseFloat(trimmed) * 16
+  return Number.parseFloat(trimmed)
+}
+
+function toNativeValue(value: string): string | number {
+  return NUMERIC_VALUE.test(value.trim()) ? toNativeNumber(value) : value
+}
+
+// sRGB projection of an oklch literal. `lch.c` gamut mapping is the closest achievable sRGB
+// representation (22 of the semantic colours are out of sRGB gamut; naive clamping is up to
+// ΔE00 ~7.3 away, `lch.c` up to ~5.1). Alpha is preserved as an 8-digit hex suffix.
+function toNativeHex(value: string): string {
+  const srgb = new Color(value).toGamut({ space: 'srgb', method: 'lch.c' }).to('srgb')
+  const channels = srgb.coords.map((channel) =>
+    Math.round(Math.max(0, Math.min(1, channel ?? 0)) * 255),
+  )
+  const hex = (channel: number) => channel.toString(16).padStart(2, '0')
+  const base = `#${hex(channels[0])}${hex(channels[1])}${hex(channels[2])}`
+  const alpha = srgb.alpha ?? 1
+  return alpha >= 1 ? base : `${base}${hex(Math.round(alpha * 255))}`
+}
+
+function renderObject(value: unknown, indent: number): string {
+  if (typeof value === 'string') return JSON.stringify(value)
+  if (typeof value === 'number') return String(value)
+  const entries = Object.entries(value as Record<string, unknown>)
+  const pad = ' '.repeat(indent)
+  const inner = ' '.repeat(indent + 2)
+  const body = entries
+    .map(([key, entry]) => `${inner}${JSON.stringify(key)}: ${renderObject(entry, indent + 2)},`)
+    .join('\n')
+  return `{\n${body}\n${pad}}`
+}
+
+function nativeTheme(theme: 'light' | 'dark') {
+  const semantic = theme === 'light' ? lightSemanticTokens : darkSemanticTokens
+  const contrast = theme === 'light' ? contrastTokens.light : contrastTokens.dark
+  const ring = toNativeHex(semantic.ring)
+
+  return {
+    color: Object.fromEntries(
+      Object.entries(semantic).map(([name, value]) => [name, toNativeHex(value)]),
+    ),
+    contrast: Object.fromEntries(
+      Object.entries(contrast).map(([name, value]) => [name, toNativeHex(value)]),
+    ),
+    spacing: Object.fromEntries(
+      Object.entries(spacingTokens).map(([name, value]) => [name, toNativeNumber(value)]),
+    ),
+    typography: Object.fromEntries(
+      Object.entries(typographyTokens).map(([name, value]) => [name, toNativeValue(value)]),
+    ),
+    elevation: { ...elevationTokens },
+    motion: Object.fromEntries(
+      Object.entries(motionTokens).map(([name, value]) => [name, toNativeValue(value)]),
+    ),
+    touchTarget: { ...touchTargetTokens },
+    focus: Object.fromEntries(
+      Object.entries(focusTokens).map(([name, value]) => [
+        name,
+        value === 'var(--ring)' ? ring : toNativeValue(value),
+      ]),
+    ),
+  }
+}
+
+export function renderNativeTs(): string {
+  const body = renderObject({ light: nativeTheme('light'), dark: nativeTheme('dark') }, 0)
+  return `/* Generated by scripts/generate.ts. Do not edit directly. */
+// React Native / StyleSheet projection of the same oklch source as web.css and nativewind.css.
+// Colours are sRGB hex/rgba; numeric scales are unitless numbers; font families stay strings.
+// \`foundationTokens\` is NOT projected — it is a map of CSS custom-property and colour-mix
+// aliases, not literal colours. \`nativeNavigationTokens\` in src/tokens.ts is a separate
+// hand-authored surface.
+export const nativeTokens = ${body} as const
+`
+}
+
+// The theme-driven variables are exactly the ones the runtime `VariableContextProvider` overrides
+// with the resolved theme: the semantic colours (which flip between light and dark) plus the
+// contrast-remediation colours. `metro.config.js` is plain CommonJS and cannot import the `.ts`
+// token source, so this list is emitted as JSON for it to `require()`. Entries are `--`-prefixed
+// because that is the shape `InlineVariableOptions.exclude` expects.
+export function renderNativewindExclude(): string {
+  const names = [
+    ...Object.keys(lightSemanticTokens),
+    ...Object.keys(contrastTokens.light),
+  ].map((name) => `--${name}`)
+  return `${JSON.stringify(names, null, 2)}\n`
+}
+
 const files = {
   'web.css': renderWebCss(),
   'nativewind.css': renderNativewindCss(),
+  'native.ts': renderNativeTs(),
+  'nativewind-exclude.json': renderNativewindExclude(),
 } as const
 
 if (process.argv.includes('--stdout')) {
-  process.stdout.write(`${files['web.css']}\n--- nativewind.css ---\n${files['nativewind.css']}`)
+  process.stdout.write(
+    `${files['web.css']}\n--- nativewind.css ---\n${files['nativewind.css']}\n--- native.ts ---\n${files['native.ts']}\n--- nativewind-exclude.json ---\n${files['nativewind-exclude.json']}`,
+  )
 } else if (process.argv.includes('--check')) {
   let stale = false
   for (const [name, contents] of Object.entries(files)) {
