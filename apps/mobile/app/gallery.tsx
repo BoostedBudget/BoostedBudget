@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react'
+import Head from 'expo-router/head'
 import { VariableContextProvider } from 'nativewind'
 import { ScrollView, View } from 'react-native'
 import {
@@ -164,10 +165,13 @@ const GALLERY_FIXTURES: Record<string, Record<string, unknown>> = {
     onCancel: noop,
   },
 
-  'Alert.info': { variant: 'info', title: 'Alert title', children: <Text>Alert body</Text> },
-  'Alert.success': { variant: 'success', title: 'Alert title', children: <Text>Alert body</Text> },
-  'Alert.warning': { variant: 'warning', title: 'Alert title', children: <Text>Alert body</Text> },
-  'Alert.danger': { variant: 'danger', title: 'Alert title', children: <Text>Alert body</Text> },
+  // The body is a plain string so `Alert` paints it with its own variant foreground. A nested
+  // `<Text>` would carry `text-foreground` and defeat the alert's colour (see the contrast
+  // violation the Playwright rendered-contrast pass reported on the previous fixture).
+  'Alert.info': { variant: 'info', title: 'Alert title', children: 'Alert body' },
+  'Alert.success': { variant: 'success', title: 'Alert title', children: 'Alert body' },
+  'Alert.warning': { variant: 'warning', title: 'Alert title', children: 'Alert body' },
+  'Alert.danger': { variant: 'danger', title: 'Alert title', children: 'Alert body' },
 
   'Label.default': { children: 'Label text' },
   'Label.required': { children: 'Label text', required: true },
@@ -185,10 +189,21 @@ const GALLERY_FIXTURES: Record<string, Record<string, unknown>> = {
     children: <TextField onChangeText={noop} />,
   },
 
-  'TextField.value': { value: 'Fixture value', onChangeText: noop },
-  'TextField.placeholder': { placeholder: 'Placeholder', onChangeText: noop },
-  'TextArea.value': { value: 'Fixture value', onChangeText: noop },
-  'TextArea.placeholder': { placeholder: 'Placeholder', onChangeText: noop },
+  // Every standalone field fixture carries an accessible name. `FormField` supplies one in real
+  // usage; a bare `TextField`/`TextArea` does not, and an unlabelled form control is an axe
+  // `label` violation (WCAG 4.1.2).
+  'TextField.value': { value: 'Fixture value', onChangeText: noop, accessibilityLabel: 'Fixture text field' },
+  'TextField.placeholder': {
+    placeholder: 'Placeholder',
+    onChangeText: noop,
+    accessibilityLabel: 'Fixture placeholder field',
+  },
+  'TextArea.value': { value: 'Fixture value', onChangeText: noop, accessibilityLabel: 'Fixture text area' },
+  'TextArea.placeholder': {
+    placeholder: 'Placeholder',
+    onChangeText: noop,
+    accessibilityLabel: 'Fixture placeholder area',
+  },
   'Switch.label': { value: true, onValueChange: noop, label: 'Switch label' },
   'Checkbox.label': { checked: true, onCheckedChange: noop, label: 'Checkbox label' },
 
@@ -392,9 +407,17 @@ function ThemeSection({ theme }: { theme: ResolvedTheme }) {
 
 export default function GalleryScreen() {
   return (
-    <ScrollView testID="gallery" className="flex-1 bg-background">
-      <ThemeSection theme="light" />
-      <ThemeSection theme="dark" />
-    </ScrollView>
+    <>
+      {/* Expo Router's static export leaves the document title empty for a route (the
+          `Stack.Screen` title only drives the native header), which is an axe `document-title`
+          violation. `expo-router/head` is the router's own Helmet-backed title seam. */}
+      <Head>
+        <title>Primitive gallery</title>
+      </Head>
+      <ScrollView testID="gallery" className="flex-1 bg-background">
+        <ThemeSection theme="light" />
+        <ThemeSection theme="dark" />
+      </ScrollView>
+    </>
   )
 }

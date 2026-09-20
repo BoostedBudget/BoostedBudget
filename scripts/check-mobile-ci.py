@@ -74,6 +74,10 @@ REQUIRED_STEPS = (
     # script a worker can claim to have run. `--check` exits non-zero when any threshold
     # in apps/mobile/nativewind-gate.evidence.json fails.
     ("bun run --cwd apps/mobile gate:nativewind --check", "."),
+    # Todo 22 (#1658): the Playwright visual/accessibility layer drives the exported web build.
+    # Pinned here so the step cannot be silently dropped from CI while both guard scripts still
+    # exit 0 -- the guard would otherwise pass whether or not the step exists.
+    ("bun run --cwd apps/mobile e2e:visual", "."),
 )
 
 MOBILE_COMPATIBILITY_DEPS = {

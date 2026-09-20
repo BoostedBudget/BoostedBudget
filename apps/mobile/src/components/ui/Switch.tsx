@@ -1,4 +1,4 @@
-import { Pressable, View } from 'react-native'
+import { Platform, Pressable, View } from 'react-native'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
 import { Text } from './Text'
 import type { FieldAccessibilityState } from './TextField'
@@ -36,11 +36,18 @@ export function Switch({
 }: SwitchProps) {
   const state: FieldAccessibilityState = { checked: value, disabled, invalid }
 
+  // react-native-web 0.21 no longer maps `accessibilityState` to `aria-*`, so the browser never
+  // saw `aria-checked` and axe flagged `role="switch"` as missing a required attribute. On native
+  // the same prop is normalised back into `accessibilityState`, which would change that prop's
+  // shape, so it is applied on web only (the pattern `Dialog`/`BottomSheet` already use).
+  const ariaStateProps = Platform.OS === 'web' ? { 'aria-checked': value } : {}
+
   return (
     <Pressable
       testID={testID}
       accessibilityRole="switch"
       accessibilityState={state}
+      {...ariaStateProps}
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityHint={accessibilityHint}
       disabled={disabled}

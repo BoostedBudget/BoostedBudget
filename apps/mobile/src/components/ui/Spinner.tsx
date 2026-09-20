@@ -1,8 +1,17 @@
 import { useEffect, useState } from 'react'
-import { AccessibilityInfo, Animated, Easing, type ViewProps } from 'react-native'
+import { AccessibilityInfo, Animated, Easing, Platform, type ViewProps } from 'react-native'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
 
 const MOTION = nativeTokens.light.motion
+
+/**
+ * `Animated.loop` reads the RAW `useNativeDriver` flag to choose its looping strategy
+ * (`_isUsingNativeDriver()` returns `config.useNativeDriver`), and on web react-native-web has no
+ * native animated module: the native-loop branch plays the timing ONCE and then freezes, so the
+ * spinner never spins. Native keeps the native driver; web must use the JS driver so the loop
+ * actually iterates. Asserted by the Playwright reduced-motion pass (Todo 22).
+ */
+const SPIN_USE_NATIVE_DRIVER = Platform.OS !== 'web'
 
 /** Normal spin duration, taken from the motion scale. */
 export const SPINNER_NORMAL_DURATION_MS = MOTION['transition-duration-bb-normal']
@@ -63,7 +72,7 @@ export function Spinner({ size = 'md', label, className, style, ...rest }: Spinn
         toValue: 1,
         duration,
         easing: Easing.linear,
-        useNativeDriver: true,
+        useNativeDriver: SPIN_USE_NATIVE_DRIVER,
       }),
     )
     animation.start()

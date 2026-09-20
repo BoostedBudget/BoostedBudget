@@ -67,7 +67,15 @@ export function ListItem({
           {title}
         </Text>
         {subtitle ? (
-          <Text variant="bodySmall" tone="muted" testID={testID ? `${testID}-subtitle` : undefined}>
+          // On a selected row the surface is `accent` (#f5f5f5), where `muted-foreground` measures
+          // 4.35:1 — below the 4.5:1 body floor. The full-strength foreground is used instead, the
+          // same asymmetry `Card.sunken` carries (Todo 10). Asserted by the Playwright rendered
+          // contrast pass (Todo 22).
+          <Text
+            variant="bodySmall"
+            tone={selected ? 'default' : 'muted'}
+            testID={testID ? `${testID}-subtitle` : undefined}
+          >
             {subtitle}
           </Text>
         ) : null}
