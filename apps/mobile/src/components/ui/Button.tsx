@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   Text as RNText,
   View,
@@ -213,6 +214,9 @@ export function Button({
         }}
         accessibilityRole="button"
         accessibilityState={{ disabled: isDisabled, busy: loading }}
+        // Web only: react-native-web 0.21 drops `accessibilityState`, so the browser needs
+        // `aria-busy` directly (see Switch.tsx for why this is not applied on native).
+        {...(Platform.OS === 'web' ? { 'aria-busy': loading } : {})}
         accessibilityLabel={accessibleName}
         className={classes}
         style={[

@@ -1,4 +1,4 @@
-import { TextInput, type AccessibilityState, type TextInputProps } from 'react-native'
+import { Platform, TextInput, type AccessibilityState, type TextInputProps } from 'react-native'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
 
 /** RN 0.86's `AccessibilityState` has no `invalid`; the runtime still forwards it. */
@@ -42,9 +42,14 @@ export function TextField({
     .filter(Boolean)
     .join(' ')
 
+  // Web only: react-native-web 0.21 drops `accessibilityState`, so the browser needs `aria-invalid`
+  // directly (see Switch.tsx for why this is not applied on native).
+  const ariaStateProps = Platform.OS === 'web' ? { 'aria-invalid': invalid } : {}
+
   return (
     <TextInput
       {...rest}
+      {...ariaStateProps}
       editable={isEditable}
       accessibilityState={state}
       className={classes}

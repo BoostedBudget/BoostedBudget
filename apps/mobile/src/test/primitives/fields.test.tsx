@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react-native'
-import { View } from 'react-native'
+import { Platform, View } from 'react-native'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
 import { Checkbox } from '../../components/ui/Checkbox'
 import { FormField } from '../../components/ui/FormField'
@@ -247,6 +247,31 @@ describe('field primitives in both themes', () => {
       expect(screen.getByTestId(`checkbox-${scheme}`)).toBeTruthy()
     })
   }
+})
+
+describe('web ARIA state', () => {
+  it('puts aria-invalid on the TextField on web', () => {
+    const platform = jest.replaceProperty(Platform, 'OS', 'web')
+    try {
+      render(
+        <View>
+          <TextField testID="web-invalid" invalid />
+          <TextField testID="web-valid" />
+        </View>,
+      )
+
+      expect(screen.getByTestId('web-invalid').props['aria-invalid']).toBe(true)
+      expect(screen.getByTestId('web-valid').props['aria-invalid']).toBe(false)
+    } finally {
+      platform.restore()
+    }
+  })
+
+  it('does not put aria-invalid on the TextField on native', () => {
+    render(<TextField testID="native-invalid" invalid />)
+
+    expect(screen.getByTestId('native-invalid').props['aria-invalid']).toBeUndefined()
+  })
 })
 
 describe('FIELDS_REGISTRY', () => {

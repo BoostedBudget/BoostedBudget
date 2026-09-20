@@ -142,8 +142,11 @@ detail.
   `maxFontSizeMultiplier`; no primitive sets `allowFontScaling={false}`, and a
   mechanical test fails if one ever does.
 - **Reduced-motion behaviour.** `useReducedMotion()` (shared by `Spinner`,
-  `Skeleton`, `BottomSheet`, and `ToastProvider`) collapses transitions —
-  `animationType="none"` and reduced durations — rather than slowing them.
+  `Skeleton`, `BottomSheet`, and `ToastProvider`) takes one of two reduced
+  branches: `BottomSheet` and `ToastProvider` COLLAPSE their transition to zero
+  (`animationType="none"` / a zero duration), while `Spinner` and `Skeleton`
+  deliberately SLOW to the slowest motion token rather than stopping — a frozen
+  spinner reads as a hung page.
 - **Shadows via React Native `boxShadow`.** Elevation tokens are projected
   verbatim as CSS shadow strings; React Native 0.86 resolves `shadow-bb-md` /
   `shadow-bb-lg` to a `boxShadow` array, because layered shadows cannot be

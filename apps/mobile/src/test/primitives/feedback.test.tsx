@@ -1,5 +1,7 @@
 import { afterEach, beforeEach } from '@jest/globals'
 import { render, screen, fireEvent, act } from '@testing-library/react-native'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 import { AccessibilityInfo, Animated, StyleSheet, View } from 'react-native'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
 import { Alert, type AlertVariant } from '../../components/ui/Alert'
@@ -7,6 +9,7 @@ import {
   Spinner,
   SPINNER_NORMAL_DURATION_MS,
   SPINNER_REDUCED_DURATION_MS,
+  shouldUseNativeDriver,
 } from '../../components/ui/Spinner'
 import { ProgressBar } from '../../components/ui/ProgressBar'
 import { Skeleton } from '../../components/ui/Skeleton'
@@ -235,6 +238,24 @@ describe('Skeleton', () => {
       expect.anything(),
       expect.objectContaining({ duration: SPINNER_REDUCED_DURATION_MS }),
     )
+  })
+})
+
+describe('native-driver guard', () => {
+  it('uses the JS driver on web and the native driver elsewhere', () => {
+    expect(shouldUseNativeDriver('web')).toBe(false)
+    expect(shouldUseNativeDriver('ios')).toBe(true)
+    expect(shouldUseNativeDriver('android')).toBe(true)
+  })
+
+  it('is wired into every animated feedback primitive', () => {
+    const uiDir = resolve(dirname(require.resolve('../../../package.json')), 'src/components/ui')
+    for (const file of ['Spinner.tsx', 'Skeleton.tsx', 'ToastProvider.tsx']) {
+      expect({ file, source: readFileSync(resolve(uiDir, file), 'utf8') }).toEqual({
+        file,
+        source: expect.stringContaining('shouldUseNativeDriver(Platform.OS)'),
+      })
+    }
   })
 })
 

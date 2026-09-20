@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native'
-import { View } from 'react-native'
+import { Platform, Pressable, View } from 'react-native'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
 import {
   Button,
@@ -225,6 +225,42 @@ describe('Button loading state', () => {
     expect(screen.getByTestId('loading-cue-spinner')).toBeTruthy()
     expect(screen.getByTestId('loading-cue').props.accessibilityState.busy).toBe(true)
     expect(screen.getByTestId('idle-cue').props.accessibilityState.busy).toBe(false)
+  })
+})
+
+describe('Button web ARIA state', () => {
+  it('puts aria-busy on the Button on web', () => {
+    const platform = jest.replaceProperty(Platform, 'OS', 'web')
+    try {
+      render(
+        <View>
+          <Button testID="web-loading" loading label="Save" />
+          <Button testID="web-idle" label="Save" />
+        </View>,
+      )
+
+      // `getByTestId` returns the host node, and React Native's Pressable folds `aria-busy` into
+      // `accessibilityState` before it reaches the host. The composite Pressable still carries the
+      // raw prop, which is what react-native-web forwards to the DOM.
+      const pressables = screen.UNSAFE_getAllByType(Pressable)
+      expect(pressables.find((node) => node.props.testID === 'web-loading')?.props['aria-busy']).toBe(
+        true,
+      )
+      expect(pressables.find((node) => node.props.testID === 'web-idle')?.props['aria-busy']).toBe(
+        false,
+      )
+    } finally {
+      platform.restore()
+    }
+  })
+
+  it('does not put aria-busy on the Button on native', () => {
+    render(<Button testID="native-loading" loading label="Save" />)
+
+    const pressables = screen.UNSAFE_getAllByType(Pressable)
+    expect(
+      pressables.find((node) => node.props.testID === 'native-loading')?.props['aria-busy'],
+    ).toBeUndefined()
   })
 })
 

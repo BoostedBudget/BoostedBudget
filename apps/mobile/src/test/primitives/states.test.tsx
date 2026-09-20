@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fireEvent, render, screen, within } from '@testing-library/react-native'
-import { View } from 'react-native'
+import { Platform, Pressable, View } from 'react-native'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
 import { Button } from '../../components/ui/Button'
 import { EmptyState } from '../../components/ui/EmptyState'
@@ -222,6 +222,53 @@ describe('ErrorState', () => {
 
     fireEvent.press(toggle)
     expect(screen.getByTestId('error-detail-toggle').props.accessibilityLabel).toBe('Hide details')
+  })
+})
+
+describe('web ARIA state', () => {
+  it('puts aria-expanded on the ErrorState detail toggle on web', () => {
+    const platform = jest.replaceProperty(Platform, 'OS', 'web')
+    try {
+      render(
+        <ErrorState
+          testID="web-error"
+          title="Could not load"
+          description="Try again."
+          onRetry={() => {}}
+          detail="Request failed"
+        />,
+      )
+
+      // React Native's Pressable folds `aria-expanded` into `accessibilityState` before the host
+      // node, so the raw prop is read off the composite Pressable (see button.test.tsx).
+      const toggle = () =>
+        screen
+          .UNSAFE_getAllByType(Pressable)
+          .find((node) => node.props.testID === 'web-error-detail-toggle')?.props['aria-expanded']
+
+      expect(toggle()).toBe(false)
+      fireEvent.press(screen.getByTestId('web-error-detail-toggle'))
+      expect(toggle()).toBe(true)
+    } finally {
+      platform.restore()
+    }
+  })
+
+  it('does not put aria-expanded on the detail toggle on native', () => {
+    render(
+      <ErrorState
+        testID="native-error"
+        title="Could not load"
+        description="Try again."
+        onRetry={() => {}}
+        detail="Request failed"
+      />,
+    )
+
+    const toggle = screen
+      .UNSAFE_getAllByType(Pressable)
+      .find((node) => node.props.testID === 'native-error-detail-toggle')
+    expect(toggle?.props['aria-expanded']).toBeUndefined()
   })
 })
 

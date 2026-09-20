@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { fireEvent, render, screen } from '@testing-library/react-native'
+import { fireEvent, render, screen, within } from '@testing-library/react-native'
 import { Text, View } from 'react-native'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
 import { List } from '../../components/ui/List'
@@ -156,6 +156,24 @@ describe('List', () => {
 
     expect(screen.getByTestId('list').props.accessibilityRole).toBe('list')
     expect(screen.getByText('Checking')).toBeTruthy()
+  })
+
+  it('wraps every child in a role="listitem" so the rendered list is structurally valid', () => {
+    render(
+      <List testID="list-items">
+        <ListItem testID="list-items-row" title="Checking" onPress={() => {}} />
+        <ListItem testID="list-items-row-2" title="Savings" />
+      </List>,
+    )
+
+    const list = screen.getByTestId('list-items')
+    const wrappers = list.children.filter(
+      (child): child is typeof list =>
+        typeof child !== 'string' && child.props.role === 'listitem',
+    )
+    expect(wrappers).toHaveLength(2)
+    expect(within(wrappers[0]).getByTestId('list-items-row')).toBeTruthy()
+    expect(within(wrappers[1]).getByTestId('list-items-row-2')).toBeTruthy()
   })
 })
 

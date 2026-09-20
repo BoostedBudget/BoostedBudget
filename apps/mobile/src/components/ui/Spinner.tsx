@@ -8,10 +8,15 @@ const MOTION = nativeTokens.light.motion
  * `Animated.loop` reads the RAW `useNativeDriver` flag to choose its looping strategy
  * (`_isUsingNativeDriver()` returns `config.useNativeDriver`), and on web react-native-web has no
  * native animated module: the native-loop branch plays the timing ONCE and then freezes, so the
- * spinner never spins. Native keeps the native driver; web must use the JS driver so the loop
- * actually iterates. Asserted by the Playwright reduced-motion pass (Todo 22).
+ * spinner never spins, and every mount logs a "useNativeDriver is not supported" warning. Native
+ * keeps the native driver; web must use the JS driver. Asserted by the Playwright reduced-motion
+ * pass (Todo 22).
  */
-const SPIN_USE_NATIVE_DRIVER = Platform.OS !== 'web'
+export function shouldUseNativeDriver(platformOs: string): boolean {
+  return platformOs !== 'web'
+}
+
+const SPIN_USE_NATIVE_DRIVER = shouldUseNativeDriver(Platform.OS)
 
 /** Normal spin duration, taken from the motion scale. */
 export const SPINNER_NORMAL_DURATION_MS = MOTION['transition-duration-bb-normal']
