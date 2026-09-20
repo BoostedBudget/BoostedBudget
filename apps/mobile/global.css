@@ -4,3 +4,12 @@
 
 @source './app';
 @source './src';
+
+/* Pin the root font size so `rem`-based typography resolves to the same numbers the
+ * `@boostedbudget/design-tokens/native` adapter publishes (`text-bb-body` = 1rem = 16, matching
+ * the adapter's 16). `react-native-css` scans the compiled CSS for `:root { font-size: Npx }`
+ * and inlines rem at that multiplier (default 14), so without this rule every `text-bb-*`
+ * utility would resolve 0.875x its token value on native and in jest. */
+:root {
+  font-size: 16px;
+}
