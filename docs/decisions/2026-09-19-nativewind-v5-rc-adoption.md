@@ -123,7 +123,7 @@ wrong and is corrected here.
    `apps/mobile/tsconfig.json` declares `"types": ["jest", "react-native-css/types"]` (the
    canonical v5 type surface). `apps/mobile/nativewind-env.d.ts` still references
    `nativewind/types`, which in `5.0.0-rc.0` is a one-line `/// <reference types="react-native-css/types" />`
-   re-export (verified in `node_modules/nativewind/types.d.ts`), so both paths resolve to the same
+   re-export (verified in the NativeWind package's `types.d.ts`), so both paths resolve to the same
    types and no v4-only type surface is in play.
 5. **No `cssInterop` / `remapProps`** — VERIFIED. `grep -rn "cssInterop\|remapProps" apps/mobile`
    over `.ts`/`.tsx`/`.js` (excluding `node_modules` and `dist`) returns zero hits. v5 removed
