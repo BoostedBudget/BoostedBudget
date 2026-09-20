@@ -181,15 +181,29 @@ export const nativeTokens = ${body} as const
 `
 }
 
+// The theme-driven variables are exactly the ones the runtime `VariableContextProvider` overrides
+// with the resolved theme: the semantic colours (which flip between light and dark) plus the
+// contrast-remediation colours. `metro.config.js` is plain CommonJS and cannot import the `.ts`
+// token source, so this list is emitted as JSON for it to `require()`. Entries are `--`-prefixed
+// because that is the shape `InlineVariableOptions.exclude` expects.
+export function renderNativewindExclude(): string {
+  const names = [
+    ...Object.keys(lightSemanticTokens),
+    ...Object.keys(contrastTokens.light),
+  ].map((name) => `--${name}`)
+  return `${JSON.stringify(names, null, 2)}\n`
+}
+
 const files = {
   'web.css': renderWebCss(),
   'nativewind.css': renderNativewindCss(),
   'native.ts': renderNativeTs(),
+  'nativewind-exclude.json': renderNativewindExclude(),
 } as const
 
 if (process.argv.includes('--stdout')) {
   process.stdout.write(
-    `${files['web.css']}\n--- nativewind.css ---\n${files['nativewind.css']}\n--- native.ts ---\n${files['native.ts']}`,
+    `${files['web.css']}\n--- nativewind.css ---\n${files['nativewind.css']}\n--- native.ts ---\n${files['native.ts']}\n--- nativewind-exclude.json ---\n${files['nativewind-exclude.json']}`,
   )
 } else if (process.argv.includes('--check')) {
   let stale = false
