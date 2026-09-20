@@ -14,12 +14,11 @@ const asComponent = (component: unknown): ComponentType<Record<string, unknown>>
  *
  * The chrome paints `nativeNavigationTokens` (a native-safe projection of the same palette), so the
  * registry names the closest semantic tokens — `foreground` on `card` — which is what the contrast
- * suite resolves against `nativeTokens`. `category` uses the existing `'surface'` member because
- * these entries describe text painted on a surface; `index.ts` is owned by the orchestrator and is
- * deliberately not edited here.
+ * suite resolves against `nativeTokens`. `index.ts` concatenates this module into
+ * `PRIMITIVE_REGISTRY`.
  */
 export const NAVIGATION_REGISTRY: PrimitiveRegistryEntry[] = [
-  { component: asComponent(ScreenHeader), name: 'ScreenHeader.title', category: 'surface', interactive: false, foregroundToken: 'foreground', backgroundToken: 'card', ratioClass: 'body' },
-  { component: asComponent(TabBar), name: 'TabBar.label', category: 'surface', interactive: true, foregroundToken: 'foreground', backgroundToken: 'card', ratioClass: 'body' },
-  { component: asComponent(BackButton), name: 'BackButton.label', category: 'surface', interactive: true, foregroundToken: 'foreground', backgroundToken: 'card', ratioClass: 'body' },
+  { component: asComponent(ScreenHeader), name: 'ScreenHeader.title', category: 'navigation', interactive: false, foregroundToken: 'foreground', backgroundToken: 'card', ratioClass: 'body' },
+  { component: asComponent(TabBar), name: 'TabBar.label', category: 'navigation', interactive: true, foregroundToken: 'foreground', backgroundToken: 'card', ratioClass: 'body' },
+  { component: asComponent(BackButton), name: 'BackButton.label', category: 'navigation', interactive: true, foregroundToken: 'foreground', backgroundToken: 'card', ratioClass: 'body' },
 ]

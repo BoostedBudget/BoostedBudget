@@ -9,14 +9,13 @@ import { Button } from './Button'
  * the `bb-danger-strong` FILL, never the raw `destructive` value (which is only 2.77:1 against its
  * near-white foreground in dark mode).
  *
- * This file is intentionally NOT merged into `PRIMITIVE_REGISTRY` here — parallel primitive workers
- * each append their own registry module and the orchestrator wires the barrel in one later step.
+ * `index.ts` concatenates this module into `PRIMITIVE_REGISTRY`.
  */
 export const BUTTON_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: Button,
     name: 'Button.primary',
-    category: 'surface',
+    category: 'action',
     interactive: true,
     foregroundToken: 'primary-foreground',
     backgroundToken: 'primary',
@@ -25,7 +24,7 @@ export const BUTTON_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: Button,
     name: 'Button.secondary',
-    category: 'surface',
+    category: 'action',
     interactive: true,
     foregroundToken: 'secondary-foreground',
     backgroundToken: 'secondary',
@@ -34,7 +33,7 @@ export const BUTTON_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: Button,
     name: 'Button.outline',
-    category: 'surface',
+    category: 'action',
     interactive: true,
     foregroundToken: 'foreground',
     backgroundToken: 'background',
@@ -43,7 +42,7 @@ export const BUTTON_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: Button,
     name: 'Button.ghost',
-    category: 'surface',
+    category: 'action',
     interactive: true,
     foregroundToken: 'foreground',
     backgroundToken: 'background',
@@ -52,7 +51,7 @@ export const BUTTON_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: Button,
     name: 'Button.destructive',
-    category: 'surface',
+    category: 'action',
     interactive: true,
     foregroundToken: 'destructive-foreground',
     backgroundToken: 'bb-danger-strong',
@@ -61,7 +60,7 @@ export const BUTTON_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: Button,
     name: 'Button.link',
-    category: 'surface',
+    category: 'action',
     interactive: true,
     foregroundToken: 'primary',
     backgroundToken: 'background',

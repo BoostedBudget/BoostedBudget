@@ -1,18 +1,25 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
+import * as UI from '../../components/ui'
 import {
-  Box,
-  Inline,
   PRIMITIVE_REGISTRY,
-  Stack,
-  Surface,
-  Text,
   type ContrastRatioClass,
   type PrimitiveCategory,
   type TextTone,
   type SurfaceVariant,
 } from '../../components/ui'
+import { BUTTON_REGISTRY } from '../../components/ui/button.registry'
+import { CARD_REGISTRY } from '../../components/ui/card.registry'
+import { DIALOG_REGISTRY } from '../../components/ui/dialog.registry'
+import { FEEDBACK_REGISTRY } from '../../components/ui/feedback.registry'
+import { FIELDS_REGISTRY } from '../../components/ui/fields.registry'
+import { LIST_REGISTRY } from '../../components/ui/list.registry'
+import { NAVIGATION_REGISTRY } from '../../components/ui/navigation.registry'
+import { SHEET_REGISTRY } from '../../components/ui/sheet.registry'
+import { STATES_REGISTRY } from '../../components/ui/states.registry'
+import { THEME_REGISTRY } from '../../components/ui/theme.registry'
+import { TOAST_REGISTRY } from '../../components/ui/toast.registry'
 import { COLOR_SCHEMES } from './helpers'
 
 const MOBILE_ROOT = dirname(require.resolve('../../../package.json'))
@@ -22,8 +29,65 @@ const UI_FILES = readdirSync(UI_DIR).filter((file) => file.endsWith('.ts') || fi
 
 const TEXT_TONES: readonly TextTone[] = ['default', 'muted', 'subtle', 'primary', 'success', 'warning', 'danger', 'info']
 const SURFACE_VARIANTS: readonly SurfaceVariant[] = ['canvas', 'card', 'raised', 'sunken', 'overlay']
-const CATEGORIES: readonly PrimitiveCategory[] = ['typography', 'layout', 'surface']
+const CATEGORIES: readonly PrimitiveCategory[] = [
+  'typography',
+  'layout',
+  'surface',
+  'action',
+  'field',
+  'feedback',
+  'overlay',
+  'navigation',
+  'list',
+  'theme',
+  'state',
+]
 const RATIO_CLASSES: readonly ContrastRatioClass[] = ['body', 'large', 'ui']
+
+const REGISTRY_MODULES = [
+  BUTTON_REGISTRY,
+  CARD_REGISTRY,
+  DIALOG_REGISTRY,
+  FEEDBACK_REGISTRY,
+  FIELDS_REGISTRY,
+  LIST_REGISTRY,
+  NAVIGATION_REGISTRY,
+  SHEET_REGISTRY,
+  STATES_REGISTRY,
+  THEME_REGISTRY,
+  TOAST_REGISTRY,
+]
+
+/**
+ * The entries that live in `index.ts` (the typography, surface and layout primitives that predate
+ * the per-file registry modules). They are not in a `*.registry.ts` module, so the count assertion
+ * adds them to the module total explicitly.
+ */
+const BASE_ENTRY_NAMES = [
+  ...TEXT_TONES.map((tone) => `Text.${tone}`),
+  ...SURFACE_VARIANTS.map((variant) => `Surface.${variant}`),
+  'Box',
+  'Stack',
+  'Inline',
+]
+
+/**
+ * Component files that render no text on a surface, so there is no WCAG contrast pair to derive and
+ * no registry entry to point at. Every OTHER file that exports a component MUST be referenced by at
+ * least one registry entry: adding a new component file without an entry (and without deliberately
+ * adding it here) fails the coverage test below.
+ */
+const NON_TEXT_BEARING_FILES: readonly string[] = [
+  'BottomSheet.tsx',
+  'IconButton.tsx',
+  'List.tsx',
+  'ProgressBar.tsx',
+  'Screen.tsx',
+  'Separator.tsx',
+  'Skeleton.tsx',
+  'Spinner.tsx',
+  'ToastProvider.tsx',
+]
 
 describe('components/ui source bans', () => {
   it('contains the primitive files (the ban scan is not vacuous)', () => {
@@ -86,12 +150,37 @@ describe('PRIMITIVE_REGISTRY', () => {
   })
 
   it('references only the primitives the barrel exports', () => {
-    const components = [Text, Box, Stack, Inline, Surface]
+    const exported = new Set<unknown>(Object.values(UI))
     for (const entry of PRIMITIVE_REGISTRY) {
-      expect(components).toContain(entry.component)
+      expect(exported.has(entry.component)).toBe(true)
     }
-    expect(PRIMITIVE_REGISTRY.find((entry) => entry.name === 'Box')?.component).toBe(Box)
-    expect(PRIMITIVE_REGISTRY.find((entry) => entry.name === 'Surface.card')?.component).toBe(Surface)
+    expect(PRIMITIVE_REGISTRY.find((entry) => entry.name === 'Box')?.component).toBe(UI.Box)
+    expect(PRIMITIVE_REGISTRY.find((entry) => entry.name === 'Surface.card')?.component).toBe(UI.Surface)
+  })
+
+  it('concatenates every registry module exactly once and keeps every name unique', () => {
+    const moduleTotal = REGISTRY_MODULES.reduce((sum, module) => sum + module.length, 0)
+    expect(PRIMITIVE_REGISTRY.length).toBe(moduleTotal + BASE_ENTRY_NAMES.length)
+
+    const names = PRIMITIVE_REGISTRY.map((entry) => entry.name)
+    expect(new Set(names).size).toBe(names.length)
+
+    for (const module of REGISTRY_MODULES) {
+      for (const entry of module) expect(PRIMITIVE_REGISTRY).toContain(entry)
+    }
+  })
+
+  it('covers every text-bearing component file with at least one registry entry', () => {
+    const registered = new Set<unknown>(PRIMITIVE_REGISTRY.map((entry) => entry.component))
+    const uncovered: string[] = []
+    for (const file of UI_FILES.filter((name) => name.endsWith('.tsx'))) {
+      if (NON_TEXT_BEARING_FILES.includes(file)) continue
+      const moduleExports = require(resolve(UI_DIR, file)) as Record<string, unknown>
+      const components = Object.values(moduleExports).filter((value) => typeof value === 'function')
+      if (!components.some((component) => registered.has(component))) uncovered.push(file)
+    }
+    expect(uncovered).toEqual([])
+    for (const file of NON_TEXT_BEARING_FILES) expect(UI_FILES).toContain(file)
   })
 
   it('pins the contrast remediation tokens to the info/danger body-text tones', () => {

@@ -19,8 +19,9 @@ const asComponent = (component: unknown) => component as ComponentType<Record<st
  * `muted-foreground` on `muted` is only 4.35:1 in light mode and would fail the body-text floor.
  * `CardDescription` reads the variant from context and applies the same fallback.
  *
- * This file is intentionally NOT merged into `PRIMITIVE_REGISTRY` here — parallel primitive workers
- * each append their own registry module and the orchestrator wires the barrel in one later step.
+ * `index.ts` concatenates this module into `PRIMITIVE_REGISTRY`. The entries stay `category:
+ * 'surface'` because Card/StatCard are surface primitives — this is the real category, not the
+ * placeholder the other parallel modules used before the union was widened.
  */
 export const CARD_REGISTRY: PrimitiveRegistryEntry[] = [
   {

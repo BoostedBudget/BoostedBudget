@@ -17,14 +17,13 @@ const asComponent = (component: unknown) => component as ComponentType<Record<st
  * `ListItem.title.selected` pins the selected row to the `accent` surface with `accent-foreground`
  * text; `ListItem` applies `bg-accent` when `selected` is set.
  *
- * This file is intentionally NOT merged into `PRIMITIVE_REGISTRY` here — parallel primitive workers
- * each append their own registry module and the orchestrator wires the barrel in one later step.
+ * `index.ts` concatenates this module into `PRIMITIVE_REGISTRY`.
  */
 export const LIST_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: asComponent(ListItem),
     name: 'ListItem.title',
-    category: 'surface',
+    category: 'list',
     interactive: true,
     foregroundToken: 'foreground',
     backgroundToken: 'card',
@@ -33,7 +32,7 @@ export const LIST_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: asComponent(ListItem),
     name: 'ListItem.subtitle',
-    category: 'surface',
+    category: 'list',
     interactive: true,
     foregroundToken: 'muted-foreground',
     backgroundToken: 'card',
@@ -42,7 +41,7 @@ export const LIST_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: asComponent(ListItem),
     name: 'ListItem.title.selected',
-    category: 'surface',
+    category: 'list',
     interactive: true,
     foregroundToken: 'accent-foreground',
     backgroundToken: 'accent',
@@ -51,7 +50,7 @@ export const LIST_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: asComponent(SectionHeader),
     name: 'SectionHeader.title',
-    category: 'surface',
+    category: 'list',
     interactive: false,
     foregroundToken: 'muted-foreground',
     backgroundToken: 'background',
