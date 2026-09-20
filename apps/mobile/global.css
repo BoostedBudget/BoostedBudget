@@ -1,6 +1,32 @@
-@import 'tailwindcss';
+/* ⚠ The utilities are imported WITHOUT `layer(utilities)`, deliberately.
+ *
+ * `@import 'tailwindcss'` expands to `@layer utilities { @tailwind utilities }`. On web,
+ * react-native-web injects its base component styles (`#react-native-stylesheet`) as UNLAYERED
+ * rules, and unlayered rules beat every `@layer` rule regardless of source order. With the
+ * utilities layered, `.css-g5y9jx{background-color:transparent}` and `.css-146c3p1{color:black}`
+ * therefore won over `.bg-background` / `.text-foreground`, and the exported mobile web build
+ * rendered completely unthemed (black text, no surfaces, no dark section). Verified against the
+ * built `dist/web` in a real browser: removing RNW's stylesheet restored the theme, and this
+ * import form does the same without touching RNW.
+ *
+ * `tailwindcss/utilities.css` is just `@tailwind utilities`, so importing it without a `layer()`
+ * emits the utilities unlayered — which is what lets them win. `theme` and `preflight` stay
+ * layered so react-native-web keeps its component baseline. Guarded by the Playwright rendered
+ * contrast + geometry pass (`apps/mobile/e2e/visual/gallery.spec.ts`, Todo 22). */
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/preflight.css' layer(base);
+@import 'tailwindcss/utilities.css';
 @import 'nativewind/theme';
 @import '@boostedbudget/design-tokens/nativewind.css';
 
 @source './app';
 @source './src';
+
+/* Pin the root font size so `rem`-based typography resolves to the same numbers the
+ * `@boostedbudget/design-tokens/native` adapter publishes (`text-bb-body` = 1rem = 16, matching
+ * the adapter's 16). `react-native-css` scans the compiled CSS for `:root { font-size: Npx }`
+ * and inlines rem at that multiplier (default 14), so without this rule every `text-bb-*`
+ * utility would resolve 0.875x its token value on native and in jest. */
+:root {
+  font-size: 16px;
+}

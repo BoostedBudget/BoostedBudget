@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Platform, Pressable, Text, View } from 'react-native'
 import { asBillingPlatform, selectBillingProvider } from '../src/billing/provider'
+import { ThemeSelector } from '../src/components/ui/ThemeSelector'
 import { describePublicEnvironment, MobilePublicEnvironment } from '../src/config/public-env'
 
 interface ReadinessScreenProps {
@@ -34,6 +35,7 @@ export default function ReadinessScreen({
         <Text className="text-muted-foreground">Authentication: deferred</Text>
         <Text className="text-muted-foreground">Offline cache: deferred</Text>
       </View>
+      <ThemeSelector />
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Check configuration"

@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url'
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const webPath = resolve(packageRoot, 'generated/web.css')
 const nativewindPath = resolve(packageRoot, 'generated/nativewind.css')
+const nativePath = resolve(packageRoot, 'generated/native.ts')
+const excludePath = resolve(packageRoot, 'generated/nativewind-exclude.json')
 
 function readGenerated(path: string): string {
   return existsSync(path) ? readFileSync(path, 'utf8') : ''
@@ -40,7 +42,7 @@ describe('generated design-token CSS', () => {
     expect(second.exitCode).toBe(0)
     expect(first.stdout.toString()).toBe(second.stdout.toString())
     expect(first.stdout.toString()).toBe(
-      `${readGenerated(webPath)}\n--- nativewind.css ---\n${readGenerated(nativewindPath)}`,
+      `${readGenerated(webPath)}\n--- nativewind.css ---\n${readGenerated(nativewindPath)}\n--- native.ts ---\n${readGenerated(nativePath)}\n--- nativewind-exclude.json ---\n${readGenerated(excludePath)}`,
     )
   })
 
@@ -96,6 +98,56 @@ describe('generated design-token CSS', () => {
 
       expect(result.exitCode).toBe(1)
       expect(result.stderr.toString()).toContain('nativewind.css is stale')
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  })
+
+  it('reports a stale native adapter artifact', () => {
+    const fixtureDir = mkdtempSync(resolve(tmpdir(), 'boostedbudget-design-tokens-'))
+    try {
+      cpSync(resolve(packageRoot, 'generated'), fixtureDir, { recursive: true })
+      writeFileSync(resolve(fixtureDir, 'native.ts'), 'stale native tokens\n')
+
+      const result = Bun.spawnSync({
+        cmd: [
+          process.execPath,
+          'run',
+          'scripts/generate.ts',
+          '--check',
+          '--generated-dir',
+          fixtureDir,
+        ],
+        cwd: packageRoot,
+      })
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr.toString()).toContain('native.ts is stale')
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true })
+    }
+  })
+
+  it('reports a stale nativewind exclude artifact', () => {
+    const fixtureDir = mkdtempSync(resolve(tmpdir(), 'boostedbudget-design-tokens-'))
+    try {
+      cpSync(resolve(packageRoot, 'generated'), fixtureDir, { recursive: true })
+      writeFileSync(resolve(fixtureDir, 'nativewind-exclude.json'), '[]\n')
+
+      const result = Bun.spawnSync({
+        cmd: [
+          process.execPath,
+          'run',
+          'scripts/generate.ts',
+          '--check',
+          '--generated-dir',
+          fixtureDir,
+        ],
+        cwd: packageRoot,
+      })
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr.toString()).toContain('nativewind-exclude.json is stale')
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true })
     }

@@ -370,6 +370,10 @@ apps/web/e2e/.env.test
 apps/web/e2e-*-diagnostic.png
 .playwright-mcp/
 
+# Playwright visual/accessibility layer for the exported mobile web build (apps/mobile)
+apps/mobile/playwright-report/
+apps/mobile/test-results/
+
 # Wrangler
 .wrangler/
 
