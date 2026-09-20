@@ -1,4 +1,4 @@
-import { Pressable, View } from 'react-native'
+import { Platform, Pressable, View } from 'react-native'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
 import { Text } from './Text'
 import { useTheme } from '../../theme/ThemeProvider'
@@ -44,6 +44,9 @@ export function ThemeSelector({ testID = 'theme-selector' }: ThemeSelectorProps)
             accessibilityRole="radio"
             accessibilityLabel={label}
             accessibilityState={{ selected }}
+            // `role="radio"` requires `aria-checked`, and react-native-web 0.21 drops
+            // `accessibilityState` (see Switch.tsx), so the browser needs it directly.
+            {...(Platform.OS === 'web' ? { 'aria-checked': selected } : {})}
             onPress={() => setPreference(value)}
             style={{ minHeight: nativeTokens.light.touchTarget.min }}
             className={`flex-1 items-center justify-center rounded-lg px-bb-3 py-bb-2 ${

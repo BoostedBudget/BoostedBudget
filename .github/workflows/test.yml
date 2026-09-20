@@ -2463,6 +2463,17 @@ jobs:
         # reported, and exits non-zero when any threshold in nativewind-gate.evidence.json fails.
         run: bun run --cwd apps/mobile gate:nativewind --check
 
+      - name: Install Playwright browsers
+        # Todo 22 (#1658). `--with-deps` is mandatory on the Linux runner (rule R2 in
+        # scripts/check-runner-portability.py): without it Chromium installs but cannot launch.
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run mobile visual and accessibility tests
+        # Todo 22 (#1658): drives the static web export served by apps/mobile/scripts/serve-web.ts
+        # (never `expo start`). The step is pinned in scripts/check-mobile-ci.py's REQUIRED_STEPS,
+        # so it cannot be dropped from CI without that guard failing.
+        run: bun run --cwd apps/mobile e2e:visual
+
   # =============================================================================
   # Frontend Tests (Single job - no sharding)
   # =============================================================================

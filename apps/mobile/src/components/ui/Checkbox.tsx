@@ -1,4 +1,4 @@
-import { Pressable, View } from 'react-native'
+import { Platform, Pressable, View } from 'react-native'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
 import { Text } from './Text'
 import type { FieldAccessibilityState } from './TextField'
@@ -46,11 +46,17 @@ export function Checkbox({
   }
   const glyph = indeterminate ? '–' : checked ? '✓' : ''
 
+  // Web only: react-native-web 0.21 drops `accessibilityState`, so `role="checkbox"` needs the ARIA
+  // attribute directly (see Switch.tsx for why this is not applied on native).
+  const ariaStateProps =
+    Platform.OS === 'web' ? { 'aria-checked': indeterminate ? ('mixed' as const) : checked } : {}
+
   return (
     <Pressable
       testID={testID}
       accessibilityRole="checkbox"
       accessibilityState={state}
+      {...ariaStateProps}
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityHint={accessibilityHint}
       disabled={disabled}
