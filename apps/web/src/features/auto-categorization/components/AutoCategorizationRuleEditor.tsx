@@ -659,7 +659,8 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
       }
 
       case 'pfc_primary_select':
-        // existing_pfc_primary: display shown, raw PFC enum stored
+        // existing_pfc_primary: display shown, raw PFC enum stored. The raw enum is the category
+        // the bank ORIGINALLY reported — the match target, before any override (#1684 Task 4).
         return (
           <SearchableSelect
             options={plaidPrimaries.map(p => ({ value: p.enum, label: p.display }))}
@@ -674,7 +675,9 @@ export function AutoCategorizationRuleEditor({ mode, rule, onSave, onCancel, pla
         )
 
       case 'pfc_detailed_select': {
-        // existing_pfc_detailed: two-stage cascading dropdown (primary → detailed children)
+        // existing_pfc_detailed: two-stage cascading dropdown (primary → detailed children). The
+        // stored value is the raw enum the bank ORIGINALLY reported — the match target, before any
+        // override (#1684 Task 4).
         const detailedValue = String(condition.value || '')
         // Derive selected primary: from explicit per-condition selection, OR from cached row on edit
         const selectedPrimary = pfcDetailedPrimarySelections[index] ??

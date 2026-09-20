@@ -59,6 +59,17 @@ func TestScanDestinations_MapColumnsToTheRightFields_Integration(t *testing.T) {
 	`, accountID, linkedItemID, userID, "plaid-acc-scanmap-"+accountID)
 	require.NoError(t, err, "seed account")
 
+	// MANDATORY: transactions.user_account_id carries a LIVE FK to user_accounts(id)
+	// (migrations/000034...up.sql:21), so the target must exist in the SAME tx BEFORE the
+	// transactions INSERT. On user_accounts only user_id and institution_id are NOT NULL without a
+	// default (migrations/000031...up.sql:21,25). Its id is the sentinel the round-trip asserts.
+	userAccountID := uuid.New().String()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_accounts (id, user_id, institution_id)
+		VALUES ($1, $2, $3)
+	`, userAccountID, userID, "ins-scanmap-"+userAccountID)
+	require.NoError(t, err, "seed user_account")
+
 	// Every value below is unique ACROSS ITS TYPE GROUP. Reusing a value anywhere in a group is
 	// what would let a swap pass, so the sentinels spell out which column they came from. The five
 	// PFC columns take real enum members instead of "*_SENTINEL" strings because CHECK constraints
@@ -92,7 +103,8 @@ func TestScanDestinations_MapColumnsToTheRightFields_Integration(t *testing.T) {
 			category_source, category_override_date,
 			effective_category_name,
 			reviewed, reviewed_at,
-			deleted_at, deleted_reason, deleted_by
+			deleted_at, deleted_reason, deleted_by,
+			user_account_id
 		) VALUES (
 			$1, $2, $3, $4,
 			'plaid', NULL, $5, NULL,
@@ -104,10 +116,12 @@ func TestScanDestinations_MapColumnsToTheRightFields_Integration(t *testing.T) {
 			'manual', $8,
 			'EFFECTIVE_CATEGORY_NAME_SENTINEL',
 			true, $9,
-			$10, 'provider_removed_posted', 'DELETED_BY_SENTINEL'
+			$10, 'provider_removed_posted', 'DELETED_BY_SENTINEL',
+			$11
 		)
 	`, txnID, userID, accountID, linkedItemID,
-		"blind-scanmap-"+txnID, date, authorizedDate, categoryOverrideDate, reviewedAt, deletedAt)
+		"blind-scanmap-"+txnID, date, authorizedDate, categoryOverrideDate, reviewedAt, deletedAt,
+		userAccountID)
 	require.NoError(t, err, "seed transaction")
 
 	repo := NewTransactionRepository(tx, newTestFieldEncryptor(t)).(*transactionRepository)
@@ -154,6 +168,11 @@ func TestScanDestinations_MapColumnsToTheRightFields_Integration(t *testing.T) {
 	assert.Equal(t, "TRAVEL_FLIGHTS", deref(got.EffectivePFCDetailed))
 	assert.Equal(t, "EFFECTIVE_CATEGORY_NAME_SENTINEL", deref(got.EffectiveCategoryName))
 	assert.Equal(t, "DELETED_BY_SENTINEL", deref(got.DeletedBy))
+	// #1684: user_account_id is the tail column and deleted_by the one immediately before it —
+	// both *string, so a swap between the two is invisible to the compiler, a mock and a length
+	// check alike. Each sentinel must land in its own field.
+	require.NotNil(t, got.UserAccountID)
+	assert.Equal(t, userAccountID, *got.UserAccountID)
 	assert.Equal(t, domain.CategorySourceManual, got.CategorySourceField)
 	require.NotNil(t, got.DeletedReason)
 	assert.Equal(t, domain.TxnDeletedProviderRemovedPosted, *got.DeletedReason)

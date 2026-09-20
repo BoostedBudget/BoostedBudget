@@ -3,6 +3,8 @@ import { RuleConditionField } from '@boostedbudget/api-client/models/ruleConditi
 import { RuleConditionOperator } from '@boostedbudget/api-client/models/ruleConditionOperator'
 import {
   CONDITION_CHOICES,
+  CONDITION_FIELD_LABELS,
+  CONDITION_TYPE_LABELS,
   FIELD_OPERATORS,
   conditionChoiceKey,
   type ConditionField,
@@ -92,5 +94,35 @@ describe('conditionChoiceKey', () => {
   it('resolves a pair with no fused ancestor to its field:operator key', () => {
     expect(conditionChoiceKey({ type: 'expression', field: 'name', operator: 'contains' } as never))
       .toBe('name:contains')
+  })
+})
+
+// #1684 Task 4: the PFC conditions match the RAW provider category, not the effective
+// (override-applied) one — `matchPFC` in backend/internal/rules/field_evaluator.go reads
+// tx.PFCPrimary/tx.PFCDetailed directly, so a rule's own action can never rewrite what it
+// matches. The bare "PFC Primary" / "PFC Detailed" read as "the category this transaction
+// currently has", which is exactly the effective value an override changes. These labels are
+// what the rule card, the history panel and the condition picker all render, so the fix has to
+// live here rather than in one renderer.
+describe('PFC condition labels state source semantics (#1684)', () => {
+  it('names the bank-reported category on the fused condition types', () => {
+    expect(CONDITION_TYPE_LABELS.existing_pfc_primary)
+      .toBe('Existing PFC Primary (as the bank originally reported it)')
+    expect(CONDITION_TYPE_LABELS.existing_pfc_detailed)
+      .toBe('Existing PFC Detailed (as the bank originally reported it)')
+  })
+
+  it('names the bank-reported category on the {field} form too', () => {
+    expect(CONDITION_FIELD_LABELS.pfc_primary)
+      .toBe('PFC Primary (as the bank originally reported it)')
+    expect(CONDITION_FIELD_LABELS.pfc_detailed)
+      .toBe('PFC Detailed (as the bank originally reported it)')
+  })
+
+  it('no longer publishes the ambiguous bare label anywhere', () => {
+    expect(Object.values(CONDITION_TYPE_LABELS)).not.toContain('PFC Primary')
+    expect(Object.values(CONDITION_TYPE_LABELS)).not.toContain('PFC Detailed')
+    expect(Object.values(CONDITION_FIELD_LABELS)).not.toContain('PFC Primary')
+    expect(Object.values(CONDITION_FIELD_LABELS)).not.toContain('PFC Detailed')
   })
 })
