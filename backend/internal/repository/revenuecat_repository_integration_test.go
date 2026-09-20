@@ -270,6 +270,55 @@ func TestRevenueCatRepository_PendingOperationsFairToNewIntent(t *testing.T) {
 	require.Equal(t, next.ID, pending[0].ID, "permanent older failures must not starve new intents")
 }
 
+// TestRevenueCatRepository_AbandonExhaustedOperationsSweepRetiresWithoutStarvation is the G1 proof:
+// the fair PendingOperations page (attempts ASC) can never reach a cap-adjacent operation when more
+// than one page of lower-attempt work exists, so the attempt cap is only a hard bound if a
+// deterministic sweep retires exhausted rows directly. It also pins the last_error CASE: an empty
+// provider error is stamped with the cap reason, an existing one is preserved.
+func TestRevenueCatRepository_AbandonExhaustedOperationsSweepRetiresWithoutStarvation(t *testing.T) {
+	pool, id := revenueCatTestDB(t)
+	repo := NewRevenueCatRepository(pool, newTestFieldEncryptor(t))
+	ctx := context.Background()
+
+	emptyErr := domain.RevenueCatOperation{UserID: id, Class: "comp", Key: "comp_premium", Reason: "exhausted", CreatedAt: time.Now().Add(-time.Hour)}
+	keptErr := domain.RevenueCatOperation{UserID: id, Class: "trial", Key: "trial_premium", Reason: "exhausted with error", CreatedAt: time.Now().Add(-time.Hour)}
+	require.NoError(t, repo.RequestOperation(ctx, &emptyErr))
+	require.NoError(t, repo.RequestOperation(ctx, &keptErr))
+	for i := 0; i < 101; i++ {
+		_, err := pool.Exec(ctx, `INSERT INTO revenuecat_operations(id,user_id,class,entitlement_key,expires_at,revoke,version,reason,stage,attempts,last_error,created_at)
+			VALUES($1,$2,'comp','comp_premium',NULL,false,$3,'seed','pending',0,'',now())`, uuid.NewString(), id, i+2)
+		require.NoError(t, err)
+	}
+	_, err := pool.Exec(ctx, `UPDATE revenuecat_operations SET attempts=500,last_error='' WHERE id=$1`, emptyErr.ID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE revenuecat_operations SET attempts=500,last_error='provider_unavailable' WHERE id=$1`, keptErr.ID)
+	require.NoError(t, err)
+
+	page, err := repo.PendingOperations(ctx, 100)
+	require.NoError(t, err)
+	require.Len(t, page, 100)
+	for _, op := range page {
+		require.NotEqual(t, emptyErr.ID, op.ID, "the exhausted op sorts beyond the fair page and cannot be retried")
+		require.NotEqual(t, keptErr.ID, op.ID)
+	}
+
+	n, err := repo.AbandonExhaustedOperations(ctx, 500, 100)
+	require.NoError(t, err)
+	require.Equal(t, 2, n, "the deterministic sweep must retire every exhausted op the fair page never reaches")
+
+	var stage, lastErr string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT stage,last_error FROM revenuecat_operations WHERE id=$1`, emptyErr.ID).Scan(&stage, &lastErr))
+	require.Equal(t, "abandoned", stage)
+	require.Equal(t, "attempt_cap_exceeded", lastErr, "an empty last_error is stamped with the cap reason")
+	require.NoError(t, pool.QueryRow(ctx, `SELECT stage,last_error FROM revenuecat_operations WHERE id=$1`, keptErr.ID).Scan(&stage, &lastErr))
+	require.Equal(t, "abandoned", stage)
+	require.Equal(t, "provider_unavailable", lastErr, "a recorded provider error is preserved, not overwritten")
+
+	pending, err := repo.PendingOperations(ctx, 200)
+	require.NoError(t, err)
+	require.Len(t, pending, 101, "both exhausted ops have left the pending population")
+}
+
 func TestRevenueCatRepository_AbandonedOperationLeavesThePendingSetAndProjectionGate(t *testing.T) {
 	pool, id := revenueCatTestDB(t)
 	repo := NewRevenueCatRepository(pool, newTestFieldEncryptor(t))

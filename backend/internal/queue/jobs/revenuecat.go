@@ -9,6 +9,7 @@ import (
 	rc "github.com/maxnussbaum/BoostedBudget/internal/integration/revenuecat"
 	"github.com/maxnussbaum/BoostedBudget/internal/observability"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
 )
 
@@ -124,6 +125,7 @@ type RevenueCatRepairArgs struct{}
 func (RevenueCatRepairArgs) Kind() string { return "revenuecat_repair" }
 
 type revenueCatRepairStore interface {
+	AbandonExhaustedOperations(context.Context, int, int) (int, error)
 	PendingOperations(context.Context, int) ([]domain.RevenueCatOperation, error)
 	ListDue(context.Context, time.Time, int) ([]string, error)
 }
@@ -152,6 +154,12 @@ func (w *RevenueCatRepairWorker) SetJobQueue(q revenueCatJobEnqueuer) {
 func (w *RevenueCatRepairWorker) Work(ctx context.Context, _ *river.Job[RevenueCatRepairArgs]) error {
 	if w.store == nil || w.queue == nil {
 		return errors.New("RevenueCat repair unavailable")
+	}
+	// Retire exhausted operations first: the fair page below orders by attempts ASC, so a
+	// cap-adjacent operation sorts last and would never be selected while a page of lower-attempt
+	// work exists. The sweep selects by attempts DESC, so the cap stays a hard bound.
+	if _, err := w.store.AbandonExhaustedOperations(ctx, services.RevenueCatMaxOperationAttempts, 100); err != nil {
+		return err
 	}
 	operations, err := w.store.PendingOperations(ctx, 100)
 	if err != nil {
