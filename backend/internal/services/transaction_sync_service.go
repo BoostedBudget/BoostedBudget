@@ -776,8 +776,8 @@ func (s *transactionSyncService) SyncTransactions(
 	// table.)
 	//
 	// The flag is armed BEFORE each write is attempted, not after it succeeds (#1537 T92). It used
-	// to be armed after: processModifiedTransactions commits one transactionRepo.Update PER ROW
-	// and returns on the first failure, so a MODIFIED-ONLY sync (Plaid DEFAULT_UPDATE's common
+	// to be armed after: processModifiedTransactions commits one transactionRepo.UpdateFromSync PER
+	// ROW and returns on the first failure, so a MODIFIED-ONLY sync (Plaid DEFAULT_UPDATE's common
 	// shape, with result.Added empty and therefore no earlier step to arm the flag) that committed
 	// 5 of 10 updates returned before arming it — five durable rows in `transactions`, a
 	// cached-read table, left invisible to cached analytics for the full namespace TTL. Arming
@@ -1332,6 +1332,11 @@ func (s *transactionSyncService) processModifiedTransactions(
 	// rather than once per transaction. See the batch block after the loop.
 	var upsertCandidates []domain.Transaction
 
+	// #1684 (Defect 2): modified entries WITH a live stored row. Collected for the same reason as
+	// upsertCandidates — one ApplyRulesToBatch call for the whole batch — with the added
+	// requirement that each element carries the stored row's guard state before rules run.
+	var updateCandidates []domain.Transaction
+
 	// Issue #1163: Batch-upsert merchants for modified transactions (best-effort)
 	// Build domain txns temporarily just to use shared upsertMerchants helper
 	modifiedDomainTxns := make([]domain.Transaction, len(modified))
@@ -1413,23 +1418,106 @@ func (s *transactionSyncService) processModifiedTransactions(
 		// CRITICAL: Preserve user_notes from existing transaction
 		newTxn.UserNotes = existingTxn.UserNotes
 
-		// Copy ID from existing transaction (required for Update)
+		// Copy ID from existing transaction (required for the write)
 		newTxn.ID = existingTxn.ID
 
-		// Issue #1163: Stamp merchant_id from the pre-computed map (best-effort)
+		// #1684 (Defect 2): LOAD THE GUARD STATE BEFORE RULES RUN. newTxn comes from the Plaid
+		// mapper, which sets none of these fields, and ApplyRulesToBatch's guard reads
+		// `CategorySourceField == manual || Reviewed` — so without this copy the guard skips
+		// NOTHING and the next sync silently overwrites a category the user set by hand and the
+		// review state that protects it.
+		//
+		// ⚠ ReviewedAt is load-bearing and easy to omit: the guard SKIPS rule application for a
+		// reviewed row, but the write still executes, so a missing copy would null reviewed_at
+		// while leaving reviewed=true — losing the user's review timestamp irrecoverably.
+		//
+		// These move as a UNIT with the tuple the write persists; a partial copy would leave the
+		// in-memory row disagreeing with the row on disk.
+		newTxn.CategorySourceField = existingTxn.CategorySourceField
+		newTxn.Reviewed = existingTxn.Reviewed
+		newTxn.ReviewedAt = existingTxn.ReviewedAt
+		newTxn.CategoryOverrideKind = existingTxn.CategoryOverrideKind
+		newTxn.PFCPrimaryOverride = existingTxn.PFCPrimaryOverride
+		newTxn.PFCDetailedOverride = existingTxn.PFCDetailedOverride
+		newTxn.CustomCategoryOverrideID = existingTxn.CustomCategoryOverrideID
+		newTxn.Tags = existingTxn.Tags
+		newTxn.TagsSource = existingTxn.TagsSource
+
+		// Issue #1163: Stamp merchant_id from the pre-computed map (best-effort). It runs BEFORE
+		// the batch rule call below so an effective_merchant condition sees the same value the
+		// added path's rules see — preview and sync must not disagree (#1625 Task 11).
 		if newTxn.MerchantName != nil && merchantIDs != nil {
 			if id, ok := merchantIDs[*newTxn.MerchantName]; ok {
 				newTxn.MerchantID = &id
 			}
 		}
 
-		// Update transaction with new data but preserved user_notes
-		if err := s.transactionRepo.Update(ctx, newTxn); err != nil {
-			return fmt.Errorf("failed to update transaction %s: %w", plaidTxn.TransactionId, err)
+		// Collected, not written: the write happens in the batch block after the loop, so
+		// categorization rules run ONCE for the whole batch rather than once per transaction.
+		updateCandidates = append(updateCandidates, *newTxn)
+	}
+
+	// #1684 (Defect 2): the update branch's rules and writes are batched here, mirroring the upsert
+	// block below and processAddedTransactions (:1185-1211). ApplyRulesToBatch's rule fetch,
+	// merchant enrichment and quarantine census all run once per call
+	// (rule_application_service.go:298-325), so a call per transaction is N× the queries.
+	//
+	// The guard state was already copied onto every candidate in the loop, BEFORE this call: the
+	// guard is only meaningful if it can see the stored row, and reading it here would be too late
+	// for the manual/reviewed rows it exists to protect.
+	if len(updateCandidates) > 0 {
+		var ruleApplications []BatchRuleApplication
+		if s.ruleApplicationService != nil {
+			apps, applyErr := s.ruleApplicationService.ApplyRulesToBatch(ctx, updateCandidates, linkedItem.UserID)
+			if applyErr != nil {
+				// Log but don't fail — rule application is non-critical.
+				s.logger.Warn("failed to apply categorization rules to modified transactions",
+					"error", applyErr)
+			} else {
+				ruleApplications = apps
+			}
 		}
 
-		settledCandidates = append(settledCandidates, *newTxn)
-		successCount++
+		// ⚠ SIDE-EFFECT GATING DIFFERS FROM THE ADDED PATH, deliberately. The added path passes
+		// CreateBatch's real insertedIDs, so its side effects mean "this row is NEW". The update
+		// branch inserts nothing, so an empty map would emit NOTHING — silently dropping both the
+		// match counts and the rule_execution_history trail for every rule-categorized
+		// modification. The map instead names exactly the transactions whose category, tags or
+		// review state GENUINELY changed; their rows already exist, so writeExecutionHistory's FK
+		// to transactions is satisfied.
+		//
+		// ⚠ The predicate is slightly broader than "category or tags changed", and on purpose:
+		// buildRuleExecutionRecords also records a `reviewed` false→true transition
+		// (rule_application_service.go:499-501), which is a genuine, permanent, user-visible change
+		// too. Restricting the map to genuinely-changed rows is what BOUNDS the match-count increase
+		// on the first sync after deploy — a rule that matched but changed nothing is excluded.
+		changedIDs := make(map[string]bool, len(ruleApplications))
+		for _, app := range ruleApplications {
+			if len(app.Executions) > 0 {
+				changedIDs[app.TransactionID] = true
+			}
+		}
+
+		// Capture the provider's raw external ids BEFORE the write, so the error line names the
+		// transaction the provider sent rather than a value a future change to the writer encrypted.
+		rawExternalIDs := make([]string, len(updateCandidates))
+		for i := range updateCandidates {
+			if updateCandidates[i].ExternalTransactionID != nil {
+				rawExternalIDs[i] = *updateCandidates[i].ExternalTransactionID
+			}
+		}
+
+		for i := range updateCandidates {
+			if err := s.transactionRepo.UpdateFromSync(ctx, &updateCandidates[i]); err != nil {
+				return fmt.Errorf("failed to update transaction %s: %w", rawExternalIDs[i], err)
+			}
+			settledCandidates = append(settledCandidates, updateCandidates[i])
+			successCount++
+		}
+
+		if s.ruleApplicationService != nil && len(ruleApplications) > 0 {
+			s.ruleApplicationService.EmitBatchSideEffects(ctx, linkedItem.UserID, ruleApplications, changedIDs)
+		}
 	}
 
 	// #1684 (Defect 2): the upsert branch's writes are batched here so categorization rules run

@@ -74,8 +74,46 @@ type TransactionRepository interface {
 	// returned map is the other question — "is this row new?" — and does NOT widen to conflict rows.
 	CreateBatch(ctx context.Context, transactions []domain.Transaction) (map[string]bool, error)
 
-	// Update updates an existing transaction
+	// Update updates an existing transaction's PROVIDER-OWNED fields only. It deliberately carries
+	// no category tuple, no tags and no review state — see UpdateFromSync for why that contract is
+	// kept intact rather than widened.
 	Update(ctx context.Context, transaction *domain.Transaction) error
+
+	// UpdateFromSync is Update's sibling for the Plaid `modified` path: it rewrites the same
+	// provider-owned columns AND persists the full category tuple, tags and review state in the
+	// SAME statement. Issue #1684 Defect 2.
+	//
+	// WHY A SIBLING AND NOT A WIDER Update. The category tuple moves as a unit — the
+	// `valid_category_override_discriminator` CHECK rejects a partial one with SQLSTATE 23514 — and
+	// `Update`'s provider-only contract is what the `added` path's CreateBatch conflict clause
+	// mirrors. Widening `Update` would change the meaning of an existing method for every caller
+	// instead of adding one that says what it writes.
+	//
+	// Update's ENUMERATED CALLERS, re-derived by
+	// `grep -rn --include='*.go' 'transactionRepo\.Update(\|txnRepo\.Update(' internal cmd`:
+	//   - internal/services/transaction_sync_service.go:1427 — the `modified` path, which belongs to
+	//     UpdateFromSync because it must carry the category tuple.
+	//   - internal/workers/plaid_sync_provider.go:251 — NOT wired into production (see that file's
+	//     own banner), so it is dead but must stay audited. It needs no bump because it never runs;
+	//     if it is ever wired it needs its own, the same latent-unwired-code hazard issue #1530
+	//     tracks.
+	//
+	// ⚠ It MUST replicate every `Update` SET clause, in particular
+	// `pending_transaction_id_blind_idx = COALESCE($n, pending_transaction_id_blind_idx)`.
+	// processModifiedTransactions feeds settledCandidates to pullForwardStrandedSettlements, whose
+	// monotonic-pointer semantics depend on that COALESCE (#1578): without it, a re-delivery of an
+	// ordinary modification would erase a pointer the row had already learned and the
+	// stranded-settlement repair would silently match nothing.
+	//
+	// ⚠ It also replicates `external_metadata`'s encryption, which happens in Go before the
+	// statement runs.
+	//
+	// `effective_category_name` is computed from the NEW parameter values rather than from the
+	// pre-update row: Postgres evaluates every SET expression against the OLD row, so a CASE that
+	// read `category_override_kind` / `pfc_primary_override` would store the WRONG display name for
+	// a row whose override this very statement is changing. `effective_pfc_primary` /
+	// `effective_pfc_detailed` are GENERATED columns (migration 000073) and are never written.
+	UpdateFromSync(ctx context.Context, transaction *domain.Transaction) error
 
 	// TombstoneByExternalID marks a provider-removed transaction as deleted WITHOUT destroying
 	// it, and reports which class of removal it turned out to be. Issue #1569.
@@ -727,6 +765,129 @@ func (r *transactionRepository) Update(ctx context.Context, transaction *domain.
 	}
 
 	return nil
+}
+
+// UpdateFromSync is Update's sibling for the `modified` path: the same provider-owned columns PLUS
+// the coherent category tuple, tags and review state, in ONE statement. See the interface doc for
+// the caller enumeration and the contract it must replicate.
+func (r *transactionRepository) UpdateFromSync(ctx context.Context, transaction *domain.Transaction) error {
+	transaction.UpdatedAt = time.Now()
+
+	// Encrypt external_metadata before writing — same as Update.
+	encMeta, err := r.enc.EncryptNullableString(transaction.ExternalMetadata)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt external_metadata: %w", err)
+	}
+
+	tagsJSON, err := marshalTagsJSON(transaction.Tags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tags: %w", err)
+	}
+	tagsSourceJSON, err := marshalTagsSourceJSON(transaction.TagsSource)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tags_source: %w", err)
+	}
+
+	// category_source defaults to 'plaid' when unset, exactly as CreateBatch does. A legacy row's
+	// NULL column scans to "" (scanTransactionDestSliceWithState assigns only when the column is
+	// Valid), and writing "" back violates valid_category_source — category_source IN
+	// ('plaid','rule','manual') — so the NULL-vs-"" ambiguity is resolved in favour of 'plaid'.
+	categorySource := string(transaction.CategorySourceField)
+	if categorySource == "" {
+		categorySource = string(domain.CategorySourcePlaid)
+	}
+
+	query := `
+		UPDATE transactions
+		SET amount = $1, date = $2, authorized_date = $3, name = $4,
+		    merchant_name = $5, merchant_id = $6, pfc_primary = $7, pfc_detailed = $8,
+		    pfc_confidence_level = $9, pfc_category_icon_url = $10, payment_channel = $11,
+		    pending = $12, external_metadata = $13, user_notes = $14, updated_at = $15,
+		    category_override_kind = $16,
+		    pfc_primary_override = $17,
+		    pfc_detailed_override = $18,
+		    custom_category_override_id = $19,
+		    category_source = $20,
+		    tags = $21,
+		    tags_source = $22,
+		    reviewed = $23,
+		    reviewed_at = $24,
+		    -- #1578: monotonic, exactly as in Update's clause. A non-NULL arrival teaches a stored
+		    -- row its pending twin; a NULL arrival (every ordinary modification of a transaction
+		    -- that is not a settlement) must not erase what we already know.
+		    pending_transaction_id_blind_idx = COALESCE($25, pending_transaction_id_blind_idx),
+		    -- Computed from the NEW parameter values, NOT from the row: Postgres evaluates every
+		    -- SET expression against the OLD row, so reading category_override_kind /
+		    -- pfc_primary_override here would store the pre-update display name for a row whose
+		    -- override this statement is changing.
+		    -- tombstone-exempt(custom_categories, write:transactions): HISTORICAL name resolution
+		    -- (#1569 Task 9), and the UPDATE target is unfiltered because liveness is the sync
+		    -- path's concern, not this statement's (#1569 T8 write-target audit).
+		    effective_category_name = CASE
+		        WHEN $16 = 'custom' THEN
+		            (SELECT name FROM custom_categories WHERE id = $19::uuid AND user_id = $27)
+		        WHEN $16 = 'pfc' THEN COALESCE(NULLIF($17, ''), $7)
+		        ELSE $7
+		    END
+		WHERE id = $26 AND user_id = $27
+	`
+
+	ct, err := r.db.Exec(ctx, query,
+		transaction.Amount,
+		transaction.Date,
+		transaction.AuthorizedDate,
+		transaction.Name,
+		transaction.MerchantName,
+		transaction.MerchantID,
+		transaction.PFCPrimary,
+		transaction.PFCDetailed,
+		transaction.PFCConfidenceLevel,
+		transaction.PFCCategoryIconURL,
+		transaction.PaymentChannel,
+		transaction.Pending,
+		encMeta,
+		transaction.UserNotes,
+		transaction.UpdatedAt,
+		transaction.CategoryOverrideKind,
+		transaction.PFCPrimaryOverride,
+		transaction.PFCDetailedOverride,
+		transaction.CustomCategoryOverrideID,
+		categorySource,
+		tagsJSON,
+		tagsSourceJSON,
+		transaction.Reviewed,
+		transaction.ReviewedAt,
+		r.pendingTwinBlindIndex(transaction),
+		transaction.ID,
+		transaction.UserID,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to update transaction from sync: %w", err)
+	}
+
+	if ct.RowsAffected() == 0 {
+		return ErrTransactionNotFound
+	}
+
+	return nil
+}
+
+// marshalTagsJSON / marshalTagsSourceJSON serialise the two annotation arrays, mapping a nil slice
+// to an empty JSON array rather than JSON null: the columns are JSONB with an '[]' default and every
+// reader unmarshals them, so null is a value nothing in the tree produces or expects.
+func marshalTagsJSON(tags []string) ([]byte, error) {
+	if tags == nil {
+		tags = []string{}
+	}
+	return json.Marshal(tags)
+}
+
+func marshalTagsSourceJSON(sources []domain.TagSource) ([]byte, error) {
+	if sources == nil {
+		sources = []domain.TagSource{}
+	}
+	return json.Marshal(sources)
 }
 
 // settlementCategoryMoveCond and settlementTagsMoveCond are the two "may this move" predicates used
