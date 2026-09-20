@@ -9,6 +9,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	rc "github.com/maxnussbaum/BoostedBudget/internal/integration/revenuecat"
 	"github.com/maxnussbaum/BoostedBudget/internal/queue"
+	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
@@ -94,11 +95,48 @@ func TestRevenueCatSyncWorkerRejectsAmbiguousArguments(t *testing.T) {
 
 type revenueCatRepairSource struct{}
 
+func (revenueCatRepairSource) AbandonExhaustedOperations(context.Context, int, int) (int, error) {
+	return 0, nil
+}
 func (revenueCatRepairSource) PendingOperations(context.Context, int) ([]domain.RevenueCatOperation, error) {
 	return []domain.RevenueCatOperation{{ID: "operation", UserID: "grant-user"}}, nil
 }
 func (revenueCatRepairSource) ListDue(context.Context, time.Time, int) ([]string, error) {
 	return []string{"refresh-user"}, nil
+}
+
+// revenueCatRepairProbe records the order and arguments of the store calls Work makes, so a test
+// can prove the deterministic sweep runs BEFORE the fair retry page (otherwise a cap-adjacent op
+// starves) and receives the cap constant rather than a magic number.
+type revenueCatRepairProbe struct {
+	calls       []string
+	maxAttempts int
+	limit       int
+}
+
+func (p *revenueCatRepairProbe) AbandonExhaustedOperations(_ context.Context, maxAttempts, limit int) (int, error) {
+	p.calls = append(p.calls, "sweep")
+	p.maxAttempts, p.limit = maxAttempts, limit
+	return 0, nil
+}
+func (p *revenueCatRepairProbe) PendingOperations(context.Context, int) ([]domain.RevenueCatOperation, error) {
+	p.calls = append(p.calls, "pending")
+	return nil, nil
+}
+func (p *revenueCatRepairProbe) ListDue(context.Context, time.Time, int) ([]string, error) {
+	p.calls = append(p.calls, "due")
+	return nil, nil
+}
+
+func TestRevenueCatRepairSweepsExhaustedOperationsBeforeFairRetries(t *testing.T) {
+	probe := &revenueCatRepairProbe{}
+	w := NewRevenueCatRepairWorker(probe, &revenueCatRecordingQueue{})
+	require.NoError(t, w.Work(context.Background(), &river.Job[RevenueCatRepairArgs]{}))
+	require.Equal(t, []string{"sweep", "pending", "due"}, probe.calls,
+		"the deterministic sweep must retire exhausted operations before the fair queue pass")
+	require.Equal(t, services.RevenueCatMaxOperationAttempts, probe.maxAttempts,
+		"the sweep must use the one cap constant, not a divergent literal")
+	require.Equal(t, 100, probe.limit)
 }
 
 type revenueCatRecordingQueue struct {

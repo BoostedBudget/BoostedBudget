@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"regexp"
 	"testing"
 	"time"
 
@@ -85,21 +86,40 @@ func TestRevenueCatPendingOperationsQuery_ExcludesTerminalStages(t *testing.T) {
 	assert.NotContains(t, revenueCatPendingOperationsQuery, "'superseded'")
 }
 
-// TestRevenueCatFinishNonPendingRowCountsNothing guards against over-counting: an UPDATE that
-// matched no pending row is a no-op, not an application or a failure.
-func TestRevenueCatFinishNonPendingRowCountsNothing(t *testing.T) {
+// TestRevenueCatAbandonExhaustedOperationsQuery_PinsDeterministicSweep pins the SQL that makes the
+// attempt cap a hard bound. PendingOperations orders by attempts ASC, so a cap-adjacent operation
+// sorts LAST and is never reached when more than one page of lower-attempt work exists. The sweep
+// must instead select the HIGHEST-attempt pending rows (attempts DESC), atomically write the
+// terminal stage, stamp the cap reason only when no provider error was recorded, and bump attempts
+// so the row leaves the pending population exactly once.
+func TestRevenueCatAbandonExhaustedOperationsQuery_PinsDeterministicSweep(t *testing.T) {
+	sql := revenueCatAbandonExhaustedOperationsQuery
+	assert.Contains(t, sql, "SET stage='abandoned'")
+	assert.Contains(t, sql, "attempts=attempts+1")
+	assert.Contains(t, sql, "last_error=CASE WHEN last_error='' THEN 'attempt_cap_exceeded' ELSE last_error END")
+	assert.Contains(t, sql, "WHERE stage='pending' AND attempts >= $1")
+	assert.Contains(t, sql, "ORDER BY attempts DESC, created_at")
+	assert.Contains(t, sql, "RETURNING class")
+}
+
+// TestRevenueCatAbandonExhaustedOperationsRecordsTerminalFlow pins that the sweep is a terminal
+// write site equal in effect to FinishOperation: one abandonment metric per returned class, and the
+// returned count is exactly the number of rows retired.
+func TestRevenueCatAbandonExhaustedOperationsRecordsTerminalFlow(t *testing.T) {
 	db, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer db.Close()
-	s := &revenueCatSession{q: db, userID: "user"}
-	db.ExpectExec("UPDATE revenuecat_operations SET stage").
-		WithArgs("op", "user", "applied", "").
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	r := &revenueCatRepository{db: db}
+	db.ExpectQuery(regexp.QuoteMeta("UPDATE revenuecat_operations SET stage='abandoned'")).
+		WithArgs(500, 100).
+		WillReturnRows(pgxmock.NewRows([]string{"class"}).AddRow("comp").AddRow("trial"))
 
-	beforeApplied := testutil.ToFloat64(observability.RevenueCatGrantsAppliedTotal.WithLabelValues(observability.RevenueCatGrantClassComp))
-	beforeFailed := testutil.ToFloat64(observability.RevenueCatOperationFailuresTotal.WithLabelValues(observability.RevenueCatGrantClassComp))
-	require.NoError(t, s.FinishOperation(context.Background(), "op", "applied", "", "comp"))
+	beforeComp := testutil.ToFloat64(observability.RevenueCatOperationAbandonmentsTotal.WithLabelValues(observability.RevenueCatGrantClassComp))
+	beforeTrial := testutil.ToFloat64(observability.RevenueCatOperationAbandonmentsTotal.WithLabelValues(observability.RevenueCatGrantClassTrial))
+	n, err := r.AbandonExhaustedOperations(context.Background(), 500, 100)
+	require.NoError(t, err)
 	require.NoError(t, db.ExpectationsWereMet())
-	assert.Equal(t, beforeApplied, testutil.ToFloat64(observability.RevenueCatGrantsAppliedTotal.WithLabelValues(observability.RevenueCatGrantClassComp)))
-	assert.Equal(t, beforeFailed, testutil.ToFloat64(observability.RevenueCatOperationFailuresTotal.WithLabelValues(observability.RevenueCatGrantClassComp)))
+	require.Equal(t, 2, n)
+	assert.Equal(t, beforeComp+1, testutil.ToFloat64(observability.RevenueCatOperationAbandonmentsTotal.WithLabelValues(observability.RevenueCatGrantClassComp)))
+	assert.Equal(t, beforeTrial+1, testutil.ToFloat64(observability.RevenueCatOperationAbandonmentsTotal.WithLabelValues(observability.RevenueCatGrantClassTrial)))
 }

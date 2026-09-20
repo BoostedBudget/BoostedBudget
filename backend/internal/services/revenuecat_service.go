@@ -486,6 +486,7 @@ func (s *RevenueCatService) RequestGrant(ctx context.Context, id, class, tier st
 func (s *RevenueCatService) ProcessOperation(ctx context.Context, userID, operationID string) error {
 	var workErr error
 	var attempted *domain.RevenueCatOperation
+	var outcomeStage string
 	customer, _, identityErr := s.customerID(ctx, userID)
 	err := s.repo.WithCustomer(ctx, userID, func(session repository.RevenueCatSession) error {
 		op, err := session.Operation(ctx, operationID)
@@ -499,6 +500,7 @@ func (s *RevenueCatService) ProcessOperation(ctx context.Context, userID, operat
 		if identityErr != nil {
 			workErr = identityErr
 			stage, message := revenueCatOperationOutcome(op, workErr)
+			outcomeStage = stage
 			return session.FinishOperation(ctx, op.ID, stage, message, op.Class)
 		}
 		state, err := session.Read(ctx)
@@ -513,33 +515,43 @@ func (s *RevenueCatService) ProcessOperation(ctx context.Context, userID, operat
 			workErr = s.applyOperation(ctx, session, customer, op, &state)
 		}
 		stage, message := revenueCatOperationOutcome(op, workErr)
+		outcomeStage = stage
 		return session.FinishOperation(ctx, op.ID, stage, message, op.Class)
 	})
 	if err != nil {
 		return err
 	}
-	if attempted != nil {
-		phase := revenueCatOperationApplied
-		if workErr != nil {
-			phase = revenueCatOperationFailed
-		}
-		s.captureOperation(ctx, *attempted, phase)
-		s.captureTrialStarted(ctx, *attempted, workErr == nil)
-		if attempted.Revoke && workErr == nil {
-			s.captureRevocation(ctx, attempted.UserID, attempted.Key, phclient.RevenueCatAccessRevokedSourceAdmin)
-		}
+	if attempted == nil {
+		return nil
+	}
+	if outcomeStage == "abandoned" {
+		// Terminal: FinishOperation already recorded the abandonment metric, and no retryable work
+		// remains. Reporting the provider error here would mark the River job failed and emit a
+		// retryable-failure product event for an operation that will never be retried.
+		return nil
+	}
+	phase := revenueCatOperationApplied
+	if workErr != nil {
+		phase = revenueCatOperationFailed
+	}
+	s.captureOperation(ctx, *attempted, phase)
+	s.captureTrialStarted(ctx, *attempted, workErr == nil)
+	if attempted.Revoke && workErr == nil {
+		s.captureRevocation(ctx, attempted.UserID, attempted.Key, phclient.RevenueCatAccessRevokedSourceAdmin)
 	}
 	return workErr
 }
 
 // revenueCatOperationOutcome maps a provider or identity failure to the stage FinishOperation
-// writes. A success is 'applied'; a failure below the attempt cap stays 'pending' and is retried; a
-// failure at or above the cap is written to the terminal 'abandoned' stage.
+// writes. A success is 'applied'; a failure below the cap stays 'pending' and is retried; a failure
+// that is the operation's RevenueCatMaxOperationAttempts-th is written to the terminal 'abandoned'
+// stage. op.Attempts is the count of PRIOR failures, so the attempt in flight is failure number
+// op.Attempts+1 and the cap is reached when that number equals the constant.
 func revenueCatOperationOutcome(op domain.RevenueCatOperation, workErr error) (string, string) {
 	if workErr == nil {
 		return "applied", ""
 	}
-	if op.Attempts >= revenueCatMaxOperationAttempts {
+	if op.Attempts+1 >= RevenueCatMaxOperationAttempts {
 		return "abandoned", revenueCatErrorCode(workErr)
 	}
 	return "pending", revenueCatErrorCode(workErr)
@@ -610,26 +622,33 @@ func sameRevenueCatExpiry(a, b *time.Time) bool {
 }
 
 // RevenueCat materialises a `duration:lifetime` promotional grant as a concrete,
-// per-grant jittered expiry roughly 200 years out, so a permanent (nil-expiry)
-// operation can never match by exact equality. A genuine finite comp is always far
-// below this horizon; only another effectively-permanent grant satisfies a nil op.
+// per-grant jittered expiry roughly 200 years out (the observed sentinel is ~8.097e12 ms), so a
+// permanent (nil-expiry) operation can never match by exact equality. A genuine finite comp is
+// always far below this horizon; only another effectively-permanent grant satisfies a nil op. The
+// horizon is 10 years, far below the ~200y sentinel and far above any real promotion.
 const revenueCatPermanentHorizon = 10 * 365 * 24 * time.Hour
 
-// revenueCatMaxOperationAttempts bounds how many times one operation may fail before it is
+// RevenueCatMaxOperationAttempts bounds how many times one operation may fail before it is
 // abandoned. A permanently non-converging operation — a provider outage that never clears, or an
 // intent the provider never reflects — otherwise stays stage='pending' forever: every failure
 // rewrites 'pending', every repair pass re-enqueues it, and each attempt re-applies provider side
 // effects (revoke/grant). At the repair worker's one-minute cadence, 500 attempts is roughly eight
 // hours of continuous failure, far beyond any transient outage, after which the operation is written
 // to the terminal 'abandoned' stage and drops out of every stage='pending' read.
-const revenueCatMaxOperationAttempts = 500
+//
+// Operator recovery: 'abandoned' is terminal and the admin retry gate rejects any non-pending
+// stage, so an abandoned operation is never replayed in place. Recovery is to issue a NEW grant for
+// the same class and tier: RequestGrant reaches insertRevenueCatOperation, which inserts a fresh
+// stage='pending' row at the next version with a clean attempt count, re-attempting the desired
+// state. The abandoned row is retained as the audit trail of the failed intent.
+const RevenueCatMaxOperationAttempts = 500
 
 func revenueCatGrantMatches(g rc.Entitlement, op domain.RevenueCatOperation, now time.Time) bool {
 	if g.LookupKey != op.Key {
 		return false
 	}
 	if op.ExpiresAt == nil {
-		return g.ExpiresAt == nil || g.ExpiresAt.After(now.Add(revenueCatPermanentHorizon))
+		return g.ExpiresAt == nil || !g.ExpiresAt.Before(now.Add(revenueCatPermanentHorizon))
 	}
 	return sameRevenueCatExpiry(g.ExpiresAt, op.ExpiresAt)
 }
