@@ -79,6 +79,10 @@ type previewSyncParityRow struct {
 	// Set only on the defect-3 rows, which cannot go through a production write path.
 	seededKind     *string
 	seededOverride *string
+	// secondAccount places the row on the single-rule fixture's SECOND account, whose
+	// user_account_id is deliberately NOT the rule's value. Only the account_id parity test uses
+	// it; this fixture seeds one account, so every row here leaves it false.
+	secondAccount bool
 }
 
 // previewSyncParityFixture is one user, two rules with DISJOINT match sets, and seven driven rows.
@@ -355,13 +359,20 @@ func previewSyncParityMerchantCandidate() *domain.CategorizationRule {
 // preview runs ONE candidate through the real preview service over the fixture's persisted rows.
 func (f *previewSyncParityFixture) preview(t *testing.T, ctx context.Context, candidate *domain.CategorizationRule) *domain.RulePreviewResult {
 	t.Helper()
-	svc := NewCategorizationRuleService(
-		repository.NewCategorizationRuleRepository(f.tx),
-		repository.NewCustomCategoryRepository(f.tx),
-	).(*categorizationRuleService)
-	svc.SetTransactionReader(repository.NewTransactionRepository(f.tx, ruleHistoryEncryptor(t)))
+	return previewSyncParityPreview(t, ctx, f.tx, f.userID, candidate)
+}
 
-	res, err := svc.PreviewRule(ctx, f.userID, candidate, 0)
+// previewSyncParityPreview is the shared preview wiring: the REAL categorizationRuleService over
+// the REAL transaction repository, no stub. Both parity fixtures call it so the two cannot drift.
+func previewSyncParityPreview(t *testing.T, ctx context.Context, tx pgx.Tx, userID string, candidate *domain.CategorizationRule) *domain.RulePreviewResult {
+	t.Helper()
+	svc := NewCategorizationRuleService(
+		repository.NewCategorizationRuleRepository(tx),
+		repository.NewCustomCategoryRepository(tx),
+	).(*categorizationRuleService)
+	svc.SetTransactionReader(repository.NewTransactionRepository(tx, ruleHistoryEncryptor(t)))
+
+	res, err := svc.PreviewRule(ctx, userID, candidate, 0)
 	require.NoError(t, err, "preview must not error — an error would make every assertion vacuous")
 	return res
 }
