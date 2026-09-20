@@ -16,7 +16,7 @@ const BASE_PADDING = nativeTokens.light.spacing['spacing-bb-5']
 /**
  * `useSafeAreaInsets()` throws without a `<SafeAreaProvider>` ancestor, and `jest.setup.ts` is
  * off-limits, so its jest mock cannot be registered globally. Reading the context directly with a
- * zero fallback is the same pattern the package's own `jest/mock.tsx` uses; real expo-router and
+ * zero fallback is the same pattern the package's own `jest/mock.tsx` uses; real navigation and
  * production supply real insets.
  */
 const FALLBACK_INSETS = { top: 0, right: 0, bottom: 0, left: 0 }
