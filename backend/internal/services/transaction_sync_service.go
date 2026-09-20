@@ -1016,6 +1016,20 @@ func (s *transactionSyncService) upsertMerchants(ctx context.Context, transactio
 	return merchantIDs
 }
 
+// rawExternalTransactionIDs returns each transaction's provider external id (empty when absent).
+// Callers capture it BEFORE a write, so an error line names the id the provider sent rather than a
+// value the writer encrypted in place. Shared by the modified path's update and upsert batches
+// (#1684).
+func rawExternalTransactionIDs(txns []domain.Transaction) []string {
+	ids := make([]string, len(txns))
+	for i := range txns {
+		if txns[i].ExternalTransactionID != nil {
+			ids[i] = *txns[i].ExternalTransactionID
+		}
+	}
+	return ids
+}
+
 // buildAccountMaps builds both accountMap and userAccountMap for transaction mapping.
 // Issue #171: userAccountMap provides stable UserAccountID that survives re-links.
 // ownerUserID is the linked item's owner (Issue #1615): any account whose UserID does not
@@ -1500,12 +1514,7 @@ func (s *transactionSyncService) processModifiedTransactions(
 
 		// Capture the provider's raw external ids BEFORE the write, so the error line names the
 		// transaction the provider sent rather than a value a future change to the writer encrypted.
-		rawExternalIDs := make([]string, len(updateCandidates))
-		for i := range updateCandidates {
-			if updateCandidates[i].ExternalTransactionID != nil {
-				rawExternalIDs[i] = *updateCandidates[i].ExternalTransactionID
-			}
-		}
+		rawExternalIDs := rawExternalTransactionIDs(updateCandidates)
 
 		for i := range updateCandidates {
 			if err := s.transactionRepo.UpdateFromSync(ctx, &updateCandidates[i]); err != nil {
@@ -1560,12 +1569,7 @@ func (s *transactionSyncService) processModifiedTransactions(
 		// Capture the provider's raw external ids BEFORE the write: CreateBatch encrypts
 		// ExternalTransactionID in place, so reading it afterwards would log ciphertext instead of
 		// the transaction id the provider sent.
-		rawExternalIDs := make([]string, len(upsertCandidates))
-		for i := range upsertCandidates {
-			if upsertCandidates[i].ExternalTransactionID != nil {
-				rawExternalIDs[i] = *upsertCandidates[i].ExternalTransactionID
-			}
-		}
+		rawExternalIDs := rawExternalTransactionIDs(upsertCandidates)
 
 		// #1586 (gap G7): the slice is passed by reference and CreateBatch writes the PERSISTED id
 		// into each element it was handed. Read it back PER ELEMENT: with one row per call the
