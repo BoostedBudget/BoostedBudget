@@ -1,0 +1,109 @@
+{
+  "items": [
+    {
+      "id": "expo-doctor-exit",
+      "measured": 0,
+      "threshold": 0,
+      "pass": true
+    },
+    {
+      "id": "expo-export-web-exit",
+      "measured": 0,
+      "threshold": 0,
+      "pass": true
+    },
+    {
+      "id": "expo-export-ios-exit",
+      "measured": 0,
+      "threshold": 0,
+      "pass": true
+    },
+    {
+      "id": "expo-export-android-exit",
+      "measured": 0,
+      "threshold": 0,
+      "pass": true
+    },
+    {
+      "id": "react-native-css-copies",
+      "measured": 1,
+      "threshold": 1,
+      "pass": true
+    },
+    {
+      "id": "web-export-gzip-bytes",
+      "measured": 367512,
+      "threshold": {
+        "baselineBytes": 347166,
+        "maxDeltaPercent": 15,
+        "maxBytes": 399241
+      },
+      "pass": true
+    },
+    {
+      "id": "web-export-gzip-delta-bytes",
+      "measured": 20346,
+      "threshold": {
+        "baselineBytes": 347166,
+        "maxDeltaBytes": 52075
+      },
+      "pass": true
+    },
+    {
+      "id": "ios-export-gzip-bytes",
+      "measured": 1820505,
+      "threshold": {
+        "baselineBytes": 1774298,
+        "maxDeltaPercent": 20,
+        "maxBytes": 2129158
+      },
+      "pass": true
+    },
+    {
+      "id": "ios-export-gzip-delta-bytes",
+      "measured": 46207,
+      "threshold": {
+        "baselineBytes": 1774298,
+        "maxDeltaBytes": 354860
+      },
+      "pass": true
+    },
+    {
+      "id": "android-export-gzip-bytes",
+      "measured": 1928674,
+      "threshold": {
+        "baselineBytes": 1880903,
+        "maxDeltaPercent": 20,
+        "maxBytes": 2257084
+      },
+      "pass": true
+    },
+    {
+      "id": "android-export-gzip-delta-bytes",
+      "measured": 47771,
+      "threshold": {
+        "baselineBytes": 1880903,
+        "maxDeltaBytes": 376181
+      },
+      "pass": true
+    },
+    {
+      "id": "nativewind-version",
+      "measured": true,
+      "threshold": {
+        "expected": "5.0.0-rc.0",
+        "resolved": "5.0.0-rc.0"
+      },
+      "pass": true
+    },
+    {
+      "id": "react-native-css-version",
+      "measured": true,
+      "threshold": {
+        "expected": "3.1.0-rc.0",
+        "resolved": "3.1.0-rc.0"
+      },
+      "pass": true
+    }
+  ]
+}
