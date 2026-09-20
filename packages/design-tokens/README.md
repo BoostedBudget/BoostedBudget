@@ -5,16 +5,24 @@ Run `bun run generate` after editing it and commit all three files in `generated
 
 Three adapters are generated from that one source:
 
-- `@boostedbudget/design-tokens/web.css` keeps the existing explicit `.dark` selector so the
-  desktop web theme remains user-controlled.
-- `@boostedbudget/design-tokens/nativewind.css` follows `prefers-color-scheme` for the initial
-  Expo system-theme policy.
+- `@boostedbudget/design-tokens/web.css` (`generated/web.css`) keeps the existing explicit `.dark`
+  selector so the desktop web theme remains user-controlled.
+- `@boostedbudget/design-tokens/nativewind.css` (`generated/nativewind.css`) follows
+  `prefers-color-scheme` for the initial Expo system-theme policy.
 - `@boostedbudget/design-tokens/native` (`generated/native.ts`) is the React Native / StyleSheet
   projection: `nativeTokens = { light, dark }` with `.color`, `.contrast`, `.spacing`,
   `.typography`, `.elevation`, `.motion`, `.touchTarget`, and `.focus`. Colours are sRGB
   hex/rgba (converted from the same `oklch()` source, never hand-maintained); numeric scales are
   unitless numbers; font families stay strings. `foundationTokens` is deliberately NOT projected
   — it is a map of `var(--…)` and `color-mix()` aliases, not literal colours.
+
+Which platform consumes which adapter:
+
+| Adapter | Generated artifact | Consumer |
+| --- | --- | --- |
+| `web.css` | `generated/web.css` | `apps/web` (desktop), imported from `apps/web/src/index.css`; explicit `.dark` class selector. |
+| `nativewind.css` | `generated/nativewind.css` | `apps/mobile` via `apps/mobile/global.css`; `prefers-color-scheme` plus runtime CSS custom properties. |
+| `native` | `generated/native.ts` | `apps/mobile` React Native / StyleSheet code (e.g. `nativeNavigationTokens` consumers and the theme bootstrap); a design-tokens projection, not a NativeWind feature. |
 
 `bun run check` fails when a generated artifact is missing or stale.
 
