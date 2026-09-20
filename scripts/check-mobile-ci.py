@@ -70,11 +70,20 @@ REQUIRED_STEPS = (
     ("bun run --cwd apps/mobile export:web", "."),
     ("bun run --cwd apps/mobile export:ios", "."),
     ("bun run --cwd apps/mobile export:android", "."),
+    # Todo 4 (#1658): the NativeWind RC evidence gate must run in CI, not merely be a
+    # script a worker can claim to have run. `--check` exits non-zero when any threshold
+    # in apps/mobile/nativewind-gate.evidence.json fails.
+    ("bun run --cwd apps/mobile gate:nativewind --check", "."),
+    # Todo 22 (#1658): the Playwright visual/accessibility layer drives the exported web build.
+    # Pinned here so the step cannot be silently dropped from CI while both guard scripts still
+    # exit 0 -- the guard would otherwise pass whether or not the step exists.
+    ("bun run --cwd apps/mobile e2e:visual", "."),
 )
 
 MOBILE_COMPATIBILITY_DEPS = {
     "@babel/core",
     "@babel/runtime",
+    "@react-native-async-storage/async-storage",
     "@testing-library/react-native",
     "babel-preset-expo",
     "expo",
@@ -140,6 +149,11 @@ LOCKFILE_NAMES = (
 WORKSPACE_PATTERN = re.compile(r"^(apps|packages)/(\*|[A-Za-z0-9][A-Za-z0-9._-]*)$")
 DEPENDENCY_SECTIONS = ("dependencies", "devDependencies")
 MANUAL_UPDATE_POLICIES = {
+    "@react-native-async-storage/async-storage": {
+        "version-update:semver-patch",
+        "version-update:semver-minor",
+        "version-update:semver-major",
+    },
     "react": {"version-update:semver-minor", "version-update:semver-major"},
     "react-dom": {"version-update:semver-minor", "version-update:semver-major"},
     "react-native": {"version-update:semver-minor", "version-update:semver-major"},

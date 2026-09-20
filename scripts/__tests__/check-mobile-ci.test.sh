@@ -8,7 +8,7 @@ GUARD="$REPO_ROOT/scripts/check-mobile-ci.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-TOTAL=168
+TOTAL=170
 case_no=0
 pass=0
 fail=0
@@ -295,6 +295,11 @@ elif action.startswith('remove-ignore-type:'):
     entry = next((i for i in bun['ignore'] if i.get('dependency-name') == dependency), None)
     if entry is not None:
         entry['update-types'] = [value for value in entry.get('update-types', []) if value != update_type]
+elif action == 'remove-async-storage-pattern':
+    groups['expo-react-native-compatibility']['patterns'].remove('@react-native-async-storage/*')
+elif action == 'narrow-async-storage-ignore':
+    entry = next(i for i in bun['ignore'] if i.get('dependency-name') == '@react-native-async-storage/async-storage')
+    entry['update-types'] = ['version-update:semver-major']
 else:
     raise AssertionError(action)
 path.write_text(yaml.safe_dump(doc, sort_keys=False))
@@ -613,6 +618,13 @@ reject_dependabot "React Native minor updates must remain manual" "remove-ignore
 reject_dependabot "React Native Web minor updates must remain manual" "remove-ignore-type:react-native-web:version-update:semver-minor"
 reject_dependabot "NativeWind release candidates must hold every update" "remove-ignore-type:nativewind:version-update:semver-patch"
 reject_dependabot "react-native-css release candidates must hold every update" "remove-ignore-type:react-native-css:version-update:semver-patch"
+# AsyncStorage is enumerated in MOBILE_COMPATIBILITY_DEPS and MANUAL_UPDATE_POLICIES, so the
+# guard couples it to Dependabot. The fixture inherits the real manifest entry and the real
+# policy set; each case removes one half of that coupling. Adding the dependency to
+# apps/mobile/package.json alone is invisible to the guard, which never checks package ->
+# Dependabot, so the policy-set membership is what makes these cases load-bearing.
+reject_dependabot "AsyncStorage is not covered by the Expo compatibility group" "remove-async-storage-pattern"
+reject_dependabot "AsyncStorage patch updates must remain manual" "narrow-async-storage-ignore"
 
 accept_dependency_policy "React patch updates remain available to Dependabot" "allowed-react-patch"
 accept_dependency_policy "Expo 57 patch updates remain available to Dependabot" "set:mobile:dependencies:expo:~57.0.99"

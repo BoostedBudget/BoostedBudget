@@ -122,6 +122,75 @@
   --color-skeleton: var(--skeleton);
 }
 
+@theme inline {
+  --font-bb-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-bb-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  --text-bb-xs: 0.75rem;
+  --text-bb-sm: 0.875rem;
+  --text-bb-body: 1rem;
+  --text-bb-lg: 1.125rem;
+  --text-bb-xl: 1.25rem;
+  --text-bb-2xl: 1.5rem;
+  --text-bb-3xl: 1.875rem;
+  --text-bb-4xl: 2.25rem;
+  --leading-bb-tight: 1.25;
+  --leading-bb-snug: 1.375;
+  --leading-bb-normal: 1.5;
+  --leading-bb-relaxed: 1.625;
+  --font-weight-bb-regular: 400;
+  --font-weight-bb-medium: 500;
+  --font-weight-bb-semibold: 600;
+  --font-weight-bb-bold: 700;
+  --tracking-bb-tight: -0.025em;
+  --tracking-bb-normal: 0em;
+  --tracking-bb-wide: 0.025em;
+  --spacing-bb-0: 0px;
+  --spacing-bb-1: 4px;
+  --spacing-bb-2: 8px;
+  --spacing-bb-3: 12px;
+  --spacing-bb-4: 16px;
+  --spacing-bb-5: 20px;
+  --spacing-bb-6: 24px;
+  --spacing-bb-8: 32px;
+  --spacing-bb-10: 40px;
+  --spacing-bb-12: 48px;
+  --spacing-bb-16: 64px;
+  --shadow-bb-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-bb-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-bb-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --transition-duration-bb-fast: 150ms;
+  --transition-duration-bb-normal: 250ms;
+  --transition-duration-bb-slow: 400ms;
+  --ease-bb-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-bb-decelerate: cubic-bezier(0, 0, 0.2, 1);
+  --ease-bb-accelerate: cubic-bezier(0.4, 0, 1, 1);
+  --bb-focus-ring-width: 2px;
+  --bb-focus-ring-offset: 2px;
+  --bb-focus-ring-color: var(--ring);
+  --bb-touch-min: 44;
+  --bb-touch-comfortable: 48;
+  --color-bb-info-text: var(--bb-info-text);
+  --color-bb-danger-text: var(--bb-danger-text);
+  --color-bb-info-strong: var(--bb-info-strong);
+  --color-bb-danger-strong: var(--bb-danger-strong);
+}
+
+:root, :host {
+  --bb-info-text: oklch(0.5 0.167 253.226);
+  --bb-danger-text: oklch(0.5 0.245 27.325);
+  --bb-info-strong: oklch(0.5 0.167 253.226);
+  --bb-danger-strong: oklch(0.5 0.245 27.325);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root, :host {
+    --bb-info-text: oklch(0.72 0.167 253.226);
+    --bb-danger-text: oklch(0.72 0.245 27.325);
+    --bb-info-strong: oklch(0.48 0.167 253.226);
+    --bb-danger-strong: oklch(0.48 0.245 27.325);
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     --background: oklch(0.145 0 0);
