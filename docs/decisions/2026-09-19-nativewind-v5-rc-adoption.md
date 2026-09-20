@@ -9,7 +9,7 @@ baseline `apps/mobile/scripts/nativewind-gate-baseline.json`
 **Record guard:** `apps/mobile/src/test/nativewind-gate-record.test.ts` ties the version pins in
 this ADR to `apps/mobile/package.json` and derives the verdict below from
 `evidence.items.every(item => item.pass)`
-**Related:** `.omo/plans/1658-mobile-ui-primitives-and-themes.md` (Todos 4, 6, 7, 26);
+**Related:** the #1658 work plan (Todos 4, 6, 7, 26);
 `docs/decisions/2026-08-24-financial-history-retained-by-default.md` (ADR style)
 
 ---
@@ -178,11 +178,12 @@ is bounded.
   that regresses, or a confirmed regression in the known-risk list above. Record the failing
   evidence, amend this ADR with the swap date and the residual NativeWind surface, and set the
   verdict to `RETAIN`.
-- **Mechanism.** Execute Todo 7: add `apps/mobile/src/theme/styleAdapter.ts` (a `StyleSheet`-based
-  implementation of the same semantic surface) plus `createThemedStyles`, rewire Todos 8-18's
-  primitives to consume it, and amend each Todo 8-19 acceptance line to assert the same *values*
-  through the returned style object instead of resolved `className`. Keep `global.css` and
-  NativeWind installed but unused by the primitives.
+- **Mechanism.** Execute Todo 7 — the conditional fallback that was NOT built, because the gate
+  returned `KEEP_RC`: add a `StyleSheet`-based adapter (styleAdapter.ts) under
+  `apps/mobile/src/theme/` implementing the same semantic surface, plus `createThemedStyles`,
+  rewire Todos 8-18's primitives to consume it, and amend each Todo 8-19 acceptance line to assert
+  the same *values* through the returned style object instead of resolved `className`. Keep
+  `global.css` and NativeWind installed but unused by the primitives.
 - **What does NOT change.** `packages/design-tokens` and `apps/web` are untouched by the rollback:
   the StyleSheet adapter reads the same generated `@boostedbudget/design-tokens/native` source, so
   no token value forks. The pinned versions stay in `package.json` (the pin guard must stay green),
