@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar'
 import { ReactNode, useState } from 'react'
 import { useColorScheme } from 'react-native'
 import { createMobileQueryClient, initializeMobileRuntime } from '../src/bootstrap/runtime'
+import { ToastProvider } from '../src/components/ui/ToastProvider'
 import { getNavigationAppearance } from '../src/theme/navigation'
 import { ThemeProvider as ThemePreferenceProvider } from '../src/theme/ThemeProvider'
 
@@ -16,7 +17,9 @@ export function MobileAppProviders({ children }: { children: ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemePreferenceProvider>{children}</ThemePreferenceProvider>
+      <ThemePreferenceProvider>
+        <ToastProvider>{children}</ToastProvider>
+      </ThemePreferenceProvider>
     </QueryClientProvider>
   )
 }
