@@ -545,10 +545,15 @@ var fieldNotes = map[RuleConditionField]string{
 	// closedValuesFor deliberately returns nil for both PFC fields — the promise was false as
 	// written for the one caller who could not also read closedSetExemptFields in Go source.
 	// Naming the actual endpoint here, not just the count, is what makes the promise true.
-	FieldPFCPrimary: "Closed set of 18 curated PFCv2 primary categories. Not inlined here — call " +
-		"GET /api/v1/categories/plaid-primaries once and cache the result.",
-	FieldPFCDetailed: "Closed set of ~120 curated PFCv2 detailed categories. Not inlined here — " +
-		"call GET /api/v1/categories/plaid-detailed once and cache the result.",
+	FieldPFCPrimary: "Matches the category the bank ORIGINALLY reported — the raw provider value, " +
+		"before any override. This is NOT the effective category shown in the app: a rule's own " +
+		"action can never rewrite what it matches. Closed set of 18 curated PFCv2 primary categories. " +
+		"Not inlined here — call GET /api/v1/categories/plaid-primaries once and cache the result.",
+	FieldPFCDetailed: "Matches the category the bank ORIGINALLY reported — the raw provider value, " +
+		"before any override. This is NOT the effective category shown in the app: a rule's own " +
+		"action can never rewrite what it matches. Closed set of ~120 curated PFCv2 detailed " +
+		"categories. Not inlined here — call GET /api/v1/categories/plaid-detailed once and cache " +
+		"the result.",
 }
 
 // exampleFor returns a well-formed value for a shape, so callers copy rather than guess.
