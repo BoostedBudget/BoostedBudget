@@ -27,6 +27,7 @@ type RevenueCatRepository interface {
 	CreateTrialTx(context.Context, pgx.Tx, string, time.Time) error
 	ListOperations(context.Context, string) ([]domain.RevenueCatOperation, error)
 	PendingOperations(context.Context, int) ([]domain.RevenueCatOperation, error)
+	AbandonExhaustedOperations(context.Context, int, int) (int, error)
 	ListDue(context.Context, time.Time, int) ([]string, error)
 	AcceptWebhook(context.Context, string, string, string, func(context.Context, pgx.Tx, string) error) (bool, error)
 	CompleteWebhook(context.Context, string, string) error
@@ -250,9 +251,10 @@ func (s *revenueCatSession) Operation(ctx context.Context, id string) (domain.Re
 
 // FinishOperation is the operation write site, and the operation FLOW counters are incremented
 // here rather than derived from a query: `applied` on a successful application, `failure` whenever
-// a last_error is recorded (there is no `failed` stage — a failure stays pending and is retried).
-// `class` is carried by the caller purely for those labels; it is not part of the UPDATE, so the
-// SQL and its argument list are unchanged.
+// a retryable last_error is recorded (there is no `failed` stage — a failure stays pending and is
+// retried), and `abandonment` when the attempt cap writes the terminal `abandoned` stage. `class` is
+// carried by the caller purely for those labels; it is not part of the UPDATE, so the SQL and its
+// argument list are unchanged.
 func (s *revenueCatSession) FinishOperation(ctx context.Context, id, stage, message, class string) error {
 	tag, err := s.q.Exec(ctx, `UPDATE revenuecat_operations SET stage=$3,last_error=$4,attempts=attempts+1 WHERE id=$1 AND user_id=$2 AND stage='pending'`, id, s.userID, stage, message)
 	if err != nil {
@@ -269,7 +271,14 @@ func (s *revenueCatSession) FinishOperation(ctx context.Context, id, stage, mess
 		}
 		observability.RecordRevenueCatGrantApplied(class)
 	}
-	if message != "" {
+	switch {
+	case stage == "abandoned":
+		// Terminal: the operation has left the retry population permanently. Counting it as a
+		// retryable failure would overstate the failure FLOW whose stock companion
+		// (revenuecat_operations_errored) only counts rows still stage='pending'. Record the
+		// abandonment counter instead so a stuck operation is alertable and distinguishable.
+		observability.RecordRevenueCatOperationAbandoned(class)
+	case message != "":
 		observability.RecordRevenueCatOperationFailure(class)
 	}
 	return nil
@@ -277,8 +286,45 @@ func (s *revenueCatSession) FinishOperation(ctx context.Context, id, stage, mess
 func (r *revenueCatRepository) ListOperations(ctx context.Context, id string) ([]domain.RevenueCatOperation, error) {
 	return r.operations(ctx, `SELECT `+revenueCatOperationColumns+` FROM revenuecat_operations WHERE user_id=$1 ORDER BY created_at DESC,id DESC`, id)
 }
+
+// revenueCatPendingOperationsQuery is PendingOperations' SQL, hoisted so a unit test can pin the
+// retry predicate without a database. Only stage='pending' rows are retried, so a terminal row
+// ('applied', 'superseded', 'abandoned') is excluded by construction and can never be re-enqueued
+// by the repair worker or re-apply provider side effects.
+const revenueCatPendingOperationsQuery = `SELECT ` + revenueCatOperationColumns + ` FROM revenuecat_operations WHERE stage='pending' ORDER BY attempts,created_at,id LIMIT $1`
+
 func (r *revenueCatRepository) PendingOperations(ctx context.Context, limit int) ([]domain.RevenueCatOperation, error) {
-	return r.operations(ctx, `SELECT `+revenueCatOperationColumns+` FROM revenuecat_operations WHERE stage='pending' ORDER BY attempts,created_at,id LIMIT $1`, limit)
+	return r.operations(ctx, revenueCatPendingOperationsQuery, limit)
+}
+
+// revenueCatAbandonExhaustedOperationsQuery is AbandonExhaustedOperations' SQL, hoisted so a unit
+// test can pin the sweep predicate without a database. PendingOperations orders by attempts ASC so
+// a cap-adjacent operation sorts LAST and is unreachable whenever more than one page of
+// lower-attempt work exists; this sweep deliberately orders by attempts DESC so it selects exactly
+// the exhausted rows that would otherwise starve, writes the terminal stage atomically in one
+// statement, and returns each retired row's class for the abandonment counter.
+const revenueCatAbandonExhaustedOperationsQuery = `UPDATE revenuecat_operations SET stage='abandoned', last_error=CASE WHEN last_error='' THEN 'attempt_cap_exceeded' ELSE last_error END, attempts=attempts+1 WHERE id IN (SELECT id FROM revenuecat_operations WHERE stage='pending' AND attempts >= $1 ORDER BY attempts DESC, created_at LIMIT $2) RETURNING class`
+
+// AbandonExhaustedOperations deterministically retires pending operations that have reached the
+// attempt cap, so the cap is a hard bound rather than one the fair retry page may never reach. It
+// returns the number of rows moved to the terminal 'abandoned' stage and records one abandonment
+// metric per returned class, mirroring FinishOperation's terminal write site.
+func (r *revenueCatRepository) AbandonExhaustedOperations(ctx context.Context, maxAttempts, limit int) (int, error) {
+	rows, err := r.db.Query(ctx, revenueCatAbandonExhaustedOperationsQuery, maxAttempts, limit)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	abandoned := 0
+	for rows.Next() {
+		var class string
+		if err := rows.Scan(&class); err != nil {
+			return 0, err
+		}
+		observability.RecordRevenueCatOperationAbandoned(class)
+		abandoned++
+	}
+	return abandoned, rows.Err()
 }
 func (r *revenueCatRepository) operations(ctx context.Context, query string, args ...any) ([]domain.RevenueCatOperation, error) {
 	rows, err := r.db.Query(ctx, query, args...)
