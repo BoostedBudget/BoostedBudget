@@ -83,6 +83,7 @@ REQUIRED_STEPS = (
 MOBILE_COMPATIBILITY_DEPS = {
     "@babel/core",
     "@babel/runtime",
+    "@react-native-async-storage/async-storage",
     "@testing-library/react-native",
     "babel-preset-expo",
     "expo",
@@ -148,6 +149,11 @@ LOCKFILE_NAMES = (
 WORKSPACE_PATTERN = re.compile(r"^(apps|packages)/(\*|[A-Za-z0-9][A-Za-z0-9._-]*)$")
 DEPENDENCY_SECTIONS = ("dependencies", "devDependencies")
 MANUAL_UPDATE_POLICIES = {
+    "@react-native-async-storage/async-storage": {
+        "version-update:semver-patch",
+        "version-update:semver-minor",
+        "version-update:semver-major",
+    },
     "react": {"version-update:semver-minor", "version-update:semver-major"},
     "react-dom": {"version-update:semver-minor", "version-update:semver-major"},
     "react-native": {"version-update:semver-minor", "version-update:semver-major"},
