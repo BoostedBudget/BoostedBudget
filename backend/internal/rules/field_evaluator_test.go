@@ -196,3 +196,99 @@ func TestAccountIDEvaluator_NoIdentityMatchesNothingIncludingNeq(t *testing.T) {
 		Field: domain.FieldAccountID, Operator: "neq", Value: "acc-1",
 	}))
 }
+
+// #1684 Defect 3: `existing_pfc_*` / the pfc fields describe the RAW provider category the bank
+// reported — NOT the effective category. A rule's ACTION writes a category override, and
+// GetEffectiveCategory reports that override; if the condition read the effective category, the
+// rule would destroy the very condition that selected its row on any later pass (preview, the
+// modified branch, or a future re-application pass). These subtests pin source semantics across
+// the operator families, mirroring the empty-subject precedent in
+// TestAccountIDEvaluator_NoIdentityMatchesNothingIncludingNeq.
+func TestMatchPFC_SourceSemantics(t *testing.T) {
+	t.Run("pfc_detailed_matches_raw_when_a_custom_override_is_set", func(t *testing.T) {
+		// The motivating case: a TRANSFER_IN row was rule-categorized into a custom category.
+		// The bank's raw category is untouched, so the condition must still fire — previously
+		// matchPFC saw kind=custom and returned false outright.
+		tx := &domain.Transaction{
+			ID:                       "t",
+			PFCPrimary:               strPtr("TRANSFER_IN"),
+			PFCDetailed:              strPtr("TRANSFER_IN_OTHER_TRANSFER_IN"),
+			CategoryOverrideKind:     strPtr("custom"),
+			CustomCategoryOverrideID: strPtr("cat-1"),
+		}
+		assert.True(t, evalCond(t, tx, domain.RuleCondition{
+			Field: domain.FieldPFCDetailed, Operator: "eq", Value: "TRANSFER_IN_OTHER_TRANSFER_IN",
+		}), "a custom override must not hide the raw pfc_detailed")
+		assert.True(t, evalCond(t, tx, domain.RuleCondition{
+			Type: domain.ConditionExistingPFCDetailed, Value: "TRANSFER_IN_OTHER_TRANSFER_IN",
+		}), "the legacy existing_pfc_detailed type must agree")
+	})
+
+	t.Run("pfc_override_does_not_shadow_the_raw_category", func(t *testing.T) {
+		// A PFC override replaces what the UI shows, NOT what a condition reads. Matching the
+		// override value must FAIL; matching the raw value must succeed.
+		tx := &domain.Transaction{
+			ID:                  "t",
+			PFCPrimary:          strPtr("FOOD_AND_DRINK"),
+			PFCDetailed:         strPtr("FOOD_AND_DRINK_FAST_FOOD"),
+			CategoryOverrideKind: strPtr("pfc"),
+			PFCPrimaryOverride:  strPtr("TRANSPORTATION"),
+			PFCDetailedOverride: strPtr("TRANSPORTATION_TAXIS_AND_RIDE_SHARING"),
+		}
+		assert.False(t, evalCond(t, tx, domain.RuleCondition{
+			Field: domain.FieldPFCDetailed, Operator: "eq", Value: "TRANSPORTATION_TAXIS_AND_RIDE_SHARING",
+		}), "the override value is the rule's OUTPUT, not the source a condition reads")
+		assert.True(t, evalCond(t, tx, domain.RuleCondition{
+			Field: domain.FieldPFCDetailed, Operator: "eq", Value: "FOOD_AND_DRINK_FAST_FOOD",
+		}), "the raw pfc_detailed must still match under a pfc override")
+	})
+
+	t.Run("no_raw_pfc_matches_nothing_including_neq", func(t *testing.T) {
+		noRaw := &domain.Transaction{ID: "t"}
+		for _, op := range []string{"eq", "neq", "in"} {
+			c := domain.RuleCondition{Field: domain.FieldPFCDetailed, Operator: op, Value: "FOOD_AND_DRINK_FAST_FOOD"}
+			assert.False(t, evalCond(t, noRaw, c),
+				"a transaction with no raw pfc_detailed must not match pfc_detailed %s", op)
+		}
+		// Even when an override exists, a missing RAW value matches nothing: the condition reads
+		// the source, and there is no source. Explicitly pinned because a `neq` on an absent
+		// subject is the case that reads as vacuously true if you forget the guard.
+		noRawCustom := &domain.Transaction{
+			ID:                       "t",
+			CategoryOverrideKind:     strPtr("custom"),
+			CustomCategoryOverrideID: strPtr("cat-1"),
+		}
+		assert.False(t, evalCond(t, noRawCustom, domain.RuleCondition{
+			Field: domain.FieldPFCDetailed, Operator: "neq", Value: "FOOD_AND_DRINK_FAST_FOOD",
+		}), "a neq on a nil raw PFC is false, not vacuously true")
+	})
+
+	t.Run("existing_pfc_primary_is_symmetric", func(t *testing.T) {
+		underCustom := &domain.Transaction{
+			ID:                       "t",
+			PFCPrimary:               strPtr("TRANSFER_IN"),
+			PFCDetailed:              strPtr("TRANSFER_IN_OTHER_TRANSFER_IN"),
+			CategoryOverrideKind:     strPtr("custom"),
+			CustomCategoryOverrideID: strPtr("cat-1"),
+		}
+		assert.True(t, evalCond(t, underCustom, domain.RuleCondition{
+			Type: domain.ConditionExistingPFCPrimary, Value: "TRANSFER_IN",
+		}), "existing_pfc_primary must read the raw primary under a custom override")
+		assert.False(t, evalCond(t, underCustom, domain.RuleCondition{
+			Type: domain.ConditionExistingPFCPrimary, Value: "SOMETHING_ELSE",
+		}))
+
+		underOverride := &domain.Transaction{
+			ID:                  "t",
+			PFCPrimary:          strPtr("FOOD_AND_DRINK"),
+			CategoryOverrideKind: strPtr("pfc"),
+			PFCPrimaryOverride:  strPtr("TRANSPORTATION"),
+		}
+		assert.True(t, evalCond(t, underOverride, domain.RuleCondition{
+			Type: domain.ConditionExistingPFCPrimary, Value: "FOOD_AND_DRINK",
+		}), "a pfc override must not shadow the raw primary")
+		assert.False(t, evalCond(t, underOverride, domain.RuleCondition{
+			Type: domain.ConditionExistingPFCPrimary, Value: "TRANSPORTATION",
+		}), "existing_pfc_primary must not match the override value")
+	})
+}
