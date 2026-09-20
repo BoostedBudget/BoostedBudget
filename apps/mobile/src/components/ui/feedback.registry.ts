@@ -3,8 +3,8 @@ import { Alert } from './Alert'
 
 /**
  * Feedback primitives' registry entries. Kept in a separate module so parallel primitive workers
- * never touch `index.ts`; the orchestrator merges this array into `PRIMITIVE_REGISTRY` in one later
- * step. One entry per (Alert × variant) that renders text on a surface.
+ * never touched `index.ts`; the barrel concatenates this array into `PRIMITIVE_REGISTRY`. One entry
+ * per (Alert × variant) that renders text on a surface.
  *
  * `Alert.info` / `Alert.danger` deliberately point at the `*-strong` contrast fills with the
  * matching `*-foreground`, not the raw `info` / `destructive` values (Todo 1's `contrastTokens`).
@@ -13,7 +13,7 @@ export const FEEDBACK_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: Alert,
     name: 'Alert.info',
-    category: 'surface',
+    category: 'feedback',
     interactive: false,
     foregroundToken: 'info-foreground',
     backgroundToken: 'bb-info-strong',
@@ -22,7 +22,7 @@ export const FEEDBACK_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: Alert,
     name: 'Alert.success',
-    category: 'surface',
+    category: 'feedback',
     interactive: false,
     foregroundToken: 'success-foreground',
     backgroundToken: 'success',
@@ -31,7 +31,7 @@ export const FEEDBACK_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: Alert,
     name: 'Alert.warning',
-    category: 'surface',
+    category: 'feedback',
     interactive: false,
     foregroundToken: 'warning-foreground',
     backgroundToken: 'warning',
@@ -40,7 +40,7 @@ export const FEEDBACK_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: Alert,
     name: 'Alert.danger',
-    category: 'surface',
+    category: 'feedback',
     interactive: false,
     foregroundToken: 'destructive-foreground',
     backgroundToken: 'bb-danger-strong',

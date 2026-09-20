@@ -15,24 +15,23 @@ const asComponent = (component: unknown): ComponentType<Record<string, unknown>>
  * One entry per (field control x state) that renders text on a surface. Todo 20 derives one WCAG
  * pair per entry from `foregroundToken`/`backgroundToken` and checks it against `ratioClass`.
  *
- * `category` uses the existing `'surface'` member because these entries describe text painted on
- * a surface; `index.ts` is owned by the orchestrator and is deliberately not edited here.
+ * `index.ts` concatenates this module into `PRIMITIVE_REGISTRY`.
  */
 export const FIELDS_REGISTRY: PrimitiveRegistryEntry[] = [
-  { component: Label, name: 'Label.default', category: 'surface', interactive: false, foregroundToken: 'foreground', backgroundToken: 'background', ratioClass: 'body' },
-  { component: Label, name: 'Label.required', category: 'surface', interactive: false, foregroundToken: 'bb-danger-text', backgroundToken: 'background', ratioClass: 'body' },
-  { component: Label, name: 'Label.disabled', category: 'surface', interactive: false, foregroundToken: 'muted-foreground', backgroundToken: 'background', ratioClass: 'body' },
+  { component: Label, name: 'Label.default', category: 'field', interactive: false, foregroundToken: 'foreground', backgroundToken: 'background', ratioClass: 'body' },
+  { component: Label, name: 'Label.required', category: 'field', interactive: false, foregroundToken: 'bb-danger-text', backgroundToken: 'background', ratioClass: 'body' },
+  { component: Label, name: 'Label.disabled', category: 'field', interactive: false, foregroundToken: 'muted-foreground', backgroundToken: 'background', ratioClass: 'body' },
 
-  { component: asComponent(FormField), name: 'FormField.label', category: 'surface', interactive: false, foregroundToken: 'foreground', backgroundToken: 'background', ratioClass: 'body' },
-  { component: asComponent(FormField), name: 'FormField.hint', category: 'surface', interactive: false, foregroundToken: 'muted-foreground', backgroundToken: 'background', ratioClass: 'body' },
-  { component: asComponent(FormField), name: 'FormField.error', category: 'surface', interactive: false, foregroundToken: 'bb-danger-text', backgroundToken: 'background', ratioClass: 'body' },
+  { component: asComponent(FormField), name: 'FormField.label', category: 'field', interactive: false, foregroundToken: 'foreground', backgroundToken: 'background', ratioClass: 'body' },
+  { component: asComponent(FormField), name: 'FormField.hint', category: 'field', interactive: false, foregroundToken: 'muted-foreground', backgroundToken: 'background', ratioClass: 'body' },
+  { component: asComponent(FormField), name: 'FormField.error', category: 'field', interactive: false, foregroundToken: 'bb-danger-text', backgroundToken: 'background', ratioClass: 'body' },
 
-  { component: TextField, name: 'TextField.value', category: 'surface', interactive: true, foregroundToken: 'foreground', backgroundToken: 'background', ratioClass: 'body' },
-  { component: TextField, name: 'TextField.placeholder', category: 'surface', interactive: true, foregroundToken: 'muted-foreground', backgroundToken: 'background', ratioClass: 'body' },
+  { component: TextField, name: 'TextField.value', category: 'field', interactive: true, foregroundToken: 'foreground', backgroundToken: 'background', ratioClass: 'body' },
+  { component: TextField, name: 'TextField.placeholder', category: 'field', interactive: true, foregroundToken: 'muted-foreground', backgroundToken: 'background', ratioClass: 'body' },
 
-  { component: TextArea, name: 'TextArea.value', category: 'surface', interactive: true, foregroundToken: 'foreground', backgroundToken: 'background', ratioClass: 'body' },
-  { component: TextArea, name: 'TextArea.placeholder', category: 'surface', interactive: true, foregroundToken: 'muted-foreground', backgroundToken: 'background', ratioClass: 'body' },
+  { component: TextArea, name: 'TextArea.value', category: 'field', interactive: true, foregroundToken: 'foreground', backgroundToken: 'background', ratioClass: 'body' },
+  { component: TextArea, name: 'TextArea.placeholder', category: 'field', interactive: true, foregroundToken: 'muted-foreground', backgroundToken: 'background', ratioClass: 'body' },
 
-  { component: asComponent(Switch), name: 'Switch.label', category: 'surface', interactive: true, foregroundToken: 'foreground', backgroundToken: 'background', ratioClass: 'body' },
-  { component: asComponent(Checkbox), name: 'Checkbox.label', category: 'surface', interactive: true, foregroundToken: 'foreground', backgroundToken: 'background', ratioClass: 'body' },
+  { component: asComponent(Switch), name: 'Switch.label', category: 'field', interactive: true, foregroundToken: 'foreground', backgroundToken: 'background', ratioClass: 'body' },
+  { component: asComponent(Checkbox), name: 'Checkbox.label', category: 'field', interactive: true, foregroundToken: 'foreground', backgroundToken: 'background', ratioClass: 'body' },
 ]

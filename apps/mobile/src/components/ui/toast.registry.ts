@@ -11,9 +11,7 @@ import { Toast } from './Toast'
  *
  * `Toast` requires a `message` prop, so it is not structurally assignable to
  * `ComponentType<Record<string, unknown>>`; the same local widening cast used by
- * `fields.registry.ts` is required. This file is intentionally NOT merged into
- * `PRIMITIVE_REGISTRY` here — parallel primitive workers each append their own registry module and
- * the orchestrator wires the barrel in one later step.
+ * `fields.registry.ts` is required. `index.ts` concatenates this module into `PRIMITIVE_REGISTRY`.
  */
 const asComponent = (component: unknown) => component as ComponentType<Record<string, unknown>>
 
@@ -21,7 +19,7 @@ export const TOAST_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: asComponent(Toast),
     name: 'Toast.info',
-    category: 'surface',
+    category: 'feedback',
     interactive: false,
     foregroundToken: 'info-foreground',
     backgroundToken: 'bb-info-strong',
@@ -30,7 +28,7 @@ export const TOAST_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: asComponent(Toast),
     name: 'Toast.success',
-    category: 'surface',
+    category: 'feedback',
     interactive: false,
     foregroundToken: 'success-foreground',
     backgroundToken: 'success',
@@ -39,7 +37,7 @@ export const TOAST_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: asComponent(Toast),
     name: 'Toast.warning',
-    category: 'surface',
+    category: 'feedback',
     interactive: false,
     foregroundToken: 'warning-foreground',
     backgroundToken: 'warning',
@@ -48,7 +46,7 @@ export const TOAST_REGISTRY: PrimitiveRegistryEntry[] = [
   {
     component: asComponent(Toast),
     name: 'Toast.danger',
-    category: 'surface',
+    category: 'feedback',
     interactive: false,
     foregroundToken: 'destructive-foreground',
     backgroundToken: 'bb-danger-strong',

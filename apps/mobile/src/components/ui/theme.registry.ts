@@ -8,11 +8,10 @@ const asComponent = (component: unknown): ComponentType<Record<string, unknown>>
 
 /**
  * One entry per text-bearing theme-selector state. Todo 20 derives one WCAG pair per entry from
- * `foregroundToken`/`backgroundToken` and checks it against `ratioClass`. `category` uses the
- * existing `'surface'` member because these entries describe text painted on a surface; `index.ts`
- * is owned by the orchestrator and is deliberately not edited here.
+ * `foregroundToken`/`backgroundToken` and checks it against `ratioClass`. `index.ts` concatenates
+ * this module into `PRIMITIVE_REGISTRY`.
  */
 export const THEME_REGISTRY: PrimitiveRegistryEntry[] = [
-  { component: asComponent(ThemeSelector), name: 'ThemeSelector.option', category: 'surface', interactive: true, foregroundToken: 'muted-foreground', backgroundToken: 'card', ratioClass: 'body' },
-  { component: asComponent(ThemeSelector), name: 'ThemeSelector.optionSelected', category: 'surface', interactive: true, foregroundToken: 'primary-foreground', backgroundToken: 'primary', ratioClass: 'body' },
+  { component: asComponent(ThemeSelector), name: 'ThemeSelector.option', category: 'theme', interactive: true, foregroundToken: 'muted-foreground', backgroundToken: 'card', ratioClass: 'body' },
+  { component: asComponent(ThemeSelector), name: 'ThemeSelector.optionSelected', category: 'theme', interactive: true, foregroundToken: 'primary-foreground', backgroundToken: 'primary', ratioClass: 'body' },
 ]
