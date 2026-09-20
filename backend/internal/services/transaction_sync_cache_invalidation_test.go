@@ -262,7 +262,7 @@ func TestSyncTransactions_BumpsOnPartialCommitEvenWhenSyncLaterFails(t *testing.
 	// Modified transaction: storage FAILS after the Added commit above.
 	existingTxn := &domain.Transaction{ID: "existing-uuid", ExternalTransactionID: stringPtr("txn-modified")}
 	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "txn-modified", linkedItem.UserID).Return(existingTxn, nil)
-	mockTransactionRepo.On("Update", ctx, mock.Anything).Return(errors.New("update failed"))
+	mockTransactionRepo.On("UpdateFromSync", ctx, mock.Anything).Return(errors.New("update failed"))
 
 	fake := redisclient.NewFake("cache")
 	c := cache.NewCache(cache.Options{Client: fake})
@@ -346,7 +346,7 @@ func newSingleStepSyncHarness(t *testing.T, itemSuffix string, resp *plaid.Trans
 }
 
 // TestSyncTransactions_ModifiedOnlyPartialCommitStillBumpsCache is the T92 bug proper.
-// processModifiedTransactions commits ONE transactionRepo.Update per row and returns on the
+// processModifiedTransactions commits ONE transactionRepo.UpdateFromSync per row and returns on the
 // FIRST failure. On a MODIFIED-ONLY sync (Plaid DEFAULT_UPDATE's common shape) the rows updated
 // before that failure are durable, but SyncTransactions returned before arming cacheBumpNeeded,
 // so cached analytics kept serving pre-sync numbers for the whole namespace TTL.
@@ -369,8 +369,8 @@ func TestSyncTransactions_ModifiedOnlyPartialCommitStillBumpsCache(t *testing.T)
 	txnRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "txn-mod-2", linkedItem.UserID).
 		Return(&domain.Transaction{ID: "existing-2", ExternalTransactionID: stringPtr("txn-mod-2")}, nil)
 	// Row 1 COMMITS, row 2 fails: the partial-commit shape.
-	txnRepo.On("Update", ctx, mock.Anything).Return(nil).Once()
-	txnRepo.On("Update", ctx, mock.Anything).Return(errors.New("update failed on row 2")).Once()
+	txnRepo.On("UpdateFromSync", ctx, mock.Anything).Return(nil).Once()
+	txnRepo.On("UpdateFromSync", ctx, mock.Anything).Return(errors.New("update failed on row 2")).Once()
 
 	preGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
 	require.NoError(t, err)
@@ -388,7 +388,7 @@ func TestSyncTransactions_ModifiedOnlyPartialCommitStillBumpsCache(t *testing.T)
 	postGen, err := c.Generations().Get(ctx, cache.ScopeUser, linkedItem.UserID)
 	require.NoError(t, err)
 	assert.NotEqual(t, preGen, postGen,
-		"row 1's Update COMMITTED before row 2 failed. transactions is a cached-read table, so "+
+		"row 1's write COMMITTED before row 2 failed. transactions is a cached-read table, so "+
 			"leaving the generation untouched serves stale financial data for the namespace TTL. "+
 			"This also proves the deferred bump runs on an error return.")
 }
