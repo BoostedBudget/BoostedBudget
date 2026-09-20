@@ -139,7 +139,7 @@ func (r adminRCOperations) ListOperations(context.Context, string) ([]domain.Rev
 }
 
 func TestAdminRevenueCatRetryDoesNotReviveAppliedOrSupersededOperations(t *testing.T) {
-	for _, stage := range []string{"pending", "applied", "superseded"} {
+	for _, stage := range []string{"pending", "applied", "superseded", "abandoned"} {
 		q := &adminRCQueue{}
 		h := (&AdminHandler{}).WithRevenueCat(RevenueCatAdminDeps{States: adminRCOperations{operations: []domain.RevenueCatOperation{{ID: "operation", UserID: "target", Stage: stage}}}}).WithJobQueue(q)
 		in := &AdminRevenueCatOperationInput{AdminRevenueCatUserInput: AdminRevenueCatUserInput{AdminAuthenticatedInput: inputs.AdminAuthenticatedInput{AuthenticatedInput: inputs.AuthenticatedInput{UserID: "actor"}}, TargetUserID: "target"}, OperationID: "operation"}
@@ -148,7 +148,10 @@ func TestAdminRevenueCatRetryDoesNotReviveAppliedOrSupersededOperations(t *testi
 			require.NoError(t, err)
 			require.Equal(t, []jobs.RevenueCatSyncArgs{{UserID: "target", OperationID: "operation"}}, q.jobs)
 		} else {
-			require.Error(t, err)
+			var status huma.StatusError
+			require.ErrorAs(t, err, &status)
+			require.Equal(t, 409, status.GetStatus(),
+				"only a pending operation may be retried; %q is terminal or superseded", stage)
 			require.Empty(t, q.jobs)
 		}
 	}

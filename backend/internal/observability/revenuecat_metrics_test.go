@@ -24,6 +24,7 @@ var revenueCatMetricNames = []string{
 	"revenuecat_grants_applied_total",
 	"revenuecat_grants_expired_total",
 	"revenuecat_operation_failures_total",
+	"revenuecat_operation_abandonments_total",
 	"revenuecat_refreshes_total",
 	"revenuecat_refresh_duration_seconds",
 	"revenuecat_retention_episodes_armed_total",
@@ -49,6 +50,7 @@ func publishRevenueCatLabelSamples() {
 	RecordRevenueCatGrantApplied(RevenueCatGrantClassComp)
 	RecordRevenueCatGrantExpired(RevenueCatGrantClassPaid)
 	RecordRevenueCatOperationFailure(RevenueCatGrantClassComp)
+	RecordRevenueCatOperationAbandoned(RevenueCatGrantClassComp)
 	ObserveRevenueCatRefresh(RevenueCatRefreshSuccess, 0.01)
 	RecordRevenueCatRetentionEpisodeArmed()
 	PublishRevenueCatWebhookInbox(1, 1)
@@ -161,6 +163,17 @@ func TestRecordRevenueCatGrantExpired_BoundsClass(t *testing.T) {
 	RecordRevenueCatGrantExpired(RevenueCatGrantClassComp)
 	assert.Equal(t, float64(1), testutil.ToFloat64(
 		RevenueCatGrantsExpiredTotal.WithLabelValues(RevenueCatGrantClassComp)))
+}
+
+func TestRecordRevenueCatOperationAbandoned_BoundsClass(t *testing.T) {
+	RevenueCatOperationAbandonmentsTotal.Reset()
+	RecordRevenueCatOperationAbandoned("enterprise_platinum")
+	assert.Equal(t, float64(1), testutil.ToFloat64(
+		RevenueCatOperationAbandonmentsTotal.WithLabelValues(RevenueCatLabelOther)))
+
+	RecordRevenueCatOperationAbandoned(RevenueCatGrantClassComp)
+	assert.Equal(t, float64(1), testutil.ToFloat64(
+		RevenueCatOperationAbandonmentsTotal.WithLabelValues(RevenueCatGrantClassComp)))
 }
 
 func TestRecordRevenueCatWebhookFailed_BoundsBothLabels(t *testing.T) {
