@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
 import * as UI from '../../components/ui'
 import {
@@ -21,11 +21,14 @@ import { STATES_REGISTRY } from '../../components/ui/states.registry'
 import { THEME_REGISTRY } from '../../components/ui/theme.registry'
 import { TOAST_REGISTRY } from '../../components/ui/toast.registry'
 import { COLOR_SCHEMES } from './helpers'
+import {
+  NON_TEXT_BEARING_FILES,
+  UI_DIR,
+  findUncoveredComponentFiles,
+  uiFiles,
+} from './registry-coverage'
 
-const MOBILE_ROOT = dirname(require.resolve('../../../package.json'))
-const UI_DIR = resolve(MOBILE_ROOT, 'src/components/ui')
-
-const UI_FILES = readdirSync(UI_DIR).filter((file) => file.endsWith('.ts') || file.endsWith('.tsx'))
+const UI_FILES = uiFiles()
 
 const TEXT_TONES: readonly TextTone[] = ['default', 'muted', 'subtle', 'primary', 'success', 'warning', 'danger', 'info']
 const SURFACE_VARIANTS: readonly SurfaceVariant[] = ['canvas', 'card', 'raised', 'sunken', 'overlay']
@@ -75,19 +78,9 @@ const BASE_ENTRY_NAMES = [
  * Component files that render no text on a surface, so there is no WCAG contrast pair to derive and
  * no registry entry to point at. Every OTHER file that exports a component MUST be referenced by at
  * least one registry entry: adding a new component file without an entry (and without deliberately
- * adding it here) fails the coverage test below.
+ * adding it to `NON_TEXT_BEARING_FILES`) fails the coverage test below. The list lives in
+ * `./registry-coverage` so the Todo 20 accessibility suite reads the same source.
  */
-const NON_TEXT_BEARING_FILES: readonly string[] = [
-  'BottomSheet.tsx',
-  'IconButton.tsx',
-  'List.tsx',
-  'ProgressBar.tsx',
-  'Screen.tsx',
-  'Separator.tsx',
-  'Skeleton.tsx',
-  'Spinner.tsx',
-  'ToastProvider.tsx',
-]
 
 describe('components/ui source bans', () => {
   it('contains the primitive files (the ban scan is not vacuous)', () => {
@@ -171,15 +164,8 @@ describe('PRIMITIVE_REGISTRY', () => {
   })
 
   it('covers every text-bearing component file with at least one registry entry', () => {
-    const registered = new Set<unknown>(PRIMITIVE_REGISTRY.map((entry) => entry.component))
-    const uncovered: string[] = []
-    for (const file of UI_FILES.filter((name) => name.endsWith('.tsx'))) {
-      if (NON_TEXT_BEARING_FILES.includes(file)) continue
-      const moduleExports = require(resolve(UI_DIR, file)) as Record<string, unknown>
-      const components = Object.values(moduleExports).filter((value) => typeof value === 'function')
-      if (!components.some((component) => registered.has(component))) uncovered.push(file)
-    }
-    expect(uncovered).toEqual([])
+    const registered = PRIMITIVE_REGISTRY.map((entry) => entry.component)
+    expect(findUncoveredComponentFiles(registered)).toEqual([])
     for (const file of NON_TEXT_BEARING_FILES) expect(UI_FILES).toContain(file)
   })
 
