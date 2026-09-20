@@ -151,6 +151,18 @@ var (
 		Help: "Total RevenueCat operation applications that failed, by grant class. The flow companion to revenuecat_operations_errored (the stock).",
 	}, []string{"class"})
 
+	// RevenueCatOperationAbandonmentsTotal counts operations written to the TERMINAL 'abandoned'
+	// stage after reaching the attempt cap, by grant class. This is deliberately separate from
+	// RevenueCatOperationFailuresTotal: the failure counter is the retryable-failure FLOW whose
+	// stock companion (revenuecat_operations_errored) counts only rows STILL stage='pending', and an
+	// abandoned row has left that population for good. Folding abandonment into the failure counter
+	// would overstate the retry flow and make a permanently stuck operation indistinguishable from a
+	// transient one. This counter is the alertable signal for "an operation is not converging".
+	RevenueCatOperationAbandonmentsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "revenuecat_operation_abandonments_total",
+		Help: "Total RevenueCat operations abandoned (terminal stage) after exceeding the attempt cap, by grant class. Distinct from revenuecat_operation_failures_total, which counts retryable failures still pending.",
+	}, []string{"class"})
+
 	// RevenueCatRefreshesTotal counts access-refresh outcomes. `not_due` is a refresh call that
 	// found a still-valid cached projection and did no provider I/O — healthy and expected on a
 	// duplicate webhook or a coalesced repair pass, so it is NOT an error.
@@ -495,6 +507,12 @@ func RecordRevenueCatGrantExpired(class string) {
 // RecordRevenueCatOperationFailure records a failed operation application.
 func RecordRevenueCatOperationFailure(class string) {
 	RevenueCatOperationFailuresTotal.WithLabelValues(normalizeRevenueCatGrantClass(class)).Inc()
+}
+
+// RecordRevenueCatOperationAbandoned records an operation that reached its attempt cap and was
+// written to the terminal 'abandoned' stage. Never call this for a retryable failure.
+func RecordRevenueCatOperationAbandoned(class string) {
+	RevenueCatOperationAbandonmentsTotal.WithLabelValues(normalizeRevenueCatGrantClass(class)).Inc()
 }
 
 // ObserveRevenueCatRefresh records a refresh outcome and its duration.

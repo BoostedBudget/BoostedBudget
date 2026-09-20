@@ -39,8 +39,8 @@ export const CONDITION_TYPE_LABELS: Record<ConditionType, string> = {
   account_id: 'Account is',
   account_type: 'Account type is',
   payment_channel: 'Payment channel is',
-  existing_pfc_primary: 'PFC Primary',
-  existing_pfc_detailed: 'PFC Detailed',
+  existing_pfc_primary: 'Existing PFC Primary (as the bank originally reported it)',
+  existing_pfc_detailed: 'Existing PFC Detailed (as the bank originally reported it)',
   date_range: 'Date between',
   expression: 'Condition',
 }
@@ -92,8 +92,8 @@ export const CONDITION_FIELD_LABELS: Record<ConditionField, string> = {
   account_type: 'Account type',
   payment_channel: 'Payment channel',
   date: 'Date',
-  pfc_primary: 'PFC Primary',
-  pfc_detailed: 'PFC Detailed',
+  pfc_primary: 'PFC Primary (as the bank originally reported it)',
+  pfc_detailed: 'PFC Detailed (as the bank originally reported it)',
 }
 
 export const CONDITION_OPERATOR_LABELS: Record<ConditionOperator, string> = {
