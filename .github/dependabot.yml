@@ -93,6 +93,15 @@ updates:
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "@react-native/*"
         update-types: ["version-update:semver-major"]
+      # AsyncStorage is pinned exactly to the Expo SDK 57 compatibility version. It is a
+      # compatibility-critical native module, so every update class stays manual; the
+      # `@react-native/*` pattern above does NOT cover it (its scope is `@react-native`, not
+      # `@react-native-async-storage`).
+      - dependency-name: "@react-native-async-storage/async-storage"
+        update-types:
+          - "version-update:semver-patch"
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
       - dependency-name: "nativewind"
         update-types:
           - "version-update:semver-patch"
@@ -114,6 +123,7 @@ updates:
           - "@babel/runtime"
           - "@expo/*"
           - "@react-native/*"
+          - "@react-native-async-storage/*"
           - "@testing-library/react-native"
           - "babel-preset-expo"
           - "expo"
