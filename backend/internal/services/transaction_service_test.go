@@ -32,6 +32,12 @@ func (m *MockTransactionRepository) Update(ctx context.Context, transaction *dom
 	return args.Error(0)
 }
 
+// UpdateFromSync — #1684: the `modified` path's writer, which carries the full category tuple.
+func (m *MockTransactionRepository) UpdateFromSync(ctx context.Context, transaction *domain.Transaction) error {
+	args := m.Called(ctx, transaction)
+	return args.Error(0)
+}
+
 // PullForwardSettledPendingAnnotations — #1586.
 func (m *MockTransactionRepository) PullForwardSettledPendingAnnotations(ctx context.Context, userID string, transactionIDs []string) (int64, error) {
 	args := m.Called(ctx, userID, transactionIDs)
