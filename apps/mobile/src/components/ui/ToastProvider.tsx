@@ -8,13 +8,17 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { AccessibilityInfo, Animated, StyleSheet, View } from 'react-native'
+import { AccessibilityInfo, Animated, Platform, StyleSheet, View } from 'react-native'
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
 import { Toast, type ToastAction, type ToastVariant } from './Toast'
-import { useReducedMotion } from './Spinner'
+import { shouldUseNativeDriver, useReducedMotion } from './Spinner'
 
 const MOTION = nativeTokens.light.motion
+
+// react-native-web has no native animated module and logs a fallback warning on every mount when
+// `useNativeDriver` is true (see Spinner.tsx). Native keeps the native driver.
+export const TOAST_USE_NATIVE_DRIVER = shouldUseNativeDriver(Platform.OS)
 
 /** Enter transition, taken from the motion scale. */
 export const TOAST_ENTER_DURATION_MS = MOTION['transition-duration-bb-normal']
@@ -99,7 +103,7 @@ function ToastItem({ toast, screenReaderEnabled, onDismiss, onExited }: ToastIte
     const animation = Animated.timing(progress, {
       toValue: 1,
       duration: enterDuration,
-      useNativeDriver: true,
+      useNativeDriver: TOAST_USE_NATIVE_DRIVER,
     })
     animation.start()
     return () => animation.stop()
@@ -121,7 +125,7 @@ function ToastItem({ toast, screenReaderEnabled, onDismiss, onExited }: ToastIte
     const animation = Animated.timing(progress, {
       toValue: 0,
       duration: exitDuration,
-      useNativeDriver: true,
+      useNativeDriver: TOAST_USE_NATIVE_DRIVER,
     })
     animation.start(({ finished }) => {
       if (finished) onExited(toast.id)

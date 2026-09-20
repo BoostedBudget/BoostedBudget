@@ -32,7 +32,7 @@
     },
     {
       "id": "web-export-gzip-bytes",
-      "measured": 347166,
+      "measured": 367512,
       "threshold": {
         "baselineBytes": 347166,
         "maxDeltaPercent": 15,
@@ -42,7 +42,7 @@
     },
     {
       "id": "web-export-gzip-delta-bytes",
-      "measured": 0,
+      "measured": 20346,
       "threshold": {
         "baselineBytes": 347166,
         "maxDeltaBytes": 52075
@@ -51,7 +51,7 @@
     },
     {
       "id": "ios-export-gzip-bytes",
-      "measured": 1774293,
+      "measured": 1820505,
       "threshold": {
         "baselineBytes": 1774298,
         "maxDeltaPercent": 20,
@@ -61,7 +61,7 @@
     },
     {
       "id": "ios-export-gzip-delta-bytes",
-      "measured": -5,
+      "measured": 46207,
       "threshold": {
         "baselineBytes": 1774298,
         "maxDeltaBytes": 354860
@@ -70,7 +70,7 @@
     },
     {
       "id": "android-export-gzip-bytes",
-      "measured": 1880900,
+      "measured": 1928674,
       "threshold": {
         "baselineBytes": 1880903,
         "maxDeltaPercent": 20,
@@ -80,7 +80,7 @@
     },
     {
       "id": "android-export-gzip-delta-bytes",
-      "measured": -3,
+      "measured": 47771,
       "threshold": {
         "baselineBytes": 1880903,
         "maxDeltaBytes": 376181

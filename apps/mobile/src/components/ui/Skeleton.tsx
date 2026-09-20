@@ -1,7 +1,16 @@
 import { useEffect, useState } from 'react'
-import { Animated, Easing, type DimensionValue, type ViewProps } from 'react-native'
+import { Animated, Easing, Platform, type DimensionValue, type ViewProps } from 'react-native'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
-import { SPINNER_NORMAL_DURATION_MS, SPINNER_REDUCED_DURATION_MS, useReducedMotion } from './Spinner'
+import {
+  SPINNER_NORMAL_DURATION_MS,
+  SPINNER_REDUCED_DURATION_MS,
+  shouldUseNativeDriver,
+  useReducedMotion,
+} from './Spinner'
+
+// react-native-web has no native animated module and logs a fallback warning on every mount when
+// `useNativeDriver` is true (see Spinner.tsx). Native keeps the native driver.
+export const SKELETON_USE_NATIVE_DRIVER = shouldUseNativeDriver(Platform.OS)
 
 export type SkeletonRadius = 'none' | 'lg' | 'full'
 
@@ -40,13 +49,13 @@ export function Skeleton({
           toValue: 0.4,
           duration,
           easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
+          useNativeDriver: SKELETON_USE_NATIVE_DRIVER,
         }),
         Animated.timing(opacity, {
           toValue: 1,
           duration,
           easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
+          useNativeDriver: SKELETON_USE_NATIVE_DRIVER,
         }),
       ]),
     )

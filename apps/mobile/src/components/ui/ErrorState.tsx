@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Pressable, View, type ViewProps } from 'react-native'
+import { Platform, Pressable, View, type ViewProps } from 'react-native'
 import { nativeTokens } from '@boostedbudget/design-tokens/native'
 import { Button, BUTTON_FOCUS_RING_COLOR_CLASS, BUTTON_FOCUS_RING_STYLE } from './Button'
 import { Text } from './Text'
@@ -82,6 +82,9 @@ export function ErrorState({
           <Pressable
             accessibilityRole="button"
             accessibilityState={{ expanded }}
+            // Web only: react-native-web 0.21 drops `accessibilityState`, so the browser needs
+            // `aria-expanded` directly (see Switch.tsx for why this is not applied on native).
+            {...(Platform.OS === 'web' ? { 'aria-expanded': expanded } : {})}
             accessibilityLabel={expanded ? 'Hide details' : 'Show details'}
             onPress={() => setExpanded((previous) => !previous)}
             onFocus={() => setFocused(true)}

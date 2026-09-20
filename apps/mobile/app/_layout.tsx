@@ -27,20 +27,25 @@ export function MobileAppProviders({ children }: { children: ReactNode }) {
 }
 
 export function ThemedApp({ children }: { children: ReactNode }) {
-  const { resolvedTheme } = useTheme()
+  const { resolvedTheme, hydrated } = useTheme()
   const variables = useMemo(() => themeVariables(resolvedTheme), [resolvedTheme])
 
+  // Both writes are gated on `hydrated`. Before hydration `resolvedTheme` is derived from the
+  // still-`system` preference, so writing it would clobber the pre-paint bootstrap's persisted
+  // theme (a dark -> light -> dark flash on web) and briefly set the wrong native scheme.
   useEffect(() => {
+    if (!hydrated) return
     if (Platform.OS !== 'web') {
       Appearance.setColorScheme(resolvedTheme)
     }
-  }, [resolvedTheme])
+  }, [hydrated, resolvedTheme])
 
   useEffect(() => {
+    if (!hydrated) return
     if (Platform.OS === 'web') {
       applyWebThemeVariables(resolvedTheme, variables, globalThis.document.documentElement)
     }
-  }, [resolvedTheme, variables])
+  }, [hydrated, resolvedTheme, variables])
 
   const { theme, statusBarStyle } = getNavigationAppearance(resolvedTheme)
 

@@ -549,6 +549,22 @@ test.describe('gallery: reduced motion', () => {
   })
 })
 
+test.describe('gallery: web animation driver', () => {
+  test('no animated primitive logs the native-driver fallback warning', async ({ page }) => {
+    const warnings: string[] = []
+    page.on('console', (message) => {
+      if (message.type() === 'warning' && message.text().includes('useNativeDriver')) {
+        warnings.push(message.text())
+      }
+    })
+
+    await page.setViewportSize({ width: 375, height: 812 })
+    await openGallery(page, 'light')
+
+    expect(warnings, 'no primitive may mount with useNativeDriver on web').toEqual([])
+  })
+})
+
 test.describe('gallery: built theme bootstrap', () => {
   test('the inline theme bootstrap is inlined in the built export before any script src or preload', () => {
     const html = readFileSync(EXPORT_INDEX_HTML, 'utf8')

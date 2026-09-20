@@ -1,5 +1,6 @@
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { afterEach, beforeEach } from '@jest/globals'
-import { act, fireEvent, render, screen } from '@testing-library/react-native'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native'
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import type { ReactNode } from 'react'
@@ -125,6 +126,36 @@ describe('app-wide theme wiring', () => {
     )
 
     expect(offenders).toEqual([])
+  })
+
+  it('does not write a light theme before hydration when the persisted preference is dark', async () => {
+    // The pre-paint bootstrap already applied the PERSISTED preference (dark) before first paint.
+    // The runtime must not clobber it with the still-`system` resolution (light) while AsyncStorage
+    // is unresolved, or the user sees a dark -> light -> dark flash.
+    await AsyncStorage.setItem('bb-theme', 'dark')
+    const setProperty = jest.fn()
+    const setAttribute = jest.fn()
+    ;(globalThis as unknown as { document: unknown }).document = {
+      documentElement: { style: { setProperty }, setAttribute },
+    }
+    const platform = jest.replaceProperty(Platform, 'OS', 'web')
+
+    try {
+      render(<RootLayout />)
+      await waitFor(() => expect(setAttribute).toHaveBeenCalledWith('data-bb-theme', 'dark'))
+
+      const backgroundWrites = setProperty.mock.calls.filter(([name]) => name === '--background')
+      expect(backgroundWrites.length).toBeGreaterThan(0)
+      // The FIRST background write must already be the dark token: no light write may precede it.
+      expect(backgroundWrites[0][1]).toBe(nativeTokens.dark.color.background)
+      expect(backgroundWrites.map(([, value]) => value)).not.toContain(
+        nativeTokens.light.color.background,
+      )
+    } finally {
+      platform.restore()
+      delete (globalThis as unknown as { document?: unknown }).document
+      await AsyncStorage.clear()
+    }
   })
 
   it('wires the generated exclude list into metro inlineVariables', () => {
