@@ -131,6 +131,57 @@ func TestRevenueCatService_IdentityFailureRecordsRetryAttempt(t *testing.T) {
 	require.Zero(t, p.granted)
 }
 
+// TestProcessOperationAbandonsOnTheCapThFailure pins the corrected off-by-one: op.Attempts is the
+// count of PRIOR failures, so the attempt being made here is failure number Attempts+1. The
+// operation must abandon on the cap-th failure (Attempts == cap-1), not one failure later. It also
+// pins G4: the abandoning attempt is terminal, so ProcessOperation must NOT report a retryable
+// failure — otherwise River retries a job whose only work is to observe stage!='pending' and no-op.
+func TestProcessOperationAbandonsOnTheCapThFailure(t *testing.T) {
+	r := &rcTestStore{ops: map[string]domain.RevenueCatOperation{
+		"op": {ID: "op", UserID: "u", Class: "comp", Key: "comp_premium", Stage: "pending", Attempts: RevenueCatMaxOperationAttempts - 1},
+	}}
+	p := &rcTestProvider{fetchErr: errors.New("outage")}
+	s := NewRevenueCatService(r, p, rcTestProfile{})
+	require.NoError(t, s.ProcessOperation(context.Background(), "u", "op"),
+		"the abandoning attempt is terminal and must not be reported as a retryable failure")
+	require.Equal(t, "abandoned", r.ops["op"].Stage,
+		"a permanently non-converging operation must stop being retried on the cap-th failure")
+	require.Equal(t, "provider_unavailable", r.ops["op"].LastError)
+	require.Equal(t, RevenueCatMaxOperationAttempts, r.ops["op"].Attempts,
+		"the cap-th failure is recorded exactly once, not cap+1 times")
+}
+
+// TestProcessOperationStaysPendingBeforeTheCapThFailure is the other side of the boundary: one
+// failure below the cap (Attempts == cap-2) still leaves the operation retryable.
+func TestProcessOperationStaysPendingBeforeTheCapThFailure(t *testing.T) {
+	r := &rcTestStore{ops: map[string]domain.RevenueCatOperation{
+		"op": {ID: "op", UserID: "u", Class: "comp", Key: "comp_premium", Stage: "pending", Attempts: RevenueCatMaxOperationAttempts - 2},
+	}}
+	p := &rcTestProvider{fetchErr: errors.New("outage")}
+	s := NewRevenueCatService(r, p, rcTestProfile{})
+	require.Error(t, s.ProcessOperation(context.Background(), "u", "op"))
+	require.Equal(t, "pending", r.ops["op"].Stage, "below the cap the operation must stay retryable")
+	require.Equal(t, "provider_unavailable", r.ops["op"].LastError)
+	require.Equal(t, RevenueCatMaxOperationAttempts-1, r.ops["op"].Attempts)
+}
+
+// TestProcessOperationOnAbandonedOperationIsANoOp pins the second half of G4: once the sweep (or
+// the cap branch) has written the terminal stage, a still-queued River attempt must do no provider
+// work, must not bump attempts, and must report success so the job is not retried forever.
+func TestProcessOperationOnAbandonedOperationIsANoOp(t *testing.T) {
+	r := &rcTestStore{ops: map[string]domain.RevenueCatOperation{
+		"op": {ID: "op", UserID: "u", Class: "comp", Key: "comp_premium", Stage: "abandoned", Attempts: RevenueCatMaxOperationAttempts, LastError: "provider_unavailable"},
+	}}
+	p := &rcTestProvider{}
+	s := NewRevenueCatService(r, p, rcTestProfile{})
+	require.NoError(t, s.ProcessOperation(context.Background(), "u", "op"))
+	require.Zero(t, p.ensured)
+	require.Zero(t, p.fetches)
+	require.Zero(t, p.granted)
+	require.Equal(t, "abandoned", r.ops["op"].Stage)
+	require.Equal(t, RevenueCatMaxOperationAttempts, r.ops["op"].Attempts, "a non-pending replay must not bump attempts")
+}
+
 type rcTestProvider struct {
 	grants                         []rc.Entitlement
 	billing                        []rc.Subscription
@@ -378,4 +429,74 @@ func TestRevenueCatService_AdminValidationAndIntentOnly(t *testing.T) {
 	a, err := r.state.ResolveAccess(time.Now())
 	require.NoError(t, err)
 	require.Equal(t, "inactive", a.Status)
+}
+
+// TestRevenueCatDesired_PermanentOpMatchesLifetimeSentinel is the issue #1692 regression.
+// RevenueCat materialises a `duration:lifetime` comp as a concrete, per-grant jittered expiry
+// roughly 200 years out (production value observed: 8097054022838 ms). A permanent (nil-expiry)
+// operation must treat that sentinel as its own grant, or it can never reach `applied` and the
+// repair worker revokes+regrants the promotion every minute.
+func TestRevenueCatDesired_PermanentOpMatchesLifetimeSentinel(t *testing.T) {
+	now := time.Now()
+	lifetime := time.UnixMilli(8097054022838)
+	grants := []rc.Entitlement{{LookupKey: "comp_household_2", ExpiresAt: &lifetime}}
+	op := domain.RevenueCatOperation{Class: "comp", Key: "comp_household_2"}
+	require.True(t, revenueCatDesired(grants, op, now),
+		"a nil-expiry comp must be satisfied by RevenueCat's lifetime sentinel expiry")
+}
+
+// TestRevenueCatDesired_PermanentOpRejectsShortFiniteGrant pins the other half of the horizon:
+// a genuine finite comp is far below the permanent horizon and must NOT satisfy a nil-expiry op,
+// so a permanent request still replaces a short promotion rather than silently accepting it.
+func TestRevenueCatDesired_PermanentOpRejectsShortFiniteGrant(t *testing.T) {
+	now := time.Now()
+	short := now.Add(30 * 24 * time.Hour)
+	grants := []rc.Entitlement{{LookupKey: "comp_household_2", ExpiresAt: &short}}
+	op := domain.RevenueCatOperation{Class: "comp", Key: "comp_household_2"}
+	require.False(t, revenueCatDesired(grants, op, now),
+		"a finite comp must not satisfy a permanent operation")
+}
+
+// TestRevenueCatDesired_FiniteOpUnchanged guards the out-of-scope boundary: finite operations keep
+// requiring an exact millisecond match, with no tolerance introduced by the permanent fix.
+func TestRevenueCatDesired_FiniteOpUnchanged(t *testing.T) {
+	now := time.Now()
+	end := now.Add(30 * 24 * time.Hour)
+	op := domain.RevenueCatOperation{Class: "comp", Key: "comp_household_2", ExpiresAt: &end}
+	require.True(t, revenueCatDesired([]rc.Entitlement{{LookupKey: "comp_household_2", ExpiresAt: &end}}, op, now))
+	mismatch := end.Add(time.Millisecond)
+	require.False(t, revenueCatDesired([]rc.Entitlement{{LookupKey: "comp_household_2", ExpiresAt: &mismatch}}, op, now),
+		"finite expiries still require an exact millisecond match")
+}
+
+func TestRevenueCatGrantMatches(t *testing.T) {
+	now := time.Now()
+	lifetime := time.UnixMilli(8097054022838)
+	short := now.Add(30 * 24 * time.Hour)
+	finite := now.Add(60 * 24 * time.Hour)
+	// RevenueCat's `duration:lifetime` sentinel is ~200 years out; the boundary is inclusive so a
+	// grant landing EXACTLY on the horizon is permanent, not finite.
+	atHorizon := now.Add(revenueCatPermanentHorizon)
+	permanent := domain.RevenueCatOperation{Class: "comp", Key: "comp_household_2"}
+	finiteOp := domain.RevenueCatOperation{Class: "comp", Key: "comp_household_2", ExpiresAt: &finite}
+	for _, tc := range []struct {
+		name string
+		g    rc.Entitlement
+		op   domain.RevenueCatOperation
+		want bool
+	}{
+		{"key-mismatch", rc.Entitlement{LookupKey: "comp_premium", ExpiresAt: &lifetime}, permanent, false},
+		{"nil-grant-nil-op", rc.Entitlement{LookupKey: "comp_household_2"}, permanent, true},
+		{"nil-op-lifetime-sentinel", rc.Entitlement{LookupKey: "comp_household_2", ExpiresAt: &lifetime}, permanent, true},
+		{"nil-op-short-finite", rc.Entitlement{LookupKey: "comp_household_2", ExpiresAt: &short}, permanent, false},
+		{"nil-op-exactly-at-horizon", rc.Entitlement{LookupKey: "comp_household_2", ExpiresAt: rcTimePtr(atHorizon)}, permanent, true},
+		{"nil-op-just-inside-horizon", rc.Entitlement{LookupKey: "comp_household_2", ExpiresAt: rcTimePtr(atHorizon.Add(-time.Millisecond))}, permanent, false},
+		{"nil-grant-finite-op", rc.Entitlement{LookupKey: "comp_household_2"}, finiteOp, false},
+		{"finite-exact", rc.Entitlement{LookupKey: "comp_household_2", ExpiresAt: &finite}, finiteOp, true},
+		{"finite-mismatch", rc.Entitlement{LookupKey: "comp_household_2", ExpiresAt: &short}, finiteOp, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, revenueCatGrantMatches(tc.g, tc.op, now))
+		})
+	}
 }
