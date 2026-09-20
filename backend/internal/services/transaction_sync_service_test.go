@@ -1183,7 +1183,7 @@ func TestProcessModifiedTransactions_Success(t *testing.T) {
 	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-2", userID).Return(existingTxn2, nil)
 
 	// Mock: Update should be called with new data BUT old user_notes preserved
-	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+	mockTransactionRepo.On("UpdateFromSync", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
 		// Transaction 1: Amount updated, user_notes preserved
 		if txn.ID == "txn-uuid-1" {
 			return txn.Amount == 150.00 &&
@@ -1194,7 +1194,7 @@ func TestProcessModifiedTransactions_Success(t *testing.T) {
 		return false
 	})).Return(nil).Once()
 
-	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+	mockTransactionRepo.On("UpdateFromSync", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
 		// Transaction 2: Amount updated, user_notes preserved
 		if txn.ID == "txn-uuid-2" {
 			return txn.Amount == 75.00 &&
@@ -1272,7 +1272,7 @@ func TestProcessModifiedTransactions_NewTransactionNoUserNotes(t *testing.T) {
 	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-1", userID).Return(existingTxn, nil)
 
 	// Mock: Update with nil user_notes (unchanged)
-	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+	mockTransactionRepo.On("UpdateFromSync", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
 		return txn.ID == "txn-uuid-1" && txn.UserNotes == nil
 	})).Return(nil)
 
@@ -1348,7 +1348,7 @@ func TestProcessModifiedTransactions_TransactionNotFound(t *testing.T) {
 	err := service.processModifiedTransactions(ctx, modified, linkedItem, accountMap, nil)
 
 	assert.NoError(t, err)
-	assertNoCallTo(t, &mockTransactionRepo.Mock, "Update")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "UpdateFromSync")
 	require.Len(t, upserted, 1, "the modification must reach the database as an upsert, not be dropped")
 	assert.Equal(t, "plaid-txn-new", *upserted[0].ExternalTransactionID)
 	assert.NotEmpty(t, upserted[0].ID,
@@ -1402,7 +1402,7 @@ func TestProcessModifiedTransactions_UnmappableAccountButStored_StillApplies(t *
 		Return(stored, nil)
 
 	var updated *domain.Transaction
-	mockTransactionRepo.On("Update", ctx, mock.Anything).
+	mockTransactionRepo.On("UpdateFromSync", ctx, mock.Anything).
 		Run(func(args mock.Arguments) { updated = args.Get(1).(*domain.Transaction) }).
 		Return(nil).Once()
 
@@ -1452,7 +1452,7 @@ func TestProcessModifiedTransactions_UnmappableAndNotStored_IsTheOnlySkip(t *tes
 	err := service.processModifiedTransactions(ctx, modified, linkedItem, map[string]string{}, nil)
 
 	require.NoError(t, err, "this must not wedge the sync: re-delivery cannot conjure an account row")
-	assertNoCallTo(t, &mockTransactionRepo.Mock, "Update")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "UpdateFromSync")
 	assertNoCallTo(t, &mockTransactionRepo.Mock, "CreateBatch")
 }
 
@@ -1486,7 +1486,7 @@ func TestProcessModifiedTransactions_LookupFailureIsNotSwallowed(t *testing.T) {
 	require.Error(t, err, "a lookup failure is not the missing-row case and must abort the sync")
 	assert.Contains(t, err.Error(), "connection reset by peer")
 	assertNoCallTo(t, &mockTransactionRepo.Mock, "CreateBatch")
-	assertNoCallTo(t, &mockTransactionRepo.Mock, "Update")
+	assertNoCallTo(t, &mockTransactionRepo.Mock, "UpdateFromSync")
 }
 
 // TestProcessModifiedTransactions_EmptySlice tests handling of empty input
@@ -1527,7 +1527,7 @@ func TestProcessModifiedTransactions_EmptySlice(t *testing.T) {
 	assert.NoError(t, err)
 	// No repository methods should be called
 	mockTransactionRepo.AssertNotCalled(t, "GetByExternalID")
-	mockTransactionRepo.AssertNotCalled(t, "Update")
+	mockassert.NoCallTo(t, &mockTransactionRepo.Mock, "UpdateFromSync")
 }
 
 // ============================================================================
@@ -1825,7 +1825,7 @@ func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
 
 	// Mock Update calls - verify each transaction updates correctly
 	// Restaurant: Amount changed, pending→false, user_notes PRESERVED
-	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+	mockTransactionRepo.On("UpdateFromSync", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
 		return txn.ExternalTransactionID != nil &&
 			*txn.ExternalTransactionID == "plaid-txn-restaurant" &&
 			txn.Amount == 54.50 && // Tip added (Plaid returns positive for debits)
@@ -1835,7 +1835,7 @@ func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
 	})).Return(nil).Once()
 
 	// Hotel: Date changed, pending→false, user_notes PRESERVED
-	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+	mockTransactionRepo.On("UpdateFromSync", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
 		return txn.ExternalTransactionID != nil &&
 			*txn.ExternalTransactionID == "plaid-txn-hotel" &&
 			txn.Amount == 200.00 && // Plaid returns positive for debits
@@ -1845,7 +1845,7 @@ func TestProcessModifiedTransactions_PendingToPosted(t *testing.T) {
 	})).Return(nil).Once()
 
 	// Gas: Amount unchanged, pending→false, nil notes preserved as nil
-	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+	mockTransactionRepo.On("UpdateFromSync", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
 		return txn.ExternalTransactionID != nil &&
 			*txn.ExternalTransactionID == "plaid-txn-gas" &&
 			txn.Amount == 55.00 && // Plaid returns positive for debits
@@ -3079,7 +3079,7 @@ func TestTransactionSyncService_ModifiedTransactions_SetsUserAccountID(t *testin
 	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, "plaid-txn-modified", "user-456").Return(existingTxn, nil)
 
 	// Update should be called with UserAccountID set
-	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+	mockTransactionRepo.On("UpdateFromSync", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
 		if txn.UserAccountID == nil || *txn.UserAccountID != userAccountID {
 			t.Logf("Modified txn: expected UserAccountID=%s, got %v", userAccountID, txn.UserAccountID)
 			return false
@@ -3422,7 +3422,7 @@ func TestProcessModifiedTransactions_StampsMerchantID(t *testing.T) {
 	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, externalID, userID).Return(existingTxn, nil)
 
 	// Update must be called with MerchantID stamped AND user_notes preserved
-	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+	mockTransactionRepo.On("UpdateFromSync", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
 		if txn.MerchantID == nil {
 			t.Log("MerchantID was not stamped on modified transaction")
 			return false
@@ -3490,7 +3490,7 @@ func TestProcessModifiedTransactions_MerchantUpsertError_ContinuesUpdate(t *test
 	mockTransactionRepo.On("GetByExternalID", ctx, domain.SourcePlaid, externalID, userID).Return(existingTxn, nil)
 
 	// Update must still be called — MerchantID will be nil (best-effort)
-	mockTransactionRepo.On("Update", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
+	mockTransactionRepo.On("UpdateFromSync", ctx, mock.MatchedBy(func(txn *domain.Transaction) bool {
 		return txn.MerchantID == nil
 	})).Return(nil)
 

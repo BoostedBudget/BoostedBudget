@@ -352,8 +352,8 @@ func TestSyncTransactions_ModifiedStorageFailure_LeavesCursorUnadvanced(t *testi
 	mockTransactionRepo.On("GetByExternalID", mock.Anything, domain.SourcePlaid, mock.Anything, "user-modfail").
 		Return(&domain.Transaction{ID: "existing"}, nil)
 	// Row 1 commits, row 2 fails — the partial-commit shape.
-	mockTransactionRepo.On("Update", mock.Anything, mock.Anything).Return(nil).Once()
-	mockTransactionRepo.On("Update", mock.Anything, mock.Anything).Return(errors.New("update failed on row 2")).Once()
+	mockTransactionRepo.On("UpdateFromSync", mock.Anything, mock.Anything).Return(nil).Once()
+	mockTransactionRepo.On("UpdateFromSync", mock.Anything, mock.Anything).Return(errors.New("update failed on row 2")).Once()
 	mockLinkedItemRepo.On("UpdateCursor", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	_, err := service.SyncTransactions(ctx, linkedItem)
