@@ -813,12 +813,12 @@ func (r *budgetRepository) AddCategoryChecked(ctx context.Context, budgetID stri
 		return nil, err
 	}
 
-	updated, _, _, err := r.refreshBudgetActualsInTx(ctx, tx, budgetID)
+	updated, _, withheld, err := r.refreshBudgetActualsInTx(ctx, tx, budgetID)
 	if err != nil {
 		return nil, err
 	}
 	for _, actual := range updated {
-		if actual.ID == candidate.ID {
+		if !withheld && actual.ID == candidate.ID {
 			candidate.SpentAmount = actual.SpentAmount
 		}
 	}
@@ -878,12 +878,12 @@ func (r *budgetRepository) UpdateCategoryChecked(ctx context.Context, budgetID, 
 		return nil, err
 	}
 
-	updated, _, _, err := r.refreshBudgetActualsInTx(ctx, tx, budgetID)
+	updated, _, withheld, err := r.refreshBudgetActualsInTx(ctx, tx, budgetID)
 	if err != nil {
 		return nil, err
 	}
 	for _, actual := range updated {
-		if actual.ID == category.ID {
+		if !withheld && actual.ID == category.ID {
 			category.SpentAmount = actual.SpentAmount
 		}
 	}
@@ -1482,13 +1482,13 @@ func (r *budgetRepository) CreateWithCategories(ctx context.Context, budget *dom
 		}
 	}
 
-	updated, _, _, err := r.refreshBudgetActualsInTx(ctx, tx, budget.ID)
+	updated, _, withheld, err := r.refreshBudgetActualsInTx(ctx, tx, budget.ID)
 	if err != nil {
 		return err
 	}
 	for _, actual := range updated {
 		for _, c := range categories {
-			if c.ID == actual.ID {
+			if !withheld && c.ID == actual.ID {
 				c.SpentAmount = actual.SpentAmount
 			}
 		}
