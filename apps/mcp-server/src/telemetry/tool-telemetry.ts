@@ -5,9 +5,6 @@ export type ToolSurface =
   | 'search'
   | 'read_execute'
   | 'write_execute'
-  | 'recipe_list'
-  | 'recipe_save'
-  | 'recipe_run'
   | 'recipe_templates'
 
 export type ToolFamily =
