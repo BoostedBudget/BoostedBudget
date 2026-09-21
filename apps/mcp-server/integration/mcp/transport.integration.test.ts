@@ -272,9 +272,9 @@ describe('MCP transport integration', () => {
     expect(serverName).toBe('boostedbudget')
     expect(protocolVersion).toBeTruthy()
     expect(instructions).toBe(
-      'Analyze accounts, transactions, spending, net worth, and investments; manage envelope budgets, savings goals, categories, and tags. Boost definitions are read-only here; review their history, budget alerts, and transfer, rollover, or savings-goal suggestions. MCP writes require confirmation; BoostedBudget never moves money. Use search first, then readExecute or writeExecute.',
+      'Analyze accounts, transactions, spending, net worth, and investments; manage envelope budgets, savings goals, categories, and tags. Boost definitions are read-only here; review their history, budget alerts, and transfer, rollover, or savings-goal suggestions. MCP writes require confirmation; BoostedBudget never moves money. Use search first, then readExecute or writeExecute. Recipes are saved read-only workflow compositions: list or inspect them with readExecute using listMCPRecipes or getMCPRecipe; create, update, or delete them with writeExecute using createMCPRecipe, updateMCPRecipe, or deleteMCPRecipe (confirmation-gated); run one with writeExecute using runMCPRecipe, then submit the returned calls to readExecute or writeExecute. Starter templates are available via the recipe.templates tool.',
     )
-    expect(new TextEncoder().encode(instructions).byteLength).toBeLessThanOrEqual(400)
+    expect(new TextEncoder().encode(instructions).byteLength).toBeLessThanOrEqual(1024)
     expect(serverDescription).toBeUndefined()
     // Session ID may or may not be present depending on agents SDK version
     // (some versions use path-based routing); we don't require it
