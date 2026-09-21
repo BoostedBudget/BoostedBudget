@@ -350,3 +350,110 @@ describe('groupBudgetCategoriesByPrimary — orphan detailed rows must not adopt
     expect(orphanGroup!.children.map(c => c.id)).not.toContain('custom-1')
   })
 })
+
+describe('groupBudgetCategoriesByPrimary — containment gates (#1686)', () => {
+  it('does not nest a custom whose match_logic is "or" under a category_only parent', () => {
+    const parent = makePfcPrimary('pfc-food', 'FOOD_AND_DRINK', '2024-01-01T00:00:00Z')
+    const custom: BudgetCategory = {
+      ...makeCustom('custom-1', 'uuid-or', '2024-01-02T00:00:00Z'),
+      match_logic: 'or',
+      custom_parent_pfc_primary: 'FOOD_AND_DRINK',
+    }
+    const customMap = new Map([
+      ['uuid-or', { name: 'Or Child', parent_pfc_primary: 'FOOD_AND_DRINK' }],
+    ])
+
+    const result = groupBudgetCategoriesByPrimary([parent, custom], customMap)
+
+    const customGroup = result.find(g => g.group?.id === 'custom-1')
+    expect(customGroup).toBeDefined()
+    expect(result.find(g => g.group?.id === 'pfc-food')!.children).toEqual([])
+  })
+
+  it('does not nest a custom whose match_logic is "tag_only" under a category_only parent', () => {
+    const parent = makePfcPrimary('pfc-food', 'FOOD_AND_DRINK', '2024-01-01T00:00:00Z')
+    const custom: BudgetCategory = {
+      ...makeCustom('custom-1', 'uuid-tag-only', '2024-01-02T00:00:00Z'),
+      match_logic: 'tag_only',
+      custom_parent_pfc_primary: 'FOOD_AND_DRINK',
+    }
+    const customMap = new Map([
+      ['uuid-tag-only', { name: 'Tag Only Child', parent_pfc_primary: 'FOOD_AND_DRINK' }],
+    ])
+
+    const result = groupBudgetCategoriesByPrimary([parent, custom], customMap)
+
+    const customGroup = result.find(g => g.group?.id === 'custom-1')
+    expect(customGroup).toBeDefined()
+    expect(result.find(g => g.group?.id === 'pfc-food')!.children).toEqual([])
+  })
+
+  it('does not nest a custom whose row linkage is absent even when the map supplies a parent', () => {
+    const parent = makePfcPrimary('pfc-food', 'FOOD_AND_DRINK', '2024-01-01T00:00:00Z')
+    const custom = makeCustom('custom-1', 'uuid-map-only', '2024-01-02T00:00:00Z')
+    const customMap = new Map([
+      ['uuid-map-only', { name: 'Map Only', parent_pfc_primary: 'FOOD_AND_DRINK' }],
+    ])
+
+    const result = groupBudgetCategoriesByPrimary([parent, custom], customMap)
+
+    const customGroup = result.find(g => g.group?.id === 'custom-1')
+    expect(customGroup).toBeDefined()
+    expect(result.find(g => g.group?.id === 'pfc-food')!.children).toEqual([])
+  })
+
+  it('does not nest a contained child under a non-containing parent (tag_only)', () => {
+    const parent: BudgetCategory = {
+      ...makePfcPrimary('pfc-food', 'FOOD_AND_DRINK', '2024-01-01T00:00:00Z'),
+      match_logic: 'tag_only',
+    }
+    const custom: BudgetCategory = {
+      ...makeCustom('custom-1', 'uuid-tag-parent', '2024-01-02T00:00:00Z'),
+      custom_parent_pfc_primary: 'FOOD_AND_DRINK',
+    }
+    const customMap = new Map([
+      ['uuid-tag-parent', { name: 'Tag Parent Child', parent_pfc_primary: 'FOOD_AND_DRINK' }],
+    ])
+
+    const result = groupBudgetCategoriesByPrimary([parent, custom], customMap)
+
+    const customGroup = result.find(g => g.group?.id === 'custom-1')
+    expect(customGroup).toBeDefined()
+    expect(result.find(g => g.group?.id === 'pfc-food')!.children).toEqual([])
+  })
+
+  it('nests a genuinely contained child (category_only parent, "and" child, row linkage present)', () => {
+    const parent = makePfcPrimary('pfc-food', 'FOOD_AND_DRINK', '2024-01-01T00:00:00Z')
+    const custom: BudgetCategory = {
+      ...makeCustom('custom-1', 'uuid-and', '2024-01-02T00:00:00Z'),
+      match_logic: 'and',
+      custom_parent_pfc_primary: 'FOOD_AND_DRINK',
+    }
+    const customMap = new Map([
+      ['uuid-and', { name: 'And Child', parent_pfc_primary: 'FOOD_AND_DRINK' }],
+    ])
+
+    const result = groupBudgetCategoriesByPrimary([parent, custom], customMap)
+
+    expect(result.find(g => g.group?.id === 'pfc-food')!.children.map(c => c.id)).toEqual([
+      'custom-1',
+    ])
+    expect(result.find(g => g.group?.id === 'custom-1')).toBeUndefined()
+  })
+
+  it('nests a grandchild under a budgeted PFC root when its direct parent has no budget row', () => {
+    const pfcRoot = makePfcPrimary('pfc-root', 'FOOD_AND_DRINK', '2024-01-01T00:00:00Z')
+    const grandchild: BudgetCategory = {
+      ...makeCustom('grandchild-1', 'uuid-grandchild', '2024-01-02T00:00:00Z'),
+      custom_parent_id: 'unbudgeted-parent-uuid',
+      custom_grandparent_pfc_primary: 'FOOD_AND_DRINK',
+    }
+
+    const result = groupBudgetCategoriesByPrimary([pfcRoot, grandchild])
+
+    expect(result.find(g => g.group?.id === 'pfc-root')!.children.map(c => c.id)).toEqual([
+      'grandchild-1',
+    ])
+    expect(result.find(g => g.group?.id === 'grandchild-1')).toBeUndefined()
+  })
+})
