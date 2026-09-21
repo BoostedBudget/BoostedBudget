@@ -166,6 +166,26 @@ describe('redactError', () => {
     expect(result.message).toContain('name is required')
   })
 
+  it('#1699: preserves the HTTP status in an "API error <status>" message and surfaces 4xx detail', () => {
+    const result = redactError({
+      message: 'API error 404',
+      status: 404,
+      body: { detail: 'Recipe not found' },
+    })
+    expect(result.message).toContain('404')
+    expect(result.message).toContain('Recipe not found')
+  })
+
+  it('#1699: preserves the HTTP status for a 5xx while still withholding its body detail', () => {
+    const result = redactError({
+      message: 'API error 500',
+      status: 500,
+      body: { detail: 'x' },
+    })
+    expect(result.message).toContain('500')
+    expect(result.message).not.toContain('x')
+  })
+
   it('never includes raw financial data in output', () => {
     const sensitiveError = {
       message: 'Transaction amount 9999.99 exceeded limit',
