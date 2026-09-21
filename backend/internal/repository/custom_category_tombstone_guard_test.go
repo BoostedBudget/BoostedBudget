@@ -80,7 +80,10 @@ func TestNoCustomCategoryReadForgetsTheTombstoneFilter(t *testing.T) {
 		}
 	}
 
-	requireTombstoneCorpus(t, "TestNoCustomCategoryReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 336, 26, 374, 29)
+	// #1685/#1686 T29: re-measured live corpus is 460 files / 51 refs (was 374/29), so the old
+	// floor's band had widened to 49% — half-vacated per the FLOOR POLICY above. Recalibrated to
+	// floor(0.9*live): 414/45, with was*=live. This RAISES the floor; nothing is lowered.
+	requireTombstoneCorpus(t, "TestNoCustomCategoryReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 414, 45, 460, 51)
 
 	if len(offenders) > 0 {
 		t.Fatalf(
