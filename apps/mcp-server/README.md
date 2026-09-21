@@ -43,9 +43,12 @@ Follow your client's instructions for adding a remote MCP server at `https://mcp
 | `search` | Discover available API operations by keyword, tag, or class |
 | `readExecute` | Chain admitted non-destructive, caller-scoped API calls (no `confirmationToken` input) |
 | `writeExecute` | Chain any API calls against your account, including confirmation-gated writes |
-| `recipe.list` | List your saved workflow recipes |
-| `recipe.save` | Save a named read-only workflow recipe for later reuse |
-| `recipe.run` | Resolve a saved recipe's calls to pass to readExecute()/writeExecute() |
+| `recipe.templates` | Return starter recipe templates for common financial workflows |
+
+Recipes are not separate tools. Every recipe capability is a classified API operation, so you
+list, inspect, create, update, delete, and run recipes through `search` +
+`readExecute`/`writeExecute` like any other operation. See
+[Recipes](#3-save-and-run-a-reusable-cash-flow-summary-recipe) below.
 
 ### Migrating from `execute`
 
@@ -126,9 +129,11 @@ for every live response. A small response can grow because its safe full-detail 
 costs more than the fields removed.
 
 Saved recipe calls retain their detail settings; existing recipes default to compact.
-`recipe.run` resolves complete call objects without executing them. Execute the returned
-calls in batches of at most 25. A resolution exceeding 100,000 rendered characters
-returns an explicit error with no executable calls, rather than a truncated call.
+Resolve a saved recipe with `writeExecute({ operationId: "runMCPRecipe", pathParams: { id: "rec_abc123" } })`,
+which returns complete call objects without executing them. Submit those calls to `readExecute`
+where admitted, or `writeExecute` otherwise, in batches of at most 25. A resolution exceeding
+100,000 rendered characters returns an explicit error with no executable calls, rather than a
+truncated call.
 
 Deploy the recipe-detail-compatible backend before this worker. Rolling back the
 worker is independent; keep a backend that preserves recipe detail when decoding and
@@ -241,45 +246,82 @@ Agent: Done. 13 unreviewed transactions remain (next_cursor: "abc123" to continu
 
 ---
 
-### 3. "Save a reusable cash flow summary recipe"
+### 3. "Save and run a reusable cash flow summary recipe"
 
-The agent saves a named read-only recipe you can resolve on demand, then submit to an executor:
+Recipes are saved read-only workflow compositions. You manage them through the same tools as any
+other operation: list and inspect with `readExecute`, create/update/delete with `writeExecute`
+(confirmation-gated), and resolve a saved recipe with `writeExecute(runMCPRecipe)` before
+submitting the returned calls to an executor. `recipe.templates` returns starter templates you
+can instantiate.
 
 ```
 You: Create a recipe called "Weekly Cash Flow" that summarizes my cash flow
-     for the last 7 days. I want to resolve and execute its calls whenever I need it.
+     for the last 7 days, then run it.
 
 Agent calls:
-  recipe.save({
-    name: "Weekly Cash Flow",
-    description: "Cash flow summary for the past 7 days",
-    calls: [
-      {
-        operationId: "getCashFlowSummary",
-        params: {
-          start_date: "{{date_minus_7}}",
-          end_date: "{{date_today}}"
-        }
-      },
-      {
-        operationId: "getSpendingByCategory",
-        params: {
-          start_date: "{{date_minus_7}}",
-          end_date: "{{date_today}}"
-        }
+  writeExecute({
+    calls: [{
+      operationId: "createMCPRecipe",
+      body: {
+        name: "Weekly Cash Flow",
+        description: "Cash flow summary for the past 7 days",
+        spec: [
+          {
+            operation_id: "getCashFlowSummary",
+            params: { start_date: "{{date_minus_7}}", end_date: "{{date_today}}" }
+          },
+          {
+            operation_id: "getSpendingByCategory",
+            params: { start_date: "{{date_minus_7}}", end_date: "{{date_today}}" }
+          }
+        ]
       }
+    }]
+  })
+  → createMCPRecipe requires confirmation.
+    "Re-invoke with confirmationToken: '3f7a9c...'"
+
+Agent: Ready to save "Weekly Cash Flow" and run it. Confirm?
+You: Yes.
+
+Agent re-invokes with confirmationToken → recipe created with id: "rec_abc123"
+
+  writeExecute({
+    calls: [{ operationId: "runMCPRecipe", pathParams: { id: "rec_abc123" } }]
+  })
+  → { calls: [
+        { operationId: "getCashFlowSummary", params: { start_date: "...", end_date: "..." } },
+        { operationId: "getSpendingByCategory", params: { start_date: "...", end_date: "..." } }
+      ] }
+
+  readExecute({
+    calls: [
+      { operationId: "getCashFlowSummary", params: { start_date: "...", end_date: "..." } },
+      { operationId: "getSpendingByCategory", params: { start_date: "...", end_date: "..." } }
     ]
   })
 
-  → confirmation prompt (save is a write)
-  → confirmed → recipe saved with id: "rec_abc123"
-
 Agent responds:
-  Saved "Weekly Cash Flow" recipe (id: rec_abc123).
-  Resolve it anytime with: recipe.run({ id: "rec_abc123" })
-  This returns, but does not execute, the API calls. Submit them to readExecute() where admitted,
-  or writeExecute() otherwise.
+  Saved "Weekly Cash Flow" (id: rec_abc123) and ran it. Both calls resolved as read-only, so
+  they went through readExecute(). List your recipes anytime with
+  readExecute({ operationId: "listMCPRecipes" }).
 ```
+
+**Recipe operations** (all reached through `search` + `readExecute`/`writeExecute`):
+
+| Operation | Call it with | What it does |
+|-----------|--------------|--------------|
+| `listMCPRecipes` | `readExecute` | List your saved recipes |
+| `getMCPRecipe` | `readExecute` | Inspect one saved recipe by `pathParams: { id }` |
+| `createMCPRecipe` | `writeExecute` | Save a new named recipe (confirmation-gated) |
+| `updateMCPRecipe` | `writeExecute` | Replace a saved recipe's name/description/spec (confirmation-gated) |
+| `deleteMCPRecipe` | `writeExecute` | Delete a saved recipe (confirmation-gated) |
+| `runMCPRecipe` | `writeExecute` | Resolve a recipe's spec into ordered calls without executing them |
+
+`runMCPRecipe` is a POST, so `readExecute` refuses it; resolve it with `writeExecute`, then submit
+the returned calls to `readExecute` where admitted or `writeExecute` otherwise. A resolution
+exceeding 100,000 rendered characters returns an explicit error with no executable calls, rather
+than a truncated call.
 
 ---
 
@@ -379,7 +421,7 @@ Tokens are **one-time use** and expire in 5 minutes.
 Claude Desktop  ←→  mcp.boostedbudget.com/mcp  (Cloudflare Worker)
                           │  Clerk OAuth 2.1 (DCR + PKCE)
                           │  McpAgent (Durable Object)
-                          │  search / readExecute / writeExecute / recipe.*
+                          │  search / readExecute / writeExecute / recipe.templates
                           ▼
                     api.boostedbudget.com  (Go backend, unchanged)
                           │
