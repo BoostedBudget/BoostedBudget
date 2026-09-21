@@ -2,12 +2,14 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"log/slog"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 )
 
 // =============================================================================
@@ -62,7 +64,9 @@ type BudgetSyncService interface {
 
 	// RecalculateBudget recalculates income and spent amounts for a single budget.
 	// Returns error if income calculation or budget update fails.
-	// Category errors are logged but don't fail the operation.
+	// Category errors are logged but don't fail the operation, except a
+	// domain.ErrBudgetActualsIncomplete sentinel, which is propagated so the
+	// caller can surface the reasons and map it to a 422.
 	RecalculateBudget(ctx context.Context, budget *domain.Budget) error
 
 	// SetEventProcessor sets the optional event processor for triggering automation rules.
@@ -74,6 +78,10 @@ type BudgetSyncService interface {
 	// When set, savings-kind categories derive spent from the confirmed contribution
 	// ledger instead of the generic transaction-matching path (Issue #1300).
 	SetSavingsSpentCalc(calc SavingsContributionSpentCalc)
+
+	// SetAnalytics sets the optional PostHog analytics client. Nil is no-op safe.
+	// Issue #1685: the degraded-actuals event is emitted through this client.
+	SetAnalytics(analytics phclient.ProductAnalytics)
 }
 
 // budgetSyncService implements BudgetSyncService
@@ -84,6 +92,7 @@ type budgetSyncService struct {
 	logger          *slog.Logger
 	eventProcessor  EventTriggerProcessor        // Optional: triggers automation rules on budget updates
 	savingsSpent    SavingsContributionSpentCalc // Optional: computes savings category spent from ledger (#1300)
+	analytics       phclient.ProductAnalytics     // Optional: PostHog product analytics (#1685)
 }
 
 // NewBudgetSyncService creates a new BudgetSyncService instance.
@@ -111,6 +120,11 @@ func (s *budgetSyncService) SetEventProcessor(processor EventTriggerProcessor) {
 // instead of the generic transaction-matching path (Issue #1300).
 func (s *budgetSyncService) SetSavingsSpentCalc(calc SavingsContributionSpentCalc) {
 	s.savingsSpent = calc
+}
+
+// SetAnalytics sets the optional PostHog analytics client. Nil is no-op safe.
+func (s *budgetSyncService) SetAnalytics(analytics phclient.ProductAnalytics) {
+	s.analytics = analytics
 }
 
 // RecalculateBudgetAmounts recalculates income and spent amounts for all active budgets.
@@ -142,6 +156,17 @@ func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domai
 		}
 		if fresh == nil {
 			return nil
+		}
+		if len(fresh.ActualsIncompleteReasons) > 0 {
+			s.logger.Warn("budget actuals incomplete; publish withheld or retained",
+				"budgetID", budget.ID,
+				"userID", budget.UserID,
+				"reasons", fresh.ActualsIncompleteReasons)
+			if s.analytics != nil {
+				s.analytics.CaptureEvent(ctx, fresh.UserID, phclient.BudgetActualsIncompletePayload{
+					ReasonCount: int64(len(fresh.ActualsIncompleteReasons)),
+				})
+			}
 		}
 		return s.emitBudgetUpdated(ctx, fresh, fresh.Categories, fresh.IncomeAmount)
 	}
@@ -176,6 +201,9 @@ func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domai
 			spentAmount, err = s.savingsSpent.SumConfirmedByGoalInPeriod(
 				ctx, budget.UserID, *cat.SavingsGoalID, startDate, endDate)
 			if err != nil {
+				if errors.Is(err, domain.ErrBudgetActualsIncomplete) {
+					return fmt.Errorf("failed to calculate savings category spent: %w", err)
+				}
 				s.logger.Error("failed to calculate savings category spent",
 					"categoryID", cat.ID,
 					"goalID", *cat.SavingsGoalID,
@@ -188,6 +216,9 @@ func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domai
 			spentAmount, err = s.categoryService.CalculateCategorySpent(
 				ctx, budget.UserID, cat, startDate, endDate)
 			if err != nil {
+				if errors.Is(err, domain.ErrBudgetActualsIncomplete) {
+					return fmt.Errorf("failed to calculate category spent: %w", err)
+				}
 				s.logger.Error("failed to calculate category spent",
 					"categoryID", cat.ID,
 					"budgetID", budget.ID,

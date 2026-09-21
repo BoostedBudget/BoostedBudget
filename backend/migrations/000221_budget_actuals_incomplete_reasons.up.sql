@@ -1,0 +1,11 @@
+-- #1685: persist the reasons a budget's actuals publish was withheld or degraded.
+--
+-- A last-publish diagnostic, not a live ledger state: the publish transaction
+-- writes the de-duplicated, sorted reasons (empty on a clean run) alongside
+-- spent_amount, and the user-facing budget reads return them so the notice
+-- survives a reload.
+--
+-- Additive and idempotent: ADD COLUMN IF NOT EXISTS is a no-op on re-run, and a
+-- NOT NULL column with a constant DEFAULT is a catalog-only write in PostgreSQL
+-- 11+ (no table rewrite). No constraint, index, or cascade.
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS actuals_incomplete_reasons text[] NOT NULL DEFAULT '{}';

@@ -399,7 +399,7 @@ func (h *BudgetHandler) SyncBudget(ctx context.Context, input *SyncBudgetInput) 
 
 	// Recalculate budget amounts
 	if err := h.syncService.RecalculateBudget(ctx, budget); err != nil {
-		return nil, huma.Error500InternalServerError("Failed to sync budget")
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Re-fetch to get updated amounts
@@ -451,7 +451,7 @@ func (h *BudgetHandler) GetCategoryTransactions(ctx context.Context, input *GetC
 		input.Offset,
 	)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("failed to get category transactions")
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Convert to pointer slice (enrichment done by service)

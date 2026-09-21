@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -76,11 +77,12 @@ type BudgetHierarchySpentCalculator interface {
 	CalculateCategorySpent(ctx context.Context, userID string, category *domain.BudgetCategory, startDate, endDate time.Time) (float64, error)
 }
 
-// budgetHierarchyAuditReasonDuplicateIdentity / EscapingPair / Repaired / Verified build the
-// human-readable `reason` column. Kept as functions (not constants) because each one needs to name
-// the specific rows involved — the whole point of recording a reason is that an operator can act
-// without re-deriving the check by hand.
-func budgetHierarchyAuditReason(outcome string, flaggedDuplicate, flaggedEscaping []string, categoriesRepaired int) string {
+// budgetHierarchyAuditReasonDuplicateIdentity / EscapingPair / Repaired / SkippedIncompleteActuals
+// / Verified build the human-readable `reason` column. Kept as functions (not constants) because
+// each one needs to name the specific rows involved — the whole point of recording a reason is that
+// an operator can act without re-deriving the check by hand. The skipped case names the actuals
+// reasons instead of rows, because what it has to explain is why no row was examined at all.
+func budgetHierarchyAuditReason(outcome string, flaggedDuplicate, flaggedEscaping []string, categoriesRepaired int, actualsReasons []string) string {
 	switch outcome {
 	case domain.BudgetHierarchyAuditOutcomeReportedDuplicateIdentity:
 		return fmt.Sprintf(
@@ -104,10 +106,29 @@ func budgetHierarchyAuditReason(outcome string, flaggedDuplicate, flaggedEscapin
 		return fmt.Sprintf(
 			"no duplicate-identity or escaping-pair shape found; %d categor(ies)' stored spent_amount "+
 				"disagreed with the narrow recomputation and were corrected", categoriesRepaired)
+	case domain.BudgetHierarchyAuditOutcomeSkippedIncompleteActuals:
+		return fmt.Sprintf(
+			"the budget's actuals could not be computed completely (%v), so no spent_amount was "+
+				"recomputed or corrected and no partial repair was applied. The budget is recorded as "+
+				"examined and will not be re-selected by BudgetIDsWithUnexaminedHierarchy even after "+
+				"the ambiguity clears; the admin surface is GET-only, so there is no operator "+
+				"re-audit path. Accepted limitation — see the #1685 decision doc.",
+			actualsReasons)
 	default: // BudgetHierarchyAuditOutcomeVerified
 		return "no duplicate-identity or escaping-pair shape found, and every live category's stored " +
 			"spent_amount already matched the recomputation; nothing written"
 	}
+}
+
+// budgetActualsIncompleteReasons recovers the machine-readable reasons from a sentinel-wrapped
+// error, falling back to the error's own text when the reasons-carrying type is absent (a bare
+// sentinel wrap) so the ledger's reason column is never empty.
+func budgetActualsIncompleteReasons(err error) []string {
+	var incomplete *domain.BudgetActualsIncompleteError
+	if errors.As(err, &incomplete) && len(incomplete.Reasons) > 0 {
+		return incomplete.Reasons
+	}
+	return []string{err.Error()}
 }
 
 // decideBudgetHierarchyAuditOutcome picks ONE outcome for the ledger row. A budget can in principle
@@ -116,8 +137,18 @@ func budgetHierarchyAuditReason(outcome string, flaggedDuplicate, flaggedEscapin
 // versus escaping (which transactions a category matches). Both findings, when both are present, are
 // still visible in flaggedDuplicate/flaggedEscaping — only the single-valued `outcome` column has to
 // choose.
-func decideBudgetHierarchyAuditOutcome(flaggedDuplicate, flaggedEscaping map[string]bool, categoriesRepaired int) string {
+//
+// skippedIncompleteActuals is checked FIRST, before either structural finding. A skipped run never
+// completed its recomputation, so the reported_* reasons — which assert a spent_amount correction
+// count — would describe work this run did not do. The structural evidence is not lost: the typed
+// flagged_*_category_ids columns are populated regardless of which outcome wins, so a budget that
+// carries BOTH a structural finding and an incomplete ledger still names its flagged rows. Before
+// this outcome existed such a budget produced no ledger row at all (the audit rolled back and the
+// job counted it as a failure), so this is strictly more information than the status quo.
+func decideBudgetHierarchyAuditOutcome(flaggedDuplicate, flaggedEscaping map[string]bool, categoriesRepaired int, skippedIncompleteActuals bool) string {
 	switch {
+	case skippedIncompleteActuals:
+		return domain.BudgetHierarchyAuditOutcomeSkippedIncompleteActuals
 	case len(flaggedDuplicate) > 0:
 		return domain.BudgetHierarchyAuditOutcomeReportedDuplicateIdentity
 	case len(flaggedEscaping) > 0:
@@ -267,6 +298,8 @@ func (r *budgetRepository) AuditBudgetHierarchy(ctx context.Context, budget *dom
 		newAmount  float64
 	}
 	recomputed := make([]recomputedSpend, 0, len(categories))
+	skippedIncompleteActuals := false
+	var actualsReasons []string
 	for i := range categories {
 		cat := &categories[i]
 		if cat.CategoryKind == "savings" {
@@ -274,35 +307,47 @@ func (r *budgetRepository) AuditBudgetHierarchy(ctx context.Context, budget *dom
 		}
 		spent, err := spentCalc.CalculateCategorySpent(ctx, budget.UserID, cat, periodStart, periodEnd)
 		if err != nil {
-			return verdict, fmt.Errorf("audit budget hierarchy %s: recompute spend for category %s: %w", budget.ID, cat.ID, err)
+			if !errors.Is(err, domain.ErrBudgetActualsIncomplete) {
+				return verdict, fmt.Errorf("audit budget hierarchy %s: recompute spend for category %s: %w", budget.ID, cat.ID, err)
+			}
+			// An incomplete ledger is a PRECONDITION, not a fault (domain.ErrBudgetActualsIncomplete):
+			// the audit records the skip and commits rather than rolling its own work back and failing
+			// the job. Every category recomputed before this point is DISCARDED — the repair loop
+			// below is skipped entirely — so no partial repair is applied to a budget whose actuals
+			// could not be computed completely.
+			skippedIncompleteActuals = true
+			actualsReasons = budgetActualsIncompleteReasons(err)
+			break
 		}
 		recomputed = append(recomputed, recomputedSpend{categoryID: cat.ID, newAmount: spent})
 	}
 
 	categoriesRepaired := 0
-	for _, rc := range recomputed {
-		// IS DISTINCT FROM: write only a category that actually disagrees, so an already-correct
-		// category comes out of this audit byte-identical, updated_at included — the same guard
-		// repairSelectSQL's UPDATE uses, for the same reason: "the audit changed nothing the second
-		// time" has to stay observable.
-		ct, err := tx.Exec(ctx, `
-			UPDATE budget_categories
-			SET spent_amount = $1, updated_at = NOW()
-			WHERE id = $2 AND deleted_at IS NULL
-			  AND spent_amount IS DISTINCT FROM $1
-		`, rc.newAmount, rc.categoryID)
-		if err != nil {
-			return verdict, fmt.Errorf("audit budget hierarchy %s: repair category %s: %w", budget.ID, rc.categoryID, err)
-		}
-		if ct.RowsAffected() > 0 {
-			categoriesRepaired++
+	if !skippedIncompleteActuals {
+		for _, rc := range recomputed {
+			// IS DISTINCT FROM: write only a category that actually disagrees, so an already-correct
+			// category comes out of this audit byte-identical, updated_at included — the same guard
+			// repairSelectSQL's UPDATE uses, for the same reason: "the audit changed nothing the second
+			// time" has to stay observable.
+			ct, err := tx.Exec(ctx, `
+				UPDATE budget_categories
+				SET spent_amount = $1, updated_at = NOW()
+				WHERE id = $2 AND deleted_at IS NULL
+				  AND spent_amount IS DISTINCT FROM $1
+			`, rc.newAmount, rc.categoryID)
+			if err != nil {
+				return verdict, fmt.Errorf("audit budget hierarchy %s: repair category %s: %w", budget.ID, rc.categoryID, err)
+			}
+			if ct.RowsAffected() > 0 {
+				categoriesRepaired++
+			}
 		}
 	}
 
-	outcome := decideBudgetHierarchyAuditOutcome(flaggedDuplicate, flaggedEscaping, categoriesRepaired)
+	outcome := decideBudgetHierarchyAuditOutcome(flaggedDuplicate, flaggedEscaping, categoriesRepaired, skippedIncompleteActuals)
 	flaggedDuplicateIDs := budgetHierarchyAuditSortedKeys(flaggedDuplicate)
 	flaggedEscapingIDs := budgetHierarchyAuditSortedKeys(flaggedEscaping)
-	reason := budgetHierarchyAuditReason(outcome, flaggedDuplicateIDs, flaggedEscapingIDs, categoriesRepaired)
+	reason := budgetHierarchyAuditReason(outcome, flaggedDuplicateIDs, flaggedEscapingIDs, categoriesRepaired, actualsReasons)
 
 	// flagged_category_ids is the DEPRECATED untyped union column (migration 000202) — still
 	// populated for anything querying this table directly, but no longer read back by Go code:

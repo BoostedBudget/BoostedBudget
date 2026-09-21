@@ -6,6 +6,7 @@
  * for hierarchical display in the budget category manager.
  */
 import type { BudgetCategory } from '../types'
+import { isContainingMatchLogic, isContainedMatchLogic } from '../types'
 
 export interface BudgetCategoryGroup {
   /** Primary-only PFC budget (parent) — null when detailed has no parent budget */
@@ -16,8 +17,10 @@ export interface BudgetCategoryGroup {
 
 /**
  * Optional map from custom_category_id (UUID) → { name, parent_pfc_primary }.
- * When provided, custom categories with a parent_pfc_primary matching an existing
- * PFC parent group are nested as children of that group instead of being standalone.
+ * Used to resolve a custom category's display name (the manager) and its legend label
+ * (AllocationBreakdown). It is deliberately NOT consulted for nesting: the budget ROW's own
+ * `custom_parent_pfc_primary` / `custom_parent_id` fields are the linkage (#1686), because a
+ * map entry can disagree with the row and the row is what the remainder arithmetic reads.
  */
 export type CustomCategoryMap = Map<string, { name: string; parent_pfc_primary?: string | null }>
 
@@ -27,8 +30,10 @@ export type CustomCategoryMap = Map<string, { name: string; parent_pfc_primary?:
  * Rules:
  * - PFC category with pfc_primary + NO pfc_detailed → parent
  * - PFC category with pfc_primary + pfc_detailed → child of matching parent
- * - Custom categories → standalone by default; nested under PFC parent group when
- *   customCategoryMap resolves a matching parent_pfc_primary
+ * - Custom categories → standalone by default; nested under a PRIMARY-ONLY PFC parent group
+ *   when the row's `custom_parent_pfc_primary` names it (#1686), under a budgeted custom
+ *   parent via `custom_parent_id` (#1203), or under a PFC root via
+ *   `custom_grandparent_pfc_primary` (#1686, transitive)
  * - Orphan detailed (no parent exists) → standalone ({ group: orphan, children: [] })
  *
  * Sort order:
@@ -42,9 +47,29 @@ const sortByCreatedAt = (a: BudgetCategory, b: BudgetCategory) =>
 const getFirstItem = (group: BudgetCategoryGroup) =>
   group.group ?? group.children[0]
 
+/**
+ * Finds the PRIMARY-ONLY PFC group a custom category may nest under, given the primary name the
+ * row links to. Both match_logic gates mirror isSubAllocationOfParent (types.ts) so display
+ * nesting stays a strict subset of the remainder arithmetic that computeParentAllocationRemainder
+ * performs.
+ */
+function findPfcParentGroup(
+  pfcGroups: BudgetCategoryGroup[],
+  pfcPrimary: string,
+  childMatchLogic: BudgetCategory['match_logic']
+): BudgetCategoryGroup | undefined {
+  return pfcGroups.find(
+    (g) =>
+      g.group !== null &&
+      g.group.pfc_primary === pfcPrimary &&
+      !g.group.pfc_detailed &&
+      isContainingMatchLogic(g.group.match_logic) &&
+      isContainedMatchLogic(childMatchLogic)
+  )
+}
+
 export function groupBudgetCategoriesByPrimary(
-  categories: BudgetCategory[],
-  customCategoryMap?: CustomCategoryMap
+  categories: BudgetCategory[]
 ): BudgetCategoryGroup[] {
   if (categories.length === 0) return []
 
@@ -92,18 +117,28 @@ export function groupBudgetCategoriesByPrimary(
     return aFirst && bFirst ? sortByCreatedAt(aFirst, bFirst) : 0
   })
 
-  // Nest custom categories under PFC parents when possible
+  // Nest custom categories under PFC parents when possible (#1686).
+  //
+  // The ROW field `custom_parent_pfc_primary` is the ONLY linkage consulted — the map's
+  // `parent_pfc_primary` is no longer read here. The row field is authoritative because the DB
+  // forbids a custom category from carrying both linkages
+  // (000078_add_custom_category_parent_id.up.sql: CHECK (NOT (parent_pfc_primary IS NOT NULL AND
+  // parent_id IS NOT NULL)), constraint `custom_category_single_parent`).
+  //
+  // The parent must be a PRIMARY-ONLY row (`!pfc_detailed`): a detailed row sharing the primary
+  // is a SIBLING, not a parent (#1686).
   const standaloneCustom: BudgetCategory[] = []
   for (const cat of customCategories) {
     let nested = false
-    if (customCategoryMap && cat.custom_category_id) {
-      const meta = customCategoryMap.get(cat.custom_category_id)
-      if (meta?.parent_pfc_primary) {
-        const parentGroup = pfcGroups.find(g => g.group?.pfc_primary === meta.parent_pfc_primary)
-        if (parentGroup) {
-          parentGroup.children.push(cat)
-          nested = true
-        }
+    if (cat.custom_parent_pfc_primary) {
+      const parentGroup = findPfcParentGroup(
+        pfcGroups,
+        cat.custom_parent_pfc_primary,
+        cat.match_logic
+      )
+      if (parentGroup) {
+        parentGroup.children.push(cat)
+        nested = true
       }
     }
     if (!nested) {
@@ -140,6 +175,33 @@ export function groupBudgetCategoriesByPrimary(
       customGroupMap.set(child.custom_category_id ?? child.id, { group: child, children: [] })
     }
   }
+  // Final pass (#1686): a custom whose DIRECT parent is not a budgeted custom — unbudgeted, or
+  // budgeted but itself nested under a PFC root — is still a GRANDCHILD of a PFC root when
+  // custom_grandparent_pfc_primary names one. Mirrors isSubAllocationWithin's transitive branch
+  // (types.ts:146-150) so display nesting stays a strict subset of the remainder arithmetic.
+  // Runs AFTER the custom-to-custom pass: a custom already nested under its budgeted custom
+  // parent is no longer in customGroupMap and is left alone. Deliberately NOT gated on the
+  // direct parent being unbudgeted — a budgeted-but-PFC-nested parent has no custom group
+  // either, and its child still belongs under the PFC root.
+  for (const [key, group] of customGroupMap) {
+    const cat = group.group
+    if (!cat || !cat.custom_parent_id || !cat.custom_grandparent_pfc_primary) continue
+    const grandparentGroup = findPfcParentGroup(
+      pfcGroups,
+      cat.custom_grandparent_pfc_primary,
+      cat.match_logic
+    )
+    if (grandparentGroup) {
+      grandparentGroup.children.push(cat)
+      customGroupMap.delete(key)
+    }
+  }
+
+  // Re-sort PFC children after the grandparent pass may have added to them.
+  for (const group of pfcGroups) {
+    group.children.sort(sortByCreatedAt)
+  }
+
   const customGroups = Array.from(customGroupMap.values())
     .sort((a, b) => sortByCreatedAt(a.group as BudgetCategory, b.group as BudgetCategory))
   for (const group of customGroups) {
