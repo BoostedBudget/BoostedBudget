@@ -449,4 +449,23 @@ describe('groupBudgetCategoriesByPrimary — containment gates (#1686)', () => {
     ])
     expect(result.find(g => g.group?.id === 'grandchild-1')).toBeUndefined()
   })
+
+  it('does not nest a custom carrying only custom_grandparent_pfc_primary with no direct parent', () => {
+    // isSubAllocationOfParent's transitive branch lives INSIDE `if (child.custom_parent_id)`
+    // (types.ts:223-240), so a row with the grandparent field but no direct parent is NOT a
+    // sub-allocation of the PFC root. Display nesting must stay a strict subset of that
+    // arithmetic (plan Success criterion 10).
+    const pfcRoot = makePfcPrimary('pfc-root', 'FOOD_AND_DRINK', '2024-01-01T00:00:00Z')
+    const custom: BudgetCategory = {
+      ...makeCustom('custom-1', 'uuid-grandparent-only', '2024-01-02T00:00:00Z'),
+      custom_grandparent_pfc_primary: 'FOOD_AND_DRINK',
+    }
+
+    const result = groupBudgetCategoriesByPrimary([pfcRoot, custom])
+
+    const customGroup = result.find(g => g.group?.id === 'custom-1')
+    expect(customGroup).toBeDefined()
+    expect(customGroup!.children).toEqual([])
+    expect(result.find(g => g.group?.id === 'pfc-root')!.children).toEqual([])
+  })
 })
