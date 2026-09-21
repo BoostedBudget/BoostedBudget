@@ -120,3 +120,29 @@ func TestBudgetExpenseLedgerNarrowParentStillDiagnosesOverlap(t *testing.T) {
 	got = CalculateBudgetExpenseLedger(cats, []BudgetExpenseFact{{ID: "one", Amount: 10, PFCPrimary: "FOOD_AND_DRINK", PFCDetailed: "FOOD_AND_DRINK_RESTAURANTS"}})
 	require.Empty(t, got.Reasons, "a true containing parent is a natural suballocation")
 }
+
+// TestBudgetExpenseLedgerRecordsUnbudgetedAndLineReasons pins the two fields the
+// publish withhold rule reads: every reason seen for a line (the union, sorted
+// and de-duplicated) and only the reasons actually carried by unbudgeted facts.
+func TestBudgetExpenseLedgerRecordsUnbudgetedAndLineReasons(t *testing.T) {
+	p := func(s string) *string { return &s }
+	cats := []BudgetCategory{{ID: "food", CategoryKind: "pfc", PFCPrimary: p("FOOD_AND_DRINK")}}
+	facts := []BudgetExpenseFact{
+		{ID: "matched_a", Amount: 10, PFCPrimary: "FOOD_AND_DRINK", CurrencyCode: "USD", Reason: "legacy_savings_origin"},
+		{ID: "matched_b", Amount: 10, PFCPrimary: "FOOD_AND_DRINK", CurrencyCode: "USD", Reason: "legacy_savings_origin"},
+		{ID: "matched_c", Amount: 10, PFCPrimary: "FOOD_AND_DRINK", CurrencyCode: "USD", Reason: "mixed_currency"},
+		{ID: "unbudgeted_clean", Amount: 5, PFCPrimary: "TRAVEL", CurrencyCode: "USD"},
+		{ID: "unbudgeted_reasoned", Amount: 5, PFCPrimary: "TRAVEL", CurrencyCode: "USD", Reason: "legacy_savings_origin"},
+	}
+	got := CalculateBudgetExpenseLedger(cats, facts)
+
+	require.Equal(t, []string{"legacy_savings_origin", "mixed_currency"}, got.Lines["food"].Reasons,
+		"every reason seen for a line is retained, de-duplicated and sorted")
+	require.Equal(t, "mixed_currency", got.Lines["food"].Reason,
+		"Reason keeps its existing last-wins semantics")
+	require.Equal(t, []string{"legacy_savings_origin"}, got.UnbudgetedReasons,
+		"only unbudgeted facts that actually carry a reason are recorded")
+	require.Equal(t, []string{"USD"}, got.UnbudgetedCurrencyCodes,
+		"UnbudgetedCurrencyCodes keeps its unconditional per-fact semantics")
+	require.Equal(t, []string{"legacy_savings_origin", "mixed_currency"}, got.Reasons)
+}
