@@ -414,6 +414,55 @@ func TestUnbudgetedReasonCollisionStillWithholds(t *testing.T) {
 	require.Equal(t, 7.0, spent, "a withheld run writes nothing")
 }
 
+// TestUnbudgetedFactReasonIsReportedAndWithholds is a REGRESSION GUARD for the
+// withhold rule implemented in todo 3 (commit cf94e866). It pins the rule's
+// attribution semantics: a per-fact reason on a fact that matches NO budgeted
+// line is reported AND withholds the whole run, while the SAME reason on a fact
+// that DOES match a budgeted line is RETAINED. The negative control is what
+// proves the rule discriminates by attribution rather than by the mere presence
+// of a reason.
+//
+// The guard's value is that it fails if the withhold rule regresses. Reverting
+// the `len(ledger.Reasons) > 0` barrier to its pre-todo-3 abort makes the
+// unbudgeted case return an error instead of withholding (observed RED); a rule
+// that published the unbudgeted case would fail the withheld assertion.
+func TestUnbudgetedFactReasonIsReportedAndWithholds(t *testing.T) {
+	food, travel := "FOOD_AND_DRINK", "TRAVEL"
+
+	t.Run("unbudgeted fact reason is reported and withholds", func(t *testing.T) {
+		f := newActualsTaxonomyFixture(t)
+		goal := f.addGoal("USD")
+		foodLine := f.addCategory("pfc", 7, func(c *domain.BudgetCategory) { c.PFCPrimary = &food })
+		// A fact that matches no budgeted line, carrying a per-fact reason
+		// (legacy_unknown contribution -> legacy_savings_origin).
+		unbudgeted := f.addTransaction(50, travel, "USD", nil)
+		f.addContribution(goal, &unbudgeted, 1, "legacy_unknown")
+
+		_, reasons, withheld, err := f.publish(nil)
+		require.NoError(t, err, "an unbudgeted reason must withhold, not abort")
+		require.True(t, withheld, "a per-fact reason on an unbudgeted fact withholds the run")
+		require.Equal(t, []string{"legacy_savings_origin"}, reasons)
+		spent, _ := f.row(foodLine.ID)
+		require.Equal(t, 7.0, spent, "a withheld run writes no spent_amount")
+	})
+
+	t.Run("the same reason on a matched fact is retained, not withheld", func(t *testing.T) {
+		f := newActualsTaxonomyFixture(t)
+		goal := f.addGoal("USD")
+		foodLine := f.addCategory("pfc", 7, func(c *domain.BudgetCategory) { c.PFCPrimary = &food })
+		// The same per-fact reason, but on a fact that DOES match the budgeted line.
+		matched := f.addTransaction(100, food, "USD", nil)
+		f.addContribution(goal, &matched, 1, "legacy_unknown")
+
+		_, reasons, withheld, err := f.publish(nil)
+		require.NoError(t, err)
+		require.False(t, withheld, "a reason attributable to a line must RETAIN, not withhold")
+		require.Equal(t, []string{"legacy_savings_origin"}, reasons)
+		spent, _ := f.row(foodLine.ID)
+		require.Equal(t, 7.0, spent, "a retained line keeps its prior spent_amount")
+	})
+}
+
 // TestWithheldSyncReturnsPriorIncome pins the /sync income restore: the sync
 // path zeroes the income base before publishing, so a withheld run must restore
 // the prior income on the returned budget and leave the row untouched.
