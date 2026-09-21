@@ -1,9 +1,22 @@
 package domain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+)
+
+// Recipe error sentinels (#1699 MCP-3). The service wraps every validation and
+// persistence failure with one of these so the error mapper can return an actionable
+// 400/404/409 instead of a generic 500.
+var (
+	// ErrInvalidRecipeSpec marks a recipe whose spec, schedule, or operation_id fails validation.
+	ErrInvalidRecipeSpec = errors.New("invalid recipe spec")
+	// ErrRecipeNotFound marks a recipe that does not exist or belongs to another user.
+	ErrRecipeNotFound = errors.New("recipe not found")
+	// ErrDuplicateRecipeName marks a create/update that collides with the per-user unique name.
+	ErrDuplicateRecipeName = errors.New("recipe name already exists")
 )
 
 // MCPRecipeCall represents a single API call in a recipe's declarative spec.

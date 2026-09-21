@@ -38,7 +38,7 @@ func NewRecipeHandler(service services.RecipeService, idempotencyRepo ...reposit
 type CreateRecipeInput struct {
 	inputs.AuthenticatedInput
 	inputs.IdempotencyInput // reads Idempotency-Key header; empty = no deduplication
-	Body domain.CreateMCPRecipeRequest
+	Body                    domain.CreateMCPRecipeRequest
 }
 type CreateRecipeOutput struct{ Body *domain.MCPRecipe }
 
@@ -108,8 +108,13 @@ func (h *RecipeHandler) ListRecipes(ctx context.Context, input *ListRecipesInput
 
 func (h *RecipeHandler) GetRecipe(ctx context.Context, input *GetRecipeInput) (*GetRecipeOutput, error) {
 	recipe, err := h.service.Get(ctx, input.ID, input.UserID)
-	if err != nil || recipe == nil {
+	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
+	}
+	if recipe == nil {
+		// The repo reports "not found" as (nil, nil). Returning (nil, nil) makes Huma panic,
+		// so surface the sentinel explicitly (#1699 MCP-3).
+		return nil, humaerrors.LoggingMapError(ctx, domain.ErrRecipeNotFound)
 	}
 	return &GetRecipeOutput{Body: recipe}, nil
 }
