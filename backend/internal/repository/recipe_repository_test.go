@@ -9,11 +9,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// duplicateNamePgError is the exact Postgres 23505 the mcp_recipes_user_id_name_unique
+// constraint raises (migration 000085_create_mcp_recipes.up.sql:22).
+func duplicateNamePgError() *pgconn.PgError {
+	return &pgconn.PgError{Code: "23505", ConstraintName: "mcp_recipes_user_id_name_unique"}
+}
 
 func setupRecipeMockDB(t *testing.T) (pgxmock.PgxPoolIface, RecipeRepository) {
 	t.Helper()
@@ -117,6 +124,53 @@ func TestRecipeRepository_Create_Error(t *testing.T) {
 	err := repo.Create(ctx, recipe)
 
 	assert.Error(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRecipeRepository_Create_DuplicateNameMapsToSentinel(t *testing.T) {
+	mock, repo := setupRecipeMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	recipe := &domain.MCPRecipe{
+		UserID:  uuid.New().String(),
+		Name:    "My Recipe",
+		Spec:    []domain.MCPRecipeCall{},
+		Enabled: true,
+	}
+
+	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO mcp_recipes`)).
+		WithArgs(recipe.UserID, recipe.Name, recipe.Description, []byte("[]"), recipe.Schedule, recipe.Enabled).
+		WillReturnError(duplicateNamePgError())
+
+	err := repo.Create(ctx, recipe)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrDuplicateRecipeName), "expected ErrDuplicateRecipeName, got %v", err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRecipeRepository_Create_OtherUniqueViolationNotMisclassified(t *testing.T) {
+	mock, repo := setupRecipeMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	recipe := &domain.MCPRecipe{
+		UserID:  uuid.New().String(),
+		Name:    "My Recipe",
+		Spec:    []domain.MCPRecipeCall{},
+		Enabled: true,
+	}
+
+	otherConstraint := &pgconn.PgError{Code: "23505", ConstraintName: "some_other_table_unique"}
+	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO mcp_recipes`)).
+		WithArgs(recipe.UserID, recipe.Name, recipe.Description, []byte("[]"), recipe.Schedule, recipe.Enabled).
+		WillReturnError(otherConstraint)
+
+	err := repo.Create(ctx, recipe)
+
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, domain.ErrDuplicateRecipeName), "a different unique constraint must not be misclassified")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -350,6 +404,30 @@ func TestRecipeRepository_Update_Error(t *testing.T) {
 	err := repo.Update(ctx, recipe)
 
 	assert.Error(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRecipeRepository_Update_DuplicateNameMapsToSentinel(t *testing.T) {
+	mock, repo := setupRecipeMockDB(t)
+	defer mock.Close()
+
+	ctx := context.Background()
+	recipe := &domain.MCPRecipe{
+		ID:      uuid.New().String(),
+		UserID:  uuid.New().String(),
+		Name:    "Renamed Recipe",
+		Spec:    []domain.MCPRecipeCall{},
+		Enabled: true,
+	}
+
+	mock.ExpectQuery(regexp.QuoteMeta(`UPDATE mcp_recipes`)).
+		WithArgs(recipe.ID, recipe.Name, recipe.Description, []byte("[]"), recipe.Schedule, recipe.Enabled, recipe.UserID).
+		WillReturnError(duplicateNamePgError())
+
+	err := repo.Update(ctx, recipe)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrDuplicateRecipeName), "expected ErrDuplicateRecipeName, got %v", err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

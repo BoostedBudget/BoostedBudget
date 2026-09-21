@@ -136,7 +136,7 @@ describe('write operations', () => {
 describe('recipe operations', () => {
   it('classifies runMCPRecipe as READ (v1 recipes are read-only compositions)', () => {
     // GAP-R3-10: runMCPRecipe was misclassified as write, causing host-proxy to demand
-    // a confirmation token that the recipe.run tool has no input field for.
+    // a confirmation token that the dedicated recipe tool had no input field for.
     // v1 recipes can only compose read-class ops, so running them is a read operation.
     const entry = getCapability('runMCPRecipe')
     expect(entry?.class).toBe('read')
