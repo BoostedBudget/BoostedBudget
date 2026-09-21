@@ -185,7 +185,7 @@ export function groupBudgetCategoriesByPrimary(
   // either, and its child still belongs under the PFC root.
   for (const [key, group] of customGroupMap) {
     const cat = group.group
-    if (!cat || !cat.custom_grandparent_pfc_primary) continue
+    if (!cat || !cat.custom_parent_id || !cat.custom_grandparent_pfc_primary) continue
     const grandparentGroup = findPfcParentGroup(
       pfcGroups,
       cat.custom_grandparent_pfc_primary,
