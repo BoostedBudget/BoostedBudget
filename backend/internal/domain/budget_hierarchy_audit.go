@@ -38,6 +38,20 @@ const (
 	// wrongness it would replace. spent_amount corrections (if any) still apply, for the same reason
 	// as above.
 	BudgetHierarchyAuditOutcomeReportedEscapingPair = "reported_escaping_pair"
+	// BudgetHierarchyAuditOutcomeSkippedIncompleteActuals — this budget's spent_amount could not be
+	// recomputed at all: CalculateCategorySpent returned domain.ErrBudgetActualsIncomplete, so the
+	// ledger is ambiguous or degraded and no trustworthy figure exists to compare against. The audit
+	// records the skip and commits; it applies NO partial repair, discarding every category it had
+	// already recomputed before the sentinel fired. Informational, not actionable: there is nothing
+	// for an operator to do that the user's own next config write will not do.
+	//
+	// ⚠ ACCEPTED LIMITATION — PERMANENT EXEMPTION. The ledger row makes this budget EXAMINED, and
+	// BudgetIDsWithUnexaminedHierarchy excludes any budget already in the ledger, so a skipped budget
+	// is never re-selected even after the ambiguity clears. The admin surface is GET-only, so there
+	// is no operator re-audit path either. This is deliberate (a re-audit loop would need its own
+	// starvation/backoff design) and is recorded in the #1685 decision doc; do not describe it as
+	// mitigated.
+	BudgetHierarchyAuditOutcomeSkippedIncompleteActuals = "skipped_incomplete_actuals"
 )
 
 // BudgetHierarchyAuditVerdict is one examined budget — one row of budget_hierarchy_audits.
@@ -72,6 +86,7 @@ type BudgetHierarchyAuditSummary struct {
 	Verified                  int `json:"verified"`
 	ReportedDuplicateIdentity int `json:"reported_duplicate_identity"`
 	ReportedEscapingPair      int `json:"reported_escaping_pair"`
+	SkippedIncompleteActuals  int `json:"skipped_incomplete_actuals"`
 }
 
 // Add folds one verdict into the summary.
@@ -86,6 +101,8 @@ func (s *BudgetHierarchyAuditSummary) Add(outcome string, n int) {
 		s.ReportedDuplicateIdentity += n
 	case BudgetHierarchyAuditOutcomeReportedEscapingPair:
 		s.ReportedEscapingPair += n
+	case BudgetHierarchyAuditOutcomeSkippedIncompleteActuals:
+		s.SkippedIncompleteActuals += n
 	}
 }
 
@@ -96,4 +113,5 @@ func (s *BudgetHierarchyAuditSummary) Merge(o BudgetHierarchyAuditSummary) {
 	s.Verified += o.Verified
 	s.ReportedDuplicateIdentity += o.ReportedDuplicateIdentity
 	s.ReportedEscapingPair += o.ReportedEscapingPair
+	s.SkippedIncompleteActuals += o.SkippedIncompleteActuals
 }

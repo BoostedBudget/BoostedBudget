@@ -30,6 +30,7 @@ import type {
 } from '../types';
 import { filterTopLevel } from '../types';
 import { BudgetCategoryManager } from './category-management/BudgetCategoryManager';
+import { BudgetActualsIncompleteNotice } from './budget-detail/BudgetActualsIncompleteNotice';
 import { BudgetIncomeSection } from './budget-detail/BudgetIncomeSection';
 import { UnallocatedFundsCard } from './budget-detail/UnallocatedFundsCard';
 
@@ -235,6 +236,10 @@ export function BudgetDetailPage() {
           </Link>
         </div>
       </header>
+
+      {/* Issue #1685: persisted incomplete-actuals reasons — derived from server state, so it
+          renders again after a reload and carries no dismissal. */}
+      <BudgetActualsIncompleteNotice reasons={budget.actuals_incomplete_reasons} />
 
       {/* Issue #498: Income Section - shows expected vs actual income */}
       {(budget.income_sources?.length > 0 || incomeMetrics.expectedIncome > 0) && (

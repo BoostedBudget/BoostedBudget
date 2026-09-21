@@ -36,9 +36,10 @@ var budgetHierarchyAuditActionableOutcomes = []string{
 type ListAdminBudgetHierarchyAuditsInput struct {
 	inputs.AdminAuthenticatedInput
 	// Outcome filters to exactly one verdict (repaired, verified, reported_duplicate_identity,
-	// reported_escaping_pair). Omit to get both reported_* outcomes — the actionable subset — or
-	// pass "all" to get every verdict this audit has ever recorded, including the boring ones.
-	Outcome string `query:"outcome" doc:"Filter to one outcome (repaired, verified, reported_duplicate_identity, reported_escaping_pair), or 'all' for every outcome. Omitted defaults to the two reported_* (actionable) outcomes."`
+	// reported_escaping_pair, skipped_incomplete_actuals). Omit to get both reported_* outcomes —
+	// the actionable subset — or pass "all" to get every verdict this audit has ever recorded,
+	// including the boring ones.
+	Outcome string `query:"outcome" doc:"Filter to one outcome (repaired, verified, reported_duplicate_identity, reported_escaping_pair, skipped_incomplete_actuals), or 'all' for every outcome. Omitted defaults to the two reported_* (actionable) outcomes."`
 	Limit   int    `query:"limit" default:"50" minimum:"1" maximum:"500" doc:"Number of findings to return"`
 }
 
@@ -105,12 +106,13 @@ func (h *AdminHandler) ListAdminBudgetHierarchyAudits(ctx context.Context, input
 	case "all":
 		outcomeFilter = nil
 	case domain.BudgetHierarchyAuditOutcomeRepaired, domain.BudgetHierarchyAuditOutcomeVerified,
-		domain.BudgetHierarchyAuditOutcomeReportedDuplicateIdentity, domain.BudgetHierarchyAuditOutcomeReportedEscapingPair:
+		domain.BudgetHierarchyAuditOutcomeReportedDuplicateIdentity, domain.BudgetHierarchyAuditOutcomeReportedEscapingPair,
+		domain.BudgetHierarchyAuditOutcomeSkippedIncompleteActuals:
 		outcomeFilter = []string{input.Outcome}
 	default:
 		return nil, huma.Error422UnprocessableEntity(fmt.Sprintf(
 			"outcome %q is not a recognized verdict; use repaired, verified, reported_duplicate_identity, "+
-				"reported_escaping_pair, or 'all'", input.Outcome))
+				"reported_escaping_pair, skipped_incomplete_actuals, or 'all'", input.Outcome))
 	}
 
 	out := &ListAdminBudgetHierarchyAuditsOutput{}

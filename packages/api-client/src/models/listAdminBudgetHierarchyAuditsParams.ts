@@ -33,7 +33,7 @@
 
 export type ListAdminBudgetHierarchyAuditsParams = {
 /**
- * Filter to one outcome (repaired, verified, reported_duplicate_identity, reported_escaping_pair), or 'all' for every outcome. Omitted defaults to the two reported_* (actionable) outcomes.
+ * Filter to one outcome (repaired, verified, reported_duplicate_identity, reported_escaping_pair, skipped_incomplete_actuals), or 'all' for every outcome. Omitted defaults to the two reported_* (actionable) outcomes.
  */
 outcome?: string;
 /**

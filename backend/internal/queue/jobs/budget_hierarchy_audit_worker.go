@@ -182,6 +182,17 @@ func (w *BudgetHierarchyAuditWorker) Work(ctx context.Context, job *river.Job[Bu
 				"flagged_escaping_pair_category_ids", verdict.FlaggedEscapingPairCategoryIDs,
 				"reason", verdict.Reason,
 			)
+		case domain.BudgetHierarchyAuditOutcomeSkippedIncompleteActuals:
+			// Not a human-facing finding, but an operational one: the audit declined to examine this
+			// budget, and the ledger row it just wrote makes that permanent — the periodic sweep
+			// never re-selects a budget already in the ledger, and the admin surface is GET-only.
+			w.logger.Warn("budget hierarchy audit: skipped a budget whose actuals are incomplete; it is now permanently exempt from re-examination",
+				"job_id", job.ID,
+				"budget_id", budgetID,
+				"user_id", verdict.UserID,
+				"outcome", verdict.Outcome,
+				"reason", verdict.Reason,
+			)
 		}
 	}
 
@@ -197,6 +208,7 @@ func (w *BudgetHierarchyAuditWorker) Work(ctx context.Context, job *river.Job[Bu
 		"verified", summary.Verified,
 		"reported_duplicate_identity", summary.ReportedDuplicateIdentity,
 		"reported_escaping_pair", summary.ReportedEscapingPair,
+		"skipped_incomplete_actuals", summary.SkippedIncompleteActuals,
 		"duration_ms", time.Since(start).Milliseconds(),
 	)
 

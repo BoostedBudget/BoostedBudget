@@ -1,5 +1,6 @@
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, mock, beforeEach, type Mock } from 'bun:test'
 import type { BudgetCategory } from '../../types'
+import { filterTopLevel } from '../../types'
 import type { UserTag } from '@/features/tags/types'
 import type { CustomCategory } from '@boostedbudget/api-client/models/customCategory'
 
@@ -25,6 +26,14 @@ mock.module('./AllocationBreakdown', () => ({
       <span data-testid="breakdown-total-income">{totalIncome}</span>
       <span data-testid="breakdown-unallocated">{unallocated}</span>
       <span data-testid="breakdown-category-count">{categories.length}</span>
+      {/* Mirrors the real component's top-level derivation (AllocationBreakdown.tsx:102) so a
+          test can assert the card list and the breakdown agree on the top-level set (#1686). */}
+      <span data-testid="breakdown-top-level-ids">
+        {filterTopLevel(categories)
+          .map((cat) => cat.id)
+          .sort()
+          .join(',')}
+      </span>
     </div>
   ),
 }))
@@ -714,5 +723,192 @@ describe('BudgetCategoryManager — custom category name resolution (Codex gap f
     const cardHeading = screen.getByRole('heading', { level: 3 })
     expect(cardHeading.textContent).not.toMatch(/custom-uuid-1/)
     expect(cardHeading).toHaveTextContent('Custom category')
+  })
+})
+
+/**
+ * Issue #1686: a custom category must not nest under an orphan DETAILED row, and the card list
+ * must agree with AllocationBreakdown about which rows are top-level.
+ *
+ * The manager's top-level set is read off the rendered cards — a card is a child iff it renders
+ * the earmark span (BudgetCategoryCard.tsx:161-165). AllocationBreakdown's is read off the mocked
+ * breakdown, which derives it exactly as the real component does (AllocationBreakdown.tsx:102).
+ */
+describe('BudgetCategoryManager — orphan-detailed nesting and view agreement (#1686)', () => {
+  let mockOnAddCategory: ReturnType<typeof mock>
+  let mockOnUpdateCategory: ReturnType<typeof mock>
+  let mockOnDeleteCategory: ReturnType<typeof mock>
+
+  const renderManager = (props: Partial<Parameters<typeof BudgetCategoryManager>[0]> = {}) =>
+    render(
+      <BudgetCategoryManager
+        budgetId="budget-1"
+        categories={[]}
+        totalIncome={3000}
+        onAddCategory={mockOnAddCategory}
+        onUpdateCategory={mockOnUpdateCategory}
+        onDeleteCategory={mockOnDeleteCategory}
+        availableTags={[]}
+        {...props}
+      />,
+      { wrapper: TestWrapper }
+    )
+
+  const customCategory = (id: string, name: string): CustomCategory => ({
+    id,
+    user_id: 'user-1',
+    name,
+    usage_count: 0,
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-01T00:00:00Z',
+  })
+
+  /** Labels of the cards rendered at TOP LEVEL — every card that is not a 'child' variant. */
+  const managerTopLevelLabels = (): string[] =>
+    screen
+      .getAllByRole('article')
+      .filter((card) => !card.querySelector('.budget-category-card__earmark'))
+      .map((card) => card.querySelector('h3')?.textContent?.trim() ?? '')
+      .sort()
+
+  /** Ids AllocationBreakdown treats as top-level (the real component's own derivation). */
+  const breakdownTopLevelIds = (): string[] =>
+    (screen.getByTestId('breakdown-top-level-ids').textContent ?? '')
+      .split(',')
+      .filter(Boolean)
+      .sort()
+
+  // The preloaded mock's inferred return type pins `data` to `undefined`
+  // (src/test/mocks/categories-api.ts), so a populated list needs a cast. Typed once here rather
+  // than at each call site.
+  const setUserCategories = (categories: CustomCategory[]) =>
+    (
+      mockUseGetUserCategories as unknown as Mock<
+        () => { data: CustomCategory[]; isLoading: boolean; error: null }
+      >
+    ).mockReturnValue({ data: categories, isLoading: false, error: null })
+
+  beforeEach(() => {
+    mockOnAddCategory = mock(() => Promise.resolve({} as BudgetCategory))
+    mockOnUpdateCategory = mock(() => Promise.resolve({} as BudgetCategory))
+    mockOnDeleteCategory = mock(() => Promise.resolve(undefined))
+    setUserCategories([])
+  })
+
+  it('renders the issue repro standalone: no earmark, no remainder, custom top-level', () => {
+    setUserCategories([customCategory('hoa-uuid', 'HOA')])
+    const categories = [
+      createMockCategory({
+        id: 'gas-electric',
+        category_kind: 'pfc',
+        pfc_primary: 'RENT_AND_UTILITIES',
+        pfc_detailed: 'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY',
+        allocated_amount: 215,
+        spent_amount: 192.08,
+      }),
+      createMockCategory({
+        id: 'hoa',
+        category_kind: 'custom',
+        pfc_primary: undefined,
+        pfc_detailed: undefined,
+        custom_category_id: 'hoa-uuid',
+        custom_parent_pfc_primary: 'RENT_AND_UTILITIES',
+        allocated_amount: 423.2,
+        spent_amount: 423.2,
+      }),
+    ]
+
+    renderManager({ categories })
+
+    // The orphan detailed row is a SIBLING of HOA, not its parent.
+    expect(screen.queryByText(/Earmarked from/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Remaining after children/i)).not.toBeInTheDocument()
+    expect(managerTopLevelLabels()).toEqual(['HOA', 'Rent And Utilities › Gas And Electricity'])
+    expect(breakdownTopLevelIds()).toEqual(['gas-electric', 'hoa'])
+  })
+
+  it('agrees with AllocationBreakdown when the map lacks an entry but the row linkage is present', () => {
+    setUserCategories([])
+    const categories = [
+      createMockCategory({
+        id: 'pfc-food',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+      }),
+      createMockCategory({
+        id: 'custom-1',
+        category_kind: 'custom',
+        pfc_primary: undefined,
+        pfc_detailed: undefined,
+        custom_category_id: 'uuid-1',
+        custom_parent_pfc_primary: 'FOOD_AND_DRINK',
+        allocated_amount: 200,
+      }),
+    ]
+
+    renderManager({ categories })
+
+    // The row linkage is authoritative: the custom nests even though the map has no entry.
+    expect(managerTopLevelLabels()).toEqual(['Food And Drink'])
+    expect(breakdownTopLevelIds()).toEqual(['pfc-food'])
+  })
+
+  it('agrees with AllocationBreakdown when the map has an entry but the row linkage is absent', () => {
+    setUserCategories([customCategory('uuid-2', 'HOA')])
+    const categories = [
+      createMockCategory({
+        id: 'pfc-food',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+      }),
+      createMockCategory({
+        id: 'custom-2',
+        category_kind: 'custom',
+        pfc_primary: undefined,
+        pfc_detailed: undefined,
+        custom_category_id: 'uuid-2',
+        allocated_amount: 200,
+      }),
+    ]
+
+    renderManager({ categories })
+
+    // The map is NOT consulted for nesting: with no row linkage the custom stays top-level.
+    expect(managerTopLevelLabels()).toEqual(['Food And Drink', 'HOA'])
+    expect(breakdownTopLevelIds()).toEqual(['custom-2', 'pfc-food'])
+  })
+
+  it('agrees with AllocationBreakdown for a grandchild whose direct parent has no budget row', () => {
+    setUserCategories([])
+    const categories = [
+      createMockCategory({
+        id: 'pfc-root',
+        category_kind: 'pfc',
+        pfc_primary: 'FOOD_AND_DRINK',
+        pfc_detailed: undefined,
+        allocated_amount: 500,
+      }),
+      createMockCategory({
+        id: 'grandchild',
+        category_kind: 'custom',
+        pfc_primary: undefined,
+        pfc_detailed: undefined,
+        custom_category_id: 'uuid-grandchild',
+        custom_parent_id: 'unbudgeted-parent-uuid',
+        custom_grandparent_pfc_primary: 'FOOD_AND_DRINK',
+        allocated_amount: 50,
+      }),
+    ]
+
+    renderManager({ categories })
+
+    // The grandchild nests under the PFC root (the final pass), and AllocationBreakdown
+    // excludes it from top level via the same transitive relation.
+    expect(managerTopLevelLabels()).toEqual(['Food And Drink'])
+    expect(breakdownTopLevelIds()).toEqual(['pfc-root'])
   })
 })
