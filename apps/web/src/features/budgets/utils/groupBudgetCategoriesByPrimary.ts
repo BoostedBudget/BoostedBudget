@@ -47,6 +47,27 @@ const sortByCreatedAt = (a: BudgetCategory, b: BudgetCategory) =>
 const getFirstItem = (group: BudgetCategoryGroup) =>
   group.group ?? group.children[0]
 
+/**
+ * Finds the PRIMARY-ONLY PFC group a custom category may nest under, given the primary name the
+ * row links to. Both match_logic gates mirror isSubAllocationOfParent (types.ts) so display
+ * nesting stays a strict subset of the remainder arithmetic that computeParentAllocationRemainder
+ * performs.
+ */
+function findPfcParentGroup(
+  pfcGroups: BudgetCategoryGroup[],
+  pfcPrimary: string,
+  childMatchLogic: BudgetCategory['match_logic']
+): BudgetCategoryGroup | undefined {
+  return pfcGroups.find(
+    (g) =>
+      g.group !== null &&
+      g.group.pfc_primary === pfcPrimary &&
+      !g.group.pfc_detailed &&
+      isContainingMatchLogic(g.group.match_logic) &&
+      isContainedMatchLogic(childMatchLogic)
+  )
+}
+
 export function groupBudgetCategoriesByPrimary(
   categories: BudgetCategory[]
 ): BudgetCategoryGroup[] {
@@ -105,20 +126,15 @@ export function groupBudgetCategoriesByPrimary(
   // parent_id IS NOT NULL)), constraint `custom_category_single_parent`).
   //
   // The parent must be a PRIMARY-ONLY row (`!pfc_detailed`): a detailed row sharing the primary
-  // is a SIBLING, not a parent (#1686). Both match_logic gates mirror isSubAllocationOfParent
-  // (types.ts) so display nesting stays a strict subset of the remainder arithmetic that
-  // computeParentAllocationRemainder performs.
+  // is a SIBLING, not a parent (#1686).
   const standaloneCustom: BudgetCategory[] = []
   for (const cat of customCategories) {
     let nested = false
     if (cat.custom_parent_pfc_primary) {
-      const parentGroup = pfcGroups.find(
-        (g) =>
-          g.group !== null &&
-          g.group.pfc_primary === cat.custom_parent_pfc_primary &&
-          !g.group.pfc_detailed &&
-          isContainingMatchLogic(g.group.match_logic) &&
-          isContainedMatchLogic(cat.match_logic)
+      const parentGroup = findPfcParentGroup(
+        pfcGroups,
+        cat.custom_parent_pfc_primary,
+        cat.match_logic
       )
       if (parentGroup) {
         parentGroup.children.push(cat)
@@ -170,13 +186,10 @@ export function groupBudgetCategoriesByPrimary(
   for (const [key, group] of customGroupMap) {
     const cat = group.group
     if (!cat || !cat.custom_grandparent_pfc_primary) continue
-    const grandparentGroup = pfcGroups.find(
-      (g) =>
-        g.group !== null &&
-        g.group.pfc_primary === cat.custom_grandparent_pfc_primary &&
-        !g.group.pfc_detailed &&
-        isContainingMatchLogic(g.group.match_logic) &&
-        isContainedMatchLogic(cat.match_logic)
+    const grandparentGroup = findPfcParentGroup(
+      pfcGroups,
+      cat.custom_grandparent_pfc_primary,
+      cat.match_logic
     )
     if (grandparentGroup) {
       grandparentGroup.children.push(cat)

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"slices"
 	"sort"
 	"time"
 )
@@ -191,23 +192,11 @@ func CalculateBudgetExpenseLedger(categories []BudgetCategory, facts []BudgetExp
 		}
 		if len(matched) == 0 {
 			r.UnbudgetedTransactionIDs = append(r.UnbudgetedTransactionIDs, f.ID)
-			foundCurrency := false
-			for _, code := range r.UnbudgetedCurrencyCodes {
-				if code == f.CurrencyCode {
-					foundCurrency = true
-				}
-			}
-			if !foundCurrency {
+			if !slices.Contains(r.UnbudgetedCurrencyCodes, f.CurrencyCode) {
 				r.UnbudgetedCurrencyCodes = append(r.UnbudgetedCurrencyCodes, f.CurrencyCode)
 			}
 			if reason != "" {
-				foundReason := false
-				for _, existing := range r.UnbudgetedReasons {
-					if existing == reason {
-						foundReason = true
-					}
-				}
-				if !foundReason {
+				if !slices.Contains(r.UnbudgetedReasons, reason) {
 					r.UnbudgetedReasons = append(r.UnbudgetedReasons, reason)
 				}
 				r.UnbudgetedAmount = nil
@@ -218,25 +207,13 @@ func CalculateBudgetExpenseLedger(categories []BudgetCategory, facts []BudgetExp
 		for _, c := range matched {
 			line := r.Lines[c.ID]
 			line.TransactionIDs = append(line.TransactionIDs, f.ID)
-			found := false
-			for _, currency := range line.CurrencyCodes {
-				if currency == f.CurrencyCode {
-					found = true
-				}
-			}
-			if !found {
+			if !slices.Contains(line.CurrencyCodes, f.CurrencyCode) {
 				line.CurrencyCodes = append(line.CurrencyCodes, f.CurrencyCode)
 			}
 			if reason != "" {
 				line.Amount = nil
 				line.Reason = reason
-				foundReason := false
-				for _, existing := range line.Reasons {
-					if existing == reason {
-						foundReason = true
-					}
-				}
-				if !foundReason {
+				if !slices.Contains(line.Reasons, reason) {
 					line.Reasons = append(line.Reasons, reason)
 				}
 			} else if line.Amount != nil {
