@@ -15,13 +15,13 @@ const BudgetEffectiveTransferExpr = "COALESCE(t.effective_pfc_primary,cc.parent_
 func budgetScalarCurrency(currencies []string, expected string) (string, error) {
 	for _, currency := range currencies {
 		if currency == "" {
-			return "", fmt.Errorf("budget actuals incomplete: unknown_currency")
+			return "", domain.NewBudgetActualsIncompleteError("unknown_currency")
 		}
 		if expected == "" {
 			expected = currency
 		}
 		if currency != expected {
-			return "", fmt.Errorf("budget actuals incomplete: mixed_currency")
+			return "", domain.NewBudgetActualsIncompleteError("mixed_currency")
 		}
 	}
 	return expected, nil
@@ -35,7 +35,7 @@ func budgetExpensePreview(categories []domain.BudgetCategory, category domain.Bu
 		return nil, err
 	}
 	if line.Amount == nil {
-		return nil, fmt.Errorf("budget actuals incomplete: %s", line.Reason)
+		return nil, domain.NewBudgetActualsIncompleteError(line.Reason)
 	}
 	resp := &domain.CategoryPreviewResponse{CurrencyCode: currency, TransactionCount: len(line.TransactionIDs), TotalAmount: *line.Amount}
 	selected := map[string]bool{}
