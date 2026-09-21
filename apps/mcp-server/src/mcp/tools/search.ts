@@ -72,7 +72,18 @@ export function buildSearchResult(entries: SpecEntry[], detail: ResponseDetail =
 
   if (allowed.length === 0) {
     return {
-      content: [{ type: 'text', text: 'No operations found matching your query.' }],
+      content: [
+        {
+          type: 'text',
+          text: [
+            'No operations found matching your query. Try:',
+            "- Browse by class: search({class:'read'}) or search({class:'write'})",
+            "- Browse by tag: search({tag:'Analytics'})",
+            "- Use a shorter, natural-language query, e.g. search({query:'spending by category'})",
+            'Matching is per-word: at least ONE of your words must appear anywhere in an operation\'s id, summary, path, description, tags, or parameters; operations matching ALL your words rank first.',
+          ].join('\n'),
+        },
+      ],
     }
   }
 

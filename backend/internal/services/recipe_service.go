@@ -50,17 +50,17 @@ var _ RecipeRepository = (*repository.RecipeRepositoryImpl)(nil)
 // v1 hard constraint: no write-class operations.
 func validateSpec(spec []domain.MCPRecipeCall) error {
 	if len(spec) == 0 {
-		return fmt.Errorf("recipe spec must contain at least one call")
+		return fmt.Errorf("recipe spec must contain at least one call: %w", domain.ErrInvalidRecipeSpec)
 	}
 	for _, call := range spec {
 		if call.Detail != nil && *call.Detail != "compact" && *call.Detail != "full" {
-			return fmt.Errorf("operation %q detail must be compact or full", call.OperationID)
+			return fmt.Errorf("operation %q detail must be compact or full: %w", call.OperationID, domain.ErrInvalidRecipeSpec)
 		}
 		if !domain.MCPOperationAllowed(call.OperationID) {
-			return fmt.Errorf("operation %q is not available via MCP", call.OperationID)
+			return fmt.Errorf("operation %q is not available via MCP: %w", call.OperationID, domain.ErrInvalidRecipeSpec)
 		}
 		if !domain.MCPOperationIsRead(call.OperationID) {
-			return fmt.Errorf("operation %q is a write-class operation; v1 recipes may only contain read operations", call.OperationID)
+			return fmt.Errorf("operation %q is a write-class operation; v1 recipes may only contain read operations: %w", call.OperationID, domain.ErrInvalidRecipeSpec)
 		}
 	}
 	return nil
@@ -73,7 +73,7 @@ func (s *recipeService) Create(ctx context.Context, userID string, req domain.Cr
 
 	// R4-4: reject schedule field (v1 constraint; column preserved for future use)
 	if req.Schedule != nil && *req.Schedule != "" {
-		return nil, fmt.Errorf("scheduled recipes are not available in v1; omit the schedule field")
+		return nil, fmt.Errorf("scheduled recipes are not available in v1; omit the schedule field: %w", domain.ErrInvalidRecipeSpec)
 	}
 
 	recipe := &domain.MCPRecipe{
@@ -111,8 +111,11 @@ func (s *recipeService) Get(ctx context.Context, id string, userID string) (*dom
 
 func (s *recipeService) Update(ctx context.Context, id string, userID string, req domain.UpdateMCPRecipeRequest) (*domain.MCPRecipe, error) {
 	recipe, err := s.repo.Get(ctx, id, userID)
-	if err != nil || recipe == nil {
-		return nil, fmt.Errorf("recipe not found")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recipe: %w", err)
+	}
+	if recipe == nil {
+		return nil, fmt.Errorf("recipe %s not found: %w", id, domain.ErrRecipeNotFound)
 	}
 
 	if req.Name != nil {
@@ -129,7 +132,7 @@ func (s *recipeService) Update(ctx context.Context, id string, userID string, re
 	}
 	if req.Schedule != nil && *req.Schedule != "" {
 		// R4-4: reject schedule updates (v1 constraint)
-		return nil, fmt.Errorf("scheduled recipes are not available in v1; omit the schedule field")
+		return nil, fmt.Errorf("scheduled recipes are not available in v1; omit the schedule field: %w", domain.ErrInvalidRecipeSpec)
 	}
 	if req.Enabled != nil {
 		recipe.Enabled = *req.Enabled
@@ -147,8 +150,11 @@ func (s *recipeService) Delete(ctx context.Context, id string, userID string) er
 
 func (s *recipeService) Run(ctx context.Context, id string, userID string) (*domain.MCPRecipeRunResult, error) {
 	recipe, err := s.repo.Get(ctx, id, userID)
-	if err != nil || recipe == nil {
-		return nil, fmt.Errorf("recipe not found: %s", id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recipe: %w", err)
+	}
+	if recipe == nil {
+		return nil, fmt.Errorf("recipe %s not found: %w", id, domain.ErrRecipeNotFound)
 	}
 	// Re-validate spec at run time (defense-in-depth: GAP-R3-10).
 	// A recipe saved before a manifest change must not be allowed to run write-class ops.

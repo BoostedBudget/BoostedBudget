@@ -216,9 +216,8 @@ const MANIFEST_ENTRIES: CapabilityEntry[] = [
   read('listMCPRecipes'),
   read('getMCPRecipe'),
   // runMCPRecipe is READ in v1: recipes can only compose read-class ops, so running
-  // them produces no writes. The tool resolves the recipe to ordered API calls and
-  // returns them for the agent to pass to readExecute()/writeExecute(). Classifying as
-  // write would require a confirmation token that the recipe.run tool has no input field for.
+  // them produces no writes. Running a recipe resolves it to ordered API calls and
+  // returns them for the agent to pass to readExecute()/writeExecute().
   // ⚠ Its HTTP method is POST despite class 'read' — this is EXACTLY why readExecute's
   // admission gate (tools/execute.ts) checks the method too, not class alone: see the
   // module doc's SECURITY POINT.

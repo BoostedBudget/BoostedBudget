@@ -3,6 +3,48 @@ import { buildSearchResult, parseSearchInput, handleSearch } from './search'
 import generatedIndex from '../../spec/generated/spec-index.json'
 import type { SpecIndex } from '../../spec/search-runtime'
 
+// #1699: multi-word / natural-language queries must match operations whose text carries only
+// SOME of the query's words. These cases run against the REAL generated index — the unit
+// fixture in search-runtime.test.ts lacks the spending operations.
+describe('#1699 tokenized ranked search against the real index', () => {
+  const index = generatedIndex as SpecIndex
+
+  const searchIds = (input: unknown): string[] => {
+    const text = handleSearch(input, index).content[0]!.text
+    return [...text.matchAll(/operationId: (\w+)/g)].map((match) => match[1]!)
+  }
+
+  it('finds getSpendingByMerchant for "top merchants spending"', () => {
+    expect(searchIds({ query: 'top merchants spending' })).toContain('getSpendingByMerchant')
+  })
+
+  it('finds getSpendingTrends for "spending trends month over month"', () => {
+    expect(searchIds({ query: 'spending trends month over month' })).toContain('getSpendingTrends')
+  })
+
+  it('finds getLargestTransactionsForPeriod for "largest transactions high spend"', () => {
+    expect(searchIds({ query: 'largest transactions high spend' })).toContain(
+      'getLargestTransactionsForPeriod',
+    )
+  })
+
+  it('finds getCategoryTotalForPeriod for "spending category" filtered to tag Analytics', () => {
+    expect(
+      searchIds({ query: 'spending category', tag: 'Analytics', limit: 50 }),
+    ).toContain('getCategoryTotalForPeriod')
+  })
+
+  it('returns a non-empty set including a getSpending* operation for a natural-language query', () => {
+    const ids = searchIds({ query: 'how much did I spend on food last month' })
+    expect(ids.length).toBeGreaterThan(0)
+    expect(ids.some((id) => id.startsWith('getSpending'))).toBe(true)
+  })
+
+  it('still returns [] for a query matching nothing — regression guard', () => {
+    expect(searchIds({ query: 'zzznomatch' })).toEqual([])
+  })
+})
+
 describe('#1634 selected response view', () => {
   it('shows compact by default and exposes full-only execution diagnostics on request', () => {
     const index = generatedIndex as SpecIndex
@@ -93,6 +135,16 @@ describe('buildSearchResult', () => {
   it('returns empty result message when no matches', () => {
     const result = buildSearchResult([])
     expect(result.content[0]?.text).toContain('No operations found')
+  })
+
+  it('#1699: zero-result message names concrete next steps and the real matcher', () => {
+    const text = buildSearchResult([]).content[0]?.text ?? ''
+    expect(text).toContain('No operations found')
+    expect(text).toContain("search({class:'read'})")
+    expect(text).toContain("search({tag:'Analytics'})")
+    expect(text).toContain("search({query:'spending by category'})")
+    expect(text).toContain('at least ONE of your words')
+    expect(text).toContain('ALL your words rank first')
   })
 
   it('includes operation details', () => {

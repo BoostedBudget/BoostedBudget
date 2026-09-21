@@ -73,6 +73,8 @@ func MapError(err error) error {
 		return huma.Error404NotFound("Invite not found")
 	case errors.Is(err, domain.ErrMemberNotFound):
 		return huma.Error404NotFound("Member not found")
+	case errors.Is(err, domain.ErrRecipeNotFound):
+		return huma.Error404NotFound("Recipe not found")
 
 	// Repository errors
 	case errors.Is(err, repository.ErrTransactionNotFound):
@@ -142,6 +144,8 @@ func MapError(err error) error {
 		return huma.Error409Conflict("A categorization rule with this name already exists")
 	case errors.Is(err, domain.ErrSavingsGoalAlreadyExists):
 		return huma.Error409Conflict("A savings goal with this name already exists")
+	case errors.Is(err, domain.ErrDuplicateRecipeName):
+		return huma.Error409Conflict("A recipe with that name already exists")
 	// #1625: raised by the repository's own locked basis assertion, which is the TOCTOU-free half
 	// of ContributionHandler.assertLedgerIsLive. The handler's copy still produces the better
 	// message for the ordinary case; this mapping is what stops the RACE-losing case — which only
@@ -283,6 +287,8 @@ func MapError(err error) error {
 	// category_kind) fell through to the default case below and became a 500 + Sentry event.
 	// Mirrors ErrInvalidSavingsGoal's shape.
 	case errors.Is(err, domain.ErrInvalidBudget):
+		return huma.Error400BadRequest(err.Error())
+	case errors.Is(err, domain.ErrInvalidRecipeSpec):
 		return huma.Error400BadRequest(err.Error())
 	case errors.Is(err, domain.ErrInvalidCondition):
 		return huma.Error422UnprocessableEntity(err.Error())

@@ -24,7 +24,7 @@ func NewMCPToolTelemetryHandler(analytics phclient.ProductAnalytics, mcpWorkerSe
 }
 
 type RecordMCPToolTelemetryBody struct {
-	ToolSurface    string `json:"tool_surface" enum:"search,read_execute,write_execute,recipe_list,recipe_save,recipe_run,recipe_templates"`
+	ToolSurface    string `json:"tool_surface" enum:"search,read_execute,write_execute,recipe_templates"`
 	ToolFamily     string `json:"tool_family" enum:"accounts,analytics,budgets,boosts,savings,transactions,discovery,workflows,cross_domain,other"`
 	Outcome        string `json:"outcome" enum:"succeeded,failed"`
 	DurationBucket string `json:"duration_bucket" enum:"under_250ms,250ms_to_1s,1s_to_5s,over_5s"`
