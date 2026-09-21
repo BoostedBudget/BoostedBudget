@@ -143,6 +143,14 @@ type Budget struct {
 	// so savings-goal detach tombstones persist across the whole series rather than per-period.
 	SeriesID string `json:"series_id" db:"series_id"`
 
+	// ActualsIncompleteReasons is the diagnostic recorded by the most recent actuals
+	// publish (migration 000221, #1685): the reasons that publish degraded (RETAIN) or
+	// withheld (WITHHOLD), de-duplicated and sorted. It is a LAST-PUBLISH diagnostic,
+	// not a live ledger state — it is rewritten only when a publish runs (a clean
+	// publish writes an empty list, and a withheld publish writes its reasons without
+	// touching spent_amount/income_amount). Returned by the user-facing budget reads.
+	ActualsIncompleteReasons []string `json:"actuals_incomplete_reasons" db:"actuals_incomplete_reasons"`
+
 	// Associated data (populated on demand, not stored in DB)
 	Categories []BudgetCategory `json:"categories,omitempty" db:"-"`
 }

@@ -169,8 +169,16 @@ func TestPublishActualsTaxonomy(t *testing.T) {
 		{
 			name: "unattributed ledger reason withholds the whole run",
 			setup: func(f *actualsTaxonomyFixture) (map[string]*domain.BudgetCategory, []domain.IncomeSource) {
-				a := f.addCategory("pfc", 5, func(c *domain.BudgetCategory) { c.PFCPrimary = &food; c.Tags = shared; c.MatchLogic = domain.MatchLogicTagOnly })
-				b := f.addCategory("pfc", 6, func(c *domain.BudgetCategory) { c.PFCPrimary = &travel; c.Tags = shared; c.MatchLogic = domain.MatchLogicTagOnly })
+				a := f.addCategory("pfc", 5, func(c *domain.BudgetCategory) {
+					c.PFCPrimary = &food
+					c.Tags = shared
+					c.MatchLogic = domain.MatchLogicTagOnly
+				})
+				b := f.addCategory("pfc", 6, func(c *domain.BudgetCategory) {
+					c.PFCPrimary = &travel
+					c.Tags = shared
+					c.MatchLogic = domain.MatchLogicTagOnly
+				})
 				f.addTransaction(100, food, "USD", shared)
 				return map[string]*domain.BudgetCategory{"a": a, "b": b}, nil
 			},
@@ -378,8 +386,16 @@ func TestOverlapDoesNotDoubleCountAggregate(t *testing.T) {
 	food, travel := "FOOD_AND_DRINK", "TRAVEL"
 	shared := []string{"shared"}
 	f := newActualsTaxonomyFixture(t)
-	f.addCategory("pfc", 5, func(c *domain.BudgetCategory) { c.PFCPrimary = &food; c.Tags = shared; c.MatchLogic = domain.MatchLogicTagOnly })
-	f.addCategory("pfc", 6, func(c *domain.BudgetCategory) { c.PFCPrimary = &travel; c.Tags = shared; c.MatchLogic = domain.MatchLogicTagOnly })
+	f.addCategory("pfc", 5, func(c *domain.BudgetCategory) {
+		c.PFCPrimary = &food
+		c.Tags = shared
+		c.MatchLogic = domain.MatchLogicTagOnly
+	})
+	f.addCategory("pfc", 6, func(c *domain.BudgetCategory) {
+		c.PFCPrimary = &travel
+		c.Tags = shared
+		c.MatchLogic = domain.MatchLogicTagOnly
+	})
 	f.addTransaction(100, food, "USD", shared)
 
 	before := f.sumSpent()
@@ -484,4 +500,214 @@ func TestWithheldSyncReturnsPriorIncome(t *testing.T) {
 	require.Equal(t, 200.0, persisted, "a withheld sync must not mutate income_amount")
 	spent, _ := f.row(foodLine.ID)
 	require.Equal(t, 7.0, spent, "a withheld sync writes no spent_amount")
+}
+
+// reasonsOrEmpty normalises a nil slice to an empty one so an empty text[]
+// (which pgx may decode to nil) compares equal to []string{}.
+func reasonsOrEmpty(r []string) []string {
+	if r == nil {
+		return []string{}
+	}
+	return r
+}
+
+// budgetRowReasons reads the persisted diagnostic column directly, independent
+// of any user-facing read path, so a test can distinguish "written" from
+// "returned".
+func (f *actualsTaxonomyFixture) budgetRowReasons() []string {
+	f.t.Helper()
+	var reasons []string
+	require.NoError(f.t, f.tx.QueryRow(f.ctx, `SELECT actuals_incomplete_reasons FROM budgets WHERE id=$1`, f.budget.ID).Scan(&reasons))
+	return reasons
+}
+
+// requireAllUserFacingReadsReturn asserts the three user-facing budget reads —
+// GetByID, the list read (GetByUserID) and the current read (GetActiveByUserID)
+// — each carry want, which is what the last publish recorded.
+func (f *actualsTaxonomyFixture) requireAllUserFacingReadsReturn(want []string) {
+	f.t.Helper()
+
+	byID, err := f.repo.GetByID(f.ctx, f.budget.ID)
+	require.NoError(f.t, err)
+	require.Equal(f.t, want, reasonsOrEmpty(byID.ActualsIncompleteReasons), "GetByID must return the last-publish reasons")
+
+	list, err := f.repo.GetByUserID(f.ctx, f.user)
+	require.NoError(f.t, err)
+	listBudget := findBudgetByID(list, f.budget.ID)
+	require.NotNil(f.t, listBudget, "budget missing from GetByUserID")
+	require.Equal(f.t, want, reasonsOrEmpty(listBudget.ActualsIncompleteReasons), "the list read must return the last-publish reasons")
+
+	active, err := f.repo.GetActiveByUserID(f.ctx, f.user)
+	require.NoError(f.t, err)
+	activeBudget := findBudgetByID(active, f.budget.ID)
+	require.NotNil(f.t, activeBudget, "budget missing from GetActiveByUserID")
+	require.Equal(f.t, want, reasonsOrEmpty(activeBudget.ActualsIncompleteReasons), "the current read must return the last-publish reasons")
+}
+
+func findBudgetByID(budgets []*domain.Budget, id string) *domain.Budget {
+	for _, b := range budgets {
+		if b.ID == id {
+			return b
+		}
+	}
+	return nil
+}
+
+// publishOn drives the private publish path against an arbitrary Querier (the
+// fixture tx, or a savepoint) so a test can roll a FATAL publish back.
+func (f *actualsTaxonomyFixture) publishOn(q Querier, sources []domain.IncomeSource) ([]domain.BudgetCategory, []string, bool, error) {
+	f.t.Helper()
+	period := domain.CurrentBudgetActualsRange(f.budget, time.Now())
+	income := f.budget.IncomeAmount
+	return f.repo.publishBudgetActualsInTx(f.ctx, q, f.user, f.budget.ID, period.Start, period.ActualThrough, &income, sources)
+}
+
+// TestUserFacingBudgetReadsReturnPersistedReasons pins todo 6's read contract:
+// the three user-facing budget reads return exactly what the last publish
+// recorded. It covers a RETAIN run (reasons written on the publish path), a
+// WITHHOLD run (reasons written on the withhold path, which writes no
+// spent_amount) and a clean run (the column is emptied to '{}').
+func TestUserFacingBudgetReadsReturnPersistedReasons(t *testing.T) {
+	food := "FOOD_AND_DRINK"
+
+	t.Run("a retain publish's reasons reach all three reads", func(t *testing.T) {
+		f := newActualsTaxonomyFixture(t)
+		goal := f.addGoal("USD")
+		f.addCategory("savings", 7, func(c *domain.BudgetCategory) { c.SavingsGoalID = &goal })
+		f.addCategory("pfc", 3, func(c *domain.BudgetCategory) { c.PFCPrimary = &food })
+		f.addContribution(goal, nil, 20, "legacy_unknown")
+		f.addTransaction(100, food, "USD", nil)
+
+		_, reasons, withheld, err := f.publish(nil)
+		require.NoError(t, err)
+		require.False(t, withheld)
+		require.Equal(t, []string{"legacy_unknown"}, reasons)
+
+		require.Equal(t, []string{"legacy_unknown"}, reasonsOrEmpty(f.budgetRowReasons()), "the column records the last publish")
+		f.requireAllUserFacingReadsReturn([]string{"legacy_unknown"})
+	})
+
+	t.Run("a withheld publish's reasons reach all three reads", func(t *testing.T) {
+		f := newActualsTaxonomyFixture(t)
+		foodLine := f.addCategory("pfc", 7, func(c *domain.BudgetCategory) { c.PFCPrimary = &food })
+		f.addTransaction(100, food, "EUR", nil)
+
+		_, reasons, withheld, err := f.publish(nil)
+		require.NoError(t, err)
+		require.True(t, withheld)
+		require.Equal(t, []string{"currency_mismatch"}, reasons)
+
+		require.Equal(t, []string{"currency_mismatch"}, reasonsOrEmpty(f.budgetRowReasons()), "a withheld run still records its reasons")
+		f.requireAllUserFacingReadsReturn([]string{"currency_mismatch"})
+		spent, _ := f.row(foodLine.ID)
+		require.Equal(t, 7.0, spent, "a withheld run writes no spent_amount")
+	})
+
+	t.Run("a clean publish is empty in the column and all three reads", func(t *testing.T) {
+		f := newActualsTaxonomyFixture(t)
+		foodLine := f.addCategory("pfc", 7, func(c *domain.BudgetCategory) { c.PFCPrimary = &food })
+		f.addTransaction(100, food, "USD", nil)
+
+		_, reasons, withheld, err := f.publish(nil)
+		require.NoError(t, err)
+		require.False(t, withheld)
+		require.Empty(t, reasons)
+
+		require.Empty(t, reasonsOrEmpty(f.budgetRowReasons()), "a clean publish writes '{}'")
+		f.requireAllUserFacingReadsReturn([]string{})
+		spent, _ := f.row(foodLine.ID)
+		require.Equal(t, 100.0, spent)
+	})
+}
+
+// TestReasonsClearedAfterCleanPublish proves the publish path CLEARS a stale
+// diagnostic: a degraded run records a reason, and a later clean publish writes
+// '{}' rather than leaving the previous reasons in place. The degraded
+// condition is made transient by reclassifying the contribution's flow_kind
+// (an UPDATE, never a history DELETE).
+func TestReasonsClearedAfterCleanPublish(t *testing.T) {
+	food := "FOOD_AND_DRINK"
+	f := newActualsTaxonomyFixture(t)
+	goal := f.addGoal("USD")
+	f.addCategory("savings", 7, func(c *domain.BudgetCategory) { c.SavingsGoalID = &goal })
+	f.addCategory("pfc", 3, func(c *domain.BudgetCategory) { c.PFCPrimary = &food })
+	f.addContribution(goal, nil, 20, "legacy_unknown")
+	f.addTransaction(100, food, "USD", nil)
+
+	_, reasons, withheld, err := f.publish(nil)
+	require.NoError(t, err)
+	require.False(t, withheld)
+	require.Equal(t, []string{"legacy_unknown"}, reasons)
+	require.Equal(t, []string{"legacy_unknown"}, reasonsOrEmpty(f.budgetRowReasons()))
+
+	// The contribution is now a real contribution, so the run is clean.
+	_, err = f.tx.Exec(f.ctx, `UPDATE savings_goal_contributions SET flow_kind='contribution' WHERE savings_goal_id=$1`, goal)
+	require.NoError(t, err)
+
+	_, reasons, withheld, err = f.publish(nil)
+	require.NoError(t, err)
+	require.False(t, withheld)
+	require.Empty(t, reasons)
+	require.Empty(t, reasonsOrEmpty(f.budgetRowReasons()), "a clean publish clears the prior reasons")
+	f.requireAllUserFacingReadsReturn([]string{})
+}
+
+// TestFATALPublishLeavesNoHalfWrittenReasons pins that a FATAL structural
+// defect aborts before any write: after a degraded run recorded reasons, a
+// FATAL publish inside a rolled-back savepoint leaves the prior reasons intact
+// and writes no spent_amount. A write that ran before the FATAL check would
+// change the column and be caught here.
+func TestFATALPublishLeavesNoHalfWrittenReasons(t *testing.T) {
+	food := "FOOD_AND_DRINK"
+	f := newActualsTaxonomyFixture(t)
+	goal := f.addGoal("USD")
+	savingsLine := f.addCategory("savings", 7, func(c *domain.BudgetCategory) { c.SavingsGoalID = &goal })
+	foodLine := f.addCategory("pfc", 3, func(c *domain.BudgetCategory) { c.PFCPrimary = &food })
+	f.addContribution(goal, nil, 20, "legacy_unknown")
+	f.addTransaction(100, food, "USD", nil)
+
+	_, reasons, withheld, err := f.publish(nil)
+	require.NoError(t, err)
+	require.False(t, withheld)
+	require.Equal(t, []string{"legacy_unknown"}, reasons)
+	require.Equal(t, []string{"legacy_unknown"}, reasonsOrEmpty(f.budgetRowReasons()))
+	beforeFood, _ := f.row(foodLine.ID)
+	beforeSavings, _ := f.row(savingsLine.ID)
+
+	savepoint, err := f.tx.Begin(f.ctx)
+	require.NoError(t, err)
+	fatalIncome := []domain.IncomeSource{{Type: domain.IncomeSourceTypeManual, Value: "not-a-number"}}
+	_, _, _, err = f.publishOn(savepoint, fatalIncome)
+	require.Error(t, err)
+	require.ErrorIs(t, err, domain.ErrBudgetActualsIncomplete)
+
+	// Before the rollback: the FATAL path itself wrote nothing.
+	require.Equal(t, []string{"legacy_unknown"}, reasonsOrEmpty(f.budgetRowReasons()), "a FATAL must not half-write the reasons")
+	afterFood, _ := f.row(foodLine.ID)
+	afterSavings, _ := f.row(savingsLine.ID)
+	require.Equal(t, beforeFood, afterFood)
+	require.Equal(t, beforeSavings, afterSavings)
+
+	require.NoError(t, savepoint.Rollback(f.ctx))
+	require.Equal(t, []string{"legacy_unknown"}, reasonsOrEmpty(f.budgetRowReasons()), "the rolled-back FATAL leaves the prior reasons intact")
+}
+
+// TestRecalculateBudgetActualsReturnsPersistedReasons pins that the returned
+// *domain.Budget carries the reasons the publish just recorded. Without the
+// post-publish assignment it reports the stale pre-publish value read before
+// the publish.
+func TestRecalculateBudgetActualsReturnsPersistedReasons(t *testing.T) {
+	food := "FOOD_AND_DRINK"
+	f := newActualsTaxonomyFixture(t)
+	goal := f.addGoal("USD")
+	f.addCategory("savings", 7, func(c *domain.BudgetCategory) { c.SavingsGoalID = &goal })
+	f.addCategory("pfc", 3, func(c *domain.BudgetCategory) { c.PFCPrimary = &food })
+	f.addContribution(goal, nil, 20, "legacy_unknown")
+	f.addTransaction(100, food, "USD", nil)
+
+	fresh, err := f.repo.RecalculateBudgetActuals(f.ctx, f.user, f.budget.ID, false)
+	require.NoError(t, err)
+	require.NotNil(t, fresh)
+	require.Equal(t, []string{"legacy_unknown"}, reasonsOrEmpty(fresh.ActualsIncompleteReasons), "the returned budget must carry the reasons the publish recorded")
+	require.Equal(t, []string{"legacy_unknown"}, reasonsOrEmpty(f.budgetRowReasons()))
 }

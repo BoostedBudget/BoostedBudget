@@ -260,7 +260,7 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income, series_id
+			income_amount, income_sources, expected_income, series_id, actuals_incomplete_reasons
 		FROM budgets
 		WHERE id = $1 AND deleted_at IS NULL
 	`
@@ -283,7 +283,7 @@ func (r *budgetRepository) GetByID(ctx context.Context, id string) (*domain.Budg
 		&budget.IncomeAmount,
 		&incomeSourcesJSON,
 		&budget.ExpectedIncome,
-		&budget.SeriesID,
+		&budget.SeriesID, &budget.ActualsIncompleteReasons,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -322,7 +322,7 @@ func (r *budgetRepository) getByUserIDQuerier(ctx context.Context, q Querier, us
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income, series_id
+			income_amount, income_sources, expected_income, series_id, actuals_incomplete_reasons
 		FROM budgets
 		WHERE user_id = $1 AND deleted_at IS NULL
 		ORDER BY created_at DESC
@@ -354,7 +354,7 @@ func (r *budgetRepository) getByUserIDQuerier(ctx context.Context, q Querier, us
 			&budget.IncomeAmount,
 			&incomeSourcesJSON,
 			&budget.ExpectedIncome,
-			&budget.SeriesID,
+			&budget.SeriesID, &budget.ActualsIncompleteReasons,
 		)
 		if err != nil {
 			return nil, err
@@ -383,7 +383,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
 			amount, currency_code, is_active, created_at, updated_at,
-			income_amount, income_sources, expected_income, series_id
+			income_amount, income_sources, expected_income, series_id, actuals_incomplete_reasons
 		FROM budgets
 		WHERE user_id = $1 AND is_active = true AND deleted_at IS NULL
 		ORDER BY created_at DESC
@@ -415,7 +415,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 			&budget.IncomeAmount,
 			&incomeSourcesJSON,
 			&budget.ExpectedIncome,
-			&budget.SeriesID,
+			&budget.SeriesID, &budget.ActualsIncompleteReasons,
 		)
 		if err != nil {
 			return nil, err
@@ -439,7 +439,7 @@ func (r *budgetRepository) GetActiveByUserID(ctx context.Context, userID string)
 	return budgets, nil
 }
 
-// GetByName retrieves a budget by user ID and name.
+// GetByName retrieves a budget by user ID and name. Excluded from the actuals_incomplete_reasons read (#1685 todo 6): it has no production caller, so selecting the diagnostic here would add a scan column with no consumer to keep correct.
 func (r *budgetRepository) GetByName(ctx context.Context, userID, name string) (*domain.Budget, error) {
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
@@ -1228,7 +1228,7 @@ func (r *budgetRepository) UpdateBudgetIncome(ctx context.Context, budgetID stri
 }
 
 // GetAllActivePaginated returns all active budgets across all users ordered by id ASC.
-// Used by the budget period-close scanner (Issue #972) to fan out across all budgets.
+// Used by the budget period-close scanner (Issue #972) to fan out across all budgets. Excluded from the actuals_incomplete_reasons read (#1685 todo 6): its only caller is the period-close scanner (budget_period_close_check.go:165), which needs period identity to decide whether a period closed — never the last-publish diagnostic.
 func (r *budgetRepository) GetAllActivePaginated(ctx context.Context, limit int, offset int) ([]*domain.Budget, error) {
 	query := `
 		SELECT id, user_id, name, description, period, start_date, end_date,
