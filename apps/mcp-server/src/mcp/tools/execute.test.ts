@@ -9,6 +9,7 @@ import {
   type ExecuteSpecEntry,
 } from './execute'
 import { HostProxyError } from '../../sandbox/host-proxy'
+import { executeCallSchema } from './call-schema'
 import { ALL_OPERATION_IDS, getCapability } from '../../manifest/capability-manifest'
 import {
   ACKNOWLEDGED_READ_SIDE_EFFECT_OPERATIONS,
@@ -1355,6 +1356,76 @@ describe('batch confirmation covers the whole batch (#1625)', () => {
     expect(mutator).not.toHaveBeenCalled()
     expect(replay.auditEvents).toEqual([
       { operationId: GATED, operationClass: 'write', result: 'error' },
+    ])
+  })
+})
+
+// ── #1699: runMCPRecipe resolution must be submittable to the executors verbatim ───────────
+//
+// The public backend schema (domain/recipe.go `MCPRecipeCall` / `MCPRecipeRunResult`) tags its
+// calls with snake_case (`operation_id`, `path_params`), while `executeCallSchema` and every
+// executor speak the camelCase `ExecuteCall` shape. The deleted `recipe.run` tool mapped
+// between the two before returning; folding it into the generic executor dropped the mapping,
+// so the documented "resolve with writeExecute, then submit the returned calls" workflow handed
+// the caller objects the executors reject. These tests pin the worker-side normalization that
+// restores the round trip. The backend tags are the public API and are deliberately unchanged.
+describe('runMCPRecipe resolution is submittable to the executors (#1699)', () => {
+  const RECIPE_RESULT = {
+    recipe_id: 'rec_abc123',
+    name: 'Weekly Cash Flow',
+    calls: [
+      { operation_id: 'getCashFlowSummary', params: { start_date: '2026-01-01', end_date: '2026-01-07' } },
+      { operation_id: 'getSpendingByCategory', params: { start_date: '2026-01-01', end_date: '2026-01-07' }, path_params: { id: 'spend-1' } },
+      { operation_id: 'getTransactions', body: { limit: 5 }, detail: 'full' },
+    ],
+  }
+
+  const SPEC: ExecuteSpecEntry[] = [
+    { operationId: 'runMCPRecipe', method: 'POST', path: '/api/v1/mcp/recipes/{id}/run' },
+    { operationId: 'getCashFlowSummary', method: 'GET', path: '/api/v1/analytics/cash-flow' },
+    { operationId: 'getSpendingByCategory', method: 'GET', path: '/api/v1/analytics/spending/{id}' },
+    { operationId: 'getTransactions', method: 'GET', path: '/api/v1/transactions' },
+  ]
+
+  async function resolveRecipeCalls(): Promise<ExecuteCall[]> {
+    const handler = buildWriteExecuteHandler(makeProxy(RECIPE_RESULT), SPEC)
+    const result = await handler({ calls: [{ operationId: 'runMCPRecipe', pathParams: { id: 'rec_abc123' } }] })
+    const text = result.toolResult.content[0]!.text!
+    const payload = JSON.parse(text.slice(text.indexOf(': ') + 2)) as { calls: ExecuteCall[] }
+    return payload.calls
+  }
+
+  it('maps operation_id/path_params to camelCase and passes executeCallSchema', async () => {
+    const calls = await resolveRecipeCalls()
+
+    expect(calls).toEqual([
+      { operationId: 'getCashFlowSummary', params: { start_date: '2026-01-01', end_date: '2026-01-07' } },
+      { operationId: 'getSpendingByCategory', params: { start_date: '2026-01-01', end_date: '2026-01-07' }, pathParams: { id: 'spend-1' } },
+      { operationId: 'getTransactions', body: { limit: 5 }, detail: 'full' },
+    ])
+    for (const call of calls) {
+      expect(executeCallSchema.safeParse(call).success).toBe(true)
+    }
+  })
+
+  it('omits pathParams for a recipe call that has no path_params', async () => {
+    const calls = await resolveRecipeCalls()
+    expect(calls[0]).not.toHaveProperty('pathParams')
+  })
+
+  it('round-trips: the resolved calls run through readExecute verbatim', async () => {
+    const calls = await resolveRecipeCalls()
+    const readProxy = makeProxy({ ok: true })
+    const readHandler = buildReadExecuteHandler(readProxy, SPEC)
+
+    await readHandler({ calls })
+
+    const invoked = (readProxy.invoke as unknown as { mock: { calls: unknown[][] } }).mock.calls
+    expect(invoked).toHaveLength(3)
+    expect(invoked.map((args) => args[0])).toEqual([
+      'getCashFlowSummary',
+      'getSpendingByCategory',
+      'getTransactions',
     ])
   })
 })
