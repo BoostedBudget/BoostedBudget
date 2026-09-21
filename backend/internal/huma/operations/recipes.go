@@ -38,7 +38,7 @@ func NewRecipeHandler(service services.RecipeService, idempotencyRepo ...reposit
 type CreateRecipeInput struct {
 	inputs.AuthenticatedInput
 	inputs.IdempotencyInput // reads Idempotency-Key header; empty = no deduplication
-	Body domain.CreateMCPRecipeRequest
+	Body                    domain.CreateMCPRecipeRequest
 }
 type CreateRecipeOutput struct{ Body *domain.MCPRecipe }
 

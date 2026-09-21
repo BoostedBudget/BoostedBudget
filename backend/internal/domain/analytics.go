@@ -365,7 +365,7 @@ type MonthOverMonthBucket struct {
 	Month     string   `json:"month"` // "2024-01-01" (first day of month)
 	Total     float64  `json:"total"`
 	ChangePct *float64 `json:"change_pct" doc:"Percentage change vs the previous period (12.5 means +12.5%)."` // nil for first bucket
-	ChangeAbs *float64 `json:"change_abs"` // nil for first bucket
+	ChangeAbs *float64 `json:"change_abs"`                                                                     // nil for first bucket
 }
 
 // MonthOverMonthResponse is the response for GET /analytics/month-over-month (AI-tool-callable).
@@ -506,7 +506,7 @@ type UnusualSpendResponse struct {
 type NetWorthBucket struct {
 	Date      string   `json:"date" format:"date"` // first day of bucket period (YYYY-MM-DD)
 	NetWorth  float64  `json:"net_worth"`
-	ChangeAbs *float64 `json:"change_abs"` // nil for first bucket
+	ChangeAbs *float64 `json:"change_abs"`                                                                     // nil for first bucket
 	ChangePct *float64 `json:"change_pct" doc:"Percentage change vs the previous period (12.5 means +12.5%)."` // nil for first bucket; nil if prev=0
 }
 
