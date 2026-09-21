@@ -27,6 +27,7 @@ import { createMCPToolTelemetryClient } from '../telemetry/telemetry-client'
 import { classifyExecuteFamily, instrumentTool } from '../telemetry/tool-telemetry'
 import { extractMcpHeaders, buildPropsFromHeaders } from './agent-auth'
 import { toAuditEntry } from './audit-mapping'
+import { SERVER_INSTRUCTIONS } from './server-instructions'
 import type { SpecIndex } from '../spec/search-runtime'
 import type { Env } from '../env'
 
@@ -63,8 +64,7 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
     name: 'boostedbudget',
     version: '0.1.0',
   }, {
-    instructions:
-      'Analyze accounts, transactions, spending, net worth, and investments; manage envelope budgets, savings goals, categories, and tags. Boost definitions are read-only here; review their history, budget alerts, and transfer, rollover, or savings-goal suggestions. MCP writes require confirmation; BoostedBudget never moves money. Use search first, then readExecute or writeExecute.',
+    instructions: SERVER_INSTRUCTIONS,
   })
 
   /**
@@ -150,7 +150,9 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
         description:
           'Search the BoostedBudget API spec to discover available operations. ' +
           'Returns matching operations with their operationId, method, path, and summary. ' +
-          'Use this to find the right operation before calling readExecute() or writeExecute().',
+          'Use this to find the right operation before calling readExecute() or writeExecute(). ' +
+          'Saved workflow recipes are reached through the recipe operations (listMCPRecipes, ' +
+          'createMCPRecipe, runMCPRecipe); recipe.templates lists starters.',
         inputSchema: {
           query: z.string().optional().describe('Keyword search (e.g. "spending category", "budget create")'),
           detail: z.enum(['compact', 'full']).optional().describe('Response fields to describe (default: compact). Full includes diagnostics and provider metadata.'),
@@ -253,7 +255,9 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
           'NOTHING; one token covers every write in the batch. Re-invoke with the IDENTICAL ' +
           'calls array plus the provided confirmationToken to complete them. The token is bound ' +
           'to the exact batch, so changing any field means you must request a fresh token. ' +
-          'Prefer readExecute() for calls it admits.',
+          'Prefer readExecute() for calls it admits. ' +
+          'Recipe operations (createMCPRecipe, updateMCPRecipe, deleteMCPRecipe, runMCPRecipe) ' +
+          'are reached here; runMCPRecipe returns calls to submit to readExecute/writeExecute.',
         inputSchema: {
           calls: z.array(
             executeCallSchema,
