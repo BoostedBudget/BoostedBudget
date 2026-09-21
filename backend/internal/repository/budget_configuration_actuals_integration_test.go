@@ -89,6 +89,11 @@ func TestBudgetConfigurationPublishesAllSiblingActualsAtomically(t *testing.T) {
 	_, err = repo.AddCategoryChecked(ctx, b.ID, &domain.BudgetCategory{BudgetID: b.ID, CategoryKind: "pfc", PFCPrimary: &transport, Tags: []string{"shared"}, MatchLogic: domain.MatchLogicTagOnly, AllocatedAmount: 100})
 	require.NoError(t, err, "an ambiguous ledger withholds the publish instead of failing the config write")
 	require.Equal(t, before, sumBudgetCategorySpent(ctx, t, tx, b.ID), "ambiguous global totals must not publish individually known duplicated lines")
+	// The removed hard-fail assertion (require.ErrorContains(err, "overlapping_individual_lines"))
+	// is relocated, not deleted: the reason is asserted against the persisted diagnostic.
+	var persistedReasons []string
+	require.NoError(t, tx.QueryRow(ctx, `SELECT actuals_incomplete_reasons FROM budgets WHERE id=$1`, b.ID).Scan(&persistedReasons))
+	require.Contains(t, persistedReasons, "overlapping_individual_lines", "the withheld reason is persisted on the budget row")
 }
 
 // sumBudgetCategorySpent is the aggregate form of the guarantee that an
