@@ -35,7 +35,7 @@ export interface RecipeTemplate {
  * {{MONTH_END}} with actual dates (e.g. 2025-01-01 / 2025-01-31), then instantiates
  * one with writeExecute({operationId:"createMCPRecipe"}).
  */
-export const RECIPE_RESOLUTION_GUIDANCE =
+const RECIPE_RESOLUTION_GUIDANCE =
   'runMCPRecipe resolves the saved recipe to an ordered calls array; it does not execute those ' +
   'calls. Submit the returned calls to readExecute() or writeExecute().'
 
