@@ -80,20 +80,31 @@ func TestBudgetConfigurationPublishesAllSiblingActualsAtomically(t *testing.T) {
 	require.Equal(t, 40.0, amount, "saved target must be resolved in accounting snapshot, never replaced by stale caller metadata")
 	require.NoError(t, repo.DeleteCategory(ctx, single.ID, b.ID, nil))
 	check(40, 100)
-	_, err = tx.Exec(ctx, `UPDATE transactions SET tags='["shared"]'::jsonb WHERE user_id=$1`, user)
-	require.NoError(t, err)
-	_, err = repo.AddCategoryChecked(ctx, b.ID, &domain.BudgetCategory{BudgetID: b.ID, CategoryKind: "pfc", PFCPrimary: &food, Tags: []string{"shared"}, MatchLogic: domain.MatchLogicTagOnly, AllocatedAmount: 100})
-	require.NoError(t, err)
-	transport := "TRANSPORTATION"
-	before := sumBudgetCategorySpent(ctx, t, tx, b.ID)
-	_, err = repo.AddCategoryChecked(ctx, b.ID, &domain.BudgetCategory{BudgetID: b.ID, CategoryKind: "pfc", PFCPrimary: &transport, Tags: []string{"shared"}, MatchLogic: domain.MatchLogicTagOnly, AllocatedAmount: 100})
-	require.NoError(t, err, "an ambiguous ledger withholds the publish instead of failing the config write")
+	_, _, before := seedOverlappingActuals(ctx, t, tx, repo, b.ID, user)
 	require.Equal(t, before, sumBudgetCategorySpent(ctx, t, tx, b.ID), "ambiguous global totals must not publish individually known duplicated lines")
 	// The removed hard-fail assertion (require.ErrorContains(err, "overlapping_individual_lines"))
 	// is relocated, not deleted: the reason is asserted against the persisted diagnostic.
 	var persistedReasons []string
 	require.NoError(t, tx.QueryRow(ctx, `SELECT actuals_incomplete_reasons FROM budgets WHERE id=$1`, b.ID).Scan(&persistedReasons))
 	require.Contains(t, persistedReasons, "overlapping_individual_lines", "the withheld reason is persisted on the budget row")
+}
+
+// seedOverlappingActuals makes the budget's ledger ambiguous: it tags every
+// transaction `shared` and adds two tag_only categories that both match those
+// facts, so the publish reports overlapping_individual_lines and withholds.
+// It returns the two overlapping categories and the top-level sum captured
+// immediately before the second (overlapping) add.
+func seedOverlappingActuals(ctx context.Context, t *testing.T, q Querier, repo BudgetRepository, budgetID, user string) (first, second *domain.BudgetCategory, sumBeforeOverlap float64) {
+	t.Helper()
+	_, err := q.Exec(ctx, `UPDATE transactions SET tags='["shared"]'::jsonb WHERE user_id=$1`, user)
+	require.NoError(t, err)
+	food, transport := "FOOD_AND_DRINK", "TRANSPORTATION"
+	first, err = repo.AddCategoryChecked(ctx, budgetID, &domain.BudgetCategory{BudgetID: budgetID, CategoryKind: "pfc", PFCPrimary: &food, Tags: []string{"shared"}, MatchLogic: domain.MatchLogicTagOnly, AllocatedAmount: 100})
+	require.NoError(t, err)
+	sumBeforeOverlap = sumBudgetCategorySpent(ctx, t, q, budgetID)
+	second, err = repo.AddCategoryChecked(ctx, budgetID, &domain.BudgetCategory{BudgetID: budgetID, CategoryKind: "pfc", PFCPrimary: &transport, Tags: []string{"shared"}, MatchLogic: domain.MatchLogicTagOnly, AllocatedAmount: 100})
+	require.NoError(t, err, "an ambiguous ledger withholds the publish instead of failing the config write")
+	return first, second, sumBeforeOverlap
 }
 
 // sumBudgetCategorySpent is the aggregate form of the guarantee that an
