@@ -1122,7 +1122,8 @@ func bucketNetWorth(dailyTotals map[time.Time]float64, grouping string, startDat
 			changeAbs := entry.netWorth - prev.netWorth
 			b.ChangeAbs = &changeAbs
 			if prev.netWorth != 0 {
-				changePct := changeAbs / math.Abs(prev.netWorth)
+				// change_pct is a PERCENTAGE (×100) to match the *_change_percent siblings (#1699 MCP-4).
+				changePct := (changeAbs / math.Abs(prev.netWorth)) * 100
 				b.ChangePct = &changePct
 			}
 		}
