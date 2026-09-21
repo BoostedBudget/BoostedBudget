@@ -9,6 +9,8 @@ import {
   computeParentDirectSpend,
   filterTopLevel,
   formatBudgetCategoryLabel,
+  isContainedMatchLogic,
+  isContainingMatchLogic,
   isSubAllocationOfParent,
   type Budget,
   type BudgetCategory,
@@ -367,5 +369,77 @@ describe('isSubAllocationOfParent — Issue #1630 Task 4', () => {
   it('{ directOnly: true } still reports true for an actual direct child', () => {
     const child = { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD', allocated_amount: 50, spent_amount: 20 } as BudgetCategory
     expect(isSubAllocationOfParent(child, parent, { directOnly: true })).toBe(true)
+  })
+})
+
+describe('containment predicates — exported for shared use (#1686)', () => {
+  // The two predicates below are the single source of truth for "can this parent adopt this
+  // child" (isContainingMatchLogic) and "can this child be adopted" (isContainedMatchLogic).
+  // They are exported so the display grouping pass (groupBudgetCategoriesByPrimary) can apply
+  // the SAME gates the remainder arithmetic (isSubAllocationOfParent) applies — otherwise a
+  // card can show a child it does not count (issue #1686).
+
+  it('isContainingMatchLogic treats undefined, "", category_only and or as containing', () => {
+    expect(isContainingMatchLogic(undefined)).toBe(true)
+    expect(isContainingMatchLogic('')).toBe(true)
+    expect(isContainingMatchLogic('category_only')).toBe(true)
+    expect(isContainingMatchLogic('or')).toBe(true)
+  })
+
+  it('isContainingMatchLogic rejects and and tag_only (no plain-category envelope)', () => {
+    expect(isContainingMatchLogic('and')).toBe(false)
+    expect(isContainingMatchLogic('tag_only')).toBe(false)
+  })
+
+  it('isContainedMatchLogic treats undefined, "", category_only and and as contained', () => {
+    expect(isContainedMatchLogic(undefined)).toBe(true)
+    expect(isContainedMatchLogic('')).toBe(true)
+    expect(isContainedMatchLogic('category_only')).toBe(true)
+    expect(isContainedMatchLogic('and')).toBe(true)
+  })
+
+  it('isContainedMatchLogic rejects or and tag_only (child can escape the category clause)', () => {
+    expect(isContainedMatchLogic('or')).toBe(false)
+    expect(isContainedMatchLogic('tag_only')).toBe(false)
+  })
+
+  it('isSubAllocationOfParent rejects an orphan detailed parent (a detailed row cannot adopt a child)', () => {
+    // Issue #1686: a detailed row with no matching primary-only row is a SIBLING of any custom
+    // sharing its pfc_primary, never its parent. Both child kinds must be refused.
+    const orphanParent = {
+      ...baseCat,
+      id: 'orphan',
+      category_kind: 'pfc',
+      pfc_primary: 'RENT_AND_UTILITIES',
+      pfc_detailed: 'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY',
+      allocated_amount: 215,
+      spent_amount: 192.08,
+    } as BudgetCategory
+    const pfcChild = {
+      ...baseCat,
+      id: 'pfc-child',
+      category_kind: 'pfc',
+      pfc_primary: 'RENT_AND_UTILITIES',
+      pfc_detailed: 'RENT_AND_UTILITIES_ELECTRIC',
+      allocated_amount: 50,
+      spent_amount: 20,
+    } as BudgetCategory
+    const customChild = {
+      ...baseCat,
+      id: 'custom-child',
+      category_kind: 'custom',
+      custom_category_id: 'hoa',
+      custom_parent_pfc_primary: 'RENT_AND_UTILITIES',
+      allocated_amount: 423.2,
+      spent_amount: 423.2,
+    } as BudgetCategory
+    expect(isSubAllocationOfParent(pfcChild, orphanParent)).toBe(false)
+    expect(isSubAllocationOfParent(customChild, orphanParent)).toBe(false)
+  })
+
+  it('isSubAllocationOfParent rejects a non-contained pair (or child under a category_only parent)', () => {
+    const parent = { ...baseCat, id: 'p', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', allocated_amount: 300, spent_amount: 150 } as BudgetCategory
+    const child = { ...baseCat, id: 'c', category_kind: 'pfc', pfc_primary: 'FOOD_AND_DRINK', pfc_detailed: 'FOOD_AND_DRINK_FAST_FOOD', allocated_amount: 50, spent_amount: 20, match_logic: 'or' } as BudgetCategory
+    expect(isSubAllocationOfParent(child, parent)).toBe(false)
   })
 })

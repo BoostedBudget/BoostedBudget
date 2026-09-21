@@ -94,7 +94,7 @@ export interface BudgetCategory {
  * is treated as 'category_only' (the domain/column default). Mirrors backend
  * isContainingMatchLogic in domain/budget.go.
  */
-function isContainingMatchLogic(ml: MatchLogic | undefined | ''): boolean {
+export function isContainingMatchLogic(ml: MatchLogic | undefined | ''): boolean {
   return ml === undefined || ml === '' || ml === 'category_only' || ml === 'or';
 }
 
@@ -103,7 +103,7 @@ function isContainingMatchLogic(ml: MatchLogic | undefined | ''): boolean {
  * cannot escape the category clause via tags (Issue #1630). '' / undefined is treated as
  * 'category_only'. Mirrors backend isContainedMatchLogic in domain/budget.go.
  */
-function isContainedMatchLogic(ml: MatchLogic | undefined | ''): boolean {
+export function isContainedMatchLogic(ml: MatchLogic | undefined | ''): boolean {
   return ml === undefined || ml === '' || ml === 'category_only' || ml === 'and';
 }
 
