@@ -320,3 +320,33 @@ describe('groupBudgetCategoriesByPrimary — with customCategoryMap (Gap 3)', ()
     expect(result.find(g => g.group?.id === 'c')).toBeUndefined()
   })
 })
+
+describe('groupBudgetCategoriesByPrimary — orphan detailed rows must not adopt customs (#1686)', () => {
+  // Issue #1686: a detailed row with no matching primary-only row is a SIBLING of any custom
+  // sharing its pfc_primary, never its parent. The custom must render top-level.
+  it('does not nest a custom under an orphan detailed row sharing its pfc_primary', () => {
+    const orphan = makePfcDetailed(
+      'orphan-1',
+      'RENT_AND_UTILITIES',
+      'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY'
+    )
+    const custom: BudgetCategory = {
+      ...makeCustom('custom-1', 'hoa-uuid'),
+      custom_parent_pfc_primary: 'RENT_AND_UTILITIES',
+    }
+    const customMap = new Map([
+      ['hoa-uuid', { name: 'HOA', parent_pfc_primary: 'RENT_AND_UTILITIES' }],
+    ])
+
+    const result = groupBudgetCategoriesByPrimary([orphan, custom], customMap)
+
+    const customGroup = result.find(g => g.group?.id === 'custom-1')
+    expect(customGroup).toBeDefined()
+    expect(customGroup!.children).toEqual([])
+
+    const orphanGroup = result.find(g => g.group?.id === 'orphan-1')
+    expect(orphanGroup).toBeDefined()
+    expect(orphanGroup!.children).toEqual([])
+    expect(orphanGroup!.children.map(c => c.id)).not.toContain('custom-1')
+  })
+})
