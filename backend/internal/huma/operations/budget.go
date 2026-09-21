@@ -451,7 +451,7 @@ func (h *BudgetHandler) GetCategoryTransactions(ctx context.Context, input *GetC
 		input.Offset,
 	)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("failed to get category transactions")
+		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
 
 	// Convert to pointer slice (enrichment done by service)

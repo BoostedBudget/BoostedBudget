@@ -504,4 +504,9 @@ func TestNoUndisclosedPgxmockNullToleranceClaim_RepoSweepIsClean(t *testing.T) {
 // driver tolerates a NULL cell it scanned (the RevenueCat files test transaction order, SQL/session
 // shape, lock/checkout contracts, and household projection; the #1688 pair tests metadata INSERT
 // shape and the Begin/Commit/Rollback boundary). No file was removed on either side.
-const pgxmockSweepFileCount = 83
+//
+// ⚠ #1685 todo 11 added repository/budget_expense_ledger_barriers_test.go, taking the count 83 -> 84.
+// It is clean under TestNoUndisclosedPgxmockNullToleranceClaim above: it asserts only that the six
+// sibling read barriers wrap domain.ErrBudgetActualsIncomplete with their reason, and every AddRow
+// seeds all thirteen expense-fact columns explicitly. No file was removed.
+const pgxmockSweepFileCount = 84
