@@ -333,6 +333,12 @@ export interface Budget {
   income_amount: number;
   income_sources: IncomeSource[];
   expected_income?: number;
+  /**
+   * #1685: reasons the last actuals publish withheld or retained lines for. Persisted on the
+   * budget row server-side, so a notice derived from it survives a reload. Empty when the
+   * ledger is clean.
+   */
+  actuals_incomplete_reasons?: string[] | null;
 }
 
 export interface BudgetWithMetrics extends Budget {
