@@ -420,6 +420,30 @@ func TestWriteSetFollowsExplicitCrossRepositoryTransactionDelegate(t *testing.T)
 	}
 }
 
+// TestRefreshBudgetActualsPropagatesReasons pins that the reasons write is
+// visible to the cache-completeness write-set derivation on the REAL source:
+// the atomic writer writes budgets.actuals_incomplete_reasons in the same
+// transaction as spent_amount, so refreshBudgetActualsInTx's derived write set
+// must still include budgets. A reasons write hidden behind a helper the static
+// scan cannot follow would leave the write set empty and manufacture a false
+// NoCacheImpact for the method the inventory classifies.
+func TestRefreshBudgetActualsPropagatesReasons(t *testing.T) {
+	srcs := nonTestRepoSources(t)
+	frags := packageSQLFragments(t, srcs)
+	schema := schemaTables(t)
+	bodies := repoFuncBodies(t, srcs)
+	tables, resolved := writeTablesFor(bodies, frags, schema, "budgetRepository", "refreshBudgetActualsInTx", map[funcKey]bool{}, 0)
+	if !resolved {
+		t.Fatal("refreshBudgetActualsInTx's write set must resolve")
+	}
+	if !tables["budgets"] {
+		t.Fatal("the reasons write must keep budgets in refreshBudgetActualsInTx's write set")
+	}
+	if !tables["budget_categories"] {
+		t.Fatal("the spent write must keep budget_categories in refreshBudgetActualsInTx's write set")
+	}
+}
+
 // implReceiverFor resolves iface to its concrete receiver type.
 //
 // Requires the candidate to implement EVERY method of the interface. An earlier version scored

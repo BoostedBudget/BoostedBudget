@@ -250,6 +250,12 @@ func (w *BudgetHierarchyResyncWorker) Work(ctx context.Context, job *river.Job[B
 			if updated == nil {
 				continue
 			}
+			if len(updated.ActualsIncompleteReasons) > 0 {
+				w.logger.Warn("budget hierarchy resync completed with degraded actuals",
+					"budget_id", budget.ID,
+					"user_id", args.UserID,
+					"reasons", updated.ActualsIncompleteReasons)
+			}
 			budgetsResynced++
 			categoriesResynced += len(updated.Categories)
 			continue
