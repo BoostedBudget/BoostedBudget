@@ -2529,7 +2529,7 @@ func (r *transactionRepository) GetSpentSumForBudgetCategory(ctx context.Context
 	}
 	line := ledger.Lines[budgetCat.ID]
 	if line.Amount == nil {
-		return 0, fmt.Errorf("budget actuals incomplete: %s", line.Reason)
+		return 0, domain.NewBudgetActualsIncompleteError(line.Reason)
 	}
 	return *line.Amount, nil
 }
@@ -2550,7 +2550,7 @@ func (r *transactionRepository) GetMatchingTransactionStats(ctx context.Context,
 		return 0, 0, err
 	}
 	if line.Amount == nil {
-		return 0, 0, fmt.Errorf("budget actuals incomplete: %s", line.Reason)
+		return 0, 0, domain.NewBudgetActualsIncompleteError(line.Reason)
 	}
 	return len(line.TransactionIDs), *line.Amount, nil
 }
@@ -2626,7 +2626,7 @@ func (r *transactionRepository) getBudgetCategoryTransactions(ctx context.Contex
 	}
 	line := ledger.Lines[budgetCat.ID]
 	if line.Amount == nil {
-		return nil, 0, 0, fmt.Errorf("budget actuals incomplete: %s", line.Reason)
+		return nil, 0, 0, domain.NewBudgetActualsIncompleteError(line.Reason)
 	}
 	count := len(line.TransactionIDs)
 	if count == 0 || offset >= count {

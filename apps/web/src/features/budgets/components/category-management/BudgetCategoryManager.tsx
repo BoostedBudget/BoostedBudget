@@ -145,10 +145,12 @@ export function BudgetCategoryManager({
     [categories]
   );
 
-  // Grouped hierarchy for visual layout (custom categories nest under PFC parents when possible)
+  // Grouped hierarchy for visual layout. Nesting links on the budget ROW's own
+  // custom_parent_pfc_primary / custom_parent_id fields (#1686) — customCategoryMap is still
+  // built below for display-name resolution and the AllocationBreakdown legend, not for nesting.
   const groups = useMemo(
-    () => groupBudgetCategoriesByPrimary(spendingCategories, customCategoryMap),
-    [spendingCategories, customCategoryMap]
+    () => groupBudgetCategoriesByPrimary(spendingCategories),
+    [spendingCategories]
   );
 
   // Flat order of all categories in render order — for keyboard navigation

@@ -635,7 +635,7 @@
         {
           "name": "outcome",
           "in": "query",
-          "description": "Filter to one outcome (repaired, verified, reported_duplicate_identity, reported_escaping_pair), or 'all' for every outcome. Omitted defaults to the two reported_* (actionable) outcomes.",
+          "description": "Filter to one outcome (repaired, verified, reported_duplicate_identity, reported_escaping_pair, skipped_incomplete_actuals), or 'all' for every outcome. Omitted defaults to the two reported_* (actionable) outcomes.",
           "type": "string"
         },
         {
@@ -5209,6 +5209,11 @@
       },
       "responseBody": [
         {
+          "name": "actuals_incomplete_reasons",
+          "type": "array of string",
+          "required": true
+        },
+        {
           "name": "amount",
           "type": "number",
           "format": "double",
@@ -5420,6 +5425,7 @@
         }
       ],
       "compactResponseBody": [
+        "actuals_incomplete_reasons",
         "amount",
         "categories",
         "categories[].allocated_amount",
@@ -5618,6 +5624,11 @@
       },
       "responseBody": [
         {
+          "name": "actuals_incomplete_reasons",
+          "type": "array of string",
+          "required": true
+        },
+        {
           "name": "amount",
           "type": "number",
           "format": "double",
@@ -5829,6 +5840,7 @@
         }
       ],
       "compactResponseBody": [
+        "actuals_incomplete_reasons",
         "amount",
         "categories",
         "categories[].allocated_amount",
@@ -6185,6 +6197,11 @@
       },
       "responseBody": [
         {
+          "name": "actuals_incomplete_reasons",
+          "type": "array of string",
+          "required": true
+        },
+        {
           "name": "amount",
           "type": "number",
           "format": "double",
@@ -6396,6 +6413,7 @@
         }
       ],
       "compactResponseBody": [
+        "actuals_incomplete_reasons",
         "amount",
         "categories",
         "categories[].allocated_amount",
@@ -6458,6 +6476,11 @@
       },
       "responseBody": [
         {
+          "name": "actuals_incomplete_reasons",
+          "type": "array of string",
+          "required": true
+        },
+        {
           "name": "amount",
           "type": "number",
           "format": "double",
@@ -6669,6 +6692,7 @@
         }
       ],
       "compactResponseBody": [
+        "actuals_incomplete_reasons",
         "amount",
         "categories",
         "categories[].allocated_amount",
@@ -6806,6 +6830,11 @@
       },
       "responseBody": [
         {
+          "name": "actuals_incomplete_reasons",
+          "type": "array of string",
+          "required": true
+        },
+        {
           "name": "amount",
           "type": "number",
           "format": "double",
@@ -7017,6 +7046,7 @@
         }
       ],
       "compactResponseBody": [
+        "actuals_incomplete_reasons",
         "amount",
         "categories",
         "categories[].allocated_amount",
@@ -8124,6 +8154,11 @@
       },
       "responseBody": [
         {
+          "name": "actuals_incomplete_reasons",
+          "type": "array of string",
+          "required": true
+        },
+        {
           "name": "amount",
           "type": "number",
           "format": "double",
@@ -8335,6 +8370,7 @@
         }
       ],
       "compactResponseBody": [
+        "actuals_incomplete_reasons",
         "amount",
         "categories",
         "categories[].allocated_amount",

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"slices"
 	"sort"
 	"time"
 )
@@ -71,12 +72,14 @@ type BudgetExpenseLineActual struct {
 	Amount         *float64
 	TransactionIDs []string
 	Reason         string
+	Reasons        []string
 	CurrencyCodes  []string
 }
 type BudgetExpenseLedger struct {
 	TransactionAmounts       map[string]*float64
 	UnbudgetedTransactionIDs []string
 	UnbudgetedCurrencyCodes  []string
+	UnbudgetedReasons        []string
 	Lines                    map[string]BudgetExpenseLineActual
 	UnbudgetedAmount         *float64
 	Reason                   string
@@ -189,16 +192,13 @@ func CalculateBudgetExpenseLedger(categories []BudgetCategory, facts []BudgetExp
 		}
 		if len(matched) == 0 {
 			r.UnbudgetedTransactionIDs = append(r.UnbudgetedTransactionIDs, f.ID)
-			foundCurrency := false
-			for _, code := range r.UnbudgetedCurrencyCodes {
-				if code == f.CurrencyCode {
-					foundCurrency = true
-				}
-			}
-			if !foundCurrency {
+			if !slices.Contains(r.UnbudgetedCurrencyCodes, f.CurrencyCode) {
 				r.UnbudgetedCurrencyCodes = append(r.UnbudgetedCurrencyCodes, f.CurrencyCode)
 			}
 			if reason != "" {
+				if !slices.Contains(r.UnbudgetedReasons, reason) {
+					r.UnbudgetedReasons = append(r.UnbudgetedReasons, reason)
+				}
 				r.UnbudgetedAmount = nil
 			} else if r.UnbudgetedAmount != nil {
 				*r.UnbudgetedAmount += amount
@@ -207,18 +207,15 @@ func CalculateBudgetExpenseLedger(categories []BudgetCategory, facts []BudgetExp
 		for _, c := range matched {
 			line := r.Lines[c.ID]
 			line.TransactionIDs = append(line.TransactionIDs, f.ID)
-			found := false
-			for _, currency := range line.CurrencyCodes {
-				if currency == f.CurrencyCode {
-					found = true
-				}
-			}
-			if !found {
+			if !slices.Contains(line.CurrencyCodes, f.CurrencyCode) {
 				line.CurrencyCodes = append(line.CurrencyCodes, f.CurrencyCode)
 			}
 			if reason != "" {
 				line.Amount = nil
 				line.Reason = reason
+				if !slices.Contains(line.Reasons, reason) {
+					line.Reasons = append(line.Reasons, reason)
+				}
 			} else if line.Amount != nil {
 				*line.Amount += amount
 			}
@@ -229,6 +226,11 @@ func CalculateBudgetExpenseLedger(categories []BudgetCategory, facts []BudgetExp
 		r.CurrencyCodes = append(r.CurrencyCodes, c)
 	}
 	sort.Strings(r.CurrencyCodes)
+	for id := range r.Lines {
+		line := r.Lines[id]
+		sort.Strings(line.Reasons)
+		r.Lines[id] = line
+	}
 	for reason := range reasons {
 		r.Reasons = append(r.Reasons, reason)
 	}
