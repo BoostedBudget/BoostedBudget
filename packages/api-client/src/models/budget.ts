@@ -36,6 +36,8 @@ import type { IncomeSource } from './incomeSource';
 export interface Budget {
   /** A URL to the JSON Schema for this object. */
   readonly $schema?: string;
+  /** @nullable */
+  actuals_incomplete_reasons: string[] | null;
   amount: number;
   /** @nullable */
   categories?: BudgetCategory[] | null;
