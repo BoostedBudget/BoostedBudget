@@ -84,14 +84,14 @@ describe('createMCPToolTelemetryClient', () => {
         getAccessToken: () => 'private-user-token',
       })
       await expect(client.record({
-        tool_surface: 'recipe_save', tool_family: 'workflows', outcome: 'failed', duration_bucket: 'over_5s',
+        tool_surface: 'recipe_templates', tool_family: 'workflows', outcome: 'failed', duration_bucket: 'over_5s',
       })).resolves.toBeUndefined()
 
       const logged = JSON.stringify(warnings)
       expect(logged).toContain('network')
       expect(logged).not.toContain('secret raw failure')
       expect(logged).not.toContain('private-user-token')
-      expect(logged).not.toContain('recipe_save')
+      expect(logged).not.toContain('recipe_templates')
     } finally {
       console.warn = oldWarn
     }

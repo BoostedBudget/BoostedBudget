@@ -35,7 +35,18 @@ const REDACT_PATTERNS: RegExp[] = [
 ]
 
 function redactString(s: string): string {
-  return REDACT_PATTERNS.reduce((result, pattern) => result.replace(pattern, '[REDACTED]'), s)
+  // #1699: preserve a leading `API error <status>` prefix verbatim. The HTTP status is diagnostic
+  // metadata, not user data, but the bare multi-digit catch-all below would otherwise rewrite it to
+  // `API error [REDACTED]` — hiding the one field that tells the agent whether a failure is
+  // retryable. Extract the prefix, redact only the remainder, then re-prepend it.
+  const prefixMatch = /^API error (\d{3})\b/.exec(s)
+  const prefix = prefixMatch ? prefixMatch[0] : ''
+  const remainder = prefix ? s.slice(prefix.length) : s
+  const redacted = REDACT_PATTERNS.reduce(
+    (result, pattern) => result.replace(pattern, '[REDACTED]'),
+    remainder,
+  )
+  return prefix + redacted
 }
 
 /**

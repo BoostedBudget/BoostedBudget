@@ -37,6 +37,12 @@ export default defineConfig({
     // OAUTH_KV creates fresh random IDs per run, fetch spy is beforeEach/afterEach scoped,
     // OAuthProvider is stateless read-only config. No cross-test contamination.
     include: ['integration/**/*.integration.test.ts'],
+    // #1699: the live smoke (integration/mcp/smoke-live.integration.test.ts) needs a real
+    // backend via MCP_SMOKE_API_URL and is run through vitest.transport.config.ts, not here.
+    // It matches the include glob above, so CI's `test:integration` (this config) collected it
+    // with BOOSTEDBUDGET_API_URL=http://backend.test and failed at DNS. Excluding it keeps this
+    // config a self-contained, no-live-infra suite; the transport config still collects it.
+    exclude: ['integration/mcp/smoke-live.integration.test.ts'],
     // Generous timeouts for Workers runtime cold-start on CI runners.
     testTimeout: 30000,
     hookTimeout: 60000,

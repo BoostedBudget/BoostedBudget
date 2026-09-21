@@ -284,7 +284,7 @@ func TestMCPToolTelemetryPublishedSchemaIsClosedAndBounded(t *testing.T) {
 	)
 	assert.Equal(t, false, bodySchema["additionalProperties"])
 	assert.ElementsMatch(t,
-		[]interface{}{"search", "read_execute", "write_execute", "recipe_list", "recipe_save", "recipe_run", "recipe_templates"},
+		[]interface{}{"search", "read_execute", "write_execute", "recipe_templates"},
 		properties["tool_surface"].(map[string]interface{})["enum"],
 	)
 }

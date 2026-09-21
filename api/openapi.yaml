@@ -5346,6 +5346,7 @@ components:
             - number
             - "null"
         change_pct:
+          description: Percentage change vs the previous period (12.5 means +12.5%).
           format: double
           type:
             - number
@@ -5396,6 +5397,7 @@ components:
             - number
             - "null"
         change_pct:
+          description: Percentage change vs the previous period (12.5 means +12.5%).
           format: double
           type:
             - number
@@ -6446,9 +6448,6 @@ components:
             - search
             - read_execute
             - write_execute
-            - recipe_list
-            - recipe_save
-            - recipe_run
             - recipe_templates
           type: string
       required:
