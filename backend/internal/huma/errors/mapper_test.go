@@ -2,6 +2,7 @@ package errors_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -379,4 +380,47 @@ func TestMapError_RuleConcurrencyConflictIsNot500(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, statusErr.GetStatus())
 	assert.NotEqual(t, http.StatusInternalServerError, statusErr.GetStatus(),
 		"a concurrent-write conflict must never be a server error — this IS issue #1625")
+}
+
+// TestMapError_BudgetActualsIncomplete pins #1685: an incomplete-actuals publish is a PRECONDITION
+// (an ambiguous or degraded ledger), not a fault, so it must map to 422 — never the bare-errors.New
+// default 500. The FIRST normalised reason is embedded as a deliberate summary; the full list is
+// persisted on the budget and read back through the user-facing budget reads. The response also
+// carries the machine-readable CodeValidation.
+func TestMapError_BudgetActualsIncomplete(t *testing.T) {
+	wrapped := fmt.Errorf("publish aborted: %w",
+		domain.NewBudgetActualsIncompleteError("zeta_reason", "alpha_reason", "zeta_reason"))
+
+	result := humaerrors.MapError(wrapped)
+	require.NotNil(t, result)
+
+	statusErr, ok := result.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError")
+	assert.Equal(t, http.StatusUnprocessableEntity, statusErr.GetStatus(),
+		"an incomplete-actuals precondition must be a 422, not a 500")
+	assert.Contains(t, statusErr.Error(), "alpha_reason",
+		"the first normalised reason is embedded as the deliberate summary")
+	assert.NotContains(t, statusErr.Error(), "zeta_reason",
+		"only the first normalised reason is embedded; the full list is persisted elsewhere")
+
+	coded, ok := result.(interface{ GetCode() string })
+	require.True(t, ok, "the 422 must carry the machine-readable CodeValidation")
+	assert.Equal(t, humaerrors.CodeValidation, coded.GetCode())
+
+	body, err := json.Marshal(result)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"code":"VALIDATION_ERROR"`,
+		"the code must reach the client in the serialized body, not only in memory")
+}
+
+// TestMapError_UnrelatedStillDefault guards the new case against shadowing the default: an
+// unrelated error must keep its previous status (500), so adding the sentinel mapping does not
+// silently reclassify anything else.
+func TestMapError_UnrelatedStillDefault(t *testing.T) {
+	result := humaerrors.MapError(errors.New("unexpected internal failure"))
+	require.NotNil(t, result)
+
+	statusErr, ok := result.(huma.StatusError)
+	require.True(t, ok, "expected huma.StatusError")
+	assert.Equal(t, http.StatusInternalServerError, statusErr.GetStatus())
 }
