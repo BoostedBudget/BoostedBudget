@@ -16,7 +16,6 @@
 
 import { describe, expect, it, mock } from 'bun:test'
 import { buildWriteExecuteHandler } from './tools/execute'
-import { buildRecipeTools } from './tools/recipes'
 import { createHostProxy } from '../sandbox/host-proxy'
 import { toAuditEntry } from './audit-mapping'
 
@@ -188,51 +187,5 @@ describe('toAuditEntry (R5-19)', () => {
     const entry = toAuditEntry({ operationId: 'getAccounts', operationClass: 'read', result: 'error' }, actor)
     expect(entry.confirmationPresented).toBe(false)
     expect(entry.confirmationConfirmed).toBe(false)
-  })
-})
-
-// ── R8-3: Recipe tool audit result labels ────────────────────────────────────
-
-describe('recipe tool audit result labels (R8-3)', () => {
-  it('recipe.save returns confirmation_required auditResult on challenge call (not success)', async () => {
-    // First call: proxy throws confirmation_required → save() returns {auditResult:'confirmation_required'}
-    const proxy = createHostProxy({
-      mutator: mock(() => Promise.resolve({})) as never,
-      userId: 'user-r8',
-      grantId: 'grant-r8',
-    })
-    const tools = buildRecipeTools(proxy)
-
-    // First call (no token) → challenge
-    const { auditResult } = await tools.save({
-      name: 'Test Recipe',
-      calls: [{ operationId: 'updateTransactionCategory' }],
-    })
-    expect(auditResult).toBe('confirmation_required')
-  })
-
-  it('recipe.list returns a McpToolResult directly (no auditResult metadata needed — always read/success)', async () => {
-    const proxy = createHostProxy({
-      mutator: mock(() => Promise.resolve([])) as never,
-      userId: 'user-r8',
-      grantId: 'grant-r8',
-    })
-    const tools = buildRecipeTools(proxy)
-    const result = await tools.list({})
-    // list returns a plain McpToolResult — no auditResult field
-    expect(result.content[0]?.type).toBe('text')
-  })
-
-  it('recipe.run returns a McpToolResult directly (always read/success)', async () => {
-    const proxy = createHostProxy({
-      mutator: mock(() =>
-        Promise.resolve({ recipe_id: 'r1', name: 'Test', calls: [{ operation_id: 'getTransactions' }] }),
-      ) as never,
-      userId: 'user-r8',
-      grantId: 'grant-r8',
-    })
-    const tools = buildRecipeTools(proxy)
-    const result = await tools.run({ id: 'r1' })
-    expect(result.content[0]?.type).toBe('text')
   })
 })

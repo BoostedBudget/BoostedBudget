@@ -9,7 +9,7 @@
  *   search        — Discover API operations from the spec index (no auth needed)
  *   readExecute   — Run admitted non-destructive, caller-scoped API calls (#1610b)
  *   writeExecute  — Run any API calls, including confirmation-gated writes
- *   recipe.*      — Saved read-only workflow recipes (Phase 7)
+ *   recipe.templates — Starter read-only workflow recipe templates (Phase 7)
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -18,11 +18,7 @@ import { z } from 'zod'
 import { handleSearch } from './tools/search'
 import { buildReadExecuteHandler, buildWriteExecuteHandler, type ExecuteCall } from './tools/execute'
 import { executeCallSchema } from './tools/call-schema'
-import {
-  buildRecipeTools,
-  RECIPE_RESOLUTION_GUIDANCE,
-  RECIPE_TEMPLATE_USAGE_GUIDANCE,
-} from './tools/recipes'
+import { buildRecipeTools, RECIPE_TEMPLATE_USAGE_GUIDANCE } from './tools/recipes'
 import { createHostProxy } from '../sandbox/host-proxy'
 import { createFetchMutator } from '../client/fetch-mutator'
 import { createRateLimiter } from '../limits/rate-limit'
@@ -290,97 +286,12 @@ export class BoostedBudgetMcpAgent extends McpAgent<Env, Record<string, never>, 
       }),
     )
 
-    // ── recipe tools ──────────────────────────────────────────────────────────
+    // ── recipe templates tool ─────────────────────────────────────────────────
+    // Recipe list/save/run are not separate tools: every recipe capability is a classified API
+    // operation reached through readExecute (listMCPRecipes/getMCPRecipe) or writeExecute
+    // (createMCPRecipe/updateMCPRecipe/deleteMCPRecipe/runMCPRecipe). Only the starter templates
+    // remain a dedicated tool.
     const recipeTools = buildRecipeTools(proxy)
-
-    this.server.registerTool(
-      'recipe.list',
-      {
-        description: 'List your saved MCP workflow recipes.',
-        inputSchema: {},
-      },
-      instrumentTool({
-        surface: 'recipe_list',
-        family: () => 'workflows',
-        telemetry,
-        schedule: scheduleTelemetry,
-      }, async (_input: Record<string, never>) => {
-        const p = this.props as McpAgentProps
-        const result = await recipeTools.list({})
-        void audit.record({ actorUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown',
-          operationClass: 'read', operationId: 'recipe.list', result: 'success' })
-        return result
-      }),
-    )
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see search tool comment above
-    ;(this.server as any).registerTool(
-      'recipe.save',
-      {
-        description:
-          'Save a named workflow recipe (read-only compositions only in v1). ' +
-          RECIPE_RESOLUTION_GUIDANCE,
-        // NOTE: the `schedule` cron field is intentionally absent from the v1 schema.
-        // The backend scheduler is not yet built; it will be added in a follow-up issue.
-        // The `schedule` column is preserved in the DB for future use.
-        inputSchema: {
-          name: z.string().describe('Recipe name'),
-          description: z.string().optional().describe('Optional description'),
-          calls: z.array(executeCallSchema).describe('Ordered read-only API calls'),
-          confirmationToken: z.string().optional(),
-        },
-      },
-      instrumentTool({
-        surface: 'recipe_save',
-        family: () => 'workflows',
-        telemetry,
-        schedule: scheduleTelemetry,
-      }, async (input: {
-        name: string
-        description?: string
-        calls: Array<{ operationId: string; params?: Record<string, unknown>; body?: Record<string, unknown>; pathParams?: Record<string, string>; detail?: 'compact' | 'full' }>
-        confirmationToken?: string
-      }, reportOutcome) => {
-        const p = this.props as McpAgentProps
-        // save() returns {toolResult, auditResult} so we can emit the correct audit label.
-        // auditResult='confirmation_required' on the first (challenge) call; 'success' on confirm.
-        const { toolResult, auditResult } = await recipeTools.save(input)
-        if (auditResult === 'error') reportOutcome('failed')
-        void audit.record({
-          actorUserId: p.clerkUserId,
-          grantId: p.grantId ?? 'unknown',
-          operationClass: 'write',
-          operationId: 'recipe.save',
-          result: auditResult,
-          confirmationPresented: auditResult === 'confirmation_required',
-          confirmationConfirmed: auditResult === 'success',
-        })
-        return toolResult
-      }),
-    )
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see search tool comment above
-    ;(this.server as any).registerTool(
-      'recipe.run',
-      {
-        description: 'Resolve a saved recipe to its ordered list of API calls, then pass them to readExecute() or writeExecute().',
-        inputSchema: {
-          id: z.string().describe('Recipe ID (from recipe.list())'),
-        },
-      },
-      instrumentTool({
-        surface: 'recipe_run',
-        family: () => 'workflows',
-        telemetry,
-        schedule: scheduleTelemetry,
-      }, async (input: { id: string }) => {
-        const p = this.props as McpAgentProps
-        const result = await recipeTools.run(input)
-        void audit.record({ actorUserId: p.clerkUserId, grantId: p.grantId ?? 'unknown',
-          operationClass: 'read', operationId: 'recipe.run', result: 'success' })
-        return result
-      }),
-    )
 
     this.server.registerTool(
       'recipe.templates',
