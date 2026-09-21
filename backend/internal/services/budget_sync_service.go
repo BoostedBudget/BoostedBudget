@@ -143,6 +143,12 @@ func (s *budgetSyncService) RecalculateBudget(ctx context.Context, budget *domai
 		if fresh == nil {
 			return nil
 		}
+		if len(fresh.ActualsIncompleteReasons) > 0 {
+			s.logger.Warn("budget actuals incomplete; publish withheld or retained",
+				"budgetID", budget.ID,
+				"userID", budget.UserID,
+				"reasons", fresh.ActualsIncompleteReasons)
+		}
 		return s.emitBudgetUpdated(ctx, fresh, fresh.Categories, fresh.IncomeAmount)
 	}
 	// Calculate current period dates based on budget period type

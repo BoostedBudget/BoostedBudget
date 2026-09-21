@@ -711,3 +711,33 @@ func TestRecalculateBudgetActualsReturnsPersistedReasons(t *testing.T) {
 	require.Equal(t, []string{"legacy_unknown"}, reasonsOrEmpty(fresh.ActualsIncompleteReasons), "the returned budget must carry the reasons the publish recorded")
 	require.Equal(t, []string{"legacy_unknown"}, reasonsOrEmpty(f.budgetRowReasons()))
 }
+
+// TestRefreshBudgetActualsInTxPropagatesReasons pins todo 7's propagation
+// contract for the private configuration-writer barrier: refreshBudgetActualsInTx
+// must return the reasons the publish recorded (and the withheld discriminator),
+// not swallow them. The five config writers adapt to this arity; the two
+// interface-method callers surface the reasons. A regression that discarded the
+// reasons here would leave the config-write path unable to report why a publish
+// was withheld.
+func TestRefreshBudgetActualsInTxPropagatesReasons(t *testing.T) {
+	food, travel := "FOOD_AND_DRINK", "TRAVEL"
+	shared := []string{"shared"}
+	f := newActualsTaxonomyFixture(t)
+	f.addCategory("pfc", 5, func(c *domain.BudgetCategory) {
+		c.PFCPrimary = &food
+		c.Tags = shared
+		c.MatchLogic = domain.MatchLogicTagOnly
+	})
+	f.addCategory("pfc", 6, func(c *domain.BudgetCategory) {
+		c.PFCPrimary = &travel
+		c.Tags = shared
+		c.MatchLogic = domain.MatchLogicTagOnly
+	})
+	f.addTransaction(100, food, "USD", shared)
+
+	_, reasons, withheld, err := f.repo.refreshBudgetActualsInTx(f.ctx, f.tx, f.budget.ID)
+	require.NoError(t, err)
+	require.True(t, withheld, "the overlap barrier withholds")
+	require.Equal(t, []string{"overlapping_individual_lines"}, reasons, "refreshBudgetActualsInTx must propagate the publish's reasons")
+	require.Equal(t, []string{"overlapping_individual_lines"}, reasonsOrEmpty(f.budgetRowReasons()), "the propagated reasons are the ones persisted")
+}
