@@ -294,7 +294,10 @@ func TestNoConfigReadForgetsTheTombstoneFilter(t *testing.T) {
 		}
 	}
 
-	requireTombstoneCorpus(t, "TestNoConfigReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 336, 79, 374, 88)
+	// #1685/#1686 T29: re-measured live corpus is 460 files / 105 refs (was 374/88), so the old
+	// floor's band had widened to 25% — half-vacated per the FLOOR POLICY above. Recalibrated to
+	// floor(0.9*live): 414/94, with was*=live. This RAISES the floor; nothing is lowered.
+	requireTombstoneCorpus(t, "TestNoConfigReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 414, 94, 460, 105)
 
 	if len(offenders) > 0 {
 		t.Fatalf(
