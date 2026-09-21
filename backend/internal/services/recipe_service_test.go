@@ -190,6 +190,78 @@ func TestRecipeService_Create(t *testing.T) {
 	})
 }
 
+func TestRecipeService_ErrorSentinels(t *testing.T) {
+	ctx := context.Background()
+
+	strPtr := func(s string) *string { return &s }
+
+	t.Run("invalid spec failures carry ErrInvalidRecipeSpec", func(t *testing.T) {
+		cases := []struct {
+			name string
+			spec []domain.MCPRecipeCall
+		}{
+			{"empty spec", nil},
+			{"bad detail", []domain.MCPRecipeCall{{OperationID: "getCashFlowSummary", Detail: strPtr("verbose")}}},
+			{"excluded operation", []domain.MCPRecipeCall{{OperationID: "checkRole"}}},
+			{"write-class operation", []domain.MCPRecipeCall{{OperationID: "createBudget", Body: map[string]interface{}{"name": "x"}}}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				svc := NewRecipeService(&mockRecipeRepository{})
+				_, err := svc.Create(ctx, "user-1", domain.CreateMCPRecipeRequest{Name: "R", Spec: tc.spec})
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !errors.Is(err, domain.ErrInvalidRecipeSpec) {
+					t.Errorf("expected ErrInvalidRecipeSpec, got %v", err)
+				}
+				if errors.Is(err, domain.ErrRecipeNotFound) {
+					t.Errorf("invalid-spec error must not match ErrRecipeNotFound: %v", err)
+				}
+			})
+		}
+	})
+
+	t.Run("schedule rejection carries ErrInvalidRecipeSpec", func(t *testing.T) {
+		schedule := "0 9 * * 1"
+		svc := NewRecipeService(&mockRecipeRepository{})
+		_, err := svc.Create(ctx, "user-1", domain.CreateMCPRecipeRequest{Name: "R", Spec: validRecipeSpec(), Schedule: &schedule})
+		if !errors.Is(err, domain.ErrInvalidRecipeSpec) {
+			t.Errorf("expected ErrInvalidRecipeSpec for schedule, got %v", err)
+		}
+	})
+
+	t.Run("Update on missing recipe carries ErrRecipeNotFound", func(t *testing.T) {
+		svc := NewRecipeService(&mockRecipeRepository{getFn: func(_ context.Context, _ string, _ string) (*domain.MCPRecipe, error) {
+			return nil, nil
+		}})
+		_, err := svc.Update(ctx, "missing", "user-1", domain.UpdateMCPRecipeRequest{})
+		if !errors.Is(err, domain.ErrRecipeNotFound) {
+			t.Errorf("expected ErrRecipeNotFound, got %v", err)
+		}
+	})
+
+	t.Run("Run on missing recipe carries ErrRecipeNotFound", func(t *testing.T) {
+		svc := NewRecipeService(&mockRecipeRepository{getFn: func(_ context.Context, _ string, _ string) (*domain.MCPRecipe, error) {
+			return nil, nil
+		}})
+		_, err := svc.Run(ctx, "missing", "user-1")
+		if !errors.Is(err, domain.ErrRecipeNotFound) {
+			t.Errorf("expected ErrRecipeNotFound, got %v", err)
+		}
+	})
+
+	t.Run("Run on stored write-class spec carries ErrInvalidRecipeSpec", func(t *testing.T) {
+		svc := NewRecipeService(&mockRecipeRepository{getFn: func(_ context.Context, id string, _ string) (*domain.MCPRecipe, error) {
+			return &domain.MCPRecipe{ID: id, UserID: "user-1", Name: "Stale", Spec: []domain.MCPRecipeCall{{OperationID: "createBudget"}}}, nil
+		}})
+		_, err := svc.Run(ctx, "stale", "user-1")
+		if !errors.Is(err, domain.ErrInvalidRecipeSpec) {
+			t.Errorf("expected ErrInvalidRecipeSpec, got %v", err)
+		}
+	})
+}
+
 func TestRecipeService_Update(t *testing.T) {
 	ctx := context.Background()
 
