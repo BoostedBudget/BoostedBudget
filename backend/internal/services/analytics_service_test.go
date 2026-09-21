@@ -2140,9 +2140,38 @@ func TestAnalyticsService_GetNetWorthTrend(t *testing.T) {
 		if b2.ChangePct == nil {
 			t.Fatal("expected non-nil change_pct for second bucket")
 		}
-		// 2000/10000 = 0.2 (20%)
-		if *b2.ChangePct != 0.2 {
-			t.Errorf("expected change_pct 0.2, got %f", *b2.ChangePct)
+		// 2000/10000 = 0.2 = +20%. change_pct is a PERCENTAGE (#1699 MCP-4), so 20.0.
+		if *b2.ChangePct != 20.0 {
+			t.Errorf("expected change_pct 20.0, got %f", *b2.ChangePct)
+		}
+	})
+
+	t.Run("zero previous net worth leaves change_pct nil but sets change_abs", func(t *testing.T) {
+		day1 := time.Date(2024, 2, 28, 0, 0, 0, 0, loc)
+		day2 := time.Date(2024, 3, 31, 0, 0, 0, 0, loc)
+
+		mockBalRepo := &mockBalanceSnapshotRepository{
+			getAggregatedHistoryFn: func(ctx context.Context, userID string, startDate, endDate time.Time, accountTypes []string) ([]domain.BalanceHistoryPoint, error) {
+				return []domain.BalanceHistoryPoint{
+					{Date: day1, TotalBalance: 0.0},
+					{Date: day2, TotalBalance: 5000.0},
+				}, nil
+			},
+		}
+
+		service := NewAnalyticsService(&mockAnalyticsRepository{})
+		service.SetBalanceSnapshotRepo(mockBalRepo)
+
+		result, err := service.GetNetWorthTrend(ctx, "user-123", "monthly", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		b2 := result.Buckets[1]
+		if b2.ChangePct != nil {
+			t.Errorf("expected nil change_pct when previous net worth is zero, got %f", *b2.ChangePct)
+		}
+		if b2.ChangeAbs == nil || *b2.ChangeAbs != 5000.0 {
+			t.Errorf("expected change_abs 5000 when previous net worth is zero, got %v", b2.ChangeAbs)
 		}
 	})
 
