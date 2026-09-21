@@ -60,7 +60,7 @@ func (r *budgetRepository) RecalculateBudgetActuals(ctx context.Context, userID,
 	if recalculateIncome {
 		income = 0
 	}
-	categories, _, withheld, err := r.publishBudgetActualsInTx(ctx, tx, userID, budgetID, period.Start, period.ActualThrough, &income, sources)
+	categories, reasons, withheld, err := r.publishBudgetActualsInTx(ctx, tx, userID, budgetID, period.Start, period.ActualThrough, &income, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +68,10 @@ func (r *budgetRepository) RecalculateBudgetActuals(ctx context.Context, userID,
 		return nil, err
 	}
 	fresh.Categories = categories
+	// fresh was read before the publish, so it holds the pre-publish diagnostic.
+	// Carry the reasons the publish just recorded, or the caller reports stale
+	// data (todo 7's notice and todo 9's PostHog event both read this field).
+	fresh.ActualsIncompleteReasons = reasons
 	if withheld {
 		// A withheld run writes neither spent_amount nor income_amount, so the
 		// returned budget must report the income the row retains rather than the
@@ -182,7 +186,14 @@ func (r *budgetRepository) publishBudgetActualsInTx(ctx context.Context, q Queri
 		}
 	}
 	if withheld {
-		return categories, sortedReasons(reasons), true, nil
+		// A withheld run writes neither spent_amount nor income_amount, but it
+		// must still record its reasons: the user-facing notice exists for exactly
+		// this path, and it is what a reload reads back.
+		reasonsList := sortedReasons(reasons)
+		if _, err := q.Exec(ctx, `UPDATE budgets SET actuals_incomplete_reasons=$2,updated_at=NOW() WHERE id=$1 AND user_id=$3 AND deleted_at IS NULL`, budgetID, reasonsList, userID); err != nil {
+			return nil, nil, false, err
+		}
+		return categories, reasonsList, true, nil
 	}
 
 	retained := map[string]bool{}
@@ -239,9 +250,13 @@ func (r *budgetRepository) publishBudgetActualsInTx(ctx context.Context, q Queri
 			return nil, nil, false, err
 		}
 	}
-	if _, err := q.Exec(ctx, `UPDATE budgets SET income_amount=$2,updated_at=NOW() WHERE id=$1 AND user_id=$3 AND deleted_at IS NULL`, budgetID, *incomeAmount, userID); err != nil {
+	// The reasons are written in the same transaction (and, here, the same
+	// statement) as income_amount; a clean publish writes '{}' so a stale
+	// diagnostic from an earlier degraded run is cleared.
+	reasonsList := sortedReasons(reasons)
+	if _, err := q.Exec(ctx, `UPDATE budgets SET income_amount=$2,actuals_incomplete_reasons=$3,updated_at=NOW() WHERE id=$1 AND user_id=$4 AND deleted_at IS NULL`, budgetID, *incomeAmount, reasonsList, userID); err != nil {
 		return nil, nil, false, err
 	}
 
-	return categories, sortedReasons(reasons), false, nil
+	return categories, reasonsList, false, nil
 }
