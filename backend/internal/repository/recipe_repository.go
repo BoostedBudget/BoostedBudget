@@ -40,10 +40,17 @@ func (r *recipeRepository) Create(ctx context.Context, recipe *domain.MCPRecipe)
 		VALUES (gen_random_uuid(), $1, $2, $3, $4::jsonb, $5, $6)
 		RETURNING id, created_at, updated_at
 	`
-	return r.db.QueryRow(ctx, query,
+	err = r.db.QueryRow(ctx, query,
 		recipe.UserID, recipe.Name, recipe.Description,
 		specJSON, recipe.Schedule, recipe.Enabled,
 	).Scan(&recipe.ID, &recipe.CreatedAt, &recipe.UpdatedAt)
+	if err != nil {
+		if isUniqueViolation(err, "mcp_recipes_user_id_name_unique") {
+			return fmt.Errorf("recipe name already exists: %w", domain.ErrDuplicateRecipeName)
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *recipeRepository) List(ctx context.Context, userID string) ([]domain.MCPRecipe, error) {
@@ -115,10 +122,17 @@ func (r *recipeRepository) Update(ctx context.Context, recipe *domain.MCPRecipe)
 		WHERE id=$1 AND user_id=$7
 		RETURNING updated_at
 	`
-	return r.db.QueryRow(ctx, query,
+	err = r.db.QueryRow(ctx, query,
 		recipe.ID, recipe.Name, recipe.Description, specJSON,
 		recipe.Schedule, recipe.Enabled, recipe.UserID,
 	).Scan(&recipe.UpdatedAt)
+	if err != nil {
+		if isUniqueViolation(err, "mcp_recipes_user_id_name_unique") {
+			return fmt.Errorf("recipe name already exists: %w", domain.ErrDuplicateRecipeName)
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *recipeRepository) Delete(ctx context.Context, id string, userID string) error {

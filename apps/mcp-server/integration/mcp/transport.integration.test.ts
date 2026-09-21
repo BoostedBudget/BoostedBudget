@@ -272,9 +272,9 @@ describe('MCP transport integration', () => {
     expect(serverName).toBe('boostedbudget')
     expect(protocolVersion).toBeTruthy()
     expect(instructions).toBe(
-      'Analyze accounts, transactions, spending, net worth, and investments; manage envelope budgets, savings goals, categories, and tags. Boost definitions are read-only here; review their history, budget alerts, and transfer, rollover, or savings-goal suggestions. MCP writes require confirmation; BoostedBudget never moves money. Use search first, then readExecute or writeExecute.',
+      'Analyze accounts, transactions, spending, net worth, and investments; manage envelope budgets, savings goals, categories, and tags. Boost definitions are read-only here; review their history, budget alerts, and transfer, rollover, or savings-goal suggestions. MCP writes require confirmation; BoostedBudget never moves money. Use search first, then readExecute or writeExecute. Recipes are saved read-only workflow compositions: list or inspect them with readExecute using listMCPRecipes or getMCPRecipe; create, update, or delete them with writeExecute using createMCPRecipe, updateMCPRecipe, or deleteMCPRecipe (confirmation-gated); run one with writeExecute using runMCPRecipe, then submit the returned calls to readExecute or writeExecute. Starter templates are available via the recipe.templates tool.',
     )
-    expect(new TextEncoder().encode(instructions).byteLength).toBeLessThanOrEqual(400)
+    expect(new TextEncoder().encode(instructions).byteLength).toBeLessThanOrEqual(1024)
     expect(serverDescription).toBeUndefined()
     // Session ID may or may not be present depending on agents SDK version
     // (some versions use path-based routing); we don't require it
@@ -322,10 +322,8 @@ describe('MCP transport integration', () => {
     const writeExecuteDescription = tools!.find((tool) => tool.name === 'writeExecute')!.description
     expect(writeExecuteDescription).toContain('Prefer readExecute() for calls it admits.')
 
-    const recipeSaveDescription = tools!.find((tool) => tool.name === 'recipe.save')!.description
-    expect(recipeSaveDescription).toContain('recipe.run() resolves')
-    expect(recipeSaveDescription).toContain('readExecute() or writeExecute()')
-    expect(recipeSaveDescription).not.toContain('run on-demand')
+    expect(toolNames).toContain('recipe.templates')
+    expect([...toolNames].sort()).toEqual(['readExecute', 'recipe.templates', 'search', 'writeExecute'])
 
     // Step 3: tools/call — readExecute getCashFlowSummary (a read-only operation)
     const callResult = await sendMcp(
@@ -487,56 +485,6 @@ describe('MCP transport integration', () => {
     const preview = await sendMcp(worker, bearerToken, 'tools/call', { name: 'readExecute', arguments: { calls: [{ operationId: 'previewCategoryMatches', body: previewBody }] } }, sessionId)
     expect((preview.body!.result as { content: Array<{ text: string }> }).content[0]!.text).toContain('total_matches')
     expect(receivedBody).toEqual(previewBody)
-  })
-
-  it('preserves recipe detail through schema, confirmed save, and complete resolution', async () => {
-    const calls = [
-      { operationId: 'getAccounts', params: { include_hidden: true }, detail: 'compact' },
-      { operationId: 'getTransactions', body: { synthetic: true }, pathParams: { id: 'synthetic' }, detail: 'full' },
-      ...Array.from({ length: 24 }, () => ({ operationId: 'getCashFlowSummary' })),
-    ]
-    const spec = calls.map(({ operationId, ...rest }) => {
-      const { pathParams, ...args } = rest as Record<string, unknown>
-      return { operation_id: operationId, ...args, ...(pathParams ? { path_params: pathParams } : {}) }
-    })
-    let savedBody: unknown
-    let backendCalls = 0
-    const base = makeExtendedFetchSpy([])
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      const [url, method] = extractUrlAndMethod(input, init)
-      if (url.includes('/api/v1/mcp/recipes') && method === 'POST') {
-        backendCalls++
-        if (url.endsWith('/run')) return Response.json({ name: 'Synthetic review', calls: spec })
-        savedBody = input instanceof Request ? await input.clone().json() : JSON.parse(String(init?.body))
-        return Response.json({ id: 'synthetic-recipe' })
-      }
-      return base(input, init)
-    })
-    const { sessionId } = await initialize(worker, bearerToken)
-    const listed = await sendMcp(worker, bearerToken, 'tools/list', {}, sessionId)
-    const tools = (listed.body!.result as { tools: Array<{ name: string; inputSchema: { properties: { calls: { maxItems?: number; items: { properties: Record<string, { enum?: string[] }> } } } } }> }).tools
-    const schema = tools.find(tool => tool.name === 'recipe.save')!.inputSchema.properties.calls
-    expect(schema.maxItems).toBeUndefined()
-    expect(schema.items.properties.detail?.enum).toEqual(['compact', 'full'])
-    expect(schema.items.properties.detail).not.toHaveProperty('default')
-    for (const detail of [null, '', 'verbose']) {
-      const invalid = await sendMcp(worker, bearerToken, 'tools/call', { name: 'recipe.save', arguments: { name: 'Invalid', calls: [{ operationId: 'getAccounts', detail }] } }, sessionId)
-      expect(!!invalid.body?.error || (invalid.body?.result as { isError?: boolean })?.isError).toBe(true)
-    }
-    expect(backendCalls).toBe(0)
-    const challenge = await sendMcp(worker, bearerToken, 'tools/call', { name: 'recipe.save', arguments: { name: 'Synthetic review', calls } }, sessionId)
-    const challengeText = (challenge.body!.result as { content: Array<{ text: string }> }).content[0]!.text
-    const token = /confirmationToken: "([^"]+)"/.exec(challengeText)?.[1]
-    expect(token).toBeTruthy()
-    expect(backendCalls).toBe(0)
-    const confirmed = await sendMcp(worker, bearerToken, 'tools/call', { name: 'recipe.save', arguments: { name: 'Synthetic review', calls, confirmationToken: token } }, challenge.sessionId ?? sessionId)
-    expect((confirmed.body!.result as { content: Array<{ text: string }> }).content[0]!.text).toContain('saved successfully')
-    expect(savedBody).toEqual({ name: 'Synthetic review', spec })
-    expect(backendCalls).toBe(1)
-    const resolved = await sendMcp(worker, bearerToken, 'tools/call', { name: 'recipe.run', arguments: { id: 'synthetic-recipe' } }, sessionId)
-    const text = (resolved.body!.result as { content: Array<{ text: string }> }).content[0]!.text
-    expect(JSON.parse(text.slice(text.indexOf('{"calls":')))).toEqual({ calls })
-    expect(backendCalls).toBe(2)
   })
 
   it('Scenario 4: write-confirmation round trip — createMCPRecipe', async () => {

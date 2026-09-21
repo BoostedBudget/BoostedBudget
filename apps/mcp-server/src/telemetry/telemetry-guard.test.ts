@@ -29,7 +29,7 @@ describe('MCP telemetry architecture guard', () => {
     const registrations = sources.flatMap(source => source.match(/\.registerTool\s*\(/g) ?? [])
     const wrappers = sources.flatMap(source => source.match(/instrumentTool\s*\(\s*\{/g) ?? [])
 
-    expect(registrations).toHaveLength(7)
+    expect(registrations).toHaveLength(4)
     expect(wrappers).toHaveLength(registrations.length)
   })
 
