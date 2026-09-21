@@ -960,6 +960,8 @@ func main() {
 		budgetSyncService.SetEventProcessor(boostExecutionService)
 		// Issue #1300: Wire savings contribution ledger for savings-kind category spent amounts.
 		budgetSyncService.SetSavingsSpentCalc(savingsContribRepo)
+		// Issue #1685: emit the degraded-actuals event when a publish reports reasons.
+		budgetSyncService.SetAnalytics(analyticsGateway)
 
 		// Issue #37: Boost Scheduler Manager with providers
 		boostSchedulerManager = workers.NewBoostSchedulerManager(appLogger)

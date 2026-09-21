@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
+	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/maxnussbaum/BoostedBudget/internal/repository"
 	"github.com/maxnussbaum/BoostedBudget/internal/services"
 	"github.com/stretchr/testify/assert"
@@ -139,6 +140,10 @@ func (m *mockBudgetSyncService) SetEventProcessor(processor services.EventTrigge
 }
 
 func (m *mockBudgetSyncService) SetSavingsSpentCalc(calc services.SavingsContributionSpentCalc) {
+	// No-op for mock
+}
+
+func (m *mockBudgetSyncService) SetAnalytics(analytics phclient.ProductAnalytics) {
 	// No-op for mock
 }
 
