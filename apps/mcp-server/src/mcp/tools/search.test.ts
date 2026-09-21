@@ -137,6 +137,16 @@ describe('buildSearchResult', () => {
     expect(result.content[0]?.text).toContain('No operations found')
   })
 
+  it('#1699: zero-result message names concrete next steps and the real matcher', () => {
+    const text = buildSearchResult([]).content[0]?.text ?? ''
+    expect(text).toContain('No operations found')
+    expect(text).toContain("search({class:'read'})")
+    expect(text).toContain("search({tag:'Analytics'})")
+    expect(text).toContain("search({query:'spending by category'})")
+    expect(text).toContain('at least ONE of your words')
+    expect(text).toContain('ALL your words rank first')
+  })
+
   it('includes operation details', () => {
     const result = buildSearchResult([
       {
