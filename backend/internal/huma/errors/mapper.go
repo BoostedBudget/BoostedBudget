@@ -152,6 +152,14 @@ func MapError(err error) error {
 	// the repository can detect — from surfacing as a 500.
 	case errors.Is(err, domain.ErrContributionBasisMismatch):
 		return huma.Error422UnprocessableEntity("This goal no longer tracks progress through its contribution ledger. Reload the goal and try again.")
+	// #1685: an ambiguous or degraded ledger is a PRECONDITION, not a fault — the caller's config
+	// change is valid and still commits in the caller's transaction; only the derived actuals are
+	// withheld or partially retained. 422 with the FIRST normalised reason embedded as a deliberate
+	// summary (the full reason list is persisted on the budget and read back through the
+	// user-facing budget reads), and the machine-readable CodeValidation attached. A bare
+	// errors.New default would make this a 500 + Sentry event, the exact defect #1685 was opened for.
+	case errors.Is(err, domain.ErrBudgetActualsIncomplete):
+		return newBudgetActualsIncompleteStatusError(err)
 	case errors.Is(err, repository.ErrDuplicateEmail):
 		return huma.Error409Conflict("Email address already in use")
 	case errors.Is(err, repository.ErrDuplicateAccount):
@@ -411,6 +419,44 @@ func MapError(err error) error {
 	default:
 		return huma.Error500InternalServerError("Internal server error")
 	}
+}
+
+// codedStatusError is a huma.StatusError that carries the machine-readable RFC 9457 code from
+// codes.go alongside the standard ErrorModel fields. huma.ErrorModel (v2.39.1) has no Code field,
+// so the codes.go constants are otherwise unreachable from a response; Huma serialises a returned
+// huma.StatusError verbatim, so embedding the ErrorModel and adding Code surfaces the code without
+// changing any other mapper case.
+type codedStatusError struct {
+	*huma.ErrorModel
+	Code string `json:"code"`
+}
+
+// GetCode exposes the RFC 9457 code so callers can read it without asserting to this unexported
+// type.
+func (e *codedStatusError) GetCode() string { return e.Code }
+
+// newBudgetActualsIncompleteStatusError builds the 422 for #1685. It embeds the FIRST normalised
+// reason as a deliberate summary — the full reason list is persisted on the budget and read back
+// through the user-facing budget reads, not through this message — and attaches CodeValidation.
+// When the reasons-carrying type is absent (a bare sentinel wrap), the error's own text is used
+// rather than an empty summary.
+func newBudgetActualsIncompleteStatusError(err error) error {
+	var incomplete *domain.BudgetActualsIncompleteError
+	reason := ""
+	if errors.As(err, &incomplete) && len(incomplete.Reasons) > 0 {
+		reason = incomplete.Reasons[0]
+	}
+	if reason == "" {
+		reason = err.Error()
+	}
+
+	base := huma.Error422UnprocessableEntity(
+		fmt.Sprintf("Budget actuals could not be computed completely: %s", reason),
+	)
+	if model, ok := base.(*huma.ErrorModel); ok {
+		return &codedStatusError{ErrorModel: model, Code: CodeValidation}
+	}
+	return base
 }
 
 // LoggingMapError converts a domain error to HTTP error, logging and capturing 5xx errors.

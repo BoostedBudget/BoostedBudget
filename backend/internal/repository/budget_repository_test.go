@@ -137,6 +137,7 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
 		"income_amount", "income_sources", "expected_income", "series_id",
+		"actuals_incomplete_reasons",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -154,10 +155,11 @@ func TestBudgetRepository_GetByID(t *testing.T) {
 			true,
 			now,
 			now,
-			0.00,     // income_amount (Issue #491)
-			`[]`,     // income_sources JSON (Issue #491)
-			0.00,     // expected_income (Issue #1048)
-			budgetID, // series_id (#1300 G5: standalone budgets have series_id = id)
+			0.00,       // income_amount (Issue #491)
+			`[]`,       // income_sources JSON (Issue #491)
+			0.00,       // expected_income (Issue #1048)
+			budgetID,   // series_id (#1300 G5: standalone budgets have series_id = id)
+			[]string{}, // actuals_incomplete_reasons (#1685)
 		))
 
 	// Mock the categories query (PFC v2: category_kind + discriminated union fields + savings #1300)
@@ -243,6 +245,7 @@ func TestBudgetRepository_GetByUserID(t *testing.T) {
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
 		"income_amount", "income_sources", "expected_income", "series_id",
+		"actuals_incomplete_reasons",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -261,10 +264,11 @@ func TestBudgetRepository_GetByUserID(t *testing.T) {
 				true,
 				now,
 				now,
-				0.00,      // income_amount
-				`[]`,      // income_sources
-				0.00,      // expected_income (#1048)
-				budget1ID, // series_id (#1300 G5)
+				0.00,       // income_amount
+				`[]`,       // income_sources
+				0.00,       // expected_income (#1048)
+				budget1ID,  // series_id (#1300 G5)
+				[]string{}, // actuals_incomplete_reasons (#1685)
 			).
 			AddRow(
 				budget2ID,
@@ -279,10 +283,11 @@ func TestBudgetRepository_GetByUserID(t *testing.T) {
 				true,
 				now,
 				now,
-				0.00,      // income_amount
-				`[]`,      // income_sources
-				0.00,      // expected_income (#1048)
-				budget2ID, // series_id (#1300 G5)
+				0.00,       // income_amount
+				`[]`,       // income_sources
+				0.00,       // expected_income (#1048)
+				budget2ID,  // series_id (#1300 G5)
+				[]string{}, // actuals_incomplete_reasons (#1685)
 			))
 
 	budgets, err := repo.GetByUserID(ctx, userID)
@@ -310,6 +315,7 @@ func TestBudgetRepository_GetActiveByUserID(t *testing.T) {
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
 		"income_amount", "income_sources", "expected_income", "series_id",
+		"actuals_incomplete_reasons",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -331,6 +337,7 @@ func TestBudgetRepository_GetActiveByUserID(t *testing.T) {
 			`[]`,           // income_sources
 			0.00,           // expected_income (#1048)
 			activeBudgetID, // series_id (#1300 G5)
+			[]string{},     // actuals_incomplete_reasons (#1685)
 		))
 
 	budgets, err := repo.GetActiveByUserID(ctx, userID)
@@ -824,6 +831,7 @@ func TestBudgetRepository_GetByID_ReturnsExpectedIncome(t *testing.T) {
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
 		"income_amount", "income_sources", "expected_income", "series_id",
+		"actuals_incomplete_reasons",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -841,10 +849,11 @@ func TestBudgetRepository_GetByID_ReturnsExpectedIncome(t *testing.T) {
 			true,
 			now,
 			now,
-			0.00,     // income_amount
-			`[]`,     // income_sources JSON
-			500.00,   // expected_income (#1048)
-			budgetID, // series_id (#1300 G5)
+			0.00,       // income_amount
+			`[]`,       // income_sources JSON
+			500.00,     // expected_income (#1048)
+			budgetID,   // series_id (#1300 G5)
+			[]string{}, // actuals_incomplete_reasons (#1685)
 		))
 
 	// Mock categories query (PFC v2 columns + savings #1300)
@@ -883,6 +892,7 @@ func TestBudgetRepository_GetByUserID_ReturnsExpectedIncome(t *testing.T) {
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
 		"income_amount", "income_sources", "expected_income", "series_id",
+		"actuals_incomplete_reasons",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -904,6 +914,7 @@ func TestBudgetRepository_GetByUserID_ReturnsExpectedIncome(t *testing.T) {
 			`[]`,           // income_sources
 			450.00,         // expected_income (#1048)
 			byUserBudgetID, // series_id (#1300 G5)
+			[]string{},     // actuals_incomplete_reasons (#1685)
 		))
 
 	budgets, err := repo.GetByUserID(ctx, userID)
@@ -930,6 +941,7 @@ func TestBudgetRepository_GetActiveByUserID_ReturnsExpectedIncome(t *testing.T) 
 		"id", "user_id", "name", "description", "period", "start_date",
 		"end_date", "amount", "currency_code", "is_active", "created_at", "updated_at",
 		"income_amount", "income_sources", "expected_income", "series_id",
+		"actuals_incomplete_reasons",
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT`)).
@@ -951,6 +963,7 @@ func TestBudgetRepository_GetActiveByUserID_ReturnsExpectedIncome(t *testing.T) 
 			`[]`,            // income_sources
 			500.00,          // expected_income (#1048)
 			activeBudget2ID, // series_id (#1300 G5)
+			[]string{},      // actuals_incomplete_reasons (#1685)
 		))
 
 	budgets, err := repo.GetActiveByUserID(ctx, userID)

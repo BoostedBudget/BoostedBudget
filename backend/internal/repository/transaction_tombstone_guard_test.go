@@ -104,7 +104,11 @@ func TestNoTransactionReadForgetsTheTombstoneFilter(t *testing.T) {
 		}
 	}
 
-	requireTombstoneCorpus(t, "TestNoTransactionReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 336, 80, 374, 89)
+	// #1685/#1686 T29: re-measured live corpus is 460 files / 88 refs. The old files floor's band
+	// had widened to 27%, so minFiles is recalibrated to floor(0.9*460)=414 and wasFiles=460. The
+	// refs floor is LEFT ALONE: live (88) did not grow past the old was (89), and minRefs=80 is
+	// already inside the 10% band. No floor is lowered.
+	requireTombstoneCorpus(t, "TestNoTransactionReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 414, 80, 460, 89)
 
 	if len(offenders) > 0 {
 		t.Fatalf(

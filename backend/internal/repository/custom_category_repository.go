@@ -748,7 +748,7 @@ func (r *customCategoryRepository) DeleteWithReassignment(ctx context.Context, u
 	}
 	budgetRepo := &budgetRepository{db: tx}
 	for _, id := range budgetIDs {
-		if _, err := budgetRepo.refreshBudgetActualsInTx(ctx, tx, id); err != nil {
+		if _, _, _, err := budgetRepo.refreshBudgetActualsInTx(ctx, tx, id); err != nil {
 			return err
 		}
 	}

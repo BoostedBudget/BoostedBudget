@@ -12,6 +12,8 @@ const (
 	EventAdminSubscriptionOverrideRemovedServer = "admin_subscription_override_removed_server"
 	EventAutoCategorizationExecuted             = "auto_categorization_executed"
 	EventBoostTriggered                         = "boost_triggered"
+	// EventBudgetActualsIncomplete Fires when a budget actuals recalculation withholds or retains lines because the ledger is incomplete. reason_count is the number of distinct reasons the publish reported; never carries amounts, account identifiers, or the reason strings themselves.
+	EventBudgetActualsIncomplete = "budget_actuals_incomplete"
 	// EventDataExportGenerated Tracks completed GDPR Article 20 exports; row_count is load-bearing telemetry for deciding when synchronous generation has outgrown its reasoned size bound.
 	EventDataExportGenerated = "data_export_generated"
 	EventDeadLetterCreated   = "dead_letter_created"
@@ -141,6 +143,18 @@ func (p AdminSubscriptionOverrideRemovedServerPayload) Properties() map[string]i
 	return map[string]interface{}{
 		"tier":       p.Tier,
 		"had_expiry": p.HadExpiry,
+	}
+}
+
+type BudgetActualsIncompletePayload struct {
+	ReasonCount int64 `json:"reason_count"`
+}
+
+func (BudgetActualsIncompletePayload) isGeneratedEvent()    {}
+func (BudgetActualsIncompletePayload) EventName() EventName { return EventBudgetActualsIncomplete }
+func (p BudgetActualsIncompletePayload) Properties() map[string]interface{} {
+	return map[string]interface{}{
+		"reason_count": p.ReasonCount,
 	}
 }
 
@@ -594,6 +608,14 @@ var generatedEventContracts = map[EventName]EventContract{
 		Status:                     "legacy",
 		LegacyPropertiesUnreviewed: true,
 		Properties:                 map[string]PropertyContract{},
+	},
+	EventBudgetActualsIncomplete: {
+		Consent:                    "analytics_required",
+		Status:                     "active",
+		LegacyPropertiesUnreviewed: false,
+		Properties: map[string]PropertyContract{
+			"reason_count": {Kind: "integer", Required: true, Values: []string{}, Minimum: 1, Maximum: nil},
+		},
 	},
 	EventDataExportGenerated: {
 		Consent:                    "analytics_required",

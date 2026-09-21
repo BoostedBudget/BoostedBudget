@@ -2,8 +2,10 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/cache"
@@ -43,6 +45,35 @@ type BudgetHierarchyResyncArgs struct {
 
 // Kind returns the unique identifier for this job type.
 func (BudgetHierarchyResyncArgs) Kind() string { return "budget_hierarchy_resync" }
+
+// actualsIncompleteReasons reports whether err is the #1685 incomplete-actuals sentinel and, when
+// a reasons-carrying wrapper is present, returns those reasons. It returns ok=true for the bare
+// sentinel too (errors.Is), so an unwrapped sentinel is still treated as FATAL rather than silently
+// degrading.
+func actualsIncompleteReasons(err error) ([]string, bool) {
+	var incomplete *domain.BudgetActualsIncompleteError
+	if errors.As(err, &incomplete) {
+		return incomplete.Reasons, true
+	}
+	return nil, errors.Is(err, domain.ErrBudgetActualsIncomplete)
+}
+
+// normalizeResyncReasons de-duplicates and sorts reasons for a stable completion log, mirroring
+// domain.normalizeActualsIncompleteReasons (which is unexported). Always returns a non-nil slice so
+// the completion log carries an explicit empty list on a clean run rather than a null.
+func normalizeResyncReasons(reasons []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(reasons))
+	for _, r := range reasons {
+		if r == "" || seen[r] {
+			continue
+		}
+		seen[r] = true
+		out = append(out, r)
+	}
+	sort.Strings(out)
+	return out
+}
 
 func budgetHierarchyNeedsResync(categories []domain.BudgetCategory, customIDs, pfcPrimaries map[string]bool) bool {
 	for _, cat := range categories {
@@ -84,8 +115,11 @@ type budgetHierarchyResyncCategoryRepo interface {
 // BudgetHierarchyResyncWorker recomputes spent_amount for every LIVE budget category in every
 // active budget affected by a custom-category reparent. It uses the shared current UTC
 // period, clipped to stored dates, while preserving income read under the budget lock.
-// It deliberately does not emit budget_updated automation events. A failed sibling
-// calculation aborts the batch and propagates the error so River can retry safely.
+// It deliberately does not emit budget_updated automation events. A FATAL
+// incomplete-actuals sentinel aborts the batch and is returned so River retries it with backoff;
+// a degraded run completes and records the reasons persisted on the budget row
+// (actuals_incomplete_reasons) in its completion log. The legacy calculator branch cannot
+// distinguish FATAL from degraded, so it fails retryably on any sentinel.
 type BudgetHierarchyResyncWorker struct {
 	river.WorkerDefaults[BudgetHierarchyResyncArgs]
 
@@ -229,6 +263,7 @@ func (w *BudgetHierarchyResyncWorker) Work(ctx context.Context, job *river.Job[B
 	}
 
 	var budgetsResynced, categoriesResynced int
+	var degradedReasons []string
 	for _, budget := range budgets {
 		categories, err := w.budgetRepo.GetCategoriesByBudgetID(ctx, budget.ID)
 		if err != nil {
@@ -245,10 +280,25 @@ func (w *BudgetHierarchyResyncWorker) Work(ctx context.Context, job *river.Job[B
 		if atomic, ok := w.budgetRepo.(repository.BudgetActualsRepository); ok {
 			updated, err := atomic.RecalculateBudgetActuals(ctx, args.UserID, budget.ID, false)
 			if err != nil {
+				if reasons, fatal := actualsIncompleteReasons(err); fatal {
+					w.logger.Error("budget hierarchy resync aborted on a fatal actuals sentinel",
+						"budget_id", budget.ID,
+						"user_id", args.UserID,
+						"reasons", reasons,
+						"error", err,
+					)
+				}
 				return fmt.Errorf("atomic hierarchy resync for budget %s: %w", budget.ID, err)
 			}
 			if updated == nil {
 				continue
+			}
+			if len(updated.ActualsIncompleteReasons) > 0 {
+				degradedReasons = append(degradedReasons, updated.ActualsIncompleteReasons...)
+				w.logger.Warn("budget hierarchy resync completed with degraded actuals",
+					"budget_id", budget.ID,
+					"user_id", args.UserID,
+					"reasons", updated.ActualsIncompleteReasons)
 			}
 			budgetsResynced++
 			categoriesResynced += len(updated.Categories)
@@ -269,6 +319,15 @@ func (w *BudgetHierarchyResyncWorker) Work(ctx context.Context, job *river.Job[B
 
 			spent, err := w.spentCalc.CalculateCategorySpent(ctx, args.UserID, cat, periodStart, periodEnd)
 			if err != nil {
+				if reasons, fatal := actualsIncompleteReasons(err); fatal {
+					w.logger.Error("budget hierarchy resync aborted on a fatal actuals sentinel",
+						"budget_id", budget.ID,
+						"category_id", cat.ID,
+						"user_id", args.UserID,
+						"reasons", reasons,
+						"error", err,
+					)
+				}
 				return fmt.Errorf("recompute spend for category %s in budget %s: %w", cat.ID, budget.ID, err)
 			}
 			if err := w.budgetRepo.UpdateCategorySpentAmount(ctx, cat.ID, spent); err != nil {
@@ -285,6 +344,7 @@ func (w *BudgetHierarchyResyncWorker) Work(ctx context.Context, job *river.Job[B
 		"custom_category_id", args.CustomCategoryID,
 		"budgets_resynced", budgetsResynced,
 		"categories_resynced", categoriesResynced,
+		"actuals_incomplete_reasons", normalizeResyncReasons(degradedReasons),
 		"duration_ms", time.Since(start).Milliseconds(),
 	)
 

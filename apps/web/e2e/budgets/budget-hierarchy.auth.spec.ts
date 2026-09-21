@@ -67,6 +67,55 @@ const CUSTOM_CATEGORY_USER = {
   updated_at: '2026-01-01T00:00:00Z',
 }
 
+/**
+ * Issue #1686: an orphan DETAILED row — a detailed PFC with no primary-only row for its primary.
+ * It is a SIBLING of any custom sharing its pfc_primary, never its parent.
+ */
+const CATEGORY_ORPHAN_DETAILED = {
+  id: 'cat-orphan-gas-electric',
+  budget_id: BUDGET_ID,
+  category_kind: 'pfc',
+  pfc_primary: 'RENT_AND_UTILITIES',
+  pfc_detailed: 'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY',
+  pfc_primary_display: 'Rent & Utilities',
+  pfc_detailed_display: 'Gas & Electricity',
+  custom_category_id: undefined,
+  allocated_amount: 215,
+  spent_amount: 192.08,
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+  tags: [],
+  match_logic: 'category_only',
+}
+
+/** The custom from the issue repro: linked to RENT_AND_UTILITIES by its ROW field only. */
+const CATEGORY_HOA_CUSTOM = {
+  id: 'cat-hoa',
+  budget_id: BUDGET_ID,
+  category_kind: 'custom',
+  pfc_primary: undefined,
+  pfc_detailed: undefined,
+  pfc_primary_display: undefined,
+  pfc_detailed_display: undefined,
+  custom_category_id: 'hoa-uuid-1',
+  custom_parent_pfc_primary: 'RENT_AND_UTILITIES',
+  allocated_amount: 423.2,
+  spent_amount: 423.2,
+  created_at: '2026-01-02T00:00:00Z',
+  updated_at: '2026-01-02T00:00:00Z',
+  tags: [],
+  match_logic: 'category_only',
+}
+
+const HOA_CUSTOM_CATEGORY_USER = {
+  id: 'hoa-uuid-1',
+  user_id: 'user-123',
+  name: 'HOA',
+  parent_pfc_primary: 'RENT_AND_UTILITIES',
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+}
+
 const BUDGET_FIXTURE = {
   id: BUDGET_ID,
   user_id: 'user-123',
@@ -90,10 +139,42 @@ const BUDGET_FIXTURE = {
 // API mock helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Loose shape for a budget-category row in these fixtures — the spec exercises several row kinds
+ * (primary-only, detailed, orphan detailed, custom) whose optional fields differ.
+ */
+interface BudgetCategoryFixture {
+  id: string
+  budget_id: string
+  category_kind: string
+  pfc_primary?: string
+  pfc_detailed?: string
+  pfc_primary_display?: string
+  pfc_detailed_display?: string
+  custom_category_id?: string
+  custom_parent_pfc_primary?: string
+  allocated_amount: number
+  spent_amount: number
+  created_at: string
+  updated_at: string
+  tags: string[]
+  match_logic: string
+}
+
+interface UserCategoryFixture {
+  id: string
+  user_id: string
+  name: string
+  parent_pfc_primary?: string | null
+  created_at: string
+  updated_at: string
+}
+
 async function mockBudgetDetailAPIs(
   page: Page,
   options: {
-    categories?: typeof BUDGET_FIXTURE.categories
+    categories?: BudgetCategoryFixture[]
+    userCategories?: UserCategoryFixture[]
     withCustomCategories?: boolean
   } = {}
 ) {
@@ -115,7 +196,8 @@ async function mockBudgetDetailAPIs(
   })
 
   // User custom categories (fetched by BudgetCategoryManager + BudgetCategoryForm)
-  const userCategories = options.withCustomCategories ? [CUSTOM_CATEGORY_USER] : []
+  const userCategories =
+    options.userCategories ?? (options.withCustomCategories ? [CUSTOM_CATEGORY_USER] : [])
   await page.route('**/api/v1/categories*', (route) => {
     route.fulfill({
       status: 200,
@@ -258,5 +340,37 @@ test.describe('Budget category hierarchy (#1200)', () => {
       return firstOptgroup?.getAttribute('label') ?? null
     })
     expect(optgroupLabel).toBe('Food & Drink')
+  })
+
+  test('renders an orphan detailed row standalone, with the custom top-level and no earmark (#1686)', async ({ page }) => {
+    await mockBudgetDetailAPIs(page, {
+      categories: [CATEGORY_ORPHAN_DETAILED, CATEGORY_HOA_CUSTOM],
+      userCategories: [HOA_CUSTOM_CATEGORY_USER],
+    })
+
+    await page.goto(`/budgets/${BUDGET_ID}`)
+    await page.waitForLoadState('domcontentloaded')
+
+    // Both rows render.
+    await expect(page.getByText('Gas & Electricity').first()).toBeVisible()
+    await expect(page.getByText('HOA').first()).toBeVisible()
+
+    // The orphan detailed row is a SIBLING of HOA, not its parent: no card is a child card, so
+    // there is no earmark label and no parent remainder contradicting the rows beneath it.
+    await expect(page.locator('article.budget-category-card')).toHaveCount(2)
+    await expect(page.locator('.budget-category-card__earmark')).toHaveCount(0)
+    await expect(page.getByText(/Earmarked from/i)).toHaveCount(0)
+    await expect(page.getByText(/Remaining after children/i)).toHaveCount(0)
+
+    // The orphan card is not a parent: no child cards beneath it, no parent summary block.
+    const orphanCard = page.getByRole('article').filter({ hasText: /Gas & Electricity/i })
+    await expect(orphanCard).toHaveCount(1)
+    await expect(orphanCard.locator('article')).toHaveCount(0)
+    await expect(orphanCard.getByText(/Remaining after children/i)).toHaveCount(0)
+
+    // HOA is top-level: its card is not nested inside another card.
+    const hoaCard = page.getByRole('article').filter({ hasText: /HOA/ })
+    await expect(hoaCard).toHaveCount(1)
+    await expect(hoaCard.locator('xpath=ancestor::article')).toHaveCount(0)
   })
 })

@@ -83,7 +83,10 @@ func TestNoSavingsContributionReadForgetsTheTombstoneFilter(t *testing.T) {
 	// savings_contribution_repository.go. Below this the walk or the reference pattern is broken and
 	// a pass here would be vacuous (#1569 whole-branch review I3's lesson, applied up front rather
 	// than learned the same way a fourth time).
-	requireTombstoneCorpus(t, "TestNoSavingsContributionReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 336, 13, 374, 15)
+	// #1685/#1686 T29: re-measured live corpus is 460 files / 17 refs (was 374/15), so the old
+	// floor's band had widened to 24% — half-vacated per the FLOOR POLICY above. Recalibrated to
+	// floor(0.9*live): 414/15, with was*=live. This RAISES the floor; nothing is lowered.
+	requireTombstoneCorpus(t, "TestNoSavingsContributionReadForgetsTheTombstoneFilter", filesScanned, refsSeen, 414, 15, 460, 17)
 
 	if len(offenders) > 0 {
 		t.Fatalf(
