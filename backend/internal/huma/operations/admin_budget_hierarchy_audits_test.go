@@ -98,3 +98,25 @@ func TestListAdminBudgetHierarchyAudits_1630Review_AllOutcomeIsOneQueryWithNoFil
 	assert.Empty(t, gotOutcomes, "outcome=all must pass an empty/nil filter, not a list of every outcome name")
 	assert.Equal(t, 100, reader.calls[0][1])
 }
+
+// TestListAdminBudgetHierarchyAudits_1685_SkippedOutcomeIsAcceptedButNotActionable pins both halves
+// of the todo 12 admin contract: the new outcome is a recognized verdict a caller can filter on
+// (not a 422), and it is NOT part of the default actionable subset — a skipped budget is
+// informational and has no operator action.
+func TestListAdminBudgetHierarchyAudits_1685_SkippedOutcomeIsAcceptedButNotActionable(t *testing.T) {
+	reader := &recordingBudgetHierarchyAuditReader{}
+	handler := &AdminHandler{budgetHierarchyAuditReader: reader}
+
+	out, err := handler.ListAdminBudgetHierarchyAudits(context.Background(), &ListAdminBudgetHierarchyAuditsInput{
+		Outcome: domain.BudgetHierarchyAuditOutcomeSkippedIncompleteActuals,
+		Limit:   25,
+	})
+	require.NoError(t, err, "the new outcome must be a recognized verdict, not a 422")
+	require.Len(t, reader.calls, 1)
+	gotOutcomes, _ := reader.calls[0][0].([]string)
+	assert.Equal(t, []string{domain.BudgetHierarchyAuditOutcomeSkippedIncompleteActuals}, gotOutcomes)
+	assert.Equal(t, []string{domain.BudgetHierarchyAuditOutcomeSkippedIncompleteActuals}, out.Body.OutcomeFilter)
+
+	assert.NotContains(t, budgetHierarchyAuditActionableOutcomes, domain.BudgetHierarchyAuditOutcomeSkippedIncompleteActuals,
+		"the skipped outcome is informational; it must not join the actionable default")
+}
