@@ -131,9 +131,11 @@ costs more than the fields removed.
 Saved recipe calls retain their detail settings; existing recipes default to compact.
 Resolve a saved recipe with `writeExecute({ operationId: "runMCPRecipe", pathParams: { id: "rec_abc123" } })`,
 which returns complete call objects without executing them. Submit those calls to `readExecute`
-where admitted, or `writeExecute` otherwise, in batches of at most 25. A resolution exceeding
-100,000 rendered characters returns an explicit error with no executable calls, rather than a
-truncated call.
+where admitted, or `writeExecute` otherwise, in batches of at most 25. Recipe resolution goes
+through the same per-call output bound as every other call: a resolution exceeding 100,000
+rendered characters is truncated with an explicit marker naming the shown and full sizes, so any
+calls past the cut are not returned and cannot be submitted — split the recipe into smaller
+recipes and resolve them separately.
 
 Deploy the recipe-detail-compatible backend before this worker. Rolling back the
 worker is independent; keep a backend that preserves recipe detail when decoding and
@@ -319,9 +321,11 @@ Agent responds:
 | `runMCPRecipe` | `writeExecute` | Resolve a recipe's spec into ordered calls without executing them |
 
 `runMCPRecipe` is a POST, so `readExecute` refuses it; resolve it with `writeExecute`, then submit
-the returned calls to `readExecute` where admitted or `writeExecute` otherwise. A resolution
-exceeding 100,000 rendered characters returns an explicit error with no executable calls, rather
-than a truncated call.
+the returned calls to `readExecute` where admitted or `writeExecute` otherwise. Recipe resolution
+goes through the same per-call output bound as every other call: a resolution exceeding 100,000
+rendered characters is truncated with an explicit marker naming the shown and full sizes, so any
+calls past the cut are not returned and cannot be submitted — split the recipe into smaller
+recipes and resolve them separately.
 
 ---
 

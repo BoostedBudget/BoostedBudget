@@ -160,6 +160,39 @@ function buildRequestArgs(
 }
 
 /**
+ * Map `runMCPRecipe`'s resolved calls onto the camelCase `ExecuteCall` shape the executors accept.
+ *
+ * The backend's public schema (domain/recipe.go `MCPRecipeCall`) serializes with snake_case tags
+ * (`operation_id`, `path_params`); `executeCallSchema` and `buildRequestArgs` speak camelCase. The
+ * deleted `recipe.run` tool performed this mapping before returning; the fold into the generic
+ * executor dropped it, so the documented "resolve with writeExecute, then submit the returned
+ * calls" workflow handed the caller objects the executors reject. The backend tags are the public
+ * API and must not change, so the mapping belongs here, at the response boundary.
+ *
+ * `params`, `body`, and `detail` pass through unchanged; `path_params` becomes `pathParams` and is
+ * omitted when absent, matching executeCallSchema's optional-field semantics (which the
+ * confirmation hash binds — value AND presence).
+ */
+function normalizeRecipeRunCalls(value: unknown): unknown {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return value
+  const result = value as Record<string, unknown>
+  if (!Array.isArray(result.calls)) return value
+  return {
+    ...result,
+    calls: result.calls.map((call) => {
+      if (call === null || typeof call !== 'object' || Array.isArray(call)) return call
+      const raw = call as Record<string, unknown>
+      const normalized: Record<string, unknown> = { operationId: raw.operation_id }
+      if (raw.params !== undefined) normalized.params = raw.params
+      if (raw.body !== undefined) normalized.body = raw.body
+      if (raw.path_params !== undefined) normalized.pathParams = raw.path_params
+      if (raw.detail !== undefined) normalized.detail = raw.detail
+      return normalized
+    }),
+  }
+}
+
+/**
  * Max characters of a single call's JSON result surfaced in the tool output.
  *
  * MCP results are consumed by a model, not a human — an unbounded result risks
@@ -541,6 +574,9 @@ function buildHandlerCore(
           ...(call.detail !== undefined ? { presentation: { detail: call.detail } } : {}),
         })
         const projected = projectResponse(call.operationId, result, call.detail)
+        const presented = call.operationId === 'runMCPRecipe'
+          ? normalizeRecipeRunCalls(projected.value)
+          : projected.value
         let note = ''
         if (projected.warning) {
           note = 'Compact response unavailable; returned full response.'
@@ -548,7 +584,7 @@ function buildHandlerCore(
           note = fullResponseHint(call, result, specEntries)
         }
         const suffix = note ? `\n\n${note}` : ''
-        const rendered = renderResult(projected.value, suffix.length)
+        const rendered = renderResult(presented, suffix.length)
         const emitted = `✅ ${call.operationId}: ${rendered}${suffix}`
         const aggregateWouldTruncate = boundEmittedResult(emitted).length > resultAllowance
         pushResult(emitted, resultAllowance)
