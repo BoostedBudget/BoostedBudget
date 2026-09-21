@@ -215,9 +215,6 @@ const (
 	MCPToolCompletedToolSurfaceSearch          MCPToolCompletedToolSurface = "search"
 	MCPToolCompletedToolSurfaceReadExecute     MCPToolCompletedToolSurface = "read_execute"
 	MCPToolCompletedToolSurfaceWriteExecute    MCPToolCompletedToolSurface = "write_execute"
-	MCPToolCompletedToolSurfaceRecipeList      MCPToolCompletedToolSurface = "recipe_list"
-	MCPToolCompletedToolSurfaceRecipeSave      MCPToolCompletedToolSurface = "recipe_save"
-	MCPToolCompletedToolSurfaceRecipeRun       MCPToolCompletedToolSurface = "recipe_run"
 	MCPToolCompletedToolSurfaceRecipeTemplates MCPToolCompletedToolSurface = "recipe_templates"
 )
 
@@ -762,7 +759,7 @@ var generatedEventContracts = map[EventName]EventContract{
 		Status:                     "active",
 		LegacyPropertiesUnreviewed: false,
 		Properties: map[string]PropertyContract{
-			"tool_surface":    {Kind: "string", Required: true, Values: []string{"search", "read_execute", "write_execute", "recipe_list", "recipe_save", "recipe_run", "recipe_templates"}, Minimum: nil, Maximum: nil},
+			"tool_surface":    {Kind: "string", Required: true, Values: []string{"search", "read_execute", "write_execute", "recipe_templates"}, Minimum: nil, Maximum: nil},
 			"tool_family":     {Kind: "string", Required: true, Values: []string{"accounts", "analytics", "budgets", "boosts", "savings", "transactions", "discovery", "workflows", "cross_domain", "other"}, Minimum: nil, Maximum: nil},
 			"outcome":         {Kind: "string", Required: true, Values: []string{"succeeded", "failed"}, Minimum: nil, Maximum: nil},
 			"duration_bucket": {Kind: "string", Required: true, Values: []string{"under_250ms", "250ms_to_1s", "1s_to_5s", "over_5s"}, Minimum: nil, Maximum: nil},

@@ -34,7 +34,10 @@
 export interface NetWorthBucket {
   /** @nullable */
   change_abs: number | null;
-  /** @nullable */
+  /**
+     * Percentage change vs the previous period (12.5 means +12.5%).
+     * @nullable
+     */
   change_pct: number | null;
   date: string;
   net_worth: number;
