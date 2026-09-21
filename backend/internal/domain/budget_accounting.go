@@ -71,12 +71,14 @@ type BudgetExpenseLineActual struct {
 	Amount         *float64
 	TransactionIDs []string
 	Reason         string
+	Reasons        []string
 	CurrencyCodes  []string
 }
 type BudgetExpenseLedger struct {
 	TransactionAmounts       map[string]*float64
 	UnbudgetedTransactionIDs []string
 	UnbudgetedCurrencyCodes  []string
+	UnbudgetedReasons        []string
 	Lines                    map[string]BudgetExpenseLineActual
 	UnbudgetedAmount         *float64
 	Reason                   string
@@ -199,6 +201,15 @@ func CalculateBudgetExpenseLedger(categories []BudgetCategory, facts []BudgetExp
 				r.UnbudgetedCurrencyCodes = append(r.UnbudgetedCurrencyCodes, f.CurrencyCode)
 			}
 			if reason != "" {
+				foundReason := false
+				for _, existing := range r.UnbudgetedReasons {
+					if existing == reason {
+						foundReason = true
+					}
+				}
+				if !foundReason {
+					r.UnbudgetedReasons = append(r.UnbudgetedReasons, reason)
+				}
 				r.UnbudgetedAmount = nil
 			} else if r.UnbudgetedAmount != nil {
 				*r.UnbudgetedAmount += amount
@@ -219,6 +230,15 @@ func CalculateBudgetExpenseLedger(categories []BudgetCategory, facts []BudgetExp
 			if reason != "" {
 				line.Amount = nil
 				line.Reason = reason
+				foundReason := false
+				for _, existing := range line.Reasons {
+					if existing == reason {
+						foundReason = true
+					}
+				}
+				if !foundReason {
+					line.Reasons = append(line.Reasons, reason)
+				}
 			} else if line.Amount != nil {
 				*line.Amount += amount
 			}
@@ -229,6 +249,11 @@ func CalculateBudgetExpenseLedger(categories []BudgetCategory, facts []BudgetExp
 		r.CurrencyCodes = append(r.CurrencyCodes, c)
 	}
 	sort.Strings(r.CurrencyCodes)
+	for id := range r.Lines {
+		line := r.Lines[id]
+		sort.Strings(line.Reasons)
+		r.Lines[id] = line
+	}
 	for reason := range reasons {
 		r.Reasons = append(r.Reasons, reason)
 	}

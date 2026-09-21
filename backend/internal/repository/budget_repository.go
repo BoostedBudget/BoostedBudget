@@ -813,7 +813,7 @@ func (r *budgetRepository) AddCategoryChecked(ctx context.Context, budgetID stri
 		return nil, err
 	}
 
-	updated, err := r.refreshBudgetActualsInTx(ctx, tx, budgetID)
+	updated, _, _, err := r.refreshBudgetActualsInTx(ctx, tx, budgetID)
 	if err != nil {
 		return nil, err
 	}
@@ -878,7 +878,7 @@ func (r *budgetRepository) UpdateCategoryChecked(ctx context.Context, budgetID, 
 		return nil, err
 	}
 
-	updated, err := r.refreshBudgetActualsInTx(ctx, tx, budgetID)
+	updated, _, _, err := r.refreshBudgetActualsInTx(ctx, tx, budgetID)
 	if err != nil {
 		return nil, err
 	}
@@ -1200,7 +1200,7 @@ func (r *budgetRepository) DeleteCategory(ctx context.Context, id, budgetID stri
 		}
 	}
 
-	if _, err := r.refreshBudgetActualsInTx(ctx, tx, budgetID); err != nil {
+	if _, _, _, err := r.refreshBudgetActualsInTx(ctx, tx, budgetID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -1482,7 +1482,7 @@ func (r *budgetRepository) CreateWithCategories(ctx context.Context, budget *dom
 		}
 	}
 
-	updated, err := r.refreshBudgetActualsInTx(ctx, tx, budget.ID)
+	updated, _, _, err := r.refreshBudgetActualsInTx(ctx, tx, budget.ID)
 	if err != nil {
 		return err
 	}

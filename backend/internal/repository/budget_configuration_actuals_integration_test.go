@@ -85,6 +85,18 @@ func TestBudgetConfigurationPublishesAllSiblingActualsAtomically(t *testing.T) {
 	_, err = repo.AddCategoryChecked(ctx, b.ID, &domain.BudgetCategory{BudgetID: b.ID, CategoryKind: "pfc", PFCPrimary: &food, Tags: []string{"shared"}, MatchLogic: domain.MatchLogicTagOnly, AllocatedAmount: 100})
 	require.NoError(t, err)
 	transport := "TRANSPORTATION"
+	before := sumBudgetCategorySpent(ctx, t, tx, b.ID)
 	_, err = repo.AddCategoryChecked(ctx, b.ID, &domain.BudgetCategory{BudgetID: b.ID, CategoryKind: "pfc", PFCPrimary: &transport, Tags: []string{"shared"}, MatchLogic: domain.MatchLogicTagOnly, AllocatedAmount: 100})
-	require.ErrorContains(t, err, "overlapping_individual_lines", "ambiguous global totals must not publish individually known duplicated lines")
+	require.NoError(t, err, "an ambiguous ledger withholds the publish instead of failing the config write")
+	require.Equal(t, before, sumBudgetCategorySpent(ctx, t, tx, b.ID), "ambiguous global totals must not publish individually known duplicated lines")
+}
+
+// sumBudgetCategorySpent is the aggregate form of the guarantee that an
+// ambiguous ledger must not double-count: a withheld publish leaves the
+// top-level sum exactly where it was.
+func sumBudgetCategorySpent(ctx context.Context, t *testing.T, q Querier, budgetID string) float64 {
+	t.Helper()
+	var sum float64
+	require.NoError(t, q.QueryRow(ctx, `SELECT COALESCE(SUM(spent_amount),0) FROM budget_categories WHERE budget_id=$1 AND deleted_at IS NULL`, budgetID).Scan(&sum))
+	return sum
 }
