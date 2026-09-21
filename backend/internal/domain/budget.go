@@ -928,7 +928,68 @@ var (
 	// production budget (bf6676b1-7bbd-4f06-b765-62756ce0094e, five categories), so say plainly
 	// that the double count for any pre-existing escaping row persists — it is not fixed.
 	ErrEscapedNestedChild = fmt.Errorf("%w: nested budget category's match_logic escapes its parent's containment envelope", ErrInvalidBudget)
+	// ErrBudgetActualsIncomplete is the sentinel for a budget-actuals publish that could not
+	// compute a complete, trustworthy figure — an ambiguous or degraded ledger, not a rejected
+	// input (Issue #1685). It is a PRECONDITION, not a fault: the caller's config change is
+	// valid and still commits in the caller's transaction; only the derived actuals are withheld
+	// or partially retained. Wrapped by BudgetActualsIncompleteError (which carries the
+	// machine-readable reasons) and by the sibling read barriers, so
+	// errors.Is(err, ErrBudgetActualsIncomplete) is the single test every caller uses.
+	ErrBudgetActualsIncomplete = errors.New("budget actuals incomplete")
 )
+
+// BudgetActualsIncompleteError is the reasons-carrying wrapper around
+// ErrBudgetActualsIncomplete. It satisfies errors.Is(err, ErrBudgetActualsIncomplete) through
+// Unwrap, and errors.As can recover it to read the machine-readable reasons a publish degraded.
+//
+// Reasons are normalised on construction by NewBudgetActualsIncompleteError: duplicates removed
+// and the remainder sorted, so the order is deterministic and the FIRST element (the summary the
+// HTTP mapper embeds) is stable. The same normalisation is used when the reasons are persisted
+// and returned, so the value a caller sees is the value that was written.
+//
+// Construct this through NewBudgetActualsIncompleteError rather than a struct literal: the
+// normalisation guarantee holds only for the constructor.
+type BudgetActualsIncompleteError struct {
+	Reasons []string
+}
+
+// NewBudgetActualsIncompleteError builds the wrapper, normalising the reasons (de-duplicated and
+// sorted). It never returns nil, so a zero-reason error still satisfies errors.Is.
+func NewBudgetActualsIncompleteError(reasons ...string) *BudgetActualsIncompleteError {
+	return &BudgetActualsIncompleteError{Reasons: normalizeActualsIncompleteReasons(reasons)}
+}
+
+// Error renders the sentinel headline plus the normalised reasons. With no reasons it renders the
+// bare sentinel text, never an empty or trailing-separator string.
+func (e *BudgetActualsIncompleteError) Error() string {
+	if e == nil || len(e.Reasons) == 0 {
+		return ErrBudgetActualsIncomplete.Error()
+	}
+	return fmt.Sprintf("%s: %s", ErrBudgetActualsIncomplete.Error(), strings.Join(e.Reasons, ", "))
+}
+
+// Unwrap exposes ErrBudgetActualsIncomplete so errors.Is finds the sentinel through any number of
+// wrapping layers.
+func (e *BudgetActualsIncompleteError) Unwrap() error {
+	return ErrBudgetActualsIncomplete
+}
+
+// normalizeActualsIncompleteReasons de-duplicates reasons and sorts the survivors, mirroring the
+// ledger's own normalisation (CalculateBudgetExpenseLedger). Empty strings are preserved: whether
+// a blank reason is meaningful is the caller's policy, not this type's.
+func normalizeActualsIncompleteReasons(reasons []string) []string {
+	seen := make(map[string]struct{}, len(reasons))
+	out := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		if _, ok := seen[reason]; ok {
+			continue
+		}
+		seen[reason] = struct{}{}
+		out = append(out, reason)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // DuplicateParentIdentity reports whether `candidate` would collide with an existing LIVE
 // category's PARENT IDENTITY if added to `existing` (Issue #1630 Task 4).
