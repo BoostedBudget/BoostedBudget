@@ -38,8 +38,5 @@ export const RecordMCPToolTelemetryBodyToolSurface = {
   search: 'search',
   read_execute: 'read_execute',
   write_execute: 'write_execute',
-  recipe_list: 'recipe_list',
-  recipe_save: 'recipe_save',
-  recipe_run: 'recipe_run',
   recipe_templates: 'recipe_templates',
 } as const;
