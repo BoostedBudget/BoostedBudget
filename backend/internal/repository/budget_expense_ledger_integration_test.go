@@ -129,6 +129,9 @@ func TestBudgetExpenseLedgerPostedNonTransferAndPartialSavings(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, withheld, "a per-category savings reason retains that line rather than withholding the run")
 	require.Equal(t, []string{"legacy_unknown"}, reasons, "the retained savings line reports the reason it could not be interpreted")
+	var persistedReasons []string
+	require.NoError(t, tx.QueryRow(ctx, `SELECT actuals_incomplete_reasons FROM budgets WHERE id=$1`, budget.ID).Scan(&persistedReasons))
+	require.Contains(t, persistedReasons, "legacy_unknown", "the removed hard-fail assertion is relocated to the persisted diagnostic")
 	var retained float64
 	require.NoError(t, tx.QueryRow(ctx, `SELECT spent_amount FROM budget_categories WHERE budget_id=$1 AND category_kind='pfc' AND deleted_at IS NULL`, budget.ID).Scan(&retained))
 	require.Equal(t, 70.0, retained, "the sibling pfc line publishes while the savings line is retained")
@@ -145,5 +148,7 @@ func TestBudgetExpenseLedgerPostedNonTransferAndPartialSavings(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, withheld, "a foreign-currency ledger withholds the whole publish")
 	require.Equal(t, []string{"currency_mismatch"}, reasons)
+	require.NoError(t, tx.QueryRow(ctx, `SELECT actuals_incomplete_reasons FROM budgets WHERE id=$1`, budget.ID).Scan(&persistedReasons))
+	require.Contains(t, persistedReasons, "currency_mismatch", "the removed hard-fail assertion is relocated to the persisted diagnostic")
 	require.Equal(t, beforeWithheld, sumBudgetCategorySpent(ctx, t, tx, budget.ID), "a withheld run writes no spent_amount")
 }
