@@ -1361,12 +1361,13 @@ func TestAnalyticsService_GetMonthOverMonthSpendingChange(t *testing.T) {
 		if result.Buckets[0].ChangeAbs != nil {
 			t.Error("expected nil ChangeAbs for first bucket")
 		}
-		// Second bucket: 300/200 - 1 = 50% change, abs = +100
+		// Second bucket: (300-200)/200 = 0.5 = +50%. change_pct is a PERCENTAGE (#1699 MCP-4),
+		// matching its *_change_percent siblings, so 50.0 — not the 0.5 fraction.
 		if result.Buckets[1].ChangePct == nil {
 			t.Fatal("expected non-nil ChangePct for second bucket")
 		}
-		if *result.Buckets[1].ChangePct != 0.5 {
-			t.Errorf("expected ChangePct 0.5, got %f", *result.Buckets[1].ChangePct)
+		if *result.Buckets[1].ChangePct != 50.0 {
+			t.Errorf("expected ChangePct 50.0, got %f", *result.Buckets[1].ChangePct)
 		}
 		if result.Buckets[1].ChangeAbs == nil {
 			t.Fatal("expected non-nil ChangeAbs for second bucket")
@@ -1380,6 +1381,29 @@ func TestAnalyticsService_GetMonthOverMonthSpendingChange(t *testing.T) {
 		}
 		if result.MonthCount != 3 {
 			t.Errorf("expected month_count 3, got %d", result.MonthCount)
+		}
+	})
+
+	t.Run("zero previous total leaves change_pct nil but sets change_abs", func(t *testing.T) {
+		mockRepo := &mockAnalyticsRepository{
+			getMonthOverMonthSpendingFn: func(ctx context.Context, userID string, startDate time.Time, category string, filters domain.SpendingFilters) ([]domain.MonthOverMonthBucketRow, error) {
+				return []domain.MonthOverMonthBucketRow{
+					{Month: jan, Total: 0},
+					{Month: feb, Total: 150},
+				}, nil
+			},
+		}
+		service := NewAnalyticsService(mockRepo)
+
+		result, err := service.GetMonthOverMonthSpendingChange(ctx, "user-123", "", 3, nil, false, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Buckets[1].ChangePct != nil {
+			t.Errorf("expected nil ChangePct when previous total is zero, got %f", *result.Buckets[1].ChangePct)
+		}
+		if result.Buckets[1].ChangeAbs == nil || *result.Buckets[1].ChangeAbs != 150.0 {
+			t.Errorf("expected ChangeAbs 150 when previous total is zero, got %v", result.Buckets[1].ChangeAbs)
 		}
 	})
 

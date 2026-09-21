@@ -761,7 +761,8 @@ func (s *analyticsService) GetMonthOverMonthSpendingChange(ctx context.Context, 
 			Total: row.Total,
 		}
 		if i > 0 && rows[i-1].Total > 0 {
-			pct := (row.Total - rows[i-1].Total) / rows[i-1].Total
+			// change_pct is a PERCENTAGE (×100) to match the *_change_percent siblings (#1699 MCP-4).
+			pct := ((row.Total - rows[i-1].Total) / rows[i-1].Total) * 100
 			abs := row.Total - rows[i-1].Total
 			b.ChangePct = &pct
 			b.ChangeAbs = &abs
