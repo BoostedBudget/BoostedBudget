@@ -36,4 +36,5 @@ export type PortfolioSummaryDayChangeUnavailableReason = typeof PortfolioSummary
 
 export const PortfolioSummaryDayChangeUnavailableReason = {
   currency_mismatch: 'currency_mismatch',
+  household_scope: 'household_scope',
 } as const;

@@ -192,7 +192,7 @@ func TestHolding_GetByUserIDWithSecurities_ReadsBothCurrencies_Integration(t *te
 	seedCurrencyHolding(ctx, t, tx, userID, accountID, "FX", 100,
 		ccyPtr("GBP"), ccyPtr("USD"), &close90)
 
-	holdings, err := NewHoldingRepository(tx).GetByUserIDWithSecurities(ctx, userID.String(), nil)
+	holdings, err := NewHoldingRepository(tx).GetByUserIDWithSecurities(ctx, userID.String(), nil, nil)
 	require.NoError(t, err)
 	require.Len(t, holdings, 1)
 

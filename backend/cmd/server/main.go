@@ -2410,6 +2410,7 @@ func main() {
 
 		// Register investment portfolio routes (Issue #138)
 		humaInvestmentHandler := operations.NewInvestmentHandler(investmentService, investmentAnalyticsService)
+		humaInvestmentHandler.SetHouseholdService(householdService)
 		operations.RegisterInvestmentRoutes(humaAPI, humaInvestmentHandler)
 		appLogger.Info("Investment routes registered")
 
