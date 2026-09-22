@@ -12,7 +12,10 @@ import { getNavigationAppearance } from '../src/theme/navigation'
 import { applyWebThemeVariables, themeVariables } from '../src/theme/runtime'
 import { ThemeProvider as ThemePreferenceProvider, useTheme } from '../src/theme/ThemeProvider'
 
-initializeMobileRuntime({ EXPO_PUBLIC_API_URL: process.env.EXPO_PUBLIC_API_URL })
+initializeMobileRuntime({
+  EXPO_PUBLIC_API_URL: process.env.EXPO_PUBLIC_API_URL,
+  EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY,
+})
 
 export function MobileAppProviders({ children }: { children: ReactNode }) {
   const [queryClient] = useState(createMobileQueryClient)

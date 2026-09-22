@@ -16,7 +16,11 @@ export function createMobileQueryClient(): QueryClient {
 }
 
 export function initializeMobileRuntime(environment: MobilePublicEnvironment) {
-  const { apiUrl } = parsePublicEnvironment(environment)
+  const { apiUrl, clerkPublishableKey } = parsePublicEnvironment(environment)
   configureApiClient({ baseUrl: apiUrl })
-  return { apiUrlConfigured: Boolean(apiUrl) }
+  return {
+    apiUrlConfigured: Boolean(apiUrl),
+    authAvailable: Boolean(clerkPublishableKey),
+    clerkPublishableKey,
+  }
 }
