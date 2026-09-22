@@ -48,6 +48,7 @@ function makeSignInHandle(): SignInHandle {
   return {
     status: 'needs_first_factor',
     createdSessionId: null,
+    create: jest.fn(async () => ({ error: null })),
     password: jest.fn(async () => ({ error: null })),
     emailCode: {
       sendCode: jest.fn(async () => ({ error: null })),

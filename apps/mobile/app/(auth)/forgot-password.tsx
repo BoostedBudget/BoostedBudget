@@ -42,10 +42,13 @@ type ResetStep = 'request' | 'verify' | 'reset'
  * The forgot-password screen, backed by the auth-adapter seam.
  *
  * It consumes `useMobileSignIn()` and never a Clerk hook. The flow walks three steps:
- * request a reset code by email, verify the code, then set the new password. Each step is driven
- * by the pinned `signIn.resetPasswordEmailCode` surface (`sendCode`, `verifyCode`, `submitPassword`);
- * the final step completes through the adapter's `finalize`, which owns Clerk's navigate contract,
- * the `session.currentTask` diversion, and the finalize error envelope.
+ * request a reset code by email, verify the code, then set the new password. The request step
+ * first sets the collected address as the sign-in identifier (`signIn.create`), because
+ * `resetPasswordEmailCode.sendCode()` takes no argument and sends to the identifier already on the
+ * resource; the remaining steps are driven by the pinned `signIn.resetPasswordEmailCode` surface
+ * (`sendCode`, `verifyCode`, `submitPassword`); the final step completes through the adapter's
+ * `finalize`, which owns Clerk's navigate contract, the `session.currentTask` diversion, and the
+ * finalize error envelope.
  *
  * In inert mode (`signIn` is `null`) the real form markup renders disabled with an accessible
  * notice, mirroring the sign-in screen.
@@ -75,6 +78,12 @@ export default function ForgotPasswordScreen() {
     setSubmitting(true)
     setError(null)
     try {
+      const identifier = email.trim()
+      const { error: createError } = await signIn.create({ identifier })
+      if (createError) {
+        setError(describeAuthError(createError))
+        return
+      }
       const { error: sendError } = await signIn.resetPasswordEmailCode.sendCode()
       if (sendError) {
         setError(describeAuthError(sendError))
