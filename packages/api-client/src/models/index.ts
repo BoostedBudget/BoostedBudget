@@ -287,6 +287,7 @@ export * from './incomeSourceBreakdownResponse';
 export * from './incomeSourceItem';
 export * from './incomeSourceType';
 export * from './incomeSummary';
+export * from './investmentsSkippedAtLinkMetrics';
 export * from './investmentTransaction';
 export * from './jobBacklogMetrics';
 export * from './largestTransactionItem';
