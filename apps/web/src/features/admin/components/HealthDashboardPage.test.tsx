@@ -124,6 +124,13 @@ const mockHealthData = {
     total_positions_checked: 0,
     available: true,
   },
+  // Issue #1707: the investments-skipped-at-link gauge. `available: true` with a zero count is a
+  // VERIFIED "no connection was skipped", not an unknown — the failed-read and absent-section
+  // cases are exercised separately below.
+  investments_skipped_at_link: {
+    count: 0,
+    available: true,
+  },
 }
 
 const renderWithQueryClient = (component: React.ReactElement) => {
@@ -1306,6 +1313,163 @@ describe('HealthDashboardPage', () => {
       })
 
       expect(screen.getByText(/NOT a confirmed-problem count/i)).toBeInTheDocument()
+    })
+  })
+
+  // Issue #1707: the investments-skipped-at-link gauge — the live-scoped count of current bank
+  // connections linked while Plaid had not granted investment access.
+  //
+  // ⚠ THE STATUS RULE IS LOAD-BEARING. A NON-ZERO count is an EXPECTED steady state ("this
+  // connection's institution does not serve investments"), not an alarm. The card is therefore
+  // 'success' at ANY count and 'warning' ONLY when the gauge is unavailable — painting a non-zero
+  // count amber would contradict the plan's rationale that the gauge is deliberately excluded from
+  // overall system status, and would train an operator to ignore the dashboard.
+  describe('Investment Sync Coverage section (Issue #1707)', () => {
+    const CARD = 'Investments Skipped At Link'
+
+    function investmentCardValue(title: string): string {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${title}"`)
+      return card.querySelector('[data-slot="stat-value"]')?.textContent ?? ''
+    }
+
+    const cardFor = (title: string) => {
+      const label = screen.getByText(title)
+      const card = label.closest('[data-slot="card"]')
+      if (!card) throw new Error(`Could not find card for "${title}"`)
+      return card
+    }
+
+    // THE RED TEST: a seeded count reaches an operator.
+    it('surfaces a seeded investments-skipped count', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          investments_skipped_at_link: { count: 4200, available: true },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Investment Sync Coverage/i)).toBeInTheDocument()
+      })
+
+      expect(investmentCardValue(CARD)).toBe('4200')
+    })
+
+    // ⚠ THE LOAD-BEARING STATUS RULE. Both a non-zero count AND a verified zero are 'success'.
+    // Without this, a card hardcoded to 'warning' on any non-zero count would pass the seeded test
+    // above while making an ordinary portfolio render permanently amber.
+    it('renders a non-zero count and a verified zero as success, never warning', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          investments_skipped_at_link: { count: 4200, available: true },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      const { unmount } = renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText(CARD)).toBeInTheDocument()
+      })
+      expect(investmentCardValue(CARD)).toBe('4200')
+      expect(cardFor(CARD).className).toContain('border-l-success')
+      expect(cardFor(CARD).className).not.toContain('border-l-warning')
+      unmount()
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: mockHealthData, // count 0, available true — a verified zero
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText(CARD)).toBeInTheDocument()
+      })
+      expect(investmentCardValue(CARD)).toBe('0')
+      expect(cardFor(CARD).className).toContain('border-l-success')
+      expect(cardFor(CARD).className).not.toContain('border-l-warning')
+    })
+
+    // ⚠ THE FAIL-CLOSED PATH. A green "0" produced by a FAILED read would tell an operator that no
+    // connection was skipped — a claim nothing checked. Must read "Unavailable", never 0.
+    it('renders "Unavailable", not a zero, when the gauge is unavailable', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          investments_skipped_at_link: { count: 0, available: false },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(CARD)).toBeInTheDocument()
+      })
+
+      expect(investmentCardValue(CARD)).toBe('Unavailable')
+      expect(investmentCardValue(CARD)).not.toBe('0')
+      expect(cardFor(CARD).className).toContain('border-l-warning')
+      expect(cardFor(CARD).className).not.toContain('border-l-success')
+    })
+
+    // A rolling deploy or an older cached response can omit `investments_skipped_at_link` entirely;
+    // an unguarded read must not throw and blank the whole dashboard.
+    it('degrades to "Unavailable" (not a crash) when the section is entirely absent', async () => {
+      const withoutInvestments: Record<string, unknown> = { ...mockHealthData }
+      delete withoutInvestments.investments_skipped_at_link
+
+      mockUseGetSystemHealth.mockReturnValue({
+        data: withoutInvestments,
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/System Health/i)).toBeInTheDocument()
+      })
+      await waitFor(() => {
+        expect(screen.getByText(CARD)).toBeInTheDocument()
+      })
+
+      expect(investmentCardValue(CARD)).toBe('Unavailable')
+    })
+
+    // The sibling that stops the "success for non-zero" assertion passing against a card that lost
+    // its accent entirely: 'warning' is yielded ONLY by the unavailable state.
+    it('yields warning only when the gauge is unavailable', async () => {
+      mockUseGetSystemHealth.mockReturnValue({
+        data: {
+          ...mockHealthData,
+          investments_skipped_at_link: { count: 0, available: false },
+        },
+        isLoading: false,
+        error: null,
+        refetch: () => {},
+      } as never)
+
+      renderWithQueryClient(<HealthDashboardPage />)
+      await waitFor(() => {
+        expect(screen.getByText(CARD)).toBeInTheDocument()
+      })
+
+      expect(cardFor(CARD).className).toContain('border-l-warning')
     })
   })
 
