@@ -62,6 +62,10 @@ func (s *stubJobHealthRepo) GetDeletionResidueStats(context.Context) (int, time.
 	return s.residueCount, s.residueAge, s.errAll
 }
 
+func (s *stubJobHealthRepo) GetInvestmentsSkippedAtLinkCount(context.Context) (int64, error) {
+	return 0, nil
+}
+
 func (s *stubJobHealthRepo) GetDeadLetterQueueSize(context.Context) (int, error) {
 	return s.deadLetters, s.errAll
 }
