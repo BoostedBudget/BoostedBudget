@@ -7,10 +7,11 @@
  * data-ph-mask'd because the table is hand-built and not DataTable-wrapped.
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { BarChart2 } from 'lucide-react'
 import { useGetHoldings } from '@boostedbudget/api-client/endpoints/investments/investments'
 import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
+import { useDashboardContext } from '../context/DashboardContext'
 import { registerWidget } from './registry'
 import { WidgetEmptyState } from './WidgetEmptyState'
 import { normalizeWidgetSettings } from './settings'
@@ -75,7 +76,14 @@ function CompactRow({ holding }: CompactRowProps) {
 
 function PortfolioHoldingsWidget(props: WidgetProps) {
   const { settings: rawSettings, onSettingsChange, isEditing } = props
-  const { data, isLoading, isError, error } = useGetHoldings()
+  const { scope } = useDashboardContext()
+
+  // #1706: the dashboard scope must reach the server-side read, not be filtered client-side —
+  // a client filter would still pull another member's holdings into the browser. useMemo keeps
+  // the params reference stable so the generated query key does not churn every render.
+  const holdingsParams = useMemo(() => ({ scope }), [scope])
+
+  const { data, isLoading, isError, error } = useGetHoldings(holdingsParams)
   const trackEvent = useTrackEvent()
   const viewedFired = useRef(false)
 
