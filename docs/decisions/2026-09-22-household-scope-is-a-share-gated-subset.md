@@ -63,7 +63,9 @@ separate consent.
 
 The household holdings read replaces the personal predicate (`WHERE h.user_id = $1`) with
 `WHERE h.user_account_id IN (SELECT user_account_id FROM household_accounts)` over
-`householdAccountsCTEForBalancesAsOf()`. The personal branch is unchanged byte-for-byte.
+`householdAccountsCTEForBalancesAsOf()`. The personal branch is unchanged; its output is
+JSON-equal to the committed golden fixture
+(`backend/internal/services/testdata/personal_baseline.json`).
 
 Pinned by:
 - `TestHoldingsHouseholdScope_UnsharedAccountMustNotAppear` (an unshared account's holding is
