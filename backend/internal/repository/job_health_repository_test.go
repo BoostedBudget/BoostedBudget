@@ -8,7 +8,9 @@ package repository
 import (
 	"context"
 	"errors"
+	"os"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -347,4 +349,98 @@ func TestJobHealthRepository_RevenueCatBacklogQueries_PinTheirPredicates(t *test
 
 	assert.Contains(t, revenueCatRefreshOverdueUsersQuery, "next_refresh_at < NOW()",
 		"the refresh backlog is customers whose next_refresh_at has elapsed")
+}
+
+// --- GetInvestmentsSkippedAtLinkCount (Issue #1707 — the live-scoped investments-skipped gauge) ---
+//
+// pgxmock proves the query is issued and the single count column is scanned/wrapped correctly. It
+// CANNOT evaluate the WHERE clause — it has no query engine and returns a canned row — so the
+// live-scoping predicate is deliberately NOT proven here; it is proven against real Postgres in
+// job_health_repository_integration_test.go. What this file CAN and MUST pin is the emitted SQL
+// SHAPE: the ExpectQuery regexp below matches BOTH `investments_skipped_at_link = TRUE` and
+// `status NOT IN`, so a query that silently dropped the live-scope clause fails this test.
+
+func TestJobHealthRepository_GetInvestmentsSkippedAtLinkCount_Success(t *testing.T) {
+	mock, repo := setupJobHealthMockDB(t)
+	defer mock.Close()
+
+	rows := pgxmock.NewRows([]string{"count"}).AddRow(int64(4200))
+	mock.ExpectQuery(`(?s)investments_skipped_at_link = TRUE.*status NOT IN`).WillReturnRows(rows)
+
+	count, err := repo.GetInvestmentsSkippedAtLinkCount(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(4200), count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestJobHealthRepository_GetInvestmentsSkippedAtLinkCount_NoRows_ReturnsZero(t *testing.T) {
+	mock, repo := setupJobHealthMockDB(t)
+	defer mock.Close()
+
+	rows := pgxmock.NewRows([]string{"count"}).AddRow(int64(0))
+	mock.ExpectQuery(`(?s)investments_skipped_at_link = TRUE.*status NOT IN`).WillReturnRows(rows)
+
+	count, err := repo.GetInvestmentsSkippedAtLinkCount(context.Background())
+
+	require.NoError(t, err, "a verified zero is a real reading, not an error")
+	assert.Equal(t, int64(0), count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestJobHealthRepository_GetInvestmentsSkippedAtLinkCount_QueryError(t *testing.T) {
+	mock, repo := setupJobHealthMockDB(t)
+	defer mock.Close()
+
+	mock.ExpectQuery(`(?s)investments_skipped_at_link = TRUE.*status NOT IN`).
+		WillReturnError(errors.New("db unavailable"))
+
+	count, err := repo.GetInvestmentsSkippedAtLinkCount(context.Background())
+
+	assert.Error(t, err, "a driver error must propagate, never be swallowed into a confident 0")
+	assert.Equal(t, int64(0), count)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestJobHealthRepository_InvestmentsSkippedAtLinkCountQuery_CountsTrueOnlyAndIsLiveScoped is the
+// drift guard, and it runs without a database so it cannot be skipped. Two properties are
+// load-bearing: the count is of TRUE rows only (FALSE is the column's DEFAULT, not an "investments
+// were granted" signal), and the count is live-scoped (a replaced row is the OLD row of a re-link,
+// so counting it double-counts one connection; replaced/disconnected rows never sync).
+func TestJobHealthRepository_InvestmentsSkippedAtLinkCountQuery_CountsTrueOnlyAndIsLiveScoped(t *testing.T) {
+	assert.Contains(t, investmentsSkippedAtLinkCountQuery, "investments_skipped_at_link = TRUE",
+		"the gauge counts TRUE rows only")
+	assert.NotContains(t, investmentsSkippedAtLinkCountQuery, "= FALSE",
+		"FALSE is the column DEFAULT, not evidence investments were granted — never read it")
+	assert.Contains(t, investmentsSkippedAtLinkCountQuery, "status NOT IN",
+		"the count must be live-scoped: replaced/disconnected links never sync and must not inflate the cost basis")
+	assert.Contains(t, investmentsSkippedAtLinkCountQuery, "'replaced'")
+	assert.Contains(t, investmentsSkippedAtLinkCountQuery, "'disconnected'")
+}
+
+// TestJobHealthRepository_InvestmentsSkippedAtLinkCountQuery_NeverReadsFalseInCode scans the source
+// file itself. The doc comment is REQUIRED to contain the words "never `= FALSE`", so a whole-file
+// grep for `= FALSE` would fail on its own requirement; this check is therefore scoped to the
+// COLUMN. Any line that reads `investments_skipped_at_link = FALSE` must be a comment line. (The
+// file also carries an unrelated `is_deleted = FALSE` in GetOutstandingPlaidCleanupStats' query,
+// which is why the check is scoped to this column rather than to `= FALSE` at large.)
+func TestJobHealthRepository_InvestmentsSkippedAtLinkCountQuery_NeverReadsFalseInCode(t *testing.T) {
+	src, err := os.ReadFile("job_health_repository.go")
+	require.NoError(t, err)
+
+	sawFalseInComment := false
+	for i, line := range strings.Split(string(src), "\n") {
+		if !strings.Contains(line, "= FALSE") {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "//") {
+			sawFalseInComment = true
+			continue
+		}
+		assert.NotContains(t, line, "investments_skipped_at_link",
+			"line %d reads investments_skipped_at_link = FALSE outside a comment: %s", i+1, trimmed)
+	}
+	assert.True(t, sawFalseInComment,
+		"the doc comment is REQUIRED to record that FALSE is never read (the words \"never `= FALSE`\")")
 }
