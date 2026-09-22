@@ -1648,7 +1648,7 @@ func (s *accountService) enqueueInitialSync(ctx context.Context, linkedItemID, u
 //     in exchange for closing a gap that is already covered in the common case.
 //
 // ⚠ What is NOT claimed: that the webhook path is GUARANTEED. It is not, and that is precisely
-// why the flag is written even though nothing reads it. A future re-check needs exactly this
+// why the flag is written even though nothing read it at the time — the measurement now exists (`GetInvestmentsSkippedAtLinkCount`, the admin health gauge, live-scoped). A future re-check needs exactly this
 // column, and — more usefully — the flag makes the affected population COUNTABLE before anyone
 // pays for a poll, which is the measurement this decision was made without. If it turns out to be
 // large, the right shape is a ONE-SHOT re-check on the first webhook-driven sync (bounded at one

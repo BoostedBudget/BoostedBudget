@@ -166,6 +166,43 @@ type JobHealthRepository interface {
 	// refresh/repair worker is not keeping up, independent of whether its own job metrics are
 	// being scraped. Served by revenuecat_customers_refresh_idx (migration 000216).
 	GetRevenueCatRefreshOverdueUsers(ctx context.Context) (int, error)
+
+	// GetInvestmentsSkippedAtLinkCount returns how many CURRENT bank connections were linked while
+	// Plaid granted no investments product — the population the declined per-sync re-check decision
+	// (account_service.go) was made without. Issue #1707.
+	//
+	// ⚠ LIVE-SCOPED, and this is load-bearing. The count excludes 'replaced' and 'disconnected'
+	// links. A 'replaced' row is the OLD row of a re-link (LinkAccounts marks the old item replaced
+	// and creates a new one), so counting it would double-count one logical connection once per
+	// re-link; and neither a replaced nor a disconnected row can ever sync, so neither can benefit
+	// from the one-shot re-check this number exists to size. Counting them would inflate the cost
+	// basis for a Plaid poll, which is the one decision the number informs. The repo's own "live
+	// link" convention is liveLinkedItemExistsClause (profile_repository.go:3645), whose body is
+	// `status IS NULL OR status NOT IN ('disconnected', 'replaced')`; the same exclusion is stated
+	// in docs/decisions/2026-08-01-gdpr-erasure-hard-delete.md:509.
+	//
+	// ⚠ The bare `status NOT IN (...)` here is safe WITHOUT the clause's `status IS NULL OR` arm
+	// because migration 000126 ran `ALTER TABLE linked_items ALTER COLUMN status SET NOT NULL`, so a
+	// NULL-status row cannot exist in THIS table and SQL's three-valued logic cannot silently
+	// exclude one. That is a deliberate, written-down difference from the shared clause, not an
+	// oversight — see the NULL-status hazard warning on GetOutstandingPlaidCleanupStats above.
+	//
+	// ⚠ Only these two literals are excluded. The real linked_items vocabulary is
+	// ('active','error','login_required','pending_expiration','revoked','replaced','disconnected')
+	// (migration 000032, restated 000124). Several of the others (error, login_required, revoked,
+	// pending_expiration) are live-but-not-necessarily-syncing and are deliberately COUNTED as live,
+	// mirroring the existing clause rather than inventing a narrower definition.
+	//
+	// ⚠ Counts TRUE only — never `= FALSE`. FALSE is the column's DEFAULT, not an "investments were
+	// granted" signal: the only production writer (recordInvestmentsSkippedAtLink, account_service.go)
+	// writes TRUE on a freshly created row, so a FALSE write is a no-op against today's caller, and
+	// pre-migration-000189 rows were never backfilled, so FALSE means "unknown" there.
+	//
+	// ⚠ THE COUNT IS AN UPPER BOUND, NOT EXACT. TRUE is a link-time fact and a permanent latch: the
+	// only production writer is link-time, and the webhook path that later grants investments does
+	// NOT clear it, so an item that gained investments after linking stays TRUE. Read it as "at most
+	// this many current connections were linked without investments", never as an exact measure.
+	GetInvestmentsSkippedAtLinkCount(ctx context.Context) (int64, error)
 }
 
 type jobHealthRepository struct {
@@ -376,4 +413,24 @@ func (r *jobHealthRepository) GetRevenueCatRefreshOverdueUsers(ctx context.Conte
 		return 0, fmt.Errorf("failed to query overdue RevenueCat refreshes: %w", err)
 	}
 	return int(count), nil
+}
+
+// investmentsSkippedAtLinkCountQuery is GetInvestmentsSkippedAtLinkCount's SQL, hoisted to a
+// package-level constant so a plain unit test can pin its shape without a database. The count is
+// live-scoped and counts TRUE only — see the interface doc comment for why each clause is there.
+const investmentsSkippedAtLinkCountQuery = `
+	SELECT COUNT(*)
+	FROM linked_items
+	WHERE investments_skipped_at_link = TRUE
+	  AND status NOT IN ('replaced', 'disconnected')
+`
+
+// GetInvestmentsSkippedAtLinkCount implements the interface doc comment above — see it for why the
+// count is live-scoped, why it is an upper bound, and why FALSE is never read.
+func (r *jobHealthRepository) GetInvestmentsSkippedAtLinkCount(ctx context.Context) (int64, error) {
+	var count int64
+	if err := r.db.QueryRow(ctx, investmentsSkippedAtLinkCountQuery).Scan(&count); err != nil {
+		return 0, fmt.Errorf("failed to query investments-skipped-at-link count: %w", err)
+	}
+	return count, nil
 }

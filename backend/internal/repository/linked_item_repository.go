@@ -185,9 +185,9 @@ type LinkedItemRepository interface {
 	// then strand a stale TRUE on an item whose institution had started serving investments.
 	// A latch is a hazard bought for nothing; the setter costs the same UPDATE.
 	//
-	// ⚠ Nothing READS this column yet, deliberately: see enqueueInitialSync's own comment for the
-	// ruling that declined the per-sync product re-check, and for what a future reader would need.
-	// It is written so the fact is durable and countable, not because a consumer exists.
+	// ⚠ Read by JobHealthRepository.GetInvestmentsSkippedAtLinkCount: see enqueueInitialSync's own
+	// comment for the ruling that declined the per-sync product re-check, and for what a future
+	// reader would need. The consumer now exists: the admin health gauge.
 	SetInvestmentsSkippedAtLink(ctx context.Context, id string, skipped bool) error
 
 	// TransitionErrorStatus atomically transitions a linked item to newStatus while setting its
