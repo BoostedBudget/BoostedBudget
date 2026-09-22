@@ -19,7 +19,10 @@
  * ── DATA SOURCES (why this guard is non-vacuous) ────────────────────────────
  * Scanning a rendered tree for a leak is worthless if the tree rendered nothing.
  * So this guard also pins the SET OF DATA SOURCES the household view consumes to
- * the caller-scoped allowlist, and asserts the set is non-empty today:
+ * the caller-scoped allowlist, and asserts the set is non-empty today. The scan
+ * reads named imports from `@/features/household`, `@/features/accounts` and
+ * `@/shared/hooks/useTrackEvent`; every identifier it finds must be in the
+ * caller-scoped allowlist below.
  *
  *   CALLER-SCOPED (allowed):
  *     - useHousehold()          → only the caller's own membership signal (`isInHousehold`)
@@ -112,14 +115,31 @@ const HOUSEHOLD_WIDE_SOURCES = [
   'useGetHouseholdEntitlement',
 ] as const
 
-/** Named identifiers imported from the household feature module. */
-function importedHouseholdIdentifiers(source: string): string[] {
+/**
+ * Module specifiers whose named imports are pinned to the caller-scoped allowlist. The household
+ * feature is the primary surface; the accounts hook and the analytics hook are included because the
+ * header lists them as caller-scoped, and an allowlist that never scans them cannot enforce that.
+ */
+const SCANNED_IMPORT_SOURCES = [
+  '@/features/household',
+  '@/features/accounts',
+  '@/shared/hooks/useTrackEvent',
+] as const
+
+/** Named identifiers imported from any scanned module. */
+function importedScannedIdentifiers(source: string): string[] {
   const identifiers: string[] = []
-  const importRe = /import\s*\{([^}]*)\}\s*from\s*['"]@\/features\/household[^'"]*['"]/g
-  for (const match of source.matchAll(importRe)) {
-    for (const raw of match[1].split(',')) {
-      const identifier = raw.trim().split(/\s+as\s+/)[0].trim()
-      if (identifier) identifiers.push(identifier)
+  for (const moduleSource of SCANNED_IMPORT_SOURCES) {
+    const escaped = moduleSource.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const importRe = new RegExp(
+      `import\\s*\\{([^}]*)\\}\\s*from\\s*['"]${escaped}[^'"]*['"]`,
+      'g',
+    )
+    for (const match of source.matchAll(importRe)) {
+      for (const raw of match[1].split(',')) {
+        const identifier = raw.trim().split(/\s+as\s+/)[0].trim()
+        if (identifier) identifiers.push(identifier)
+      }
     }
   }
   return identifiers
@@ -248,8 +268,8 @@ describe('ScopeSegmentedControl household disclosure privacy guard (Issue #1706)
   }
 
   describe('data sources (non-vacuous: the set of consumed sources is pinned)', () => {
-    it('imports only caller-scoped household data sources', () => {
-      const imported = importedHouseholdIdentifiers(PRODUCTION_SOURCE)
+    it('imports only caller-scoped data sources (household, accounts, analytics)', () => {
+      const imported = importedScannedIdentifiers(PRODUCTION_SOURCE)
 
       // Non-vacuous anchor: the set is NON-EMPTY today — the host already reads
       // the caller's own membership signal. A future caption must not widen it.
