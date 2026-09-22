@@ -112,6 +112,12 @@ updates:
           - "version-update:semver-patch"
           - "version-update:semver-minor"
           - "version-update:semver-major"
+      # Clerk majors are coordinated auth-surface upgrades, not routine bumps. The `expo*`
+      # and `@expo/*` patterns above do NOT cover `@clerk/*`, and the mobile CI guard
+      # (scripts/check-mobile-ci.py) does not semver-check @clerk/expo, so this ignore is
+      # the only mechanism that keeps a Clerk major out of an automatic PR.
+      - dependency-name: "@clerk/*"
+        update-types: ["version-update:semver-major"]
     # Group dependencies by type across ALL workspaces
     groups:
       # These packages form one Expo SDK 57 compatibility surface. Keeping them in one PR lets
