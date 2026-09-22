@@ -271,7 +271,7 @@ export default function SignUpScreen() {
               variant="link"
               label="Resend code"
               onPress={handleResendCode}
-              disabled={controlsDisabled}
+              disabled={controlsDisabled || submitting}
             />
           </>
         ) : (
