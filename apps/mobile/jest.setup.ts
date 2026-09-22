@@ -15,12 +15,31 @@ jest.mock('expo-router', () => {
     bold: { fontFamily: 'System', fontWeight: '600' },
     heavy: { fontFamily: 'System', fontWeight: '700' },
   }
+  // The router singleton and its hooks. The guarded `(app)` group calls `<Redirect>`, and
+  // `src/auth/navigation.ts` plus the auth screens call `router.replace(...)`. The real
+  // `expo-router` needs a live navigation container; this mock lets a shell render in jest
+  // and lets a test assert navigation by reading `router.replace`.
+  const router = {
+    push: jest.fn(),
+    replace: jest.fn(),
+    navigate: jest.fn(),
+    back: jest.fn(),
+    dismiss: jest.fn(),
+    setParams: jest.fn(),
+    canGoBack: jest.fn(() => false),
+  }
   return {
     DarkTheme: { dark: true, colors: {}, fonts },
     DefaultTheme: { dark: false, colors: {}, fonts },
     Link: ({ children }: { children: React.ReactNode }) => children,
+    Redirect: () => null,
     Stack,
     ThemeProvider: jest.fn(({ children }: { children: React.ReactNode }) => children),
+    router,
+    useRouter: () => router,
+    useSegments: () => [] as string[],
+    usePathname: () => '/',
+    useLocalSearchParams: () => ({} as Record<string, string | string[]>),
   }
 })
 
@@ -73,6 +92,81 @@ jest.mock('@clerk/expo/token-cache', () => {
     },
   }
 })
+
+// A controllable, type-checked `@clerk/expo` mock. The real module transitively imports
+// `@clerk/clerk-js` and expects a live `ClerkProvider`; the unit tier must never instantiate it.
+// `jest.hoisted` is unavailable under this jest-expo runtime, so the state is a hoisted `var` the
+// factory closes over lazily (read at render time, after the assignment below has run). The
+// `satisfies Partial<typeof import('@clerk/expo')>` clause fails typecheck if the real surface
+// drops or renames a member this mock provides. Tests drive auth state through the helpers below.
+type ClerkExpoModule = typeof import('@clerk/expo')
+
+interface MockSetActiveParams {
+  session: string
+  navigate: (params: {
+    session: { currentTask?: { key: string } }
+    decorateUrl: (url: string) => string
+  }) => void
+}
+
+export interface MockClerkAuthState {
+  isLoaded: boolean
+  isSignedIn: boolean
+  userId: string | null
+  getToken: jest.Mock<Promise<string | null>, []>
+}
+
+var mockClerkState = {
+  auth: {
+    isLoaded: true,
+    isSignedIn: false,
+    userId: null as string | null,
+    getToken: jest.fn<Promise<string | null>, []>(async () => null),
+  } satisfies MockClerkAuthState,
+  clerk: {
+    setActive: jest.fn<Promise<void>, [MockSetActiveParams]>(async () => {}),
+    signOut: jest.fn<Promise<void>, []>(async () => {}),
+    session: null as { currentTask?: { key: string } } | null,
+  },
+  session: {
+    isLoaded: true,
+    isSignedIn: false,
+    session: null as { currentTask?: { key: string } } | null,
+  },
+  signIn: { signIn: null as unknown },
+  signUp: { signUp: null as unknown },
+}
+
+jest.mock('@clerk/expo', () =>
+  ({
+    ClerkProvider: (({ children }: { children?: React.ReactNode }) =>
+      children ?? null) as unknown as ClerkExpoModule['ClerkProvider'],
+    useAuth: (() => mockClerkState.auth) as unknown as ClerkExpoModule['useAuth'],
+    useClerk: (() => mockClerkState.clerk) as unknown as ClerkExpoModule['useClerk'],
+    useSession: (() => mockClerkState.session) as unknown as ClerkExpoModule['useSession'],
+    useSignIn: (() => mockClerkState.signIn) as unknown as ClerkExpoModule['useSignIn'],
+    useSignUp: (() => mockClerkState.signUp) as unknown as ClerkExpoModule['useSignUp'],
+  }) satisfies Partial<ClerkExpoModule>,
+)
+
+/** Per-test helper: the mutable mock state, for advanced control (SSO sessions, session tasks). */
+export function mockClerk(): typeof mockClerkState {
+  return mockClerkState
+}
+
+/** Per-test helper: override the mocked Clerk auth state. */
+export function setMockClerkAuth(next: Partial<MockClerkAuthState>): void {
+  Object.assign(mockClerkState.auth, next)
+}
+
+/** Per-test helper: restore the default signed-out Clerk auth state. */
+export function resetMockClerkAuth(): void {
+  mockClerkState.auth.isLoaded = true
+  mockClerkState.auth.isSignedIn = false
+  mockClerkState.auth.userId = null
+  mockClerkState.auth.getToken.mockReset()
+  mockClerkState.auth.getToken.mockResolvedValue(null)
+}
 
 const MOBILE_ROOT = dirname(require.resolve('./package.json'))
 const GLOBAL_CSS_PATH = resolve(MOBILE_ROOT, 'global.css')
