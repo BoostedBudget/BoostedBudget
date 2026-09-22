@@ -5,13 +5,18 @@ package services
 // investment_personal_baseline_integration_test.go — #1706 personal-scope regression gate.
 //
 // The household-scope work must not change the PERSONAL investments output. This test seeds the
-// exact deterministic fixture behind .omo/evidence/task-5-personal-baseline.json, calls the two
-// personal-scope reads (scope nil), and asserts their JSON equals the golden baseline's
+// exact deterministic fixture behind testdata/personal_baseline.json, calls the two personal-scope
+// reads (scope nil), and asserts their JSON is JSON-equal to the golden baseline's
 // personal_holdings / personal_portfolio_summary.
 //
-// The baseline lives OUTSIDE the worktree (it is evidence, not a committed fixture), so the path
-// is overridable via PERSONAL_BASELINE_PATH and the test SKIPS when the file is absent — CI has no
-// evidence dir. Locally, run it against the disposable `freshcheck` DB:
+// The baseline is a COMMITTED fixture at testdata/personal_baseline.json, resolved relative to this
+// package dir the way Go tests resolve testdata/. It is deliberately NOT skippable: a missing or
+// unreadable fixture FAILS the test. A silent skip is exactly how a personal-scope regression
+// reaches CI unnoticed — the failure mode this repo's CLAUDE.md records as having hidden a
+// regression for two rounds. The path is still overridable via PERSONAL_BASELINE_PATH for
+// regeneration, but the default is the committed file.
+//
+// Locally, run it against the disposable `freshcheck` DB:
 //
 //	DATABASE_URL="postgres://devuser:devpass@localhost:5432/freshcheck?sslmode=disable" \
 //	go test -tags integration -p 1 -count=1 -run TestInvestmentPersonalBaseline_Unchanged \
@@ -28,7 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const defaultPersonalBaselinePath = "/Users/yingyueliu/coding/BoostedBudget3/.omo/evidence/task-5-personal-baseline.json"
+const defaultPersonalBaselinePath = "testdata/personal_baseline.json"
 
 type personalBaselineDoc struct {
 	PersonalHoldings         []*domain.HoldingView    `json:"personal_holdings"`
@@ -41,9 +46,9 @@ func TestInvestmentPersonalBaseline_Unchanged(t *testing.T) {
 		path = defaultPersonalBaselinePath
 	}
 	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Skipf("personal baseline not found at %s — skipping (evidence file is outside the worktree)", path)
-	}
+	require.NoError(t, err,
+		"personal baseline fixture %q is missing or unreadable — this test must FAIL, not skip: "+
+			"a skipped baseline gate is how a personal-scope regression reaches CI unnoticed", path)
 	var golden personalBaselineDoc
 	require.NoError(t, json.Unmarshal(raw, &golden), "parse baseline %s", path)
 	require.NotEmpty(t, golden.PersonalHoldings, "baseline must carry personal_holdings")
