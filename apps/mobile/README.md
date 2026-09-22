@@ -57,6 +57,15 @@ unverified until #1660: the Sign in with Apple entitlement and the iOS
 deployment target (`17.0`), the Android hosted-auth intent filter for the
 `clerk` scheme, and the Android packaging exclusions / Kotlin metadata flag.
 
+### OAuth redirect URL (owner setup)
+
+Google and Apple sign-in return to the app through the `boostedbudget` scheme at
+`boostedbudget://sso-callback` (the `app/(auth)/sso-callback.tsx` route). Before
+OAuth works in a given Clerk instance, an owner must register that exact URL as
+an allowed redirect URL in the Clerk Dashboard (Configure → SSO connections /
+Redirect URLs). The value is pinned to `expo.scheme` in `app.json`; changing the
+scheme without updating the screen and the Dashboard breaks the callback.
+
 ## Architecture seams
 
 - Expo Router owns universal navigation. TanStack Router is not used in the
