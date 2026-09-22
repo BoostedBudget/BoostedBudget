@@ -79,7 +79,7 @@ describe('useHouseholdMembers', () => {
     expect(result.current.members).toEqual([])
   })
 
-  it('removeMember calls the mutation with the userId and invalidates listHouseholdMembers + getHouseholdEntitlement + getMyHousehold + the 7 scoped dashboard/analytics queries', async () => {
+  it('removeMember calls the mutation with the userId and invalidates listHouseholdMembers + getHouseholdEntitlement + getMyHousehold + the 9 scoped dashboard/analytics/investments queries', async () => {
     // Finding #1 (final review): removeMember is used for BOTH an owner
     // removing another member AND self-leave (LeaveHouseholdDialog calling
     // removeMember(ownUserId)). getMyHousehold must be invalidated so
