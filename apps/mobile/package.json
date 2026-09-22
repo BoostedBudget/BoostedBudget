@@ -15,11 +15,13 @@
     "test:integration": "jest --runInBand --testPathPattern '\\.integration\\.test\\.(ts|tsx)$'",
     "doctor": "expo-doctor",
     "export:web": "expo export --platform web --output-dir dist/web",
+    "export:web:clerk-smoke": "expo export --platform web --output-dir dist/web-clerk-smoke",
     "export:ios": "expo export --platform ios --output-dir dist/ios",
     "export:android": "expo export --platform android --output-dir dist/android",
     "gate:nativewind": "bun run scripts/nativewind-gate.ts",
     "serve:web": "bun run scripts/serve-web.ts",
     "e2e:visual": "playwright test --config playwright.config.ts",
+    "test:clerk-smoke": "sh -c 'if [ -z \"$EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY\" ] || [ -z \"$CLERK_SMOKE_EMAIL\" ] || [ -z \"$CLERK_SMOKE_PASSWORD\" ]; then echo \"clerk-smoke: SKIPPED (no credentials) - set EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY, CLERK_SMOKE_EMAIL and CLERK_SMOKE_PASSWORD to run the credentialed Clerk smoke. Nothing was rebuilt; no test ran.\"; exit 0; fi; bun run export:web:clerk-smoke && playwright test --config playwright.clerk-smoke.config.ts'",
     "build": "bun run export:web && bun run export:ios && bun run export:android"
   },
   "dependencies": {
