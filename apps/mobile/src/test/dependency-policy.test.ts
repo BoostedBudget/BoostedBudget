@@ -1,8 +1,16 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+
 const rootPackage = require('../../../../package.json')
 const webPackage = require('../../../web/package.json')
 const apiClientPackage = require('../../../../packages/api-client/package.json')
 const mobilePackage = require('../../package.json')
 const mobileAppConfig = require('../../app.json')
+
+const MOBILE_ROOT = dirname(require.resolve('../../package.json'))
+const REPO_ROOT = resolve(MOBILE_ROOT, '..', '..')
+const DEPENDABOT_PATH = resolve(REPO_ROOT, '.github/dependabot.yml')
+const dependabotYaml = readFileSync(DEPENDABOT_PATH, 'utf8')
 
 describe('universal React dependency policy', () => {
   it('pins the validated NativeWind release candidate exactly', () => {
@@ -72,5 +80,23 @@ describe('mobile Clerk dependency policy', () => {
   it('bans the deprecated @clerk/expo-passkeys package', () => {
     expect(mobilePackage.dependencies['@clerk/expo-passkeys']).toBeUndefined()
     expect(mobilePackage.devDependencies['@clerk/expo-passkeys']).toBeUndefined()
+  })
+
+  it('holds @clerk major updates for manual review in Dependabot', () => {
+    // The CI guard (scripts/check-mobile-ci.py) only constrains dependencies in
+    // MOBILE_COMPATIBILITY_DEPS or the Expo compatibility group, and @clerk/expo is in
+    // neither. The Dependabot ignore is therefore the only mechanism that keeps a Clerk
+    // major from arriving as a routine bump, so this assertion reads the YAML as text.
+    const lines = dependabotYaml.split('\n')
+    const entryIndex = lines.findIndex((line) =>
+      line.includes('dependency-name: "@clerk/*"'),
+    )
+    expect(entryIndex).toBeGreaterThanOrEqual(0)
+
+    // A bare dependency-name match is insufficient: the update type must sit with the
+    // entry, so assert both inside the same three-line window.
+    const window = lines.slice(entryIndex, entryIndex + 3).join('\n')
+    expect(window).toContain('dependency-name: "@clerk/*"')
+    expect(window).toContain('version-update:semver-major')
   })
 })
