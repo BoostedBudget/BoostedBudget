@@ -56,3 +56,21 @@ describe('universal React dependency policy', () => {
     expect(rootPackage.overrides.lightningcss).toBeUndefined()
   })
 })
+
+describe('mobile Clerk dependency policy', () => {
+  it('declares @clerk/expo with a numeric semver spec', () => {
+    // The CI guard (scripts/check-mobile-ci.py) matches no compatibility pattern for
+    // @clerk/expo, so it does NOT semver-check it. This assertion is the only pin.
+    expect(mobilePackage.dependencies['@clerk/expo']).toMatch(/^[\^~]?\d+\.\d+\.\d+/)
+  })
+
+  it('bans the deprecated @clerk/clerk-expo package', () => {
+    expect(mobilePackage.dependencies['@clerk/clerk-expo']).toBeUndefined()
+    expect(mobilePackage.devDependencies['@clerk/clerk-expo']).toBeUndefined()
+  })
+
+  it('bans the deprecated @clerk/expo-passkeys package', () => {
+    expect(mobilePackage.dependencies['@clerk/expo-passkeys']).toBeUndefined()
+    expect(mobilePackage.devDependencies['@clerk/expo-passkeys']).toBeUndefined()
+  })
+})
