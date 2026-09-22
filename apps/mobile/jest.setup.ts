@@ -35,6 +35,45 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 )
 
+// `expo-secure-store` ships no jest mock (unlike AsyncStorage), and its native module
+// throws at import time under jest. Provide an in-memory mock so the Clerk token cache is
+// exercisable and a test can force a read rejection.
+jest.mock('expo-secure-store', () => {
+  const store = new Map<string, string>()
+  return {
+    AFTER_FIRST_UNLOCK: 0,
+    getItemAsync: jest.fn(async (key: string) => store.get(key) ?? null),
+    setItemAsync: jest.fn(async (key: string, value: string) => {
+      store.set(key, value)
+    }),
+    deleteItemAsync: jest.fn(async (key: string) => {
+      store.delete(key)
+    }),
+  }
+})
+
+// `@clerk/expo/token-cache` builds its cache over `expo-secure-store` at module scope.
+// Mirror the real implementation (a failed read deletes the corrupt entry and resolves
+// null) so the cache contract is exercised without loading the real module.
+jest.mock('@clerk/expo/token-cache', () => {
+  const SecureStore = require('expo-secure-store')
+  const options = { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK }
+  return {
+    tokenCache: {
+      getToken: async (key: string) => {
+        try {
+          return await SecureStore.getItemAsync(key, options)
+        } catch {
+          await SecureStore.deleteItemAsync(key, options)
+          return null
+        }
+      },
+      saveToken: (key: string, token: string) => SecureStore.setItemAsync(key, token, options),
+      clearToken: (key: string) => SecureStore.deleteItemAsync(key, options),
+    },
+  }
+})
+
 const MOBILE_ROOT = dirname(require.resolve('./package.json'))
 const GLOBAL_CSS_PATH = resolve(MOBILE_ROOT, 'global.css')
 
