@@ -11,8 +11,8 @@
  * otherwise `useHousehold()`'s cached `isInHousehold` stays stale `true` after
  * leaving, leaving the Household tab/HouseholdCard visible in a broken state.
  * It also changes what's included in the household aggregate (a removed/left
- * member's shared balances should no longer be counted), so the same 7 scoped
- * dashboard/analytics queries invalidated by useAcceptInvite.ts/
+ * member's shared balances should no longer be counted), so the same 9 scoped
+ * dashboard/analytics/investments queries invalidated by useAcceptInvite.ts/
  * useHouseholdVisibility.ts are invalidated here too — see
  * `invalidateScopedQueries.ts` for the shared helper.
  */
