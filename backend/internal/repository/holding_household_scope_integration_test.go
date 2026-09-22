@@ -566,3 +566,113 @@ func TestHoldingsHouseholdScope_SubsetOfHouseholdNetWorthInvestmentLeg(t *testin
 	assert.LessOrEqual(t, holdingsTotal, investmentLeg,
 		"the sum of household holdings must never exceed the household investment leg")
 }
+
+// TestHoldingsHouseholdScope_MemberAsRequesterSeesOwnerSharedNotOwnUnshared is the shape where the
+// personal-predicate REPLACEMENT matters most, and the one the other guards leave uncovered: the
+// CALLER is the household MEMBER, not the owner. The read is called with the member's user ID.
+//
+// Under the old personal predicate (`WHERE h.user_id = $1`) this call would have returned the
+// member's OWN unshared holding and NOTHING of the owner's. The share-gated replacement must invert
+// both: the owner's SHARED account's holding IS present, and the member's OWN UNSHARED account's
+// holding is ABSENT.
+func TestHoldingsHouseholdScope_MemberAsRequesterSeesOwnerSharedNotOwnUnshared(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	insertHouseholdScopeMember(t, pool, hh, owner, "owner")
+	insertHouseholdScopeMember(t, pool, hh, member, "member")
+
+	ownerLinkedItem := insertTestLinkedItem(t, pool, owner)
+	memberLinkedItem := insertTestLinkedItem(t, pool, member)
+
+	// The OWNER shares one account into the household; the MEMBER keeps their own account unshared.
+	ownerShared := insertHouseholdScopeInvestmentAccount(t, pool, ownerLinkedItem, owner, "OWNER-SHARED-TO-MEMBER")
+	memberPrivate := insertHouseholdScopeInvestmentAccount(t, pool, memberLinkedItem, member, "MEMBER-PRIVATE-BROKERAGE")
+
+	insertHouseholdScopeHolding(t, pool, owner, ownerShared, "OSHR", "Owner Shared Fund", 1111.11)
+	insertHouseholdScopeHolding(t, pool, member, memberPrivate, "MPRV", "Member Private Fund", 9999.99)
+
+	now := time.Now().UTC()
+	insertHouseholdShare(t, pool, hh, ownerShared.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+	// memberPrivate gets NO share row.
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+
+	// ── The read under test: the CALLER is the MEMBER. ──
+	holdings, err := repository.NewHoldingRepository(pool).GetByUserIDWithSecurities(ctx, member, nil, scope)
+	require.NoError(t, err, "GetByUserIDWithSecurities must not error")
+
+	byAccount := holdingsByAccount(holdings)
+	ownerHolding, ownerPresent := byAccount[ownerShared.AccountID]
+	_, memberPresent := byAccount[memberPrivate.AccountID]
+	t.Logf("member-requester household read returned %d holding(s); owner_shared=%s member_private=%s",
+		len(holdings), ownerShared.AccountID, memberPrivate.AccountID)
+
+	require.Len(t, holdings, 1,
+		"a member-requester household read must return ONLY the owner's shared holding; the member's "+
+			"own unshared account %q (%s, ticker MPRV) MUST BE ABSENT",
+		memberPrivate.DisplayName, memberPrivate.AccountID)
+
+	assert.True(t, ownerPresent,
+		"the OWNER's shared account %q (%s) holding must be visible to the member — the personal "+
+			"predicate `h.user_id = $1` would have excluded it, which is exactly what the share-gated "+
+			"replacement fixes", ownerShared.DisplayName, ownerShared.AccountID)
+	assert.False(t, memberPresent,
+		"the MEMBER's own unshared account %q (%s) holding was returned under household scope. It is "+
+			"never shared into household %s, so it MUST BE ABSENT (#1706).",
+		memberPrivate.DisplayName, memberPrivate.AccountID, hh)
+	assert.InDelta(t, 1111.11, valueOf(ownerHolding), 0.01, "owner shared holding value")
+	assert.Equal(t, "OSHR", tickerOf(ownerHolding), "owner shared holding ticker")
+}
+
+// TestHoldingsHouseholdScope_HiddenVisibilityShareRowDoesNotContribute pins the CTE's
+// `has.visibility = 'shared'` predicate directly: a share row whose visibility is 'hidden' is NOT a
+// share, so its account's holding must not enter the household read. The hidden row is placed BESIDE
+// an active 'shared' row so the exclusion is provably specific to the visibility value rather than
+// the read returning nothing.
+func TestHoldingsHouseholdScope_HiddenVisibilityShareRowDoesNotContribute(t *testing.T) {
+	pool := setupHouseholdSchemaDB(t)
+	ctx := context.Background()
+
+	owner := insertTestUser(t, pool)
+	member := insertTestUser(t, pool)
+	hh := insertTestHousehold(t, pool, owner)
+	insertHouseholdScopeMember(t, pool, hh, owner, "owner")
+	insertHouseholdScopeMember(t, pool, hh, member, "member")
+
+	ownerLinkedItem := insertTestLinkedItem(t, pool, owner)
+	hiddenAcct := insertHouseholdScopeInvestmentAccount(t, pool, ownerLinkedItem, owner, "OWNER-HIDDEN-VISIBILITY")
+	sharedAcct := insertHouseholdScopeInvestmentAccount(t, pool, ownerLinkedItem, owner, "OWNER-SHARED-VISIBILITY")
+	insertHouseholdScopeHolding(t, pool, owner, hiddenAcct, "HIDN", "Hidden Visibility Fund", 7777.77)
+	insertHouseholdScopeHolding(t, pool, owner, sharedAcct, "SHWN", "Shared Visibility Fund", 1111.11)
+
+	now := time.Now().UTC()
+	// A share ROW exists for hiddenAcct, but its visibility is 'hidden' — not a share.
+	insertHouseholdShare(t, pool, hh, hiddenAcct.UserAccountID, nil, domain.ShareVisibilityHidden, now.AddDate(0, -2, 0))
+	insertHouseholdShare(t, pool, hh, sharedAcct.UserAccountID, nil, domain.ShareVisibilityShared, now.AddDate(0, -2, 0))
+
+	scope := &domain.HouseholdScope{HouseholdID: hh, MemberUserIDs: []string{owner, member}}
+	holdings, err := repository.NewHoldingRepository(pool).GetByUserIDWithSecurities(ctx, owner, nil, scope)
+	require.NoError(t, err, "GetByUserIDWithSecurities must not error")
+
+	byAccount := holdingsByAccount(holdings)
+	sharedHolding, sharedPresent := byAccount[sharedAcct.AccountID]
+	_, hiddenPresent := byAccount[hiddenAcct.AccountID]
+	t.Logf("household read returned %d holding(s); hidden_visibility=%s shared_visibility=%s",
+		len(holdings), hiddenAcct.AccountID, sharedAcct.AccountID)
+
+	require.Len(t, holdings, 1,
+		"only the visibility='shared' row may contribute; the visibility='hidden' row's holding "+
+			"(ticker HIDN) must be ABSENT")
+	assert.False(t, hiddenPresent,
+		"a share row with visibility='hidden' contributed a holding — household_grants_asof must "+
+			"filter `has.visibility = 'shared'`")
+	assert.True(t, sharedPresent,
+		"the visibility='shared' row's holding must survive — a read that returned nothing would "+
+			"also pass the hidden assertion, which is why this sibling exists")
+	assert.InDelta(t, 1111.11, valueOf(sharedHolding), 0.01, "shared-visibility holding value")
+	assert.Equal(t, "SHWN", tickerOf(sharedHolding), "shared-visibility holding ticker")
+}
