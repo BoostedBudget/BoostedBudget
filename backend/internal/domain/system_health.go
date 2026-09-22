@@ -76,6 +76,11 @@ type SystemHealthResponse struct {
 	// deliberately no longer exposes any component breakdown (Task 6's security fix), so this is
 	// the only place left for that guard to check.
 	CacheEnabled bool `json:"cache_enabled"`
+	// InvestmentsSkippedAtLink is the count of LIVE linked_items rows whose Plaid link was created
+	// while Plaid had not granted investment access (Issue #1707) — the measurement that makes the
+	// affected population countable. See InvestmentsSkippedAtLinkMetrics for why it is an upper
+	// bound and why it is deliberately not part of overall status.
+	InvestmentsSkippedAtLink InvestmentsSkippedAtLinkMetrics `json:"investments_skipped_at_link"`
 }
 
 // RejectedWebhookAttemptMetrics is the read side of repository.InvalidWebhookAttemptRepository —
@@ -307,6 +312,31 @@ type JobBacklogMetrics struct {
 	// Defaults to the Go zero value (false) — the fail-closed direction: any code path that
 	// forgets to explicitly report success (a nil/unwired repo, an early return, a future bug)
 	// silently reads as "unavailable", never as a falsely-confident "available, zero".
+	Available bool `json:"available"`
+}
+
+// InvestmentsSkippedAtLinkMetrics is the admin gauge for linked_items rows whose Plaid link was
+// created while Plaid had not granted investment access (Issue #1707). The column is a link-time
+// latch written by LinkedItemRepository.SetInvestmentsSkippedAtLink and read here by
+// repository.JobHealthRepository.GetInvestmentsSkippedAtLinkCount as a direct, uncached aggregate
+// scoped to LIVE links (status NOT IN ('replaced','disconnected')).
+//
+// ⚠ THE COUNT IS AN UPPER BOUND, NOT EXACT. TRUE is a permanent latch: the only production writer
+// sets it at link time, and the webhook path that later grants investments does NOT clear it, so an
+// item that gained investments after linking stays TRUE. It is also never backfilled, so FALSE
+// means "unknown", never "investments were granted", for any row predating migration 000189.
+//
+// ⚠ DELIBERATELY NOT FED INTO SystemHealthResponse.Status, matching the JobBacklog,
+// PlaidOrphanedItems and DeletionResidue gauges: "this institution serves no investments" is an
+// expected steady state, not an alarm.
+type InvestmentsSkippedAtLinkMetrics struct {
+	// Count is the number of LIVE linked_items rows with investments_skipped_at_link = TRUE.
+	Count int64 `json:"count"`
+	// Available distinguishes "queried successfully and found a real (possibly zero) count" from
+	// "the query failed or the repository is unwired, so there is no number to report". Same
+	// reasoning as JobBacklogMetrics.Available above, and the same fail-closed direction: it
+	// defaults to the Go zero value (false), so any path that forgets to explicitly claim success
+	// reports "unknown" rather than a falsely confident zero.
 	Available bool `json:"available"`
 }
 
