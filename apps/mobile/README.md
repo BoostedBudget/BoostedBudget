@@ -119,6 +119,61 @@ an allowed redirect URL in the Clerk Dashboard (Configure → SSO connections /
 Redirect URLs). The value is pinned to `expo.scheme` in `app.json`; changing the
 scheme without updating the screen and the Dashboard breaks the callback.
 
+## Authentication
+
+Clerk authentication is delivered for mobile ([#1657](https://github.com/BoostedBudget/BoostedBudget/issues/1657)).
+The app authenticates against the same Clerk instance as the web app and sends a
+bearer token on every generated API call. Passkeys are **not** part of this slice and
+remain deferred ([#1708](https://github.com/BoostedBudget/BoostedBudget/issues/1708)).
+
+- **Adapter seam with a closed interface.** `src/auth/mobile-auth.tsx` is the only
+  auth surface the app consumes. It declares its own structural types instead of
+  importing Clerk, so an inert build never pulls Clerk into the module graph. The
+  interface is closed: `MobileAuthValue`, `MobileSignInValue`, `MobileSignUpValue`,
+  and `MobileSSOValue` are the complete set of members the screens may call, and the
+  compile-time assertions in `src/test/auth/mobile-auth.test.tsx` fail if the pinned
+  Clerk v4 surface drifts. The Clerk-backed implementation lives in
+  `src/auth/mobile-auth.clerk.tsx` and is the only production module (besides the
+  token cache) allowed to import `@clerk/*`.
+- **Inert mode.** When `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` is absent or malformed,
+  `MobileAuthProvider` mounts `inertMobileAuthContextValue` instead of Clerk: the app
+  is fully usable signed-out, `getToken()` resolves `null`, and the Clerk module is
+  never `require`d. The `require` sits inside the `authAvailable` branch, so an inert
+  bundle never executes Clerk.
+- **Secure cache.** Session tokens are persisted on-device through
+  `expo-secure-store` via `src/auth/token-cache.ts`. On native the cache delegates to
+  Clerk's `@clerk/expo/token-cache`; on web it is `undefined` (Clerk keeps the session
+  in memory). The `require` is inside the native branch so a web bundle never pulls
+  `expo-secure-store`. A test-visible probe asserts no token key ever reaches
+  AsyncStorage.
+- **Default-token strategy and the backend email fallback.** The registered provider
+  requests the **default** session token (`getToken()`, no JWT template), exactly as
+  the web app does. A first registration can therefore trigger the backend's Clerk-API
+  email fallback; this is accepted and matches web.
+- **`@clerk/expo` plugin native defaults.** The config plugin's native defaults attach
+  as config mods that only run at `expo prebuild`, so they are inert for `expo export`
+  and remain unverified until #1660: the Sign in with Apple entitlement and the iOS
+  deployment target (`17.0`), the Android hosted-auth intent filter for the `clerk`
+  scheme, and the Android packaging exclusions / Kotlin metadata flag.
+- **Redirect guard.** `app/(app)/_layout.tsx` is a plain `Stack` (never
+  `Stack.Protected`, an open iOS defect expo/expo#37305) guarded by the adapter plus
+  `<Redirect>`: it renders nothing until `isLoaded`, redirects a signed-out or inert
+  user to `/(auth)/sign-in`, and admits only a signed-in user. A session carrying a
+  pending `currentTask` is not treated as signed-in.
+- **Sign-out and recovery-handler clearing.** Sign-out clears the secure cache and the
+  one-shot 401 recovery handler. `AuthProviders` registers the handler only while
+  signed in and clears it on sign-out and unmount, so a stale handler cannot fire
+  after sign-out. `hasEverAuthenticated` in the shared client is never reset (there is
+  no public API for it), which is why clearing the handler is the mechanism.
+- **Test tiers.** The unit/component tier runs against the hand-written Clerk mock;
+  the contract-integration tier drives the real `@boostedbudget/api-client` through
+  `axios-mock-adapter`; the non-gating credentialed smoke lane is the only one that
+  validates real Clerk semantics. See **Test tiers** above.
+- **Clerk Dashboard prerequisite.** Google and Apple sign-in return through
+  `boostedbudget://sso-callback`; an owner must register that exact URL as an allowed
+  redirect URL in the Clerk Dashboard before OAuth works. See **OAuth redirect URL
+  (owner setup)** above.
+
 ## Architecture seams
 
 - Expo Router owns universal navigation. TanStack Router is not used in the
@@ -297,7 +352,7 @@ design-tokens projection, not a NativeWind feature. `packages/design-tokens` and
 
 ## Deliberately deferred
 
-This scaffold does not include Clerk or passkeys ([#1657](https://github.com/BoostedBudget/BoostedBudget/issues/1657)),
+This scaffold does not include passkeys ([#1708](https://github.com/BoostedBudget/BoostedBudget/issues/1708)),
 PostHog ([#1659](https://github.com/BoostedBudget/BoostedBudget/issues/1659)),
 EAS signing, OTA, store delivery, or device E2E ([#1660](https://github.com/BoostedBudget/BoostedBudget/issues/1660)),
 notifications or background refresh ([#1661](https://github.com/BoostedBudget/BoostedBudget/issues/1661)),
