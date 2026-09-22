@@ -24,7 +24,7 @@ module.exports = {
   // conventional node_modules path. Keep both layers transformable by Expo's
   // Babel preset while retaining Jest's normal dependency exclusion.
   transformIgnorePatterns: [
-    '/node_modules/(?!\\.bun/|react-native|@react-native|expo|@expo|expo-router|@tanstack|nanoid|standard-navigation)',
+    '/node_modules/(?!\\.bun/|react-native|@react-native|expo|@expo|@clerk|expo-router|@tanstack|nanoid|standard-navigation)',
   ],
   // `/e2e/` holds the Playwright visual/accessibility suite (Todo 22). `jest-expo` sets no
   // `testMatch`, so jest's default `**/?(*.)+(spec|test).[jt]s?(x)` would discover
