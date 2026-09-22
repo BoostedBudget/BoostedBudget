@@ -136,6 +136,51 @@ func TestJobBacklogMetrics_Available_SerializesEvenWhenFalse(t *testing.T) {
 	assert.Equal(t, false, availableValue)
 }
 
+// TestInvestmentsSkippedAtLinkMetrics_Available_SerializesEvenWhenFalse is the domain-level
+// falsifiable test for the new gauge's `available` JSON tag (Issue #1707). It mirrors
+// TestJobBacklogMetrics_Available_SerializesEvenWhenFalse above: Available's doc comment says it
+// defaults to the Go zero value (false) — the fail-closed direction — so a caller that forgot to
+// set it must read as unavailable, NOT as an absent/undefined field. That guarantee would silently
+// break if a future edit added `,omitempty` to the `available` json tag: Go's encoding/json omits a
+// `false` bool with omitempty, so the key would vanish from the response entirely for the
+// "never queried, zero value" case — indistinguishable on the wire from a field that was never
+// added at all, rather than explicit `false`.
+//
+// Falsified by adding `,omitempty` to Available's json tag in system_health.go: this test then
+// fails because `"available"` no longer appears in the marshaled output at all.
+func TestInvestmentsSkippedAtLinkMetrics_Available_SerializesEvenWhenFalse(t *testing.T) {
+	var zeroValue InvestmentsSkippedAtLinkMetrics // Available is false, the Go zero value
+
+	b, err := json.Marshal(zeroValue)
+	require.NoError(t, err)
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(b, &decoded))
+
+	availableValue, present := decoded["available"]
+	require.True(t, present,
+		"the \"available\" key must be present in the marshaled JSON even when Available is the "+
+			"Go zero value (false) — an omitempty tag would drop it, making a genuinely-unavailable "+
+			"gauge indistinguishable on the wire from a field that was never added")
+	assert.Equal(t, false, availableValue)
+}
+
+// TestInvestmentsSkippedAtLinkMetrics_CountRoundTrips proves the populated gauge survives a
+// marshal/unmarshal cycle with both its count and its availability intact (Issue #1707).
+func TestInvestmentsSkippedAtLinkMetrics_CountRoundTrips(t *testing.T) {
+	original := InvestmentsSkippedAtLinkMetrics{Count: 4200, Available: true}
+
+	b, err := json.Marshal(original)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"count":4200`)
+	assert.Contains(t, string(b), `"available":true`)
+
+	var decoded InvestmentsSkippedAtLinkMetrics
+	require.NoError(t, json.Unmarshal(b, &decoded))
+	assert.Equal(t, int64(4200), decoded.Count)
+	assert.True(t, decoded.Available)
+}
+
 func TestSystemHealthResponse_Timestamp(t *testing.T) {
 	now := time.Now()
 	response := SystemHealthResponse{
