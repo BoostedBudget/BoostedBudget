@@ -1,25 +1,25 @@
 {
-  "recordedAt": "2026-09-19",
-  "recordedAfter": "Wave 1 (todos 1, 2, 3, 4, 5, 26)",
-  "note": "PRE-CHANGE baseline for apps/mobile/scripts/nativewind-gate.ts. Recorded once, after Wave 1 landed and before any Todo 8-18 primitive work, so a bundle delta measures the NativeWind substrate rather than Wave-1 token work. Do not re-record to hide a regression; a reviewed commit is the only way this file changes.",
+  "recordedAt": "2026-09-22",
+  "recordedAfter": "#1657 Clerk/Expo mobile auth dependencies (@clerk/expo, expo-secure-store, expo-web-browser, expo-auth-session, expo-crypto)",
+  "note": "SECOND recording, superseding the 2026-09-19 post-Wave-1 baseline. Re-recorded because #1657 added the Clerk/Expo auth dependencies, whose modules Metro bundles statically even though the Clerk `require` is runtime-gated behind `authAvailable` — so every platform export grew by roughly 25-31% gzip. This is the accepted cost of the auth dependencies, NOT a NativeWind regression: `nativewind` and `react-native-css` still resolve to the same exactly-pinned RC, `react-native-css` still resolves to a single copy, and `expo-doctor` plus all three exports still exit 0. The gate's percentage thresholds (webMaxDeltaPercent: 15, nativeMaxDeltaPercent: 20) are UNCHANGED; only the frozen reference bytes moved, so the delta items now measure changes AFTER the Clerk addition rather than the addition itself. The 2026-09-19 baseline was web gzip 347,166 B / iOS 1,774,298 B / Android 1,880,903 B; the new baseline is the local re-measurement below, which is a few dozen bytes above the CI gate-environment measurement (#1657 PR #1709: web 476,211 / iOS 2,582,381 / Android 2,691,853). Do not re-record to hide a regression; a reviewed commit is the only way this file changes.",
   "resolvedVersions": {
     "nativewind": "5.0.0-rc.0",
     "react-native-css": "3.1.0-rc.0"
   },
   "bundles": {
     "web": {
-      "bytes": 1314949,
-      "gzipBytes": 347166,
+      "bytes": 1828014,
+      "gzipBytes": 476267,
       "fileCount": 2
     },
     "ios": {
-      "bytes": 4187168,
-      "gzipBytes": 1774298,
+      "bytes": 6022392,
+      "gzipBytes": 2582435,
       "fileCount": 2
     },
     "android": {
-      "bytes": 4392165,
-      "gzipBytes": 1880903,
+      "bytes": 6235863,
+      "gzipBytes": 2691912,
       "fileCount": 2
     }
   }
