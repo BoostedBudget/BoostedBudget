@@ -17,6 +17,7 @@ bun run web
 bun run test
 bun run test:ci
 bun run test:integration
+bun run test:clerk-smoke
 bun run lint
 bun run typecheck
 bun run export:web
@@ -36,6 +37,7 @@ publish an application.
 | Unit / component | `bun run test` (and `test:ci`) | Every `*.test.ts(x)` file except the integration tier. The shared primitives, the auth adapter, the guard, and the screens run against the hand-written Clerk mock. |
 | Contract-integration | `bun run test:ci` (gating) / `bun run test:integration` (local, focused) | Files named `*.integration.test.ts(x)`. They import the **real** `@boostedbudget/api-client`, attach `axios-mock-adapter` to the real `AXIOS_INSTANCE`, and drive requests through the real generated functions, so the inline token attachment and both interceptors run. No network, no credentials. |
 | Real-browser | `bun run e2e:visual` | Playwright drives the static web export. |
+| Credentialed Clerk smoke (non-gating) | `bun run test:clerk-smoke` | Playwright drives a **separate** keyed web export (`dist/web-clerk-smoke`), performs one real email/password sign-in, and asserts a bearer token on an intercepted API request. Skips with a visible warning when credentials are absent. Not wired into CI. |
 | Source/dependency guards | `python3 scripts/check-mobile-ci.py` | CI trigger matrix, pinned steps, and Dependabot policy. |
 
 The contract-integration tier is **part of the unchanged `test:ci` run** — jest's
@@ -45,6 +47,39 @@ local-only convenience wrapper (`jest --testPathPattern`) for running just that
 tier while iterating; it is not a CI step. The integration files live under
 `src/test/**`, which `collectCoverageFrom` excludes, so they never change the
 coverage denominator.
+
+### Credentialed Clerk smoke (non-gating)
+
+`bun run test:clerk-smoke` is the **only** lane that validates real Clerk
+semantics. Every other tier mocks Clerk: the unit/component tier runs against the
+hand-written mock in `jest.setup.ts`, and the contract-integration tier mocks the
+adapter seam. Neither can prove that a real publishable key loads, that a real
+email/password sign-in completes, or that a real session token is minted and
+attached to an outbound request — so real flow/session behaviour is a named
+residual risk carried by this lane alone.
+
+It requires three environment variables: `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY`,
+`CLERK_SMOKE_EMAIL`, and `CLERK_SMOKE_PASSWORD`. When any is absent the script
+prints a visible skip warning and exits 0 **before** rebuilding anything; the
+spec also carries a defensive `test.skip`. With all three present it rebuilds the
+web export with the key and API URL inlined into a **separate** directory
+(`dist/web-clerk-smoke`, never `dist/web`), then runs Playwright with
+`playwright.clerk-smoke.config.ts` on its own port.
+
+Two isolation rules make the smoke honest, and neither is optional. `EXPO_PUBLIC_*`
+is inlined at build time, so serving the inert export would false-skip — the smoke
+must build its own keyed export. And building that keyed export into `dist/web`
+would clobber the inert artifact the gating `e2e:visual` step depends on, so the
+smoke serves `dist/web-clerk-smoke` via the `E2E_WEB_ROOT` override on
+`serve-web.ts` and refuses to reuse an existing server.
+
+⚠ **It is not authoritative until CI secrets exist.** The `mobile-test` CI job has
+no Clerk secrets and does not run this lane; it is a local evidence run, not a
+gate. ⚠ Because the app's token provider requests the **default** session token
+(no JWT template), a first registration can trigger the backend's Clerk-API email
+fallback — accepted, and identical to the web app's behaviour. ⚠ The smoke
+exercises **email/password only**; the SSO self-activation / `pendingTask` path is
+validated solely by the mocked unit tier.
 
 ## Runtime configuration
 
