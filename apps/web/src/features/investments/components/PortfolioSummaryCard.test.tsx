@@ -140,6 +140,33 @@ describe('PortfolioSummaryCard', () => {
     })
   })
 
+  // #1706: under household scope the backend omits day_change (no household snapshot exists).
+  // The card must render NO day-change tile at all -- not a "--" or a 0 that reads as a real value.
+  describe('household scope omits day change (#1706)', () => {
+    const householdSummary: PortfolioSummary = {
+      ...mockSummary,
+      day_change: null,
+      day_change_pct: null,
+      day_change_unavailable_reason: 'household_scope',
+    }
+
+    it('renders no day-change tile', () => {
+      render(<PortfolioSummaryCard summary={householdSummary} />)
+      expect(screen.queryByText(/day change/i)).toBeNull()
+    })
+
+    it('renders no "--" placeholder for the omitted day change', () => {
+      render(<PortfolioSummaryCard summary={householdSummary} />)
+      expect(screen.queryAllByText('--').length).toBe(0)
+    })
+
+    it('still renders the total value and gain/loss tiles', () => {
+      render(<PortfolioSummaryCard summary={householdSummary} />)
+      expect(screen.getByText(/total value/i)).toBeDefined()
+      expect(screen.getByText(/gain/i)).toBeDefined()
+    })
+  })
+
   // G15-1: StatCard renders `value` inside <p data-slot="stat-value"> (phrasing-only context).
   // PortfolioSummaryCard must not pass block-level <div> wrappers as value — that produces
   // invalid <p><div> nesting, React validateDOMNesting warnings, and browser auto-close.
@@ -244,7 +271,10 @@ describe('PortfolioSummaryCard change indicators (#1631 Codex r2)', () => {
 describe('day-change unavailable reasons are handled exhaustively (#1631 Gap B)', () => {
   it('handles every value the generated enum can carry', () => {
     const backendReasons = Object.values(PortfolioSummaryDayChangeUnavailableReason)
-    const handledByCard: PortfolioSummaryDayChangeUnavailableReason[] = ['currency_mismatch']
+    const handledByCard: PortfolioSummaryDayChangeUnavailableReason[] = [
+      'currency_mismatch',
+      'household_scope',
+    ]
     expect([...backendReasons].sort()).toEqual([...handledByCard].sort())
   })
 })
