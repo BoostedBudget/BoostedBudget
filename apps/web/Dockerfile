@@ -3,7 +3,7 @@
 # Note: Bun crashes under QEMU x86 emulation due to AVX instruction requirements
 # #1514: digest-pinned to node:22-alpine (multi-arch manifest list digest, resolved from
 # Docker Hub on 2026-08-12). Re-resolve this digest if the node major/tag is bumped.
-FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS builder
+FROM node:22-alpine@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS builder
 
 WORKDIR /build
 
@@ -54,7 +54,7 @@ RUN find dist -type f -name '*.map' -delete && \
     echo "Confirmed: no .map files remain in dist/."
 
 # Stage 2: Runtime with Nginx (Debian-based)
-FROM nginx:stable@sha256:46ccc48fbb1f5a43167f2ee2c279c122b96eec5d976e7f4e1e0780f59a51b4d6
+FROM nginx:stable@sha256:0aa2d81d65bc0cac0407e738b8f07d312c8685a84225fcb4db7bcbdd8c9bdf11
 
 # Install runtime dependencies
 RUN for i in 1 2 3; do \
