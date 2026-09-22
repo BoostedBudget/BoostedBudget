@@ -54,6 +54,7 @@ const ROUTES = {
 const signInStub: SignInHandle = {
   status: 'needs_identifier',
   createdSessionId: null,
+  create: async () => ({ error: null }),
   password: async () => ({ error: null }),
   emailCode: {
     sendCode: async () => ({ error: null }),

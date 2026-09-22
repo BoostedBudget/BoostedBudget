@@ -43,10 +43,12 @@ const PASSWORD_LABEL = 'New password required'
 
 function makeSignInHandle(
   reset: Partial<SignInHandle['resetPasswordEmailCode']> = {},
+  create: SignInHandle['create'] = jest.fn(async () => ({ error: null })),
 ): SignInHandle {
   return {
     status: 'needs_new_password',
     createdSessionId: null,
+    create,
     password: jest.fn(async () => ({ error: null })),
     emailCode: {
       sendCode: jest.fn(async () => ({ error: null })),
@@ -80,9 +82,10 @@ function activeContext(
       return { pendingTask: false, error: null }
     },
   ),
+  create: SignInHandle['create'] = jest.fn(async () => ({ error: null })),
 ): MobileAuthContextValue {
   return makeContext({
-    signIn: { isLoaded: true, signIn: makeSignInHandle(reset), finalize },
+    signIn: { isLoaded: true, signIn: makeSignInHandle(reset, create), finalize },
   })
 }
 
@@ -172,6 +175,58 @@ describe('forgot-password screen', () => {
 
     expect(sendCode).toHaveBeenCalledTimes(1)
     expect(screen.getByLabelText(CODE_LABEL)).toBeOnTheScreen()
+  })
+
+  it('sets the collected email as the sign-in identifier before sending the reset code', async () => {
+    const create = jest.fn(async () => ({ error: null }))
+    const sendCode = jest.fn(async () => ({ error: null }))
+    renderScreen(activeContext({ sendCode }, undefined, create))
+
+    await requestCode('reset-me@example.com')
+
+    // The email must actually reach Clerk: `resetPasswordEmailCode.sendCode()` takes no argument
+    // and sends to the identifier already on the sign-in resource, so `create` is the only way the
+    // collected address gets there.
+    expect(create).toHaveBeenCalledWith({ identifier: 'reset-me@example.com' })
+    expect(sendCode).toHaveBeenCalledTimes(1)
+    expect(create.mock.invocationCallOrder[0]).toBeLessThan(sendCode.mock.invocationCallOrder[0])
+  })
+
+  it('trims the collected email before setting the identifier', async () => {
+    const create = jest.fn(async () => ({ error: null }))
+    renderScreen(activeContext({}, undefined, create))
+
+    await requestCode('  spaced@example.com  ')
+
+    expect(create).toHaveBeenCalledWith({ identifier: 'spaced@example.com' })
+  })
+
+  it('renders an accessible error and does not send a code when setting the identifier fails', async () => {
+    const create = jest.fn(async () => ({
+      error: { errors: [{ message: 'No account with that email' }] },
+    }))
+    const sendCode = jest.fn(async () => ({ error: null }))
+    renderScreen(activeContext({ sendCode }, undefined, create))
+
+    await requestCode()
+
+    expect(sendCode).not.toHaveBeenCalled()
+    expect(
+      screen.getByTestId('forgot-password-error').props.accessibilityLiveRegion,
+    ).toBe('assertive')
+    expect(screen.getByText('No account with that email')).toBeOnTheScreen()
+    expect(screen.queryByLabelText(CODE_LABEL)).not.toBeOnTheScreen()
+  })
+
+  it('blocks the request step on an empty email without setting an identifier', async () => {
+    const create = jest.fn(async () => ({ error: null }))
+    const sendCode = jest.fn(async () => ({ error: null }))
+    renderScreen(activeContext({ sendCode }, undefined, create))
+
+    await requestCode('   ')
+
+    expect(create).not.toHaveBeenCalled()
+    expect(sendCode).not.toHaveBeenCalled()
   })
 
   it('blocks the request step on an empty email without calling sendCode', async () => {

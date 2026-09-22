@@ -38,6 +38,7 @@ import type {
   SignUpIdentificationField,
   SignInFutureResource,
   SignUpFutureResource,
+  SignInFutureCreateParams,
   SignInFutureEmailCodeSendParams,
   SignInFutureEmailCodeVerifyParams,
   SignInFutureResetPasswordSubmitParams,
@@ -194,12 +195,31 @@ export type _SignInResource = ExpectTrue<
   ReturnType<typeof useSignIn>['signIn'] extends {
     status: SignInStatus;
     createdSessionId: string | null;
+    create: unknown;
     password: unknown;
     finalize: unknown;
     emailCode: unknown;
     resetPasswordEmailCode: unknown;
   }
     ? true
+    : false
+>;
+
+/** Param shape of `signIn.create(...)`: the identifier the reset flow sets before `sendCode`. */
+export type _SignInCreateParams = ExpectTrue<
+  Parameters<ReturnType<typeof useSignIn>['signIn']['create']>[0] extends SignInFutureCreateParams
+    ? true
+    : false
+>;
+
+/** `create` accepts an `identifier` (the collected email) and resolves the `{ error }` envelope. */
+export type _SignInCreateIdentifier = ExpectTrue<
+  Parameters<ReturnType<typeof useSignIn>['signIn']['create']>[0] extends { identifier?: string }
+    ? ReturnType<ReturnType<typeof useSignIn>['signIn']['create']> extends Promise<{
+        error: unknown;
+      }>
+      ? true
+      : false
     : false
 >;
 

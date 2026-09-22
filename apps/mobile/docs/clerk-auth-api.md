@@ -223,6 +223,7 @@ Members the screens / adapter call:
 | --- | --- | --- |
 | `status` | `SignInStatus` = `'needs_identifier' \| 'needs_first_factor' \| 'needs_second_factor' \| 'needs_client_trust' \| 'needs_new_password' \| 'needs_protect_check' \| 'complete'` | `signInCommon.d.ts` |
 | `createdSessionId` | `string \| null` (non-null only when `status === 'complete'`) | `signInFuture.d.ts` |
+| `create(params)` | `(params: SignInFutureCreateParams) => Promise<{ error: ClerkError \| null }>` | `signInFuture.d.ts` |
 | `password(params)` | `(params: SignInFuturePasswordParams) => Promise<{ error: ClerkError \| null }>` | `signInFuture.d.ts` |
 | `emailCode.sendCode(params?)` | `(params?: SignInFutureEmailCodeSendParams) => Promise<{ error: ClerkError \| null }>` | `signInFuture.d.ts` |
 | `emailCode.verifyCode(params)` | `(params: SignInFutureEmailCodeVerifyParams) => Promise<{ error: ClerkError \| null }>` | `signInFuture.d.ts` |
@@ -235,11 +236,26 @@ Members the screens / adapter call:
 Param shapes (`signInFuture.d.ts`):
 
 ```ts
+type SignInFutureCreateParams = {
+  identifier?: string;
+  password?: string;
+  strategy?: OAuthStrategy | 'enterprise_sso' | PasskeyStrategy | TicketStrategy;
+  redirectUrl?: string;
+  // …OIDC / ticket / transfer fields, unused by this seam
+};
 type SignInFuturePasswordParams = { password: string }
   & ( { identifier: string } | { emailAddress: string } | { phoneNumber: string } );
 type SignInFutureEmailCodeVerifyParams = { code: string };
 type SignInFutureResetPasswordSubmitParams = { password: string; signOutOfOtherSessions?: boolean };
 ```
+
+> ⚠ **`resetPasswordEmailCode.sendCode()` takes no argument** and sends to the first email
+> address on the account — i.e. the identifier already on the `signIn` resource. The
+> forgot-password screen must therefore call `signIn.create({ identifier })` with the collected
+> address **before** `sendCode()`, or the code is sent to whatever identifier the resource
+> already carries (nothing, on a fresh sign-in). `create` needs no `strategy` for this flow;
+> `strategy` selects OAuth / passkey / ticket / enterprise-SSO, none of which apply to a
+> password reset.
 
 ### The completion primitive and its navigate contract
 
@@ -393,6 +409,7 @@ Core 3 `finalize` contract, so it is not used. (Pinned for contrast by
 | `activateSession` / `signOut` | `useClerk().setActive` / `useClerk().signOut` | `@clerk/shared/.../clerk.d.ts` |
 | SSO `pendingTask` fresh read | `useClerk().session?.currentTask` | `clerk.d.ts`, `session.d.ts` |
 | `useMobileSignIn().signIn` | `useSignIn().signIn` (`SignInFutureResource`) | `state.d.ts`, `signInFuture.d.ts` |
+| `signIn.create({ identifier })` (reset flow) | `signIn.create(params)` | `signInFuture.d.ts` |
 | `useMobileSignIn().finalize` | `signIn.finalize({ navigate })` | `signInFuture.d.ts` |
 | `useMobileSignUp().signUp` | `useSignUp().signUp` (`SignUpFutureResource`) | `state.d.ts`, `signUpFuture.d.ts` |
 | `useMobileSignUp().finalize` | `signUp.finalize({ navigate })` | `signUpFuture.d.ts` |

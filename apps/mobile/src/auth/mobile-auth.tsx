@@ -52,6 +52,12 @@ export interface AuthOperationResult {
 export interface SignInHandle {
   readonly status: SignInStatus
   readonly createdSessionId: string | null
+  /**
+   * Populates the sign-in resource's `identifier`. Required before
+   * `resetPasswordEmailCode.sendCode()`, which takes no argument and sends to the identifier
+   * already on the resource.
+   */
+  create(params: { identifier: string }): Promise<AuthOperationResult>
   password(params: {
     password: string
     identifier?: string
