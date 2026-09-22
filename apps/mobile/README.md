@@ -46,7 +46,10 @@ secret, API key, session token, or credential-bearing URL.
   plaintext storage.
 
 The app configures the runtime-neutral `@boostedbudget/api-client` through
-`configureApiClient`; the Clerk adapter supplies tokens through that seam.
+`configureApiClient`; the Clerk adapter supplies tokens through that seam. The
+registered provider requests the default session token (no JWT template), so a
+first registration can trigger the backend's Clerk-API email fallback; this is
+accepted and matches the web app.
 
 The `@clerk/expo` config plugin's native defaults attach as config mods that
 only run at `expo prebuild`, so they are inert for `expo export` and remain
