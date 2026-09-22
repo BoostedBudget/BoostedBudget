@@ -61,6 +61,9 @@ func TestGetSystemHealth_DeletionResidue_SeededPopulationIsVisible(t *testing.T)
 	jobHealthRepo := new(MockJobHealthRepository)
 	stubBacklogQueries(jobHealthRepo)
 	jobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(3, 90*time.Minute, nil)
+	// Issue #1707: GetSystemHealth now also reads the investments-skipped-at-link gauge on every
+	// call. .Maybe() — this test asserts nothing about it, so it neither demands nor forbids one.
+	jobHealthRepo.On("GetInvestmentsSkippedAtLinkCount", mock.Anything).Return(int64(0), nil).Maybe()
 
 	result, err := newResidueHealthService(t, jobHealthRepo).GetSystemHealth(context.Background())
 
@@ -85,6 +88,9 @@ func TestGetSystemHealth_DeletionResidue_OrdinaryDeletionReportsAVerifiedZero(t 
 	jobHealthRepo := new(MockJobHealthRepository)
 	stubBacklogQueries(jobHealthRepo)
 	jobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil)
+	// Issue #1707: GetSystemHealth now also reads the investments-skipped-at-link gauge on every
+	// call. .Maybe() — this test asserts nothing about it, so it neither demands nor forbids one.
+	jobHealthRepo.On("GetInvestmentsSkippedAtLinkCount", mock.Anything).Return(int64(0), nil).Maybe()
 
 	result, err := newResidueHealthService(t, jobHealthRepo).GetSystemHealth(context.Background())
 
@@ -106,6 +112,9 @@ func TestGetSystemHealth_DeletionResidue_QueryError_IsUnavailableNotAConfidentZe
 	stubBacklogQueries(jobHealthRepo)
 	jobHealthRepo.On("GetDeletionResidueStats", mock.Anything).
 		Return(0, time.Duration(0), errors.New("db unavailable"))
+	// Issue #1707: GetSystemHealth now also reads the investments-skipped-at-link gauge on every
+	// call. .Maybe() — this test asserts nothing about it, so it neither demands nor forbids one.
+	jobHealthRepo.On("GetInvestmentsSkippedAtLinkCount", mock.Anything).Return(int64(0), nil).Maybe()
 
 	result, err := newResidueHealthService(t, jobHealthRepo).GetSystemHealth(context.Background())
 

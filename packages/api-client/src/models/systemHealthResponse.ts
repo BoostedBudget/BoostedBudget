@@ -33,6 +33,7 @@
 import type { DeadLetterMetrics } from './deadLetterMetrics';
 import type { DeletionResidueMetrics } from './deletionResidueMetrics';
 import type { ForkedSecurityIdentityMetrics } from './forkedSecurityIdentityMetrics';
+import type { InvestmentsSkippedAtLinkMetrics } from './investmentsSkippedAtLinkMetrics';
 import type { JobBacklogMetrics } from './jobBacklogMetrics';
 import type { PaddleStatusMetrics } from './paddleStatusMetrics';
 import type { PlaidOrphanedItemMetrics } from './plaidOrphanedItemMetrics';
@@ -49,6 +50,7 @@ export interface SystemHealthResponse {
   dead_letter_queue: DeadLetterMetrics;
   deletion_residue: DeletionResidueMetrics;
   forked_security_identities: ForkedSecurityIdentityMetrics;
+  investments_skipped_at_link: InvestmentsSkippedAtLinkMetrics;
   job_backlog: JobBacklogMetrics;
   job_queues: SystemHealthResponseJobQueues;
   paddle_status: PaddleStatusMetrics;
