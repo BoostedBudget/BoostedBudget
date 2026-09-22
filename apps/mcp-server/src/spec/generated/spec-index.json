@@ -10066,6 +10066,16 @@
           "in": "query",
           "description": "Filter holdings to a specific account ID (chain-expanded via user_account_id). Optional.",
           "type": "string"
+        },
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope: personal (default) or household (requires active household membership). Household scope returns only accounts shared into the household.",
+          "enum": [
+            "personal",
+            "household"
+          ],
+          "type": "string"
         }
       ],
       "responseShape": {
@@ -10716,6 +10726,18 @@
       "manifestClass": "read",
       "excluded": false,
       "description": "Returns live portfolio totals (value, cost basis, unrealized gain/loss) computed from current holdings. day_change is derived from the most recent prior portfolio snapshot; null when no prior snapshot exists.",
+      "parameters": [
+        {
+          "name": "scope",
+          "in": "query",
+          "description": "Aggregation scope: personal (default) or household (requires active household membership). Household scope omits day_change (no household snapshot exists).",
+          "enum": [
+            "personal",
+            "household"
+          ],
+          "type": "string"
+        }
+      ],
       "responseShape": {
         "type": "object"
       },
@@ -10740,7 +10762,8 @@
           "name": "day_change_unavailable_reason",
           "type": "string",
           "enum": [
-            "currency_mismatch"
+            "currency_mismatch",
+            "household_scope"
           ]
         },
         {
