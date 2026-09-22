@@ -168,6 +168,19 @@ export function HealthDashboardPage() {
   // The card's helper text below carries this caveat so the number is never read as a to-do list.
   const positionReconciliationAvailable = data.position_reconciliation?.available;
 
+  // Issue #1707. Same fail-closed shape and the same optional-chaining guard as every gauge above:
+  // a FAILED read and a genuine zero both arrive as identical zero-valued fields, and
+  // `investments_skipped_at_link` itself can be absent entirely on an older cached response or
+  // mid-rolling-deploy. See domain.InvestmentsSkippedAtLinkMetrics (backend).
+  //
+  // ⚠ A NON-ZERO COUNT IS NOT AN ALARM. The gauge counts live connections linked while Plaid had
+  // not granted investment access — "this institution does not serve investments" is an expected
+  // steady state, not a fault, which is why the card is 'success' at any count and 'warning' ONLY
+  // when the gauge is unavailable. Painting a non-zero count amber would train an operator to
+  // ignore the dashboard, the same anti-alarm-fatigue reasoning as the Position Reconciliation
+  // section above (#1631 CX6).
+  const investmentsSkippedAvailable = data.investments_skipped_at_link?.available;
+
   return (
     <div className="p-8 max-w-[1400px] mx-auto max-md:p-4">
       <header className="flex justify-between items-center mb-8 flex-wrap gap-4 max-md:flex-col max-md:items-start">
@@ -631,6 +644,30 @@ export function HealthDashboardPage() {
           its entire pre-2-year-lookback base, and this is expected to be the dominant contributor
           today — investigate before treating a non-zero count as a to-do list.
         </p>
+      </section>
+
+      {/* Investment Sync Coverage Section (Issue #1707) — the live-scoped count of current bank
+          connections linked while Plaid had not granted investment access. This is the measurement
+          a previous decision (not to re-check the product grant on every sync) was made without.
+
+          ⚠ A NON-ZERO COUNT IS AN EXPECTED STEADY STATE, NOT AN ALARM. "This connection's
+          institution does not serve investments" is normal, so the card is 'success' at any count
+          and 'warning' ONLY when the gauge is unavailable — matching the plan's rationale that the
+          gauge is deliberately excluded from overall system status. See the guard comment above.
+
+          Scope discipline, matching every other gauge section on this page: this only makes the
+          count VISIBLE. Whether it should degrade `data.status` is a product decision #1707 never
+          asked for, so `data.status` is untouched. */}
+      <section className="mb-8">
+        <h2 className="m-0 mb-4 text-xl font-semibold text-foreground">Investment Sync Coverage</h2>
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))] max-md:[grid-template-columns:1fr]">
+          <SummaryCard
+            title="Investments Skipped At Link"
+            value={investmentsSkippedAvailable ? data.investments_skipped_at_link?.count.toString() : 'Unavailable'}
+            icon={<Landmark size={24} />}
+            status={!investmentsSkippedAvailable ? 'warning' : 'success'}
+          />
+        </div>
       </section>
 
       {/* Job Queues Section */}

@@ -300,6 +300,19 @@ func (s *systemHealthService) GetSystemHealth(ctx context.Context) (*domain.Syst
 		response.DeletionResidue = residueMetrics
 	}
 
+	// Investments skipped at link (Issue #1707) — the count of LIVE linked_items rows whose Plaid
+	// link was created while Plaid had not granted investment access. Same "unknown is not zero"
+	// convention as every gauge above, and deliberately NOT fed into calculateOverallStatus:
+	// "this institution serves no investments" is an expected steady state, not an alarm.
+	investmentsSkippedMetrics, err := s.getInvestmentsSkippedAtLinkMetrics(ctx)
+	if err != nil {
+		slog.Error("could not read the investments-skipped-at-link count for /admin/health; it is reported as unavailable rather than as zero",
+			"error", err)
+		response.InvestmentsSkippedAtLink = domain.InvestmentsSkippedAtLinkMetrics{}
+	} else {
+		response.InvestmentsSkippedAtLink = investmentsSkippedMetrics
+	}
+
 	rejectedWebhookMetrics, err := s.getRejectedWebhookAttemptMetrics(ctx)
 	if err != nil {
 		slog.Error("could not read the rejected-webhook-attempt stats for /admin/health; reported as unavailable rather than as zero — a forged-webhook flood must never render as a confident '0 attacks'",
@@ -725,6 +738,31 @@ func (s *systemHealthService) getDeletionResidueMetrics(ctx context.Context) (do
 		Records:             int64(count),
 		NewestRecordSeconds: int64(newestAge.Seconds()),
 		// The query succeeded — this is a VERIFIED count, possibly a real (and very welcome) zero.
+		Available: true,
+	}, nil
+}
+
+// getInvestmentsSkippedAtLinkMetrics reads the count of LIVE linked_items rows whose Plaid link
+// was created while Plaid had not granted investment access (Issue #1707) — the measurement that
+// makes the affected population countable. See domain.InvestmentsSkippedAtLinkMetrics for why the
+// count is an upper bound and why it is deliberately not part of overall status.
+//
+// Nil-safe, matching getJobBacklogMetrics and getDeletionResidueMetrics: an unwired repo is
+// "unknown", never "zero".
+func (s *systemHealthService) getInvestmentsSkippedAtLinkMetrics(ctx context.Context) (domain.InvestmentsSkippedAtLinkMetrics, error) {
+	if s.jobHealthRepo == nil {
+		// Not wired, not failed — but equally not a verified reading, so Available stays at its zero
+		// value. See domain.InvestmentsSkippedAtLinkMetrics.Available.
+		return domain.InvestmentsSkippedAtLinkMetrics{}, nil
+	}
+
+	count, err := s.jobHealthRepo.GetInvestmentsSkippedAtLinkCount(ctx)
+	if err != nil {
+		return domain.InvestmentsSkippedAtLinkMetrics{}, fmt.Errorf("read investments-skipped-at-link stats: %w", err)
+	}
+	return domain.InvestmentsSkippedAtLinkMetrics{
+		Count: count,
+		// The query succeeded — this is a VERIFIED count, possibly a real (and welcome) zero.
 		Available: true,
 	}, nil
 }
