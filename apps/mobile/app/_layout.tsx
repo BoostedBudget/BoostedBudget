@@ -78,6 +78,7 @@ export default function RootLayout() {
     <MobileAppProviders>
       <ThemedApp>
         <Stack screenOptions={{ headerBackTitle: 'Back' }}>
+          <Stack.Screen name="(app)" options={{ headerShown: false }} />
           <Stack.Screen name="index" options={{ title: 'BoostedBudget' }} />
           <Stack.Screen name="readiness" options={{ title: 'App readiness' }} />
           <Stack.Screen name="gallery" options={{ title: 'Primitive gallery' }} />
