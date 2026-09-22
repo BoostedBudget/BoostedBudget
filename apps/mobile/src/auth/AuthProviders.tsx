@@ -1,4 +1,5 @@
-import { ReactNode, useEffect } from 'react'
+import { setAuthTokenProvider } from '@boostedbudget/api-client/client'
+import { ReactNode, useEffect, useRef } from 'react'
 import { ToastProvider } from '../components/ui/ToastProvider'
 import { ThemeProvider as ThemePreferenceProvider } from '../theme/ThemeProvider'
 import { MobileAuthValue, useMobileAuth } from './mobile-auth'
@@ -7,8 +8,8 @@ import { MobileAuthValue, useMobileAuth } from './mobile-auth'
  * Registration seam for the API-client token provider (todo 10).
  *
  * `AuthProviders` hands the adapter's `getToken` to this callback once the adapter reports
- * `isLoaded`. It is inert today: there is no default implementation, so nothing is registered
- * until todo 10 supplies one. Todo 10 must NOT call `configureApiClient` a second time.
+ * `isLoaded`. It is an observation/extension point: the ref-based provider registration itself
+ * lives in `AuthProviders` (todo 10) and must NOT call `configureApiClient` a second time.
  */
 export type TokenProviderSeam = (getToken: MobileAuthValue['getToken']) => void
 
@@ -44,6 +45,30 @@ export function AuthProviders({
   onRecoveryReady,
 }: AuthProvidersProps) {
   const { isLoaded, userId, getToken, isSignedIn, signOut, reportTokenError } = useMobileAuth()
+
+  // The registered wrapper must always call the LATEST adapter `getToken`. A ref is the only way
+  // to guarantee that without re-registering the provider every time `getToken`'s identity
+  // changes (the adapter recreates it on each auth-state render).
+  const getTokenRef = useRef(getToken)
+
+  useEffect(() => {
+    getTokenRef.current = getToken
+  }, [getToken])
+
+  // Register once per `isLoaded` transition. The wrapper reads the ref, so it never captures a
+  // stale `getToken` even though registration does not repeat when `getToken` changes. This is
+  // NOT a second `configureApiClient` call — `initializeMobileRuntime` owns that.
+  useEffect(() => {
+    if (!isLoaded) return
+    setAuthTokenProvider(async () => {
+      try {
+        return await getTokenRef.current()
+      } catch (error) {
+        reportTokenError(error)
+        return null
+      }
+    })
+  }, [isLoaded, reportTokenError])
 
   useEffect(() => {
     if (!isLoaded) return
