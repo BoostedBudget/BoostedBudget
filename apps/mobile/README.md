@@ -16,6 +16,7 @@ bun run android
 bun run web
 bun run test
 bun run test:ci
+bun run test:integration
 bun run lint
 bun run typecheck
 bun run export:web
@@ -27,6 +28,23 @@ bun run export:android
 mobile-owned TypeScript. The three export commands validate that Metro can
 produce each platform bundle; they do not prove reproducible output, sign, or
 publish an application.
+
+## Test tiers
+
+| Tier | Command | Scope |
+|------|---------|-------|
+| Unit / component | `bun run test` (and `test:ci`) | Every `*.test.ts(x)` file except the integration tier. The shared primitives, the auth adapter, the guard, and the screens run against the hand-written Clerk mock. |
+| Contract-integration | `bun run test:ci` (gating) / `bun run test:integration` (local, focused) | Files named `*.integration.test.ts(x)`. They import the **real** `@boostedbudget/api-client`, attach `axios-mock-adapter` to the real `AXIOS_INSTANCE`, and drive requests through the real generated functions, so the inline token attachment and both interceptors run. No network, no credentials. |
+| Real-browser | `bun run e2e:visual` | Playwright drives the static web export. |
+| Source/dependency guards | `python3 scripts/check-mobile-ci.py` | CI trigger matrix, pinned steps, and Dependabot policy. |
+
+The contract-integration tier is **part of the unchanged `test:ci` run** — jest's
+default `testMatch` discovers the `*.integration.test.ts(x)` suffix, so the tier
+gates in CI without editing the pinned CI command. `test:integration` is a
+local-only convenience wrapper (`jest --testPathPattern`) for running just that
+tier while iterating; it is not a CI step. The integration files live under
+`src/test/**`, which `collectCoverageFrom` excludes, so they never change the
+coverage denominator.
 
 ## Runtime configuration
 
