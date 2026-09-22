@@ -6,13 +6,18 @@ import { StatusBar } from 'expo-status-bar'
 import { VariableContextProvider } from 'nativewind'
 import { ReactNode, useEffect, useMemo, useState } from 'react'
 import { Appearance, Platform } from 'react-native'
+import { AuthProviders } from '../src/auth/AuthProviders'
+import { MobileAuthProvider } from '../src/auth/mobile-auth'
+import { mobileTokenCache } from '../src/auth/token-cache'
 import { createMobileQueryClient, initializeMobileRuntime } from '../src/bootstrap/runtime'
-import { ToastProvider } from '../src/components/ui/ToastProvider'
 import { getNavigationAppearance } from '../src/theme/navigation'
 import { applyWebThemeVariables, themeVariables } from '../src/theme/runtime'
-import { ThemeProvider as ThemePreferenceProvider, useTheme } from '../src/theme/ThemeProvider'
+import { useTheme } from '../src/theme/ThemeProvider'
 
-initializeMobileRuntime({
+// Captured at module scope so the runtime is configured exactly once, before any provider mounts.
+// `apiUrlConfigured` is intentionally not destructured: nothing in this layout consumes it, and an
+// unused binding would fail `@typescript-eslint/no-unused-vars`.
+const { authAvailable, clerkPublishableKey } = initializeMobileRuntime({
   EXPO_PUBLIC_API_URL: process.env.EXPO_PUBLIC_API_URL,
   EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY,
 })
@@ -22,9 +27,13 @@ export function MobileAppProviders({ children }: { children: ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemePreferenceProvider>
-        <ToastProvider>{children}</ToastProvider>
-      </ThemePreferenceProvider>
+      <MobileAuthProvider
+        authAvailable={authAvailable}
+        publishableKey={clerkPublishableKey}
+        tokenCache={mobileTokenCache}
+      >
+        <AuthProviders>{children}</AuthProviders>
+      </MobileAuthProvider>
     </QueryClientProvider>
   )
 }
