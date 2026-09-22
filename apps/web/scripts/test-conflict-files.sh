@@ -67,6 +67,7 @@ GROUP_B_FILES=(
     "$FRONTEND_DIR/src/features/dashboard/widgets/DashboardGrid.test.tsx"
     "$FRONTEND_DIR/src/features/dashboard/widgets/WidgetCatalog.test.tsx"
     "$FRONTEND_DIR/src/features/dashboard/components/ScopeSegmentedControl.test.tsx"
+    "$FRONTEND_DIR/src/features/dashboard/components/ScopeSegmentedControl.privacy.test.tsx"
 )
 GROUP_B_PRELOAD_ARGS=()
 for f in \
@@ -77,6 +78,7 @@ for f in \
     "$FRONTEND_DIR/src/test/mocks/track-event.ts" \
     "$FRONTEND_DIR/src/test/mocks/dashboard-context.ts" \
     "$FRONTEND_DIR/src/test/mocks/dashboard-wrapper-hooks.ts" \
+    "$FRONTEND_DIR/src/test/mocks/accounts-api.ts" \
     "$FRONTEND_DIR/src/test/mocks/household-api.ts"; do
     GROUP_B_PRELOAD_ARGS+=(--preload "$f")
 done
