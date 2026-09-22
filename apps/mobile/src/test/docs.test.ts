@@ -57,6 +57,19 @@ describe('mobile README documentation contract', () => {
     expect(section(mobileReadme, 'Deliberately deferred')).not.toContain('1658')
   })
 
+  it('records #1657 as delivered: named in the Authentication section, absent from Deliberately deferred', () => {
+    expect(section(mobileReadme, 'Authentication')).toContain('1657')
+    const deferred = section(mobileReadme, 'Deliberately deferred')
+    expect(deferred).not.toContain('1657')
+    expect(deferred).not.toContain('Clerk')
+  })
+
+  it('keeps passkeys deferred to the follow-up issue', () => {
+    const deferred = section(mobileReadme, 'Deliberately deferred')
+    expect(deferred).toContain('passkeys')
+    expect(deferred).toContain('1708')
+  })
+
   it('names #1658 in the migration guidance section', () => {
     expect(section(mobileReadme, 'Migration guidance')).toContain('1658')
   })
@@ -102,5 +115,12 @@ describe('design-tokens README documentation contract', () => {
     expect(designTokensReadme).toContain('web.css')
     expect(designTokensReadme).toContain('nativewind.css')
     expect(designTokensReadme).toContain('native.ts')
+  })
+})
+
+describe('mobile readiness diagnostic contract', () => {
+  it('no longer reports authentication as deferred', () => {
+    const readiness = readFileSync(resolve(MOBILE_ROOT, 'app/readiness.tsx'), 'utf8')
+    expect(readiness).not.toContain('Authentication: deferred')
   })
 })
