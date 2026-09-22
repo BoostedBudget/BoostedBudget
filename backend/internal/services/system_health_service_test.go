@@ -108,6 +108,14 @@ func (m *MockJobHealthRepository) GetDeletionResidueStats(ctx context.Context) (
 	return args.Int(0), args.Get(1).(time.Duration), args.Error(2)
 }
 
+// GetInvestmentsSkippedAtLinkCount backs SystemHealthResponse.InvestmentsSkippedAtLink (Issue
+// #1707). It is m.Called-based, not a zero-return, because the service tests must stub BOTH a
+// seeded count and a query error on it.
+func (m *MockJobHealthRepository) GetInvestmentsSkippedAtLinkCount(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 // The four RevenueCat backlog reads (#1652 todo 12) feed the Prometheus collector, not the
 // /admin/health response, so they are zero-returning stubs: the service never calls them and a
 // `.Maybe()` expectation would only add noise.
