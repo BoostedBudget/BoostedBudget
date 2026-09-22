@@ -1,6 +1,6 @@
 import { router } from 'expo-router'
 import { useState } from 'react'
-import { useMobileSignIn } from '../../src/auth/mobile-auth'
+import { useMobileAuth, useMobileSignIn, useMobileSSO } from '../../src/auth/mobile-auth'
 import { navigateToClerkDestination } from '../../src/auth/navigation'
 import {
   Alert,
@@ -16,6 +16,15 @@ import {
 
 /** Shown when an error object carries no user-safe message. Never a raw error dump. */
 const GENERIC_ERROR_MESSAGE = 'Something went wrong. Please try again.'
+
+/**
+ * The deep-link target the OAuth provider returns to. It mirrors `expo.scheme` in `app.json`
+ * (`boostedbudget`) and the `app/(auth)/sso-callback.tsx` route. Clerk requires this exact URL to
+ * be registered as an allowed redirect in the Clerk Dashboard — see `apps/mobile/README.md`.
+ */
+const SSO_REDIRECT_URL = 'boostedbudget://sso-callback'
+
+type SSOStrategy = 'oauth_google' | 'oauth_apple'
 
 /**
  * Extracts a user-facing message from a Clerk error envelope without ever stringifying an unknown
@@ -38,22 +47,66 @@ function describeAuthError(error: unknown): string {
 /**
  * The email/password sign-in screen, backed by the auth-adapter seam.
  *
- * It consumes `useMobileSignIn()` and never a Clerk hook. A successful `signIn.password(...)` is
- * completed through the adapter's `finalize`, which owns Clerk's navigate contract, the
- * `session.currentTask` diversion, and the finalize error envelope. In inert mode (`signIn` is
- * `null`) the real form markup renders disabled with an accessible notice.
- *
- * The Google/Apple buttons are rendered but their SSO behaviour is wired by todo 15.
+ * It consumes `useMobileSignIn()`, `useMobileAuth()` and `useMobileSSO()` and never a Clerk hook.
+ * A successful `signIn.password(...)` is completed through the adapter's `finalize`, which owns
+ * Clerk's navigate contract, the `session.currentTask` diversion, and the finalize error envelope.
+ * The Google/Apple buttons run the OAuth flow through `useMobileSSO()` and complete it through
+ * `activateSession` when the hook did not self-activate. In inert mode (`signIn` is `null`) the
+ * real form markup renders disabled with an accessible notice.
  */
 export default function SignInScreen() {
   const { isLoaded, signIn, finalize } = useMobileSignIn()
+  const { activateSession } = useMobileAuth()
+  const { startSSOFlow } = useMobileSSO()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [ssoStrategy, setSsoStrategy] = useState<SSOStrategy | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const unavailable = signIn === null
   const controlsDisabled = unavailable || !isLoaded
+
+  async function handleSSO(strategy: SSOStrategy) {
+    if (submitting) return
+
+    setSubmitting(true)
+    setSsoStrategy(strategy)
+    setError(null)
+    try {
+      const { createdSessionId, sessionActivated, cancelled, pendingTask } = await startSSOFlow({
+        strategy,
+        redirectUrl: SSO_REDIRECT_URL,
+      })
+
+      // The user dismissed the provider sheet. There is nothing to activate and nothing to
+      // report: leave them on the form to collect any missing information.
+      if (cancelled) return
+
+      if (pendingTask) {
+        navigateToClerkDestination('/session-task')
+        return
+      }
+
+      if (!sessionActivated && createdSessionId !== null) {
+        // The pinned experimental hook self-activates when it can. A non-activated result with a
+        // session id means the caller must activate it; a null id means the hook already
+        // activated an existing session, so there is nothing to activate.
+        const { pendingTask: activationTask } = await activateSession(createdSessionId)
+        if (activationTask) {
+          navigateToClerkDestination('/session-task')
+          return
+        }
+      }
+
+      navigateToClerkDestination('/dashboard')
+    } catch (thrown) {
+      setError(describeAuthError(thrown))
+    } finally {
+      setSubmitting(false)
+      setSsoStrategy(null)
+    }
+  }
 
   async function handleSubmit() {
     // Defensive: the submit control is disabled whenever `signIn` is null or the adapter is not
@@ -171,14 +224,18 @@ export default function SignInScreen() {
             testID="sign-in-google"
             variant="outline"
             label="Continue with Google"
-            disabled={controlsDisabled}
+            onPress={() => handleSSO('oauth_google')}
+            loading={ssoStrategy === 'oauth_google'}
+            disabled={controlsDisabled || submitting}
             fullWidth
           />
           <Button
             testID="sign-in-apple"
             variant="outline"
             label="Continue with Apple"
-            disabled={controlsDisabled}
+            onPress={() => handleSSO('oauth_apple')}
+            loading={ssoStrategy === 'oauth_apple'}
+            disabled={controlsDisabled || submitting}
             fullWidth
           />
         </Stack>
