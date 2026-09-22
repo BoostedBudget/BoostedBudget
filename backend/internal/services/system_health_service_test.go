@@ -108,6 +108,14 @@ func (m *MockJobHealthRepository) GetDeletionResidueStats(ctx context.Context) (
 	return args.Int(0), args.Get(1).(time.Duration), args.Error(2)
 }
 
+// GetInvestmentsSkippedAtLinkCount backs SystemHealthResponse.InvestmentsSkippedAtLink (Issue
+// #1707). It is m.Called-based, not a zero-return, because the service tests must stub BOTH a
+// seeded count and a query error on it.
+func (m *MockJobHealthRepository) GetInvestmentsSkippedAtLinkCount(ctx context.Context) (int64, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 // The four RevenueCat backlog reads (#1652 todo 12) feed the Prometheus collector, not the
 // /admin/health response, so they are zero-returning stubs: the service never calls them and a
 // `.Maybe()` expectation would only add noise.
@@ -643,6 +651,9 @@ func TestGetSystemHealth_JobBacklogMetricsPopulated(t *testing.T) {
 	// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
 	// call it does not care about, nor demand one.
 	mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
+	// Issue #1707: GetSystemHealth now also reads the investments-skipped-at-link gauge on every
+	// call. Same .Maybe() reasoning as the residue expectation just above.
+	mockJobHealthRepo.On("GetInvestmentsSkippedAtLinkCount", mock.Anything).Return(int64(0), nil).Maybe()
 
 	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
 	mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(3, 2*time.Hour, nil)
@@ -707,6 +718,9 @@ func TestGetSystemHealth_JobBacklogMetricsError_UsesZeroValues(t *testing.T) {
 	// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
 	// call it does not care about, nor demand one.
 	mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
+	// Issue #1707: GetSystemHealth now also reads the investments-skipped-at-link gauge on every
+	// call. Same .Maybe() reasoning as the residue expectation just above.
+	mockJobHealthRepo.On("GetInvestmentsSkippedAtLinkCount", mock.Anything).Return(int64(0), nil).Maybe()
 
 	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
 	mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), errors.New("db error"))
@@ -750,6 +764,9 @@ func TestGetSystemHealth_JobBacklogMetrics_SecondQueryError_DiscardsFirstQuerysG
 	// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
 	// call it does not care about, nor demand one.
 	mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
+	// Issue #1707: GetSystemHealth now also reads the investments-skipped-at-link gauge on every
+	// call. Same .Maybe() reasoning as the residue expectation just above.
+	mockJobHealthRepo.On("GetInvestmentsSkippedAtLinkCount", mock.Anything).Return(int64(0), nil).Maybe()
 
 	setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
 	// First query succeeds with real, non-zero data.
@@ -801,6 +818,9 @@ func TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguisha
 		// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
 		// call it does not care about, nor demand one.
 		mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
+		// Issue #1707: GetSystemHealth now also reads the investments-skipped-at-link gauge on every
+		// call. Same .Maybe() reasoning as the residue expectation just above.
+		mockJobHealthRepo.On("GetInvestmentsSkippedAtLinkCount", mock.Anything).Return(int64(0), nil).Maybe()
 
 		setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
 		mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), nil)
@@ -831,6 +851,9 @@ func TestGetSystemHealth_JobBacklogMetrics_UnavailableVsRealZero_AreDistinguisha
 		// GetSystemHealth now reads it on every call. .Maybe() so an unrelated test cannot fail on a
 		// call it does not care about, nor demand one.
 		mockJobHealthRepo.On("GetDeletionResidueStats", mock.Anything).Return(0, time.Duration(0), nil).Maybe()
+		// Issue #1707: GetSystemHealth now also reads the investments-skipped-at-link gauge on every
+		// call. Same .Maybe() reasoning as the residue expectation just above.
+		mockJobHealthRepo.On("GetInvestmentsSkippedAtLinkCount", mock.Anything).Return(int64(0), nil).Maybe()
 
 		setupFullHealthMocks(mockHealthRepo, mockDeadLetterRepo, mockPool, 0, 0, 0)
 		mockJobHealthRepo.On("GetOutstandingPlaidCleanupStats", mock.Anything).Return(0, time.Duration(0), errors.New("db error"))
