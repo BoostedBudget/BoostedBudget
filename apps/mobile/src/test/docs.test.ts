@@ -76,6 +76,12 @@ describe('mobile README documentation contract', () => {
     expect(mobileReadme).toContain('bb-theme:<userId>')
   })
 
+  it('names both supported runtime environment variables', () => {
+    const runtimeConfig = section(mobileReadme, 'Runtime configuration')
+    expect(runtimeConfig).toContain('EXPO_PUBLIC_API_URL')
+    expect(runtimeConfig).toContain('EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY')
+  })
+
   it('documents at least five platform exceptions', () => {
     expect(countListItems(section(mobileReadme, 'Platform exceptions'))).toBeGreaterThanOrEqual(5)
   })

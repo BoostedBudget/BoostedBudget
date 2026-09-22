@@ -30,15 +30,29 @@ publish an application.
 
 ## Runtime configuration
 
-`EXPO_PUBLIC_API_URL` is the only supported mobile environment variable in
-this slice. Expo embeds `EXPO_PUBLIC_*` values in client bundles, so it must
-contain a public HTTP(S) API origin and never a secret, API key, session token,
-or credential-bearing URL. The readiness screen reports only whether the value
-is present and valid. It never displays or logs the value.
+Two `EXPO_PUBLIC_*` variables are supported in this slice. Expo embeds
+`EXPO_PUBLIC_*` values in client bundles, so both must be public and never a
+secret, API key, session token, or credential-bearing URL.
+
+- `EXPO_PUBLIC_API_URL` — a public HTTP(S) API origin. The readiness screen
+  reports only whether the value is present and valid. It never displays or
+  logs the value.
+- `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` — the Clerk **publishable** client key
+  (`pk_test_*` / `pk_live_*`). It is a public client key, safe to embed in the
+  bundle, and is **never a secret**; the Clerk secret key must never be set
+  here. When it is absent the app is fully usable signed-out — the readiness
+  screen simply reports authentication as unavailable. Session tokens are
+  stored on-device through `expo-secure-store`, never in the bundle or in
+  plaintext storage.
 
 The app configures the runtime-neutral `@boostedbudget/api-client` through
-`configureApiClient`. Authentication will later supply tokens through that
-adapter; this scaffold does not store credentials.
+`configureApiClient`; the Clerk adapter supplies tokens through that seam.
+
+The `@clerk/expo` config plugin's native defaults attach as config mods that
+only run at `expo prebuild`, so they are inert for `expo export` and remain
+unverified until #1660: the Sign in with Apple entitlement and the iOS
+deployment target (`17.0`), the Android hosted-auth intent filter for the
+`clerk` scheme, and the Android packaging exclusions / Kotlin metadata flag.
 
 ## Architecture seams
 
