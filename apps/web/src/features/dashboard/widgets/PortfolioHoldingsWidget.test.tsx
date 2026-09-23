@@ -6,12 +6,14 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
+import { getGetHoldingsQueryKey } from '@boostedbudget/api-client/endpoints/investments/investments'
 import type { GetHoldingsOutputBody } from '@boostedbudget/api-client/models/getHoldingsOutputBody'
 import type { HoldingView } from '@boostedbudget/api-client/models/holdingView'
 
 // Use centralized mocks — no inline mock.module()
 import '@/test/mocks/registry'
 import { mockUseGetHoldings } from '@/test/mocks/investments-api'
+import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 
 import { PortfolioHoldingsWidget } from './PortfolioHoldingsWidget'
@@ -65,6 +67,10 @@ describe('PortfolioHoldingsWidget', () => {
     mockUseGetHoldings.mockClear()
     mockTrackEvent.mockClear()
     mockUseGetHoldings.mockReturnValue(defaultQueryState)
+    mockUseDashboardContext.mockReturnValue({
+      ...mockUseDashboardContext(),
+      scope: 'personal',
+    })
   })
 
   describe('Loading State', () => {
@@ -249,6 +255,45 @@ describe('PortfolioHoldingsWidget', () => {
       renderWidget()
       await act(async () => {})
       expect(mockTrackEvent).not.toHaveBeenCalledWith('portfolio_holdings_widget_viewed')
+    })
+  })
+
+  describe('Dashboard Scope (Issue #1706)', () => {
+    it('requests holdings with scope=household when the dashboard scope is household', () => {
+      // `mockUseGetHoldings` (preloaded in bunfig.toml) is the only route to the
+      // request: it receives the params the generated client serialises into the
+      // GET /api/v1/investments/holdings query string. Reconstruct that request URL
+      // and assert on it — not on a typed GetHoldingsParams, whose `scope` field does
+      // not exist until the API client is regenerated.
+      mockUseDashboardContext.mockReturnValue({
+        ...mockUseDashboardContext(),
+        scope: 'household',
+      })
+      mockUseGetHoldings.mockReturnValue({ ...defaultQueryState, data: mockData })
+
+      renderWidget()
+
+      expect(mockUseGetHoldings).toHaveBeenCalled()
+      const requestParams = mockUseGetHoldings.mock.calls[0]?.[0] as
+        | Record<string, unknown>
+        | undefined
+
+      const search = new URLSearchParams()
+      for (const [key, value] of Object.entries(requestParams ?? {})) {
+        if (value != null) search.set(key, String(value))
+      }
+      const queryString = search.toString()
+      const requestUrl = queryString
+        ? `/api/v1/investments/holdings?${queryString}`
+        : '/api/v1/investments/holdings'
+
+      expect(requestUrl).toContain('scope=household')
+    })
+
+    it('keeps the personal and household query keys distinct so the scopes cannot share a cache entry', () => {
+      expect(getGetHoldingsQueryKey({ scope: 'personal' })).not.toEqual(
+        getGetHoldingsQueryKey({ scope: 'household' })
+      )
     })
   })
 })

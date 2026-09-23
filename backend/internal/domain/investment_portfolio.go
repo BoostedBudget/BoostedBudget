@@ -107,7 +107,7 @@ type PortfolioSummary struct {
 	// snapshot is missing DATA and fixes itself on the next sync; a currency mismatch is a figure
 	// this service is REFUSING to compute and never will while the two sides disagree. nil means
 	// the figure is present, or its absence is the ordinary missing-inputs case.
-	DayChangeUnavailableReason *string `json:"day_change_unavailable_reason,omitempty" enum:"currency_mismatch"`
+	DayChangeUnavailableReason *string `json:"day_change_unavailable_reason,omitempty" enum:"currency_mismatch,household_scope"`
 }
 
 // PortfolioHistoryPoint is one data point in a portfolio value chart.
@@ -221,6 +221,16 @@ type HoldingView struct {
 // a different currency from the security whose close price the day change would subtract. The
 // figure is refused rather than converted — there is no FX rate source in this system.
 const DayChangeUnavailableCurrencyMismatch = "currency_mismatch"
+
+// DayChangeUnavailableHouseholdScope is the PortfolioSummary.DayChangeUnavailableReason for a
+// household-scoped summary (#1706). The day change is derived from portfolio_snapshots, which are
+// written per USER (portfolio_snapshot_repository.go GetLatestBefore: `WHERE user_id = $1`) and
+// have no household equivalent — there is no household portfolio snapshot to subtract from a
+// household total. Rather than silently return the requesting member's PERSONAL day change beside
+// a household total (two different account universes in one subtraction), the figure is omitted
+// and this reason is stated. It is a refusal, not missing data: it will not fix itself on the next
+// sync while the request stays household-scoped.
+const DayChangeUnavailableHouseholdScope = "household_scope"
 
 // NewHoldingView constructs a HoldingView from a Holding (which must have Security populated).
 func NewHoldingView(h *Holding) *HoldingView {

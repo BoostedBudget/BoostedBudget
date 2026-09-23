@@ -16,6 +16,8 @@ bun run android
 bun run web
 bun run test
 bun run test:ci
+bun run test:integration
+bun run test:clerk-smoke
 bun run lint
 bun run typecheck
 bun run export:web
@@ -28,17 +30,149 @@ mobile-owned TypeScript. The three export commands validate that Metro can
 produce each platform bundle; they do not prove reproducible output, sign, or
 publish an application.
 
+## Test tiers
+
+| Tier | Command | Scope |
+|------|---------|-------|
+| Unit / component | `bun run test` (and `test:ci`) | Every `*.test.ts(x)` file except the integration tier. The shared primitives, the auth adapter, the guard, and the screens run against the hand-written Clerk mock. |
+| Contract-integration | `bun run test:ci` (gating) / `bun run test:integration` (local, focused) | Files named `*.integration.test.ts(x)`. They import the **real** `@boostedbudget/api-client`, attach `axios-mock-adapter` to the real `AXIOS_INSTANCE`, and drive requests through the real generated functions, so the inline token attachment and both interceptors run. No network, no credentials. |
+| Real-browser | `bun run e2e:visual` | Playwright drives the static web export. |
+| Credentialed Clerk smoke (non-gating) | `bun run test:clerk-smoke` | Playwright drives a **separate** keyed web export (`dist/web-clerk-smoke`), performs one real email/password sign-in, and asserts a bearer token on an intercepted API request. Skips with a visible warning when credentials are absent. Not wired into CI. |
+| Source/dependency guards | `python3 scripts/check-mobile-ci.py` | CI trigger matrix, pinned steps, and Dependabot policy. |
+
+The contract-integration tier is **part of the unchanged `test:ci` run** — jest's
+default `testMatch` discovers the `*.integration.test.ts(x)` suffix, so the tier
+gates in CI without editing the pinned CI command. `test:integration` is a
+local-only convenience wrapper (`jest --testPathPattern`) for running just that
+tier while iterating; it is not a CI step. The integration files live under
+`src/test/**`, which `collectCoverageFrom` excludes, so they never change the
+coverage denominator.
+
+### Credentialed Clerk smoke (non-gating)
+
+`bun run test:clerk-smoke` is the **only** lane that validates real Clerk
+semantics. Every other tier mocks Clerk: the unit/component tier runs against the
+hand-written mock in `jest.setup.ts`, and the contract-integration tier mocks the
+adapter seam. Neither can prove that a real publishable key loads, that a real
+email/password sign-in completes, or that a real session token is minted and
+attached to an outbound request — so real flow/session behaviour is a named
+residual risk carried by this lane alone.
+
+It requires three environment variables: `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY`,
+`CLERK_SMOKE_EMAIL`, and `CLERK_SMOKE_PASSWORD`. When any is absent the script
+prints a visible skip warning and exits 0 **before** rebuilding anything; the
+spec also carries a defensive `test.skip`. With all three present it rebuilds the
+web export with the key and API URL inlined into a **separate** directory
+(`dist/web-clerk-smoke`, never `dist/web`), then runs Playwright with
+`playwright.clerk-smoke.config.ts` on its own port.
+
+Two isolation rules make the smoke honest, and neither is optional. `EXPO_PUBLIC_*`
+is inlined at build time, so serving the inert export would false-skip — the smoke
+must build its own keyed export. And building that keyed export into `dist/web`
+would clobber the inert artifact the gating `e2e:visual` step depends on, so the
+smoke serves `dist/web-clerk-smoke` via the `E2E_WEB_ROOT` override on
+`serve-web.ts` and refuses to reuse an existing server.
+
+⚠ **It is not authoritative until CI secrets exist.** The `mobile-test` CI job has
+no Clerk secrets and does not run this lane; it is a local evidence run, not a
+gate. ⚠ Because the app's token provider requests the **default** session token
+(no JWT template), a first registration can trigger the backend's Clerk-API email
+fallback — accepted, and identical to the web app's behaviour. ⚠ The smoke
+exercises **email/password only**; the SSO self-activation / `pendingTask` path is
+validated solely by the mocked unit tier.
+
 ## Runtime configuration
 
-`EXPO_PUBLIC_API_URL` is the only supported mobile environment variable in
-this slice. Expo embeds `EXPO_PUBLIC_*` values in client bundles, so it must
-contain a public HTTP(S) API origin and never a secret, API key, session token,
-or credential-bearing URL. The readiness screen reports only whether the value
-is present and valid. It never displays or logs the value.
+Two `EXPO_PUBLIC_*` variables are supported in this slice. Expo embeds
+`EXPO_PUBLIC_*` values in client bundles, so both must be public and never a
+secret, API key, session token, or credential-bearing URL.
+
+- `EXPO_PUBLIC_API_URL` — a public HTTP(S) API origin. The readiness screen
+  reports only whether the value is present and valid. It never displays or
+  logs the value.
+- `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` — the Clerk **publishable** client key
+  (`pk_test_*` / `pk_live_*`). It is a public client key, safe to embed in the
+  bundle, and is **never a secret**; the Clerk secret key must never be set
+  here. When it is absent the app is fully usable signed-out — the readiness
+  screen simply reports authentication as unavailable. Session tokens are
+  stored on-device through `expo-secure-store`, never in the bundle or in
+  plaintext storage.
 
 The app configures the runtime-neutral `@boostedbudget/api-client` through
-`configureApiClient`. Authentication will later supply tokens through that
-adapter; this scaffold does not store credentials.
+`configureApiClient`; the Clerk adapter supplies tokens through that seam. The
+registered provider requests the default session token (no JWT template), so a
+first registration can trigger the backend's Clerk-API email fallback; this is
+accepted and matches the web app.
+
+The `@clerk/expo` config plugin's native defaults attach as config mods that
+only run at `expo prebuild`, so they are inert for `expo export` and remain
+unverified until #1660: the Sign in with Apple entitlement and the iOS
+deployment target (`17.0`), the Android hosted-auth intent filter for the
+`clerk` scheme, and the Android packaging exclusions / Kotlin metadata flag.
+
+### OAuth redirect URL (owner setup)
+
+Google and Apple sign-in return to the app through the `boostedbudget` scheme at
+`boostedbudget://sso-callback` (the `app/(auth)/sso-callback.tsx` route). Before
+OAuth works in a given Clerk instance, an owner must register that exact URL as
+an allowed redirect URL in the Clerk Dashboard (Configure → SSO connections /
+Redirect URLs). The value is pinned to `expo.scheme` in `app.json`; changing the
+scheme without updating the screen and the Dashboard breaks the callback.
+
+## Authentication
+
+Clerk authentication is delivered for mobile ([#1657](https://github.com/BoostedBudget/BoostedBudget/issues/1657)).
+The app authenticates against the same Clerk instance as the web app and sends a
+bearer token on every generated API call. Passkeys are **not** part of this slice and
+remain deferred ([#1708](https://github.com/BoostedBudget/BoostedBudget/issues/1708)).
+
+- **Adapter seam with a closed interface.** `src/auth/mobile-auth.tsx` is the only
+  auth surface the app consumes. It declares its own structural types instead of
+  importing Clerk, so an inert build never pulls Clerk into the module graph. The
+  interface is closed: `MobileAuthValue`, `MobileSignInValue`, `MobileSignUpValue`,
+  and `MobileSSOValue` are the complete set of members the screens may call, and the
+  compile-time assertions in `src/test/auth/mobile-auth.test.tsx` fail if the pinned
+  Clerk v4 surface drifts. The Clerk-backed implementation lives in
+  `src/auth/mobile-auth.clerk.tsx` and is the only production module (besides the
+  token cache) allowed to import `@clerk/*`.
+- **Inert mode.** When `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` is absent or malformed,
+  `MobileAuthProvider` mounts `inertMobileAuthContextValue` instead of Clerk: the app
+  is fully usable signed-out, `getToken()` resolves `null`, and the Clerk module is
+  never `require`d. The `require` sits inside the `authAvailable` branch, so an inert
+  bundle never executes Clerk.
+- **Secure cache.** Session tokens are persisted on-device through
+  `expo-secure-store` via `src/auth/token-cache.ts`. On native the cache delegates to
+  Clerk's `@clerk/expo/token-cache`; on web it is `undefined` (Clerk keeps the session
+  in memory). The `require` is inside the native branch so a web bundle never pulls
+  `expo-secure-store`. A test-visible probe asserts no token key ever reaches
+  AsyncStorage.
+- **Default-token strategy and the backend email fallback.** The registered provider
+  requests the **default** session token (`getToken()`, no JWT template), exactly as
+  the web app does. A first registration can therefore trigger the backend's Clerk-API
+  email fallback; this is accepted and matches web.
+- **`@clerk/expo` plugin native defaults.** The config plugin's native defaults attach
+  as config mods that only run at `expo prebuild`, so they are inert for `expo export`
+  and remain unverified until #1660: the Sign in with Apple entitlement and the iOS
+  deployment target (`17.0`), the Android hosted-auth intent filter for the `clerk`
+  scheme, and the Android packaging exclusions / Kotlin metadata flag.
+- **Redirect guard.** `app/(app)/_layout.tsx` is a plain `Stack` (never
+  `Stack.Protected`, an open iOS defect expo/expo#37305) guarded by the adapter plus
+  `<Redirect>`: it renders nothing until `isLoaded`, redirects a signed-out or inert
+  user to `/(auth)/sign-in`, and admits only a signed-in user. A session carrying a
+  pending `currentTask` is not treated as signed-in.
+- **Sign-out and recovery-handler clearing.** Sign-out clears the secure cache and the
+  one-shot 401 recovery handler. `AuthProviders` registers the handler only while
+  signed in and clears it on sign-out and unmount, so a stale handler cannot fire
+  after sign-out. `hasEverAuthenticated` in the shared client is never reset (there is
+  no public API for it), which is why clearing the handler is the mechanism.
+- **Test tiers.** The unit/component tier runs against the hand-written Clerk mock;
+  the contract-integration tier drives the real `@boostedbudget/api-client` through
+  `axios-mock-adapter`; the non-gating credentialed smoke lane is the only one that
+  validates real Clerk semantics. See **Test tiers** above.
+- **Clerk Dashboard prerequisite.** Google and Apple sign-in return through
+  `boostedbudget://sso-callback`; an owner must register that exact URL as an allowed
+  redirect URL in the Clerk Dashboard before OAuth works. See **OAuth redirect URL
+  (owner setup)** above.
 
 ## Architecture seams
 
@@ -218,7 +352,7 @@ design-tokens projection, not a NativeWind feature. `packages/design-tokens` and
 
 ## Deliberately deferred
 
-This scaffold does not include Clerk or passkeys ([#1657](https://github.com/BoostedBudget/BoostedBudget/issues/1657)),
+This scaffold does not include passkeys ([#1708](https://github.com/BoostedBudget/BoostedBudget/issues/1708)),
 PostHog ([#1659](https://github.com/BoostedBudget/BoostedBudget/issues/1659)),
 EAS signing, OTA, store delivery, or device E2E ([#1660](https://github.com/BoostedBudget/BoostedBudget/issues/1660)),
 notifications or background refresh ([#1661](https://github.com/BoostedBudget/BoostedBudget/issues/1661)),

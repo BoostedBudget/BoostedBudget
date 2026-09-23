@@ -16,7 +16,7 @@
  * On a successful accept, invalidates `getMyHousehold`, `listHouseholdMembers`,
  * `getHouseholdEntitlement`, `listMyAccountShares`, the user's profile
  * (effective tier changes on joining a household), the accounts list
- * (account visibility can change), and the 7 scoped dashboard/analytics
+ * (account visibility can change), and the 9 scoped dashboard/analytics
  * queries (both `personal` and `household` scope variants) — joining a
  * household changes almost everything the user sees. See
  * `invalidateScopedQueries.ts` for the full query-key-shape investigation

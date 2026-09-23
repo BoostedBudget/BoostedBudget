@@ -153,7 +153,7 @@ func TestRetentionUniverses_DisconnectedBrokerage_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, afterLive, "disconnected: GetByUserID must not report a stale position as live")
 
-	afterSecurities, err := holdingRepo.GetByUserIDWithSecurities(ctx, userID.String(), nil)
+	afterSecurities, err := holdingRepo.GetByUserIDWithSecurities(ctx, userID.String(), nil, nil)
 	require.NoError(t, err)
 	assert.Empty(t, afterSecurities, "disconnected: GetByUserIDWithSecurities is current-state too")
 
