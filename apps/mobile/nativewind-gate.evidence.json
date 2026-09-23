@@ -32,58 +32,58 @@
     },
     {
       "id": "web-export-gzip-bytes",
-      "measured": 367512,
+      "measured": 476267,
       "threshold": {
-        "baselineBytes": 347166,
+        "baselineBytes": 476267,
         "maxDeltaPercent": 15,
-        "maxBytes": 399241
+        "maxBytes": 547708
       },
       "pass": true
     },
     {
       "id": "web-export-gzip-delta-bytes",
-      "measured": 20346,
+      "measured": 0,
       "threshold": {
-        "baselineBytes": 347166,
-        "maxDeltaBytes": 52075
+        "baselineBytes": 476267,
+        "maxDeltaBytes": 71441
       },
       "pass": true
     },
     {
       "id": "ios-export-gzip-bytes",
-      "measured": 1820505,
+      "measured": 2582429,
       "threshold": {
-        "baselineBytes": 1774298,
+        "baselineBytes": 2582435,
         "maxDeltaPercent": 20,
-        "maxBytes": 2129158
+        "maxBytes": 3098922
       },
       "pass": true
     },
     {
       "id": "ios-export-gzip-delta-bytes",
-      "measured": 46207,
+      "measured": -6,
       "threshold": {
-        "baselineBytes": 1774298,
-        "maxDeltaBytes": 354860
+        "baselineBytes": 2582435,
+        "maxDeltaBytes": 516487
       },
       "pass": true
     },
     {
       "id": "android-export-gzip-bytes",
-      "measured": 1928674,
+      "measured": 2691910,
       "threshold": {
-        "baselineBytes": 1880903,
+        "baselineBytes": 2691912,
         "maxDeltaPercent": 20,
-        "maxBytes": 2257084
+        "maxBytes": 3230295
       },
       "pass": true
     },
     {
       "id": "android-export-gzip-delta-bytes",
-      "measured": 47771,
+      "measured": -2,
       "threshold": {
-        "baselineBytes": 1880903,
-        "maxDeltaBytes": 376181
+        "baselineBytes": 2691912,
+        "maxDeltaBytes": 538383
       },
       "pass": true
     },

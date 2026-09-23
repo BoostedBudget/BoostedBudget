@@ -22,7 +22,10 @@ describe('public mobile environment', () => {
     const description = describePublicEnvironment({ EXPO_PUBLIC_API_URL: value })
 
     expect(parsePublicEnvironment({ EXPO_PUBLIC_API_URL: value }).apiUrl).toBeUndefined()
-    expect(description).toEqual({ apiUrl: { present: true, valid: false } })
+    expect(description).toEqual({
+      apiUrl: { present: true, valid: false },
+      clerkPublishableKey: { present: false, valid: false },
+    })
     expect(JSON.stringify(description)).not.toContain(value)
     expect(JSON.stringify(description)).not.toContain('must-not-leak')
   })
@@ -35,8 +38,47 @@ describe('public mobile environment', () => {
     const secretLikeValue = 'https://token-value@example.com'
     const description = describePublicEnvironment({ EXPO_PUBLIC_API_URL: secretLikeValue })
 
-    expect(description).toEqual({ apiUrl: { present: true, valid: false } })
+    expect(description).toEqual({
+      apiUrl: { present: true, valid: false },
+      clerkPublishableKey: { present: false, valid: false },
+    })
     expect(JSON.stringify(description)).not.toContain(secretLikeValue)
     expect(JSON.stringify(description)).not.toContain('token-value')
+  })
+
+  it.each(['pk_test_abc123', 'pk_live_abc123'])('carries a valid Clerk publishable key: %s', (value) => {
+    expect(parsePublicEnvironment({ EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: value })).toEqual({
+      clerkPublishableKey: value,
+    })
+  })
+
+  it.each([
+    'sk_test_secret',
+    'sk_live_secret',
+    ' pk_test_abc123 ',
+    'pk_test_abc123 ',
+    '',
+    'not-a-key',
+    'pk_abc123',
+  ])('rejects a Clerk publishable key that is not a pk_test_/pk_live_ value: %s', (value) => {
+    expect(parsePublicEnvironment({ EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: value }).clerkPublishableKey).toBeUndefined()
+  })
+
+  it('reports Clerk key presence and validity without echoing the value', () => {
+    const valid = describePublicEnvironment({ EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: 'pk_test_abc123' })
+    expect(valid).toEqual({
+      apiUrl: { present: false, valid: false },
+      clerkPublishableKey: { present: true, valid: true },
+    })
+    expect(JSON.stringify(valid)).not.toContain('pk_test_abc123')
+
+    const secretLikeValue = 'sk_test_secret'
+    const invalid = describePublicEnvironment({ EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: secretLikeValue })
+    expect(invalid).toEqual({
+      apiUrl: { present: false, valid: false },
+      clerkPublishableKey: { present: true, valid: false },
+    })
+    expect(JSON.stringify(invalid)).not.toContain(secretLikeValue)
+    expect(JSON.stringify(invalid)).not.toContain('sk_test_secret')
   })
 })

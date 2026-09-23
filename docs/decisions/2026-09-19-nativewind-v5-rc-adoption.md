@@ -4,8 +4,9 @@
 **Status:** Accepted
 **Issue:** #1658
 **Evidence:** `apps/mobile/nativewind-gate.evidence.json` (13 measured items, all passing),
-produced by the harness `apps/mobile/scripts/nativewind-gate.ts` against the frozen post-Wave-1
-baseline `apps/mobile/scripts/nativewind-gate-baseline.json`
+produced by the harness `apps/mobile/scripts/nativewind-gate.ts` against the frozen
+baseline `apps/mobile/scripts/nativewind-gate-baseline.json` (re-recorded 2026-09-22 for #1657 —
+see [Re-measurement](#re-measurement-2026-09-22-the-1657-auth-dependency-re-baseline))
 **Record guard:** `apps/mobile/src/test/nativewind-gate-record.test.ts` ties the version pins in
 this ADR to `apps/mobile/package.json` and derives the verdict below from
 `evidence.items.every(item => item.pass)`
@@ -59,28 +60,35 @@ commit, never an implicit range upgrade.
 
 ## The five measurements
 
-Measured by `nativewind-gate.ts` on the post-Wave-1 tree — the same tree the frozen baseline was
-recorded from — so the bundle deltas measure the NativeWind substrate rather than Wave-1 token
-work. Baseline (post-Wave-1, pre-primitive): web gzip 347,166 B, iOS gzip 1,774,298 B, Android
-gzip 1,880,903 B.
+Measured by `nativewind-gate.ts`. The table above is the **2026-09-19 adoption recording**; the
+frozen baseline was re-recorded once since then, for #1657 (see
+[Re-measurement](#re-measurement-2026-09-22-the-1657-auth-dependency-re-baseline) below). Original
+adoption baseline (post-Wave-1, pre-primitive): web gzip 347,166 B, iOS gzip 1,774,298 B, Android
+gzip 1,880,903 B. Current frozen baseline (2026-09-22): web gzip 476,267 B, iOS gzip 2,582,435 B,
+Android gzip 2,691,912 B.
+
+The five measurements, re-measured 2026-09-22 against the current frozen baseline:
 
 | # | Measurement | Measured | Threshold | Result |
 | --- | --- | --- | --- | --- |
 | M1 | `expo-doctor` exit code | `0` | must equal `0` | PASS |
 | M2 | `expo export` exit code for web / iOS / Android | `0` / `0` / `0` | each must equal `0` | PASS |
 | M3 | Distinct resolved copies of `react-native-css` in `bun.lock` | `1` | exactly `1` | PASS |
-| M4 | Gzipped export size and signed delta vs baseline, per platform | web 347,166 B (Δ 0); iOS 1,774,293 B (Δ −5); Android 1,880,900 B (Δ −3) | web ≤ +15% (≤ 399,241 B; Δ ≤ 52,075 B); native ≤ +20% (iOS ≤ 2,129,158 B, Δ ≤ 354,860 B; Android ≤ 2,257,084 B, Δ ≤ 376,181 B) | PASS |
+| M4 | Gzipped export size and signed delta vs baseline, per platform | web 476,267 B (Δ 0); iOS 2,582,429 B (Δ −6); Android 2,691,910 B (Δ −2) | web ≤ +15% (≤ 547,708 B; Δ ≤ 71,441 B); native ≤ +20% (iOS ≤ 3,098,922 B, Δ ≤ 516,487 B; Android ≤ 3,230,295 B, Δ ≤ 538,383 B) | PASS |
 | M5 | Resolved version vs declared pin for `nativewind` and `react-native-css` | `5.0.0-rc.0` / `3.1.0-rc.0` | exact equality to the declared pins | PASS |
 
-The native deltas are negative (−5 and −3 bytes) and the web delta is exactly zero; the small
-native drift is per-build Hermes bytecode noise, not a regression, and is far inside the +20%
-native band. Percentage thresholds, not byte identity, are the correct bar for the native
-artifacts (see the harness header for why `.hbc` is included in the measurement).
+The deltas are 0 / −6 / −2 bytes. The baseline is the upper of two consecutive local runs and sits a
+few dozen bytes above the CI gate-environment measurement, because a Metro rebuild is not
+bit-identical run to run (the web export differed by ~974 B between two consecutive local runs — CSS
+content-hash / build-order noise, not a content change), and the baseline was intentionally taken at
+the higher value so both environments pass with margin. All three sit far inside the percentage
+bands. Percentage thresholds, not byte identity, are the correct bar for these artifacts (see the
+harness header for why `.hbc` is included in the measurement).
 
 ### Full evidence ledger (13 items)
 
-Every item in `nativewind-gate.evidence.json` is recorded here. `measured` is a number or boolean,
-never prose.
+Every item in `nativewind-gate.evidence.json` is recorded here (2026-09-22 re-measurement).
+`measured` is a number or boolean, never prose.
 
 | Evidence item id | Measured | Threshold | Result |
 | --- | --- | --- | --- |
@@ -89,16 +97,54 @@ never prose.
 | `expo-export-ios-exit` | `0` | `0` | PASS |
 | `expo-export-android-exit` | `0` | `0` | PASS |
 | `react-native-css-copies` | `1` | `1` | PASS |
-| `web-export-gzip-bytes` | `347166` | `{ baselineBytes: 347166, maxDeltaPercent: 15, maxBytes: 399241 }` | PASS |
-| `web-export-gzip-delta-bytes` | `0` | `{ baselineBytes: 347166, maxDeltaBytes: 52075 }` | PASS |
-| `ios-export-gzip-bytes` | `1774293` | `{ baselineBytes: 1774298, maxDeltaPercent: 20, maxBytes: 2129158 }` | PASS |
-| `ios-export-gzip-delta-bytes` | `-5` | `{ baselineBytes: 1774298, maxDeltaBytes: 354860 }` | PASS |
-| `android-export-gzip-bytes` | `1880900` | `{ baselineBytes: 1880903, maxDeltaPercent: 20, maxBytes: 2257084 }` | PASS |
-| `android-export-gzip-delta-bytes` | `-3` | `{ baselineBytes: 1880903, maxDeltaBytes: 376181 }` | PASS |
+| `web-export-gzip-bytes` | `476267` | `{ baselineBytes: 476267, maxDeltaPercent: 15, maxBytes: 547708 }` | PASS |
+| `web-export-gzip-delta-bytes` | `0` | `{ baselineBytes: 476267, maxDeltaBytes: 71441 }` | PASS |
+| `ios-export-gzip-bytes` | `2582429` | `{ baselineBytes: 2582435, maxDeltaPercent: 20, maxBytes: 3098922 }` | PASS |
+| `ios-export-gzip-delta-bytes` | `-6` | `{ baselineBytes: 2582435, maxDeltaBytes: 516487 }` | PASS |
+| `android-export-gzip-bytes` | `2691910` | `{ baselineBytes: 2691912, maxDeltaPercent: 20, maxBytes: 3230295 }` | PASS |
+| `android-export-gzip-delta-bytes` | `-2` | `{ baselineBytes: 2691912, maxDeltaBytes: 538383 }` | PASS |
 | `nativewind-version` | `true` | `{ expected: "5.0.0-rc.0", resolved: "5.0.0-rc.0" }` | PASS |
 | `react-native-css-version` | `true` | `{ expected: "3.1.0-rc.0", resolved: "3.1.0-rc.0" }` | PASS |
 
 13/13 items passed. The verdict above is mechanically derived from this table, not authored.
+
+## Re-measurement (2026-09-22): the #1657 auth-dependency re-baseline
+
+**Why this section exists.** The gate's other three measured items (doctor/export exits, the
+single-copy `react-native-css` check, the two version pins) are absolute and did not move. Only the
+frozen reference bytes did, because #1657 added the mobile Clerk authentication dependencies
+(`@clerk/expo`, `expo-secure-store`, `expo-web-browser`, `expo-auth-session`, `expo-crypto`), and
+Metro bundles them **statically** even though the app deliberately keeps Clerk out of *execution*
+(the `require` is runtime-gated behind `authAvailable`). Non-execution of Clerk in an inert build is
+a runtime property; it is not a bundler property, and no bundler setting here can exclude a module
+Metro reaches through a static `require`. The size growth is therefore the accepted, understood cost
+of the auth dependencies — **not a NativeWind regression**.
+
+**What was done, and what was not.** `nativewind-gate-baseline.json` was re-recorded through its
+sanctioned path — a reviewed commit — with a `note` recording exactly this. The gate's percentage
+thresholds in `nativewind-gate.ts` (`webMaxDeltaPercent: 15`, `nativeMaxDeltaPercent: 20`) are
+**unchanged**; the gate was not loosened, removed, or exempted, and the CI step still runs
+`gate:nativewind --check` as a `REQUIRED_UNGATED_STEPS` member.
+
+**The three trees, for the audit trail:**
+
+| Platform | Adoption baseline (2026-09-19, post-Wave-1) | CI gate measurement (#1709) | Frozen baseline (2026-09-22) |
+| --- | --- | --- | --- |
+| web gzip | 347,166 B | 476,211 B | 476,267 B |
+| iOS gzip | 1,774,298 B | 2,582,381 B | 2,582,435 B |
+| Android gzip | 1,880,903 B | 2,691,853 B | 2,691,912 B |
+
+The CI tree is the authoritative gate environment; the frozen baseline is the local re-measurement,
+which sits 54–59 bytes above it (well inside the 15%/20% bands), so both the CI and local
+measurements pass with the thresholds untouched. The +25–31% gzip growth versus the adoption
+baseline is the Clerk/Expo dependency addition; the unfiltered raw-byte growth is larger (for example
+web `.js` 1,797,625 B) because the Clerk bundle compresses well.
+
+**Residual.** The re-baseline does not re-open the adoption decision: the verdict stays `KEEP_RC`,
+the pins are unchanged, and the known risks below are unchanged. A follow-up that changes the
+bundle-size source (for example removing a stale static `require` target) should re-run
+`gate:nativewind --check` and, if it changes the frozen reference again, re-record through this same
+reviewed-commit path.
 
 ## Migration-checklist verification
 
