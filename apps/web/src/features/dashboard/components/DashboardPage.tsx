@@ -60,7 +60,7 @@ function DashboardContent() {
   }, [gettingStarted.isCelebrating, trackEvent])
 
   // Fetch account types for filter. accountTypes itself isn't scope-sensitive (not one
-  // of the 7 scoped endpoints), but this call also fires useGetBalanceSummary/History
+  // of the 9 scoped endpoints), but this call also fires useGetBalanceSummary/History
   // under the hood (their results are unused here) — passing `scope` keeps those
   // incidental fetches consistent with the user's current toggle selection instead of
   // always querying personal scope regardless of what's selected.

@@ -30,10 +30,15 @@
  *
  * OpenAPI spec version: 1.0.0
  */
+import type { GetHoldingsScope } from './getHoldingsScope';
 
 export type GetHoldingsParams = {
 /**
  * Filter holdings to a specific account ID (chain-expanded via user_account_id). Optional.
  */
 account_id?: string;
+/**
+ * Aggregation scope: personal (default) or household (requires active household membership). Household scope returns only accounts shared into the household.
+ */
+scope?: GetHoldingsScope;
 };

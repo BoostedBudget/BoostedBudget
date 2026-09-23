@@ -54,6 +54,7 @@ import type {
   GetInvestmentTransactionsParams,
   GetPortfolioHistoryOutputBody,
   GetPortfolioHistoryParams,
+  GetPortfolioSummaryParams,
   HoldingSnapshotHistory,
   PortfolioSummary
 } from '../../models';
@@ -462,13 +463,14 @@ export function useGetPortfolioHistory<TData = Awaited<ReturnType<typeof getPort
  * @summary Get portfolio summary
  */
 export const getPortfolioSummary = (
-
+    params?: GetPortfolioSummaryParams,
  options?: SecondParameter<typeof customInstance>,signal?: AbortSignal
 ) => {
 
 
       return customInstance<PortfolioSummary>(
-      {url: `/api/v1/investments/portfolio/summary`, method: 'GET', signal
+      {url: `/api/v1/investments/portfolio/summary`, method: 'GET',
+        params, signal
     },
       options);
     }
@@ -476,23 +478,23 @@ export const getPortfolioSummary = (
 
 
 
-export const getGetPortfolioSummaryQueryKey = () => {
+export const getGetPortfolioSummaryQueryKey = (params?: GetPortfolioSummaryParams,) => {
     return [
-    `/api/v1/investments/portfolio/summary`
+    `/api/v1/investments/portfolio/summary`, ...(params ? [params] : [])
     ] as const;
     }
 
 
-export const getGetPortfolioSummaryQueryOptions = <TData = Awaited<ReturnType<typeof getPortfolioSummary>>, TError = ErrorType<ErrorModel>>( options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+export const getGetPortfolioSummaryQueryOptions = <TData = Awaited<ReturnType<typeof getPortfolioSummary>>, TError = ErrorType<ErrorModel>>(params?: GetPortfolioSummaryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
 
-  const queryKey =  queryOptions?.queryKey ?? getGetPortfolioSummaryQueryKey();
+  const queryKey =  queryOptions?.queryKey ?? getGetPortfolioSummaryQueryKey(params);
 
 
 
-    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPortfolioSummary>>> = ({ signal }) => getPortfolioSummary(requestOptions, signal);
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getPortfolioSummary>>> = ({ signal }) => getPortfolioSummary(params, requestOptions, signal);
 
 
 
@@ -506,7 +508,7 @@ export type GetPortfolioSummaryQueryError = ErrorType<ErrorModel>
 
 
 export function useGetPortfolioSummary<TData = Awaited<ReturnType<typeof getPortfolioSummary>>, TError = ErrorType<ErrorModel>>(
-  options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioSummary>>, TError, TData>> & Pick<
+ params: undefined |  GetPortfolioSummaryParams, options: { query:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioSummary>>, TError, TData>> & Pick<
         DefinedInitialDataOptions<
           Awaited<ReturnType<typeof getPortfolioSummary>>,
           TError,
@@ -516,7 +518,7 @@ export function useGetPortfolioSummary<TData = Awaited<ReturnType<typeof getPort
  , queryClient?: QueryClient
   ):  DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetPortfolioSummary<TData = Awaited<ReturnType<typeof getPortfolioSummary>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioSummary>>, TError, TData>> & Pick<
+ params?: GetPortfolioSummaryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioSummary>>, TError, TData>> & Pick<
         UndefinedInitialDataOptions<
           Awaited<ReturnType<typeof getPortfolioSummary>>,
           TError,
@@ -526,7 +528,7 @@ export function useGetPortfolioSummary<TData = Awaited<ReturnType<typeof getPort
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useGetPortfolioSummary<TData = Awaited<ReturnType<typeof getPortfolioSummary>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ params?: GetPortfolioSummaryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
   ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -534,11 +536,11 @@ export function useGetPortfolioSummary<TData = Awaited<ReturnType<typeof getPort
  */
 
 export function useGetPortfolioSummary<TData = Awaited<ReturnType<typeof getPortfolioSummary>>, TError = ErrorType<ErrorModel>>(
-  options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
+ params?: GetPortfolioSummaryParams, options?: { query?:Partial<UseQueryOptions<Awaited<ReturnType<typeof getPortfolioSummary>>, TError, TData>>, request?: SecondParameter<typeof customInstance>}
  , queryClient?: QueryClient
  ):  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 
-  const queryOptions = getGetPortfolioSummaryQueryOptions(options)
+  const queryOptions = getGetPortfolioSummaryQueryOptions(params,options)
 
   const query = useQuery(queryOptions, queryClient) as  UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 

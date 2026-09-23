@@ -50,7 +50,7 @@ func TestDayChangePct_GoAndSQLAgree_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Go path.
-	holdings, err := NewHoldingRepository(tx).GetByUserIDWithSecurities(ctx, userID.String(), nil)
+	holdings, err := NewHoldingRepository(tx).GetByUserIDWithSecurities(ctx, userID.String(), nil, nil)
 	require.NoError(t, err)
 	require.Len(t, holdings, 1)
 	goPct := holdings[0].DayChangePct()

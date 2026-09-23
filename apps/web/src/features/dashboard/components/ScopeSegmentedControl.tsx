@@ -23,15 +23,41 @@
  * whenever the dashboard filter row is visible — even while hidden (returning
  * null), its hooks (including this effect) still run — so the reset fires
  * promptly regardless of whether the toggle itself is currently displayed.
+ *
+ * Share-coverage caption (Issue #1706): when `scope === 'household'` the
+ * household total correctly sums only accounts the caller has shared into the
+ * household, but the UI never said so. This caption states the CALLER'S OWN
+ * coverage ("N of your M accounts are shared") and links to the household
+ * sharing controls. It deliberately reports nothing about any OTHER member:
+ * the owner's constraint is that we must not expose which accounts are NOT
+ * shared with the other members. Both counts come from caller-scoped sources
+ * only — `useActiveAccounts` (the same account list the dashboard renders, so
+ * M can never disagree with it) and `useHouseholdVisibility` (which wraps the
+ * caller's own `GET /households/me/account-shares`). `useHouseholdVisibility`
+ * does not filter `revoked_at`, so a revoked share is excluded here.
+ * Enforced by ScopeSegmentedControl.privacy.test.tsx.
  */
 
 import { useEffect } from 'react'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useHousehold } from '@/features/household/hooks/useHousehold'
+import { useHouseholdVisibility } from '@/features/household/hooks/useHouseholdVisibility'
+import { useActiveAccounts } from '@/features/accounts/hooks'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { useDashboardContext } from '../context/DashboardContext'
 import type { DashboardScope } from '../types'
+
+/**
+ * Data-free fallback shown while the caller's share list is loading or has
+ * errored. The endpoint has a measured transient failure, and the explanation
+ * must not vanish exactly when it is most needed — so this states the
+ * inclusion rule without any count rather than rendering nothing.
+ */
+const SHARE_COVERAGE_FALLBACK =
+  'Household totals include only accounts shared with the household.'
+
+const MANAGE_SHARING_HREF = '/profile?tab=household'
 
 /**
  * Resolves a raw ToggleGroup onValueChange value into a valid DashboardScope,
@@ -48,6 +74,8 @@ export function resolveScopeSelection(value: string): DashboardScope | null {
 export function ScopeSegmentedControl() {
   const { scope, setScope } = useDashboardContext()
   const { isInHousehold } = useHousehold()
+  const { accounts } = useActiveAccounts()
+  const { shares, isLoading: sharesLoading, error: sharesError } = useHouseholdVisibility()
   const trackEvent = useTrackEvent()
 
   // Defensive reset — see file header. Hooks must run unconditionally, so this
@@ -59,6 +87,18 @@ export function ScopeSegmentedControl() {
   }, [isInHousehold, scope, setScope])
 
   if (!isInHousehold) return null
+
+  const ownAccounts = accounts ?? []
+  const sharedUserAccountIds = new Set(
+    shares
+      .filter((share) => share.visibility === 'shared' && share.revoked_at == null)
+      .map((share) => share.user_account_id)
+  )
+  const sharedCount = ownAccounts.filter(
+    (account) =>
+      account.user_account_id != null && sharedUserAccountIds.has(account.user_account_id)
+  ).length
+  const sharesUnavailable = sharesLoading || sharesError != null
 
   const handleValueChange = (value: string) => {
     const resolved = resolveScopeSelection(value)
@@ -77,6 +117,28 @@ export function ScopeSegmentedControl() {
           Household
         </ToggleGroupItem>
       </ToggleGroup>
+      {scope === 'household' && (
+        <p
+          data-testid="household-share-coverage"
+          className="mt-2 text-xs text-muted-foreground"
+        >
+          {sharesUnavailable ? (
+            SHARE_COVERAGE_FALLBACK
+          ) : (
+            <>
+              <span>
+                {sharedCount} of your {ownAccounts.length} accounts are shared
+              </span>{' '}
+              <a
+                href={MANAGE_SHARING_HREF}
+                className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+              >
+                Manage sharing
+              </a>
+            </>
+          )}
+        </p>
+      )}
     </div>
   )
 }
