@@ -22,9 +22,14 @@ import {
   mockUseGetHouseholdEntitlement,
   mockRefetchMyHousehold,
   mockRefetchHouseholdEntitlement,
+  mockUseListMyAccountShares,
+  mockRefetchMyAccountShares,
 } from '@/test/mocks/household-api'
+import { mockUseGetAccounts, mockRefetchAccounts } from '@/test/mocks/accounts-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
+import { filterActiveAccounts } from '@/features/accounts/hooks'
+import type { Account } from '@boostedbudget/api-client/models'
 
 import { ScopeSegmentedControl, resolveScopeSelection } from './ScopeSegmentedControl'
 import type { DashboardScope } from '../types'
@@ -229,6 +234,107 @@ describe('ScopeSegmentedControl', () => {
 
     it('resolves any other unexpected value to null', () => {
       expect(resolveScopeSelection('bogus')).toBeNull()
+    })
+  })
+
+  describe('Household share-coverage caption (Issue #1706)', () => {
+    const CALLER_ACCOUNTS = [
+      { id: 'acc-1', user_account_id: 'ua-1', status: 'active' },
+      { id: 'acc-2', user_account_id: 'ua-2', status: 'active' },
+      { id: 'acc-3', user_account_id: 'ua-3', status: 'active' },
+      { id: 'acc-4', user_account_id: 'ua-4', status: 'active' },
+    ] as unknown as Account[]
+
+    const CALLER_SHARES = [
+      { user_account_id: 'ua-1', visibility: 'shared', revoked_at: undefined },
+      { user_account_id: 'ua-2', visibility: 'shared', revoked_at: undefined },
+      { user_account_id: 'ua-3', visibility: 'shared', revoked_at: undefined },
+      // ua-4's only share is revoked — must NOT count toward the numerator.
+      { user_account_id: 'ua-4', visibility: 'shared', revoked_at: '2024-02-01T00:00:00Z' },
+    ]
+
+    beforeEach(() => {
+      mockUseGetAccounts.mockClear()
+      mockUseListMyAccountShares.mockClear()
+      mockUseGetMyHousehold.mockReturnValue({
+        data: { household: { id: 'hh-1', name: 'The Smiths' } },
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchMyHousehold,
+      } as never)
+      mockUseGetAccounts.mockReturnValue({
+        data: { accounts: CALLER_ACCOUNTS },
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: mockRefetchAccounts,
+      } as never)
+      mockUseListMyAccountShares.mockReturnValue({
+        data: CALLER_SHARES,
+        isLoading: false,
+        error: null,
+        refetch: mockRefetchMyAccountShares,
+      } as never)
+      mockUseDashboardContext.mockReturnValue(baseContextValue('household'))
+    })
+
+    it('renders the caller\'s own coverage as "N of your M accounts are shared"', () => {
+      renderControl()
+      expect(screen.getByText('3 of your 4 accounts are shared')).toBeInTheDocument()
+    })
+
+    it('counts M from the same active-account list the dashboard renders', () => {
+      const expectedM = filterActiveAccounts(CALLER_ACCOUNTS).length
+      renderControl()
+      expect(expectedM).toBe(4)
+      expect(screen.getByText(`3 of your ${expectedM} accounts are shared`)).toBeInTheDocument()
+    })
+
+    it('excludes revoked shares from the numerator', () => {
+      renderControl()
+      expect(screen.queryByText('4 of your 4 accounts are shared')).not.toBeInTheDocument()
+      expect(screen.getByText('3 of your 4 accounts are shared')).toBeInTheDocument()
+    })
+
+    it('links to the household sharing controls', () => {
+      renderControl()
+      expect(screen.getByRole('link', { name: 'Manage sharing' })).toHaveAttribute(
+        'href',
+        '/profile?tab=household'
+      )
+    })
+
+    it('renders no caption when the scope is personal', () => {
+      mockUseDashboardContext.mockReturnValue(baseContextValue('personal'))
+      renderControl()
+      expect(screen.queryByTestId('household-share-coverage')).not.toBeInTheDocument()
+    })
+
+    it('renders the data-free fallback when the share endpoint errors (5xx)', () => {
+      mockUseListMyAccountShares.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: new Error('Request failed with status code 500'),
+        refetch: mockRefetchMyAccountShares,
+      } as never)
+      renderControl()
+      expect(
+        screen.getByText('Household totals include only accounts shared with the household.')
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/of your .* accounts are shared/)).not.toBeInTheDocument()
+    })
+
+    it('renders the data-free fallback while the share list is loading', () => {
+      mockUseListMyAccountShares.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        error: null,
+        refetch: mockRefetchMyAccountShares,
+      } as never)
+      renderControl()
+      expect(
+        screen.getByText('Household totals include only accounts shared with the household.')
+      ).toBeInTheDocument()
     })
   })
 })
