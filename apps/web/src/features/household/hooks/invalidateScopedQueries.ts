@@ -35,11 +35,20 @@ import {
   getGetCashFlowHistoryQueryKey,
   getGetNetWorthTrendQueryKey,
 } from '@boostedbudget/api-client/endpoints/analytics/analytics'
+import {
+  getGetHoldingsQueryKey,
+  getGetPortfolioSummaryQueryKey,
+} from '@boostedbudget/api-client/endpoints/investments/investments'
 
 /**
- * Invalidates the 7 scoped dashboard/analytics queries so both the
+ * Invalidates the 9 scoped dashboard/analytics/investments queries so both the
  * `personal` and `household` scope variants refresh. See file-header comment
  * for why calling each key helper with no arguments is the correct approach.
+ *
+ * The two investments keys (#1706) are scope-dependent for the same reason the
+ * dashboard/analytics keys are: holdings and portfolio summary accept
+ * `scope=personal|household`, so a share-visibility change must refresh their
+ * household aggregates rather than leave them stale.
  */
 export async function invalidateScopedDashboardAnalyticsQueries(queryClient: QueryClient): Promise<void> {
   await Promise.all([
@@ -50,5 +59,7 @@ export async function invalidateScopedDashboardAnalyticsQueries(queryClient: Que
     queryClient.invalidateQueries({ queryKey: getGetNetWorthHistoryQueryKey() }),
     queryClient.invalidateQueries({ queryKey: getGetCashFlowHistoryQueryKey() }),
     queryClient.invalidateQueries({ queryKey: getGetNetWorthTrendQueryKey() }),
+    queryClient.invalidateQueries({ queryKey: getGetHoldingsQueryKey() }),
+    queryClient.invalidateQueries({ queryKey: getGetPortfolioSummaryQueryKey() }),
   ])
 }

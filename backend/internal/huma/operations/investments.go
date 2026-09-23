@@ -29,6 +29,7 @@ import (
 type InvestmentHandler struct {
 	investmentService services.InvestmentService
 	analyticsService  services.InvestmentAnalyticsService
+	householdSvc      services.HouseholdService
 }
 
 // NewInvestmentHandler creates a new InvestmentHandler.
@@ -39,6 +40,12 @@ func NewInvestmentHandler(investmentSvc services.InvestmentService, analyticsSvc
 	}
 }
 
+// SetHouseholdService wires the household service used to resolve `scope=household` on the
+// holdings and portfolio-summary reads (#1706). Nil-safe: personal scope never calls it.
+func (h *InvestmentHandler) SetHouseholdService(svc services.HouseholdService) {
+	h.householdSvc = svc
+}
+
 // ============================================================================
 // Input / Output types — Core operations
 // ============================================================================
@@ -47,6 +54,7 @@ func NewInvestmentHandler(investmentSvc services.InvestmentService, analyticsSvc
 type GetHoldingsInput struct {
 	inputs.AuthenticatedInput
 	AccountID string `query:"account_id" doc:"Filter holdings to a specific account ID (chain-expanded via user_account_id). Optional."`
+	Scope     string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope: personal (default) or household (requires active household membership). Household scope returns only accounts shared into the household."`
 }
 
 // GetHoldingsOutput is the response for GET /investments/holdings.
@@ -62,6 +70,7 @@ type GetHoldingsOutput struct {
 // GetPortfolioSummaryInput is the input for GET /investments/portfolio/summary.
 type GetPortfolioSummaryInput struct {
 	inputs.AuthenticatedInput
+	Scope string `query:"scope" enum:"personal,household" default:"personal" doc:"Aggregation scope: personal (default) or household (requires active household membership). Household scope omits day_change (no household snapshot exists)."`
 }
 
 // GetPortfolioSummaryOutput is the response for GET /investments/portfolio/summary.
@@ -198,7 +207,12 @@ func (h *InvestmentHandler) GetHoldings(ctx context.Context, input *GetHoldingsI
 		accountID = &input.AccountID
 	}
 
-	holdings, err := h.investmentService.ListHoldings(ctx, input.UserID, accountID)
+	scope, err := resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope)
+	if err != nil {
+		return nil, err
+	}
+
+	holdings, err := h.investmentService.ListHoldings(ctx, input.UserID, accountID, scope)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}
@@ -217,7 +231,11 @@ func (h *InvestmentHandler) GetHoldings(ctx context.Context, input *GetHoldingsI
 
 // GetPortfolioSummary handles GET /api/v1/investments/portfolio/summary.
 func (h *InvestmentHandler) GetPortfolioSummary(ctx context.Context, input *GetPortfolioSummaryInput) (*GetPortfolioSummaryOutput, error) {
-	summary, err := h.investmentService.GetPortfolioSummary(ctx, input.UserID)
+	scope, err := resolveHouseholdScopeIfRequested(ctx, h.householdSvc, input.UserID, input.Scope)
+	if err != nil {
+		return nil, err
+	}
+	summary, err := h.investmentService.GetPortfolioSummary(ctx, input.UserID, scope)
 	if err != nil {
 		return nil, humaerrors.LoggingMapError(ctx, err)
 	}

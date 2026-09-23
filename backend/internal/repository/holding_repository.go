@@ -37,7 +37,11 @@ type HoldingRepository interface {
 	// joined (LEFT JOIN securities). If accountID is non-nil, filters to that account
 	// (chain-expanded via user_account_id). Populates Holding.Security. Results are
 	// ordered by account_id, securities.type, holdings.institution_value DESC.
-	GetByUserIDWithSecurities(ctx context.Context, userID string, accountID *string) ([]domain.Holding, error)
+	//
+	// scope nil = personal (unchanged: `WHERE h.user_id = $1`). A non-nil scope is a
+	// validated household request (#1706): the personal predicate is REPLACED by the
+	// share-gated household CTE, so only accounts shared into the household appear.
+	GetByUserIDWithSecurities(ctx context.Context, userID string, accountID *string, scope *domain.HouseholdScope) ([]domain.Holding, error)
 
 	// GetDistinctUserIDsWithHoldings returns all distinct user IDs that currently have
 	// at least one holding. Used by the daily portfolio snapshot cron to enumerate users.
@@ -463,20 +467,17 @@ func (r *holdingRepository) GetByUserAccountID(ctx context.Context, userAccountI
 // carrying holdings was excluded from allocation/gain-loss/top-movers while still showing up in
 // the holdings list and portfolio summary — two live endpoints disagreeing about the same
 // account. This predicate closes that split.
-func (r *holdingRepository) GetByUserIDWithSecurities(ctx context.Context, userID string, accountID *string) ([]domain.Holding, error) {
+//
+// scope nil = personal, unchanged. A non-nil scope (#1706) is a validated household request: the
+// personal `WHERE h.user_id = $1` predicate is REPLACED by the share-gated household CTE, so only
+// accounts shared into the household appear. Retaining the personal predicate alongside the CTE
+// would exclude the other member's shared holdings and make this total disagree with the household
+// net-worth figure.
+func (r *holdingRepository) GetByUserIDWithSecurities(ctx context.Context, userID string, accountID *string, scope *domain.HouseholdScope) ([]domain.Holding, error) {
 	observability.AccountsReplacedFiltered.WithLabelValues("investments_with_securities").Inc()
 
-	args := []any{userID}
-	accountFilter := ""
-	if accountID != nil {
-		accountFilter = `AND (
-			(h.user_account_id = (SELECT user_account_id FROM accounts WHERE id = $2 AND user_account_id IS NOT NULL))
-			OR (h.account_id = $2 AND h.user_account_id IS NULL)
-		)`
-		args = append(args, *accountID)
-	}
-
-	query := fmt.Sprintf(`
+	// Shared by both branches; only the WHERE predicate and the account-filter placeholder differ.
+	selectFrom := `
 		SELECT
 			h.id, h.user_id, h.account_id, h.user_account_id, h.security_id,
 			h.quantity, h.cost_basis, h.institution_value, h.institution_price,
@@ -496,12 +497,49 @@ func (r *holdingRepository) GetByUserIDWithSecurities(ctx context.Context, userI
 		-- (#1612 T2/T2c). Never remove this without removing it there too, or the two live
 		-- holdings endpoints (ListHoldings, GetPortfolioSummary) will again disagree with the
 		-- four gated analytics surfaces about a depository account carrying holdings.
-		JOIN accounts a ON a.id = h.account_id AND `+currentStateAccountLeg("a")+` AND a.type = 'investment'
+		JOIN accounts a ON a.id = h.account_id AND ` + currentStateAccountLeg("a") + ` AND a.type = 'investment'
 		LEFT JOIN securities sec ON sec.id = h.security_id
+		`
+
+	// accountFilter renders the optional single-account predicate at placeholder $n.
+	accountFilter := func(n int) string {
+		if accountID == nil {
+			return ""
+		}
+		return fmt.Sprintf(`AND (
+			(h.user_account_id = (SELECT user_account_id FROM accounts WHERE id = $%[1]d AND user_account_id IS NOT NULL))
+			OR (h.account_id = $%[1]d AND h.user_account_id IS NULL)
+		)`, n)
+	}
+
+	var args []any
+	var query string
+	if scope == nil {
+		// PERSONAL — unchanged: `WHERE h.user_id = $1`, account filter at $2.
+		args = []any{userID}
+		if accountID != nil {
+			args = append(args, *accountID)
+		}
+		query = fmt.Sprintf(`%s
 		WHERE h.user_id = $1
 		%s
 		ORDER BY h.account_id, sec.type NULLS LAST, h.institution_value DESC NULLS LAST
-	`, accountFilter)
+		`, selectFrom, accountFilter(2))
+	} else {
+		// HOUSEHOLD (#1706) — the personal `h.user_id = $1` predicate is REPLACED, not augmented.
+		// $1 = requesting user, $2 = household, $3 = active members, $4 = asOf (now), account
+		// filter at $5. Inclusion is decided by the share-gated CTE alone.
+		args = append(householdScopeArgs(userID, scope), time.Now().UTC())
+		if accountID != nil {
+			args = append(args, *accountID)
+		}
+		query = fmt.Sprintf(`WITH %s
+		%s
+		WHERE h.user_account_id IN (SELECT user_account_id FROM household_accounts)
+		%s
+		ORDER BY h.account_id, sec.type NULLS LAST, h.institution_value DESC NULLS LAST
+		`, householdAccountsCTEForBalancesAsOf(), selectFrom, accountFilter(5))
+	}
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {

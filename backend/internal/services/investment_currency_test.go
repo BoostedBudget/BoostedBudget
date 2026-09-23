@@ -73,12 +73,12 @@ func TestInvestmentService_GetPortfolioSummary_DeclaresItsCurrency(t *testing.T)
 			invTxnRepo := new(MockInvestmentTransactionRepository)
 			svc := NewInvestmentService(holdingRepo, snapshotRepo, invTxnRepo)
 
-			holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).
+			holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), (*domain.HouseholdScope)(nil)).
 				Return(tt.holdings, nil)
 			snapshotRepo.On("GetLatestBefore", ctx, userID, time.Now().UTC().Truncate(24*time.Hour)).
 				Return((*domain.PortfolioSnapshot)(nil), nil)
 
-			summary, err := svc.GetPortfolioSummary(ctx, userID)
+			summary, err := svc.GetPortfolioSummary(ctx, userID, nil)
 			require.NoError(t, err)
 
 			// The sum itself is unchanged — this task does not silently alter anyone's totals.
@@ -116,11 +116,11 @@ func TestInvestmentService_GetPortfolioSummary_RefusesADayChangeAcrossCurrencies
 		snapshotRepo := new(MockPortfolioSnapshotRepository)
 		svc := NewInvestmentService(holdingRepo, snapshotRepo, new(MockInvestmentTransactionRepository))
 
-		holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).
+		holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), (*domain.HouseholdScope)(nil)).
 			Return([]domain.Holding{holdingIn("h1", "GBP", 100)}, nil)
 		snapshotRepo.On("GetLatestBefore", ctx, userID, time.Now().UTC().Truncate(24*time.Hour)).Return(newPrior(ccy("GBP")), nil)
 
-		summary, err := svc.GetPortfolioSummary(ctx, userID)
+		summary, err := svc.GetPortfolioSummary(ctx, userID, nil)
 		require.NoError(t, err)
 		require.NotNil(t, summary.DayChange)
 		assert.InDelta(t, 10.0, *summary.DayChange, 1e-9)
@@ -131,11 +131,11 @@ func TestInvestmentService_GetPortfolioSummary_RefusesADayChangeAcrossCurrencies
 		snapshotRepo := new(MockPortfolioSnapshotRepository)
 		svc := NewInvestmentService(holdingRepo, snapshotRepo, new(MockInvestmentTransactionRepository))
 
-		holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).
+		holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), (*domain.HouseholdScope)(nil)).
 			Return([]domain.Holding{holdingIn("h1", "GBP", 100)}, nil)
 		snapshotRepo.On("GetLatestBefore", ctx, userID, time.Now().UTC().Truncate(24*time.Hour)).Return(newPrior(ccy("USD")), nil)
 
-		summary, err := svc.GetPortfolioSummary(ctx, userID)
+		summary, err := svc.GetPortfolioSummary(ctx, userID, nil)
 		require.NoError(t, err)
 		assert.Nil(t, summary.DayChange, "100 GBP minus 90 USD is not a quantity of money")
 		assert.Nil(t, summary.DayChangePct)
@@ -148,11 +148,11 @@ func TestInvestmentService_GetPortfolioSummary_RefusesADayChangeAcrossCurrencies
 		snapshotRepo := new(MockPortfolioSnapshotRepository)
 		svc := NewInvestmentService(holdingRepo, snapshotRepo, new(MockInvestmentTransactionRepository))
 
-		holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).
+		holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), (*domain.HouseholdScope)(nil)).
 			Return([]domain.Holding{holdingIn("h1", "GBP", 100)}, nil)
 		snapshotRepo.On("GetLatestBefore", ctx, userID, time.Now().UTC().Truncate(24*time.Hour)).Return(newPrior(nil), nil)
 
-		summary, err := svc.GetPortfolioSummary(ctx, userID)
+		summary, err := svc.GetPortfolioSummary(ctx, userID, nil)
 		require.NoError(t, err)
 		require.NotNil(t, summary.DayChange)
 	})
@@ -306,10 +306,10 @@ func TestInvestmentService_GetPortfolioSummary_RefusesADayChangeAgainstAMixedPri
 		holdingRepo := new(MockHoldingRepository)
 		snapshotRepo := new(MockPortfolioSnapshotRepository)
 		svc := NewInvestmentService(holdingRepo, snapshotRepo, new(MockInvestmentTransactionRepository))
-		holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).Return(live, nil)
+		holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), (*domain.HouseholdScope)(nil)).Return(live, nil)
 		snapshotRepo.On("GetLatestBefore", ctx, userID, time.Now().UTC().Truncate(24*time.Hour)).
 			Return(prior, nil)
-		summary, err := svc.GetPortfolioSummary(ctx, userID)
+		summary, err := svc.GetPortfolioSummary(ctx, userID, nil)
 		require.NoError(t, err)
 		return summary
 	}
@@ -506,7 +506,7 @@ func TestInvestmentService_GetPortfolioSummary_RefusesADayChangeFromAMixedTODAY(
 		holdingRepo := new(MockHoldingRepository)
 		snapshotRepo := new(MockPortfolioSnapshotRepository)
 		svc := NewInvestmentService(holdingRepo, snapshotRepo, new(MockInvestmentTransactionRepository))
-		holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).Return(live, nil)
+		holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), (*domain.HouseholdScope)(nil)).Return(live, nil)
 		snapshotRepo.On("GetLatestBefore", ctx, userID, time.Now().UTC().Truncate(24*time.Hour)).
 			Return(&domain.PortfolioSnapshot{
 				UserID:                   userID,
@@ -515,7 +515,7 @@ func TestInvestmentService_GetPortfolioSummary_RefusesADayChangeFromAMixedTODAY(
 				TotalValueInvestmentOnly: &priorGated,
 				CurrencyCode:             priorCurrency,
 			}, nil)
-		summary, err := svc.GetPortfolioSummary(ctx, userID)
+		summary, err := svc.GetPortfolioSummary(ctx, userID, nil)
 		require.NoError(t, err)
 		return summary
 	}

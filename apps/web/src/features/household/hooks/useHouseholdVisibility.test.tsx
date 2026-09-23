@@ -16,6 +16,10 @@ import {
   getGetNetWorthTrendQueryKey,
 } from '@boostedbudget/api-client/endpoints/analytics/analytics'
 import {
+  getGetHoldingsQueryKey,
+  getGetPortfolioSummaryQueryKey,
+} from '@boostedbudget/api-client/endpoints/investments/investments'
+import {
   mockUseListMyAccountShares,
   mockUseSetHouseholdShareVisibility,
   mockRefetchMyAccountShares,
@@ -90,7 +94,7 @@ describe('useHouseholdVisibility', () => {
     })
   })
 
-  it('setVisibility invalidates listMyAccountShares and all 7 scoped dashboard/analytics query keys', async () => {
+  it('setVisibility invalidates listMyAccountShares and all 9 scoped dashboard/analytics/investments query keys', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const invalidateSpy = spyOn(queryClient, 'invalidateQueries')
     mockSetHouseholdShareVisibilityMutateAsync.mockResolvedValue(undefined)
@@ -110,6 +114,10 @@ describe('useHouseholdVisibility', () => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetNetWorthHistoryQueryKey() })
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetCashFlowHistoryQueryKey() })
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetNetWorthTrendQueryKey() })
+      // Issue #1706: holdings + portfolio summary are scope-dependent too — a
+      // share-visibility change must refresh their household aggregates.
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetHoldingsQueryKey() })
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: getGetPortfolioSummaryQueryKey() })
     })
   })
 
@@ -120,7 +128,7 @@ describe('useHouseholdVisibility', () => {
     // but not that TanStack Query's prefix-matching actually invalidates
     // BOTH `scope=personal` and `scope=household` cached variants. This test
     // seeds a real (unmocked) QueryClient cache with both scope variants for
-    // one of the 7 scoped queries, triggers the real setVisibility mutation
+    // one of the 9 scoped queries, triggers the real setVisibility mutation
     // path, and asserts both cache entries are now marked stale — proving
     // the real prefix-match semantics, not just a call-arg assertion.
     //
@@ -157,6 +165,43 @@ describe('useHouseholdVisibility', () => {
     await waitFor(() => {
       expect(queryClient.getQueryState(personalKey)?.isInvalidated).toBe(true)
       expect(queryClient.getQueryState(householdKey)?.isInvalidated).toBe(true)
+    })
+  })
+
+  it('setVisibility invalidation marks BOTH personal- and household-scope investments cache entries stale in a real QueryClient', async () => {
+    // Issue #1706 (independent review, MEDIUM): holdings and portfolio summary
+    // became scope-dependent on this branch, so their cache entries are keyed
+    // per scope. Without invalidating them here, toggling an account's share
+    // visibility leaves the household Holdings and Portfolio Summary totals
+    // stale for the full 5-minute staleTime (there is no refetch-on-focus).
+    // This seeds a real QueryClient with both scope variants of each and
+    // asserts the share change marks all four stale.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    mockSetHouseholdShareVisibilityMutateAsync.mockResolvedValue(undefined)
+
+    const personalHoldings = getGetHoldingsQueryKey({ scope: 'personal' })
+    const householdHoldings = getGetHoldingsQueryKey({ scope: 'household' })
+    const personalSummary = getGetPortfolioSummaryQueryKey({ scope: 'personal' })
+    const householdSummary = getGetPortfolioSummaryQueryKey({ scope: 'household' })
+    queryClient.setQueryData(personalHoldings, { holdings: [] })
+    queryClient.setQueryData(householdHoldings, { holdings: [] })
+    queryClient.setQueryData(personalSummary, { total_value: 100 })
+    queryClient.setQueryData(householdSummary, { total_value: 250 })
+
+    for (const key of [personalHoldings, householdHoldings, personalSummary, householdSummary]) {
+      expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false)
+    }
+
+    const { result } = renderHook(() => useHouseholdVisibility(), { wrapper: createWrapper(queryClient) })
+
+    await act(async () => {
+      await result.current.setVisibility('ua-1', 'hidden')
+    })
+
+    await waitFor(() => {
+      for (const key of [personalHoldings, householdHoldings, personalSummary, householdSummary]) {
+        expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true)
+      }
     })
   })
 
