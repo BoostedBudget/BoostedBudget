@@ -4,6 +4,14 @@ module.exports = {
   moduleNameMapper: {
     '^@babel/runtime/(.*)$': '<rootDir>/../../node_modules/@babel/runtime/$1',
     '\\.(css)$': '<rootDir>/src/test/style-mock.js',
+    // jest-resolve does not expand the package's subpath-pattern export
+    // (`"./endpoints/*/*"` in packages/api-client/package.json), so the generated
+    // `@boostedbudget/api-client/endpoints/<feature>/<feature>` specifier fails to resolve here
+    // even though Node's resolver accepts it. The literal `./client` and `./models` keys resolve
+    // natively and are deliberately left to the exports map. This is only needed by the
+    // contract-integration tier (todo 21), which imports real generated functions.
+    '^@boostedbudget/api-client/endpoints/(.*)$':
+      '<rootDir>/../../packages/api-client/src/endpoints/$1',
   },
   collectCoverageFrom: [
     'app/**/*.{ts,tsx}',
@@ -24,7 +32,7 @@ module.exports = {
   // conventional node_modules path. Keep both layers transformable by Expo's
   // Babel preset while retaining Jest's normal dependency exclusion.
   transformIgnorePatterns: [
-    '/node_modules/(?!\\.bun/|react-native|@react-native|expo|@expo|expo-router|@tanstack|nanoid|standard-navigation)',
+    '/node_modules/(?!\\.bun/|react-native|@react-native|expo|@expo|@clerk|expo-router|@tanstack|nanoid|standard-navigation)',
   ],
   // `/e2e/` holds the Playwright visual/accessibility suite (Todo 22). `jest-expo` sets no
   // `testMatch`, so jest's default `**/?(*.)+(spec|test).[jt]s?(x)` would discover

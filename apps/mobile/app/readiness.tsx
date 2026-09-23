@@ -12,7 +12,10 @@ interface ReadinessScreenProps {
 const billingNames = { revenuecat: 'RevenueCat', paddle: 'Paddle' } as const
 
 export default function ReadinessScreen({
-  environment = { EXPO_PUBLIC_API_URL: process.env.EXPO_PUBLIC_API_URL },
+  environment = {
+    EXPO_PUBLIC_API_URL: process.env.EXPO_PUBLIC_API_URL,
+    EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY,
+  },
   platform = Platform.OS,
 }: ReadinessScreenProps) {
   const [checked, setChecked] = useState(false)
@@ -20,6 +23,7 @@ export default function ReadinessScreen({
   const billingPlatform = asBillingPlatform(platform)
   const billingProvider = billingPlatform ? selectBillingProvider(billingPlatform) : null
   const apiStatus = status.apiUrl.valid ? 'configured and valid' : 'missing or invalid'
+  const authStatus = status.clerkPublishableKey.valid ? 'configured' : 'unavailable'
   const billingStatus = billingProvider
     ? `${billingNames[billingProvider]} (contract only)`
     : 'unavailable on this platform'
@@ -32,7 +36,7 @@ export default function ReadinessScreen({
       <View accessibilityRole="summary" className="gap-2 rounded-lg border border-border bg-card p-4">
         <Text className="text-card-foreground">API URL: {apiStatus}</Text>
         <Text className="text-card-foreground">Billing adapter: {billingStatus}</Text>
-        <Text className="text-muted-foreground">Authentication: deferred</Text>
+        <Text className="text-muted-foreground">Authentication: {authStatus}</Text>
         <Text className="text-muted-foreground">Offline cache: deferred</Text>
       </View>
       <ThemeSelector />
