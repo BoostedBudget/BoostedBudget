@@ -91,8 +91,8 @@ func (m *MockHoldingRepository) GetByUserAccountID(ctx context.Context, userAcco
 	return args.Get(0).([]domain.Holding), args.Error(1)
 }
 
-func (m *MockHoldingRepository) GetByUserIDWithSecurities(ctx context.Context, userID string, accountID *string) ([]domain.Holding, error) {
-	args := m.Called(ctx, userID, accountID)
+func (m *MockHoldingRepository) GetByUserIDWithSecurities(ctx context.Context, userID string, accountID *string, scope *domain.HouseholdScope) ([]domain.Holding, error) {
+	args := m.Called(ctx, userID, accountID, scope)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

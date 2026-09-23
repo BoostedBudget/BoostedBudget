@@ -28,6 +28,7 @@ EXCLUDE_PATTERNS=(
     "src/features/dashboard/widgets/DashboardGrid.test.tsx"
     "src/features/dashboard/widgets/WidgetCatalog.test.tsx"
     "src/features/dashboard/components/ScopeSegmentedControl.test.tsx"
+    "src/features/dashboard/components/ScopeSegmentedControl.privacy.test.tsx"
     "src/components/ui/toggle-group.test.tsx"
     # Inline mock.module() pollution (see feedback_bun_test_mock_module_global.md)
     "src/features/accounts/AccountsPage.test.tsx"

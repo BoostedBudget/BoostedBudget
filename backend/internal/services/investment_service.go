@@ -19,12 +19,15 @@ type InvestmentService interface {
 	// ListHoldings returns all holdings for the user, optionally filtered to a
 	// single account (chain-expanded via user_account_id). Each HoldingView includes
 	// joined security metadata and pre-computed gain/loss and day_change values.
-	ListHoldings(ctx context.Context, userID string, accountID *string) ([]*domain.HoldingView, error)
+	// scope nil = personal; a non-nil scope is a validated household request (#1706).
+	ListHoldings(ctx context.Context, userID string, accountID *string, scope *domain.HouseholdScope) ([]*domain.HoldingView, error)
 
 	// GetPortfolioSummary returns the live portfolio summary computed from current holdings.
 	// day_change is the difference between today's total value and the most-recent-prior
-	// portfolio snapshot; null when no prior snapshot exists.
-	GetPortfolioSummary(ctx context.Context, userID string) (*domain.PortfolioSummary, error)
+	// portfolio snapshot; null when no prior snapshot exists. Under household scope (#1706)
+	// day_change is always omitted with DayChangeUnavailableHouseholdScope, because snapshots
+	// are per-user and there is no household snapshot to subtract from a household total.
+	GetPortfolioSummary(ctx context.Context, userID string, scope *domain.HouseholdScope) (*domain.PortfolioSummary, error)
 
 	// GetPortfolioHistory returns portfolio value history between start and end (inclusive),
 	// ordered by date ascending. Each point is one portfolio_snapshots row.
@@ -72,8 +75,8 @@ func (s *investmentService) SetAnalytics(a phclient.Analytics) {
 // ListHoldings returns all holdings for the user with security metadata and
 // pre-computed gain/loss and day_change values. Optionally filters to a single
 // account (chain-expanded).
-func (s *investmentService) ListHoldings(ctx context.Context, userID string, accountID *string) ([]*domain.HoldingView, error) {
-	holdings, err := s.holdingRepo.GetByUserIDWithSecurities(ctx, userID, accountID)
+func (s *investmentService) ListHoldings(ctx context.Context, userID string, accountID *string, scope *domain.HouseholdScope) ([]*domain.HoldingView, error) {
+	holdings, err := s.holdingRepo.GetByUserIDWithSecurities(ctx, userID, accountID, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -92,8 +95,8 @@ func (s *investmentService) ListHoldings(ctx context.Context, userID string, acc
 // both sides of the subtraction cover the same accounts (#1613 P4-T3). DayChange is null when no
 // prior snapshot exists (first use, or never synced before today) AND when the prior snapshot
 // predates migration 000189 and therefore carries no type-gated total.
-func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID string) (*domain.PortfolioSummary, error) {
-	holdings, err := s.holdingRepo.GetByUserIDWithSecurities(ctx, userID, nil)
+func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID string, scope *domain.HouseholdScope) (*domain.PortfolioSummary, error) {
+	holdings, err := s.holdingRepo.GetByUserIDWithSecurities(ctx, userID, nil, scope)
 	if err != nil {
 		return nil, fmt.Errorf("GetPortfolioSummary: holdings: %w", err)
 	}
@@ -127,11 +130,18 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 		totalGainLossPct = &v
 	}
 
-	// Day-change: compare against yesterday's (most-recent-prior) snapshot.
-	today := time.Now().UTC().Truncate(24 * time.Hour)
-	prior, err := s.snapshotRepo.GetLatestBefore(ctx, userID, today)
-	if err != nil {
-		return nil, fmt.Errorf("GetPortfolioSummary: prior snapshot: %w", err)
+	// Day-change: compare against yesterday's (most-recent-prior) snapshot. Household scope has no
+	// snapshot to compare against — portfolio_snapshots are per USER (GetLatestBefore:
+	// `WHERE user_id = $1`) and there is no household equivalent — so the fetch is skipped and the
+	// reason is stated below rather than silently returning the requesting member's personal
+	// day change beside a household total.
+	var prior *domain.PortfolioSnapshot
+	if scope == nil {
+		today := time.Now().UTC().Truncate(24 * time.Hour)
+		prior, err = s.snapshotRepo.GetLatestBefore(ctx, userID, today)
+		if err != nil {
+			return nil, fmt.Errorf("GetPortfolioSummary: prior snapshot: %w", err)
+		}
 	}
 
 	// ⚠ #1613 P4-T3 item I — the two sides of this subtraction MUST come from the same account
@@ -198,6 +208,13 @@ func (s *investmentService) GetPortfolioSummary(ctx context.Context, userID stri
 			reason := domain.DayChangeUnavailableCurrencyMismatch
 			dayChangeUnavailableReason = &reason
 		}
+	}
+
+	// #1706: household scope never computes a day change (no household snapshot exists). State the
+	// reason so a client can tell this refusal from the ordinary missing-inputs case.
+	if scope != nil {
+		reason := domain.DayChangeUnavailableHouseholdScope
+		dayChangeUnavailableReason = &reason
 	}
 
 	return &domain.PortfolioSummary{

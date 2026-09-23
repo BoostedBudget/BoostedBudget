@@ -13,12 +13,21 @@
  * the exported `+not-found.html` so a typo surfaces as the app's own 404 rather than a blank page.
  *
  * Usage:
- *   bun run --cwd apps/mobile serve:web            # http://127.0.0.1:8081
+ *   bun run --cwd apps/mobile serve:web            # http://127.0.0.1:8081, serves dist/web
  *   E2E_VISUAL_PORT=9099 bun run serve:web
+ *   E2E_WEB_ROOT=dist/web-clerk-smoke bun run serve:web
  *
- * The root must already exist; run `bun run --cwd apps/mobile export:web` first. Failing loudly
- * here (instead of serving an empty directory) keeps the Playwright layer from reporting a
- * confusing "no elements found" failure when the export is simply missing.
+ * `E2E_WEB_ROOT` overrides which export directory is served, resolved against this package's root
+ * (an absolute path is used as-is). It defaults to `dist/web`, the inert export the visual suite
+ * drives. The credentialed Clerk smoke points it at its OWN keyed export (`dist/web-clerk-smoke`):
+ * `EXPO_PUBLIC_*` is inlined at build time, so serving the inert export to that suite would
+ * false-skip, and building the keyed export into `dist/web` would clobber the artifact the gating
+ * visual step depends on.
+ *
+ * The root must already exist; run `bun run --cwd apps/mobile export:web` (or the smoke's own
+ * export script) first. Failing loudly here (instead of serving an empty directory) keeps the
+ * Playwright layer from reporting a confusing "no elements found" failure when the export is
+ * simply missing.
  */
 import { existsSync, statSync } from 'node:fs'
 import { dirname, join, normalize, resolve, sep } from 'node:path'
@@ -39,7 +48,9 @@ declare const Bun: {
 }
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
-const ROOT = resolve(SCRIPT_DIR, '..', 'dist', 'web')
+// `E2E_WEB_ROOT` is relative to this package's root (`dist/web` by default); an absolute value is
+// used unchanged because `resolve` ignores the earlier segments when a later one is absolute.
+const ROOT = resolve(SCRIPT_DIR, '..', process.env.E2E_WEB_ROOT ?? 'dist/web')
 const PORT = Number(process.env.E2E_VISUAL_PORT ?? '8081')
 const HOSTNAME = process.env.E2E_VISUAL_HOST ?? '127.0.0.1'
 

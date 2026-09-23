@@ -59,7 +59,7 @@ func TestHolding_GetByUserIDWithSecurities_NonNullClosePriceAsOf_Integration(t *
 
 	repo := NewHoldingRepository(tx)
 
-	holdings, err := repo.GetByUserIDWithSecurities(ctx, userID.String(), nil)
+	holdings, err := repo.GetByUserIDWithSecurities(ctx, userID.String(), nil, nil)
 	require.NoError(t, err,
 		"GetByUserIDWithSecurities must scan a DATE close_price_as_of; a scan-plan error here is "+
 			"the #1631 500 on /investments/portfolio/summary and /investments/holdings")
@@ -102,7 +102,7 @@ func TestHolding_GetByUserIDWithSecurities_NullClosePriceAsOf_Integration(t *tes
 	`, holdingID, userID, accountID, secID)
 	require.NoError(t, err)
 
-	holdings, err := NewHoldingRepository(tx).GetByUserIDWithSecurities(ctx, userID.String(), nil)
+	holdings, err := NewHoldingRepository(tx).GetByUserIDWithSecurities(ctx, userID.String(), nil, nil)
 	require.NoError(t, err)
 	require.Len(t, holdings, 1)
 	require.NotNil(t, holdings[0].Security)

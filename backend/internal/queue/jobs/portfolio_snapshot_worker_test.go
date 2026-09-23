@@ -39,7 +39,7 @@ func (m *mockHoldingRepo) GetByAccountID(ctx context.Context, accountID string) 
 	panic("not implemented")
 }
 
-func (m *mockHoldingRepo) GetByUserIDWithSecurities(ctx context.Context, userID string, accountID *string) ([]domain.Holding, error) {
+func (m *mockHoldingRepo) GetByUserIDWithSecurities(ctx context.Context, userID string, accountID *string, scope *domain.HouseholdScope) ([]domain.Holding, error) {
 	panic("not implemented")
 }
 
