@@ -6,18 +6,26 @@
  * reusable PortfolioSummaryCard. Links to /insights?tab=portfolio.
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { Link } from 'react-router'
 import { TrendingUp } from 'lucide-react'
 import { useGetPortfolioSummary } from '@boostedbudget/api-client/endpoints/investments/investments'
 import { PortfolioSummaryCard } from '@/features/investments/components/PortfolioSummaryCard'
+import { useDashboardContext } from '../context/DashboardContext'
 import { registerWidget } from './registry'
 import { WidgetEmptyState } from './WidgetEmptyState'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics/events'
 
 function PortfolioSummaryWidget() {
-  const { data, isLoading, isError, error } = useGetPortfolioSummary()
+  const { scope } = useDashboardContext()
+
+  // #1706: scope must reach the server-side read (a client filter would still pull another
+  // member's holdings into the browser). useMemo keeps the params reference stable so the
+  // generated query key does not churn every render.
+  const summaryParams = useMemo(() => ({ scope }), [scope])
+
+  const { data, isLoading, isError, error } = useGetPortfolioSummary(summaryParams)
   const trackEvent = useTrackEvent()
   const viewedFired = useRef(false)
 

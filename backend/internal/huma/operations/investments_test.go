@@ -12,6 +12,7 @@ import (
 	"github.com/maxnussbaum/BoostedBudget/internal/huma/inputs"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,12 +30,15 @@ type mockInvestmentService struct {
 	txns           []domain.InvestmentTransaction
 	txnsNextCursor *string
 	txnsErr        error
+	lastScope      *domain.HouseholdScope
 }
 
-func (m *mockInvestmentService) ListHoldings(_ context.Context, _ string, _ *string) ([]*domain.HoldingView, error) {
+func (m *mockInvestmentService) ListHoldings(_ context.Context, _ string, _ *string, scope *domain.HouseholdScope) ([]*domain.HoldingView, error) {
+	m.lastScope = scope
 	return m.holdings, m.holdingsErr
 }
-func (m *mockInvestmentService) GetPortfolioSummary(_ context.Context, _ string) (*domain.PortfolioSummary, error) {
+func (m *mockInvestmentService) GetPortfolioSummary(_ context.Context, _ string, scope *domain.HouseholdScope) (*domain.PortfolioSummary, error) {
+	m.lastScope = scope
 	return m.summary, m.summaryErr
 }
 func (m *mockInvestmentService) GetPortfolioHistory(_ context.Context, _ string, _, _ time.Time) (*domain.PortfolioHistory, error) {
@@ -133,6 +137,68 @@ func TestInvestmentHandler_GetHoldings_Unauthorized(t *testing.T) {
 
 	resp := api.Get("/api/v1/investments/holdings")
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+}
+
+// ============================================================================
+// Household scope (#1706)
+// ============================================================================
+
+func TestInvestmentHandler_GetHoldings_HouseholdScopeResolved(t *testing.T) {
+	svc := &mockInvestmentService{holdings: []*domain.HoldingView{}}
+	hhSvc := &mockHouseholdService{}
+	resolved := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{"user-1", "user-2"}}
+	hhSvc.On("ResolveScope", mock.Anything, "user-1", "household").Return(resolved, nil)
+	handler := NewInvestmentHandler(svc, &mockInvestmentAnalyticsService{})
+	handler.SetHouseholdService(hhSvc)
+
+	out, err := handler.GetHoldings(context.Background(), &GetHoldingsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		Scope:              "household",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	require.NotNil(t, svc.lastScope, "the resolved household scope must reach the service")
+	assert.Equal(t, "hh-1", svc.lastScope.HouseholdID)
+	hhSvc.AssertExpectations(t)
+}
+
+func TestInvestmentHandler_GetHoldings_HouseholdScopeNoHousehold_404(t *testing.T) {
+	svc := &mockInvestmentService{holdings: []*domain.HoldingView{{ID: "personal-leak"}}}
+	hhSvc := &mockHouseholdService{}
+	hhSvc.On("ResolveScope", mock.Anything, "user-1", "household").Return(nil, domain.ErrHouseholdNotFound)
+	handler := NewInvestmentHandler(svc, &mockInvestmentAnalyticsService{})
+	handler.SetHouseholdService(hhSvc)
+
+	_, err := handler.GetHoldings(context.Background(), &GetHoldingsInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		Scope:              "household",
+	})
+
+	require.Error(t, err, "a caller with no household must not get a personal fallback")
+	var statusErr interface{ GetStatus() int }
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusNotFound, statusErr.GetStatus())
+	assert.Nil(t, svc.lastScope, "the service must NOT be called when household scope cannot be resolved")
+}
+
+func TestInvestmentHandler_GetPortfolioSummary_HouseholdScopeNoHousehold_404(t *testing.T) {
+	svc := &mockInvestmentService{summary: &domain.PortfolioSummary{TotalValue: 9999}}
+	hhSvc := &mockHouseholdService{}
+	hhSvc.On("ResolveScope", mock.Anything, "user-1", "household").Return(nil, domain.ErrHouseholdNotFound)
+	handler := NewInvestmentHandler(svc, &mockInvestmentAnalyticsService{})
+	handler.SetHouseholdService(hhSvc)
+
+	_, err := handler.GetPortfolioSummary(context.Background(), &GetPortfolioSummaryInput{
+		AuthenticatedInput: inputs.AuthenticatedInput{UserID: "user-1"},
+		Scope:              "household",
+	})
+
+	require.Error(t, err, "a caller with no household must not get a personal fallback")
+	var statusErr interface{ GetStatus() int }
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusNotFound, statusErr.GetStatus())
+	assert.Nil(t, svc.lastScope, "the service must NOT be called when household scope cannot be resolved")
 }
 
 // ============================================================================

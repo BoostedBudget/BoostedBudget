@@ -352,8 +352,8 @@ export function createApiClient(mutator: FetchMutator) {
         return mutator({ url: '/api/v1/investments/portfolio/history', method: 'GET', params, signal })
       },
       /** GET /api/v1/investments/portfolio/summary */
-      getPortfolioSummary(signal?: AbortSignal): Promise<unknown> {
-        return mutator({ url: '/api/v1/investments/portfolio/summary', method: 'GET', signal })
+      getPortfolioSummary(params?: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+        return mutator({ url: '/api/v1/investments/portfolio/summary', method: 'GET', params, signal })
       },
     } as const,
     mcpRecipes: {

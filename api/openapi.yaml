@@ -5963,6 +5963,7 @@ components:
         day_change_unavailable_reason:
           enum:
             - currency_mismatch
+            - household_scope
           type: string
         holdings_count:
           format: int64
@@ -14732,6 +14733,17 @@ paths:
           schema:
             description: Filter holdings to a specific account ID (chain-expanded via user_account_id). Optional.
             type: string
+        - description: "Aggregation scope: personal (default) or household (requires active household membership). Household scope returns only accounts shared into the household."
+          explode: false
+          in: query
+          name: scope
+          schema:
+            default: personal
+            description: "Aggregation scope: personal (default) or household (requires active household membership). Household scope returns only accounts shared into the household."
+            enum:
+              - personal
+              - household
+            type: string
       responses:
         "200":
           content:
@@ -15036,6 +15048,18 @@ paths:
     get:
       description: Returns live portfolio totals (value, cost basis, unrealized gain/loss) computed from current holdings. day_change is derived from the most recent prior portfolio snapshot; null when no prior snapshot exists.
       operationId: getPortfolioSummary
+      parameters:
+        - description: "Aggregation scope: personal (default) or household (requires active household membership). Household scope omits day_change (no household snapshot exists)."
+          explode: false
+          in: query
+          name: scope
+          schema:
+            default: personal
+            description: "Aggregation scope: personal (default) or household (requires active household membership). Household scope omits day_change (no household snapshot exists)."
+            enum:
+              - personal
+              - household
+            type: string
       responses:
         "200":
           content:

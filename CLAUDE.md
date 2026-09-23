@@ -312,6 +312,10 @@ so an account covered by two grants cannot double-count. Pinned by
 ⚠ What REMAINS is different and correct: spending clips at **DATE** resolution, balances at the
 **instant**. Read ADR Decision 7 before touching either.
 
+⚠ `scope=household` is a share-gated subset: it sums only explicitly shared accounts, so a
+single-member household can show a larger net worth than personal when an unshared liability is
+excluded. See `docs/decisions/2026-09-22-household-scope-is-a-share-gated-subset.md`.
+
 ⚠ Enforced mechanically, and each guard's meta-tests construct the violation and prove it fails:
 - `TestNoUnallowlistedCascadeIntoHistoryTable` (G1) — new `ON DELETE CASCADE` into a history-bearing
   table. Allowlist + reason in `backend/internal/repository/history_cascade_guard_test.go`.

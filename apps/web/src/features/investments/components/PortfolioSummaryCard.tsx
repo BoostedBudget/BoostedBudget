@@ -66,9 +66,13 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
   // different claim than missing data, and must not collapse into the same bare "--". Mirrors
   // HoldingsTable's renderDayChange treatment of the identical reason on HoldingView.
   const dayChangeRefused = summary.day_change_unavailable_reason === 'currency_mismatch'
+  // #1706: under household scope the backend omits day_change entirely (portfolio snapshots are
+  // per-user; no household snapshot exists). Render no day-change tile at all rather than a "--"
+  // that reads as a real value.
+  const dayChangeOmitted = summary.day_change_unavailable_reason === 'household_scope'
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+    <div className={`grid grid-cols-1 gap-4 ${dayChangeOmitted ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
       <StatCard
         label="Total Value"
         value={
@@ -102,36 +106,38 @@ export function PortfolioSummaryCard({ summary }: PortfolioSummaryCardProps) {
         }
       />
 
-      <StatCard
-        label="Day Change"
-        trend={dayVariantAndTrend?.trend}
-        value={
-          dayChange != null ? (
-            <span className="flex flex-col gap-1">
-              <span data-ph-mask className="text-2xl font-bold">
-                {money(dayChange)}
+      {!dayChangeOmitted && (
+        <StatCard
+          label="Day Change"
+          trend={dayVariantAndTrend?.trend}
+          value={
+            dayChange != null ? (
+              <span className="flex flex-col gap-1">
+                <span data-ph-mask className="text-2xl font-bold">
+                  {money(dayChange)}
+                </span>
+                {summary.day_change_pct != null && dayVariantAndTrend && (
+                  <ChangeIndicator
+                    variant={dayVariantAndTrend.variant}
+                    amount={dayChange}
+                    percent={summary.day_change_pct}
+                    label="Day change"
+                    formatAmount={moneyWhole}
+                  />
+                )}
               </span>
-              {summary.day_change_pct != null && dayVariantAndTrend && (
-                <ChangeIndicator
-                  variant={dayVariantAndTrend.variant}
-                  amount={dayChange}
-                  percent={summary.day_change_pct}
-                  label="Day change"
-                  formatAmount={moneyWhole}
-                />
-              )}
-            </span>
-          ) : dayChangeRefused ? (
-            <span data-ph-mask className="text-sm text-muted-foreground">
-              Currency mismatch — day change not available
-            </span>
-          ) : (
-            <span data-ph-mask className="text-2xl font-bold text-muted-foreground">
-              --
-            </span>
-          )
-        }
-      />
+            ) : dayChangeRefused ? (
+              <span data-ph-mask className="text-sm text-muted-foreground">
+                Currency mismatch — day change not available
+              </span>
+            ) : (
+              <span data-ph-mask className="text-2xl font-bold text-muted-foreground">
+                --
+              </span>
+            )
+          }
+        />
+      )}
     </div>
   )
 }

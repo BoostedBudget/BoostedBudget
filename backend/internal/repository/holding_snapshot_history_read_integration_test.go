@@ -74,7 +74,7 @@ func TestHoldingHistoryRead_ClosedAccount_HistoryStaysReadableWhileCurrentStateI
 	// CURRENT-STATE universe: empty, and that stays exactly as it was. The endpoint added here does
 	// not widen it by one row.
 	acct := accountID.String()
-	live, err := holdingRepo.GetByUserIDWithSecurities(ctx, userID.String(), &acct)
+	live, err := holdingRepo.GetByUserIDWithSecurities(ctx, userID.String(), &acct, nil)
 	require.NoError(t, err)
 	assert.Empty(t, live, "a removed account must still hold nothing in the current-state read")
 

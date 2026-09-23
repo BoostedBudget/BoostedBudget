@@ -6,11 +6,13 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
 import { render, screen, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
+import { getGetPortfolioSummaryQueryKey } from '@boostedbudget/api-client/endpoints/investments/investments'
 import type { PortfolioSummary } from '@boostedbudget/api-client/models/portfolioSummary'
 
 // Use centralized mocks — no inline mock.module()
 import '@/test/mocks/registry'
 import { mockUseGetPortfolioSummary } from '@/test/mocks/investments-api'
+import { mockUseDashboardContext } from '@/test/mocks/dashboard-context'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 
 import { PortfolioSummaryWidget } from './PortfolioSummaryWidget'
@@ -50,6 +52,10 @@ describe('PortfolioSummaryWidget', () => {
     mockUseGetPortfolioSummary.mockClear()
     mockTrackEvent.mockClear()
     mockUseGetPortfolioSummary.mockReturnValue(defaultQueryState)
+    mockUseDashboardContext.mockReturnValue({
+      ...mockUseDashboardContext(),
+      scope: 'personal',
+    })
   })
 
   describe('Loading State', () => {
@@ -197,6 +203,59 @@ describe('PortfolioSummaryWidget', () => {
 
       // viewedFired ref prevents re-firing
       expect(mockTrackEvent).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('Dashboard Scope (Issue #1706)', () => {
+    // The shared mock's factory takes no params and types `data` as `undefined`, so its inferred
+    // return type rejects a real summary and its call tuple has no element 0. Cast once here
+    // rather than widening the shared mock (which other suites depend on).
+    const summaryMock = mockUseGetPortfolioSummary as unknown as {
+      mockReturnValue: (value: unknown) => void
+      mock: { calls: unknown[][] }
+    }
+
+    it('requests the portfolio summary with scope=household when the dashboard scope is household', () => {
+      mockUseDashboardContext.mockReturnValue({
+        ...mockUseDashboardContext(),
+        scope: 'household',
+      })
+      summaryMock.mockReturnValue({ ...defaultQueryState, data: mockSummary })
+
+      renderWidget()
+
+      expect(mockUseGetPortfolioSummary).toHaveBeenCalled()
+      const requestParams = summaryMock.mock.calls[0]?.[0] as
+        | Record<string, unknown>
+        | undefined
+      expect(requestParams).toMatchObject({ scope: 'household' })
+    })
+
+    it('renders no day change when the household scope omits it', () => {
+      mockUseDashboardContext.mockReturnValue({
+        ...mockUseDashboardContext(),
+        scope: 'household',
+      })
+      summaryMock.mockReturnValue({
+        ...defaultQueryState,
+        data: {
+          ...mockSummary,
+          day_change: null,
+          day_change_pct: null,
+          day_change_unavailable_reason: 'household_scope',
+        },
+      })
+
+      renderWidget()
+
+      expect(screen.queryByText(/day change/i)).toBeNull()
+      expect(screen.queryAllByText('--').length).toBe(0)
+    })
+
+    it('keeps the personal and household query keys distinct so the scopes cannot share a cache entry', () => {
+      expect(getGetPortfolioSummaryQueryKey({ scope: 'personal' })).not.toEqual(
+        getGetPortfolioSummaryQueryKey({ scope: 'household' })
+      )
     })
   })
 })

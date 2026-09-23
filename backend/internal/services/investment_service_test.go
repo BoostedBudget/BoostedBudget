@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	phclient "github.com/maxnussbaum/BoostedBudget/internal/integration/posthog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxnussbaum/BoostedBudget/internal/domain"
@@ -46,9 +47,9 @@ func TestInvestmentService_ListHoldings_ReturnsViews(t *testing.T) {
 		makeTestHolding("h1", userID, "acct-1", "sec-1", ptr64(1000.0), ptr64(800.0), ptr64(100.0)),
 		makeTestHolding("h2", userID, "acct-2", "sec-2", ptr64(500.0), nil, nil),
 	}
-	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).Return(holdings, nil)
+	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), (*domain.HouseholdScope)(nil)).Return(holdings, nil)
 
-	views, err := svc.ListHoldings(ctx, userID, nil)
+	views, err := svc.ListHoldings(ctx, userID, nil, nil)
 
 	require.NoError(t, err)
 	assert.Len(t, views, 2)
@@ -70,9 +71,9 @@ func TestInvestmentService_ListHoldings_AccountFilter(t *testing.T) {
 	holdings := []domain.Holding{
 		makeTestHolding("h1", userID, accountID, "sec-1", ptr64(1000.0), ptr64(800.0), ptr64(100.0)),
 	}
-	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, &accountID).Return(holdings, nil)
+	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, &accountID, (*domain.HouseholdScope)(nil)).Return(holdings, nil)
 
-	views, err := svc.ListHoldings(ctx, userID, &accountID)
+	views, err := svc.ListHoldings(ctx, userID, &accountID, nil)
 
 	require.NoError(t, err)
 	assert.Len(t, views, 1)
@@ -88,12 +89,44 @@ func TestInvestmentService_ListHoldings_Empty(t *testing.T) {
 	ctx := context.Background()
 	userID := "user-none"
 
-	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).Return(nil, nil)
+	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), (*domain.HouseholdScope)(nil)).Return(nil, nil)
 
-	views, err := svc.ListHoldings(ctx, userID, nil)
+	views, err := svc.ListHoldings(ctx, userID, nil, nil)
 
 	require.NoError(t, err)
 	assert.Empty(t, views)
+}
+
+// TestInvestmentService_GetPortfolioSummary_HouseholdOmitsDayChange pins the #1706 day-change
+// decision: portfolio_snapshots are per USER, so a household summary has no snapshot to subtract
+// from its household total. The figure must be OMITTED with an explicit reason — never silently
+// the requesting member's personal day change beside a household total.
+func TestInvestmentService_GetPortfolioSummary_HouseholdOmitsDayChange(t *testing.T) {
+	holdingRepo := new(MockHoldingRepository)
+	snapshotRepo := new(MockPortfolioSnapshotRepository)
+	invTxnRepo := new(MockInvestmentTransactionRepository)
+
+	svc := NewInvestmentService(holdingRepo, snapshotRepo, invTxnRepo)
+	ctx := context.Background()
+	userID := "user-hh"
+	scope := &domain.HouseholdScope{HouseholdID: "hh-1", MemberUserIDs: []string{userID, "other"}}
+
+	holdings := []domain.Holding{
+		makeTestHolding("h1", userID, "acct-1", "sec-1", ptr64(1200.0), ptr64(1000.0), nil),
+	}
+	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), scope).Return(holdings, nil)
+
+	summary, err := svc.GetPortfolioSummary(ctx, userID, scope)
+
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	assert.Equal(t, 1200.0, summary.TotalValue)
+	assert.Nil(t, summary.DayChange, "household scope must omit day_change, not return the personal one")
+	assert.Nil(t, summary.DayChangePct)
+	require.NotNil(t, summary.DayChangeUnavailableReason)
+	assert.Equal(t, domain.DayChangeUnavailableHouseholdScope, *summary.DayChangeUnavailableReason)
+	snapshotRepo.AssertNotCalled(t, "GetLatestBefore", mock.Anything, mock.Anything, mock.Anything)
+	holdingRepo.AssertExpectations(t)
 }
 
 // TestInvestmentService_GetPortfolioSummary_WithPriorSnapshot verifies that
@@ -113,7 +146,7 @@ func TestInvestmentService_GetPortfolioSummary_WithPriorSnapshot(t *testing.T) {
 	holdings := []domain.Holding{
 		makeTestHolding("h1", userID, "acct-1", "sec-1", ptr64(1200.0), ptr64(1000.0), nil),
 	}
-	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).Return(holdings, nil)
+	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), (*domain.HouseholdScope)(nil)).Return(holdings, nil)
 
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	priorSnap := &domain.PortfolioSnapshot{
@@ -123,7 +156,7 @@ func TestInvestmentService_GetPortfolioSummary_WithPriorSnapshot(t *testing.T) {
 	}
 	snapshotRepo.On("GetLatestBefore", ctx, userID, today).Return(priorSnap, nil)
 
-	summary, err := svc.GetPortfolioSummary(ctx, userID)
+	summary, err := svc.GetPortfolioSummary(ctx, userID, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, summary)
@@ -157,12 +190,12 @@ func TestInvestmentService_GetPortfolioSummary_NoPriorSnapshot(t *testing.T) {
 	holdings := []domain.Holding{
 		makeTestHolding("h1", userID, "acct-1", "sec-1", ptr64(500.0), nil, nil),
 	}
-	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).Return(holdings, nil)
+	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), (*domain.HouseholdScope)(nil)).Return(holdings, nil)
 
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	snapshotRepo.On("GetLatestBefore", ctx, userID, today).Return(nil, nil)
 
-	summary, err := svc.GetPortfolioSummary(ctx, userID)
+	summary, err := svc.GetPortfolioSummary(ctx, userID, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, summary)
@@ -187,12 +220,12 @@ func TestInvestmentService_GetPortfolioSummary_NoCostBasis(t *testing.T) {
 	holdings := []domain.Holding{
 		makeTestHolding("h1", userID, "acct-1", "sec-1", ptr64(800.0), nil, nil),
 	}
-	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).Return(holdings, nil)
+	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), (*domain.HouseholdScope)(nil)).Return(holdings, nil)
 
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	snapshotRepo.On("GetLatestBefore", ctx, userID, today).Return(nil, nil)
 
-	summary, err := svc.GetPortfolioSummary(ctx, userID)
+	summary, err := svc.GetPortfolioSummary(ctx, userID, nil)
 
 	require.NoError(t, err)
 	assert.Nil(t, summary.TotalGainLossPct, "TotalGainLossPct must be nil when cost_basis=0")
@@ -217,12 +250,12 @@ func TestInvestmentService_GetPortfolioSummary_NullValueKnownBasis(t *testing.T)
 		// B: institution_value nil, cost_basis set → must NOT produce phantom loss
 		makeTestHolding("h2", userID, "acct-1", "sec-2", nil, ptr64(500.0), nil),
 	}
-	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).Return(holdings, nil)
+	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), (*domain.HouseholdScope)(nil)).Return(holdings, nil)
 
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	snapshotRepo.On("GetLatestBefore", ctx, userID, today).Return(nil, nil)
 
-	summary, err := svc.GetPortfolioSummary(ctx, userID)
+	summary, err := svc.GetPortfolioSummary(ctx, userID, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, summary)
@@ -442,7 +475,7 @@ func TestInvestmentService_GetPortfolioSummary_DayChangeUsesTheTypeGatedSnapshot
 	holdings := []domain.Holding{
 		makeTestHolding("h1", userID, "acct-inv", "sec-1", ptr64(1200.0), ptr64(1000.0), nil),
 	}
-	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).Return(holdings, nil)
+	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), (*domain.HouseholdScope)(nil)).Return(holdings, nil)
 
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	priorSnap := &domain.PortfolioSnapshot{
@@ -452,7 +485,7 @@ func TestInvestmentService_GetPortfolioSummary_DayChangeUsesTheTypeGatedSnapshot
 	}
 	snapshotRepo.On("GetLatestBefore", ctx, userID, today).Return(priorSnap, nil)
 
-	summary, err := svc.GetPortfolioSummary(ctx, userID)
+	summary, err := svc.GetPortfolioSummary(ctx, userID, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, summary.DayChange)
@@ -482,7 +515,7 @@ func TestInvestmentService_GetPortfolioSummary_DayChangeUnavailableWhenSnapshotP
 	holdings := []domain.Holding{
 		makeTestHolding("h1", userID, "acct-inv", "sec-1", ptr64(1200.0), ptr64(1000.0), nil),
 	}
-	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil)).Return(holdings, nil)
+	holdingRepo.On("GetByUserIDWithSecurities", ctx, userID, (*string)(nil), (*domain.HouseholdScope)(nil)).Return(holdings, nil)
 
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	priorSnap := &domain.PortfolioSnapshot{
@@ -492,7 +525,7 @@ func TestInvestmentService_GetPortfolioSummary_DayChangeUnavailableWhenSnapshotP
 	}
 	snapshotRepo.On("GetLatestBefore", ctx, userID, today).Return(priorSnap, nil)
 
-	summary, err := svc.GetPortfolioSummary(ctx, userID)
+	summary, err := svc.GetPortfolioSummary(ctx, userID, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, summary)

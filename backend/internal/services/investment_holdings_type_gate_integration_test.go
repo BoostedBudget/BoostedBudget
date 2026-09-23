@@ -106,7 +106,7 @@ func TestInvestmentHoldings_DepositoryAccountHoldings_ExcludedFromLiveReads(t *t
 	svc := NewInvestmentService(holdingRepo, snapshotRepo, invTxnRepo)
 
 	t.Run("ListHoldings", func(t *testing.T) {
-		views, err := svc.ListHoldings(ctx, userID, nil)
+		views, err := svc.ListHoldings(ctx, userID, nil, nil)
 		require.NoError(t, err)
 
 		var sawInvest, sawDepository bool
@@ -125,7 +125,7 @@ func TestInvestmentHoldings_DepositoryAccountHoldings_ExcludedFromLiveReads(t *t
 	})
 
 	t.Run("GetPortfolioSummary", func(t *testing.T) {
-		summary, err := svc.GetPortfolioSummary(ctx, userID)
+		summary, err := svc.GetPortfolioSummary(ctx, userID, nil)
 		require.NoError(t, err)
 		require.NotNil(t, summary)
 
