@@ -2,13 +2,14 @@
  * FeaturesSection Component
  *
  * Displays key product features with benefit-focused copy in a 2-column grid
- * (5th card spans full width to close the section, #1411).
+ * (the last card spans full width only when the card count is odd, #1411/#1666).
  * Issue #699: Create Marketing Landing Page for First-Time Visitors
  */
 
-import { Landmark, BarChart3, Zap, LayoutDashboard, Users } from 'lucide-react'
+import { Landmark, BarChart3, Zap, LayoutDashboard, Users, Bot } from 'lucide-react'
 
-const features = [
+// eslint-disable-next-line react-refresh/only-export-components
+export const features = [
   {
     icon: Landmark,
     title: 'All Your Accounts in One Place',
@@ -39,7 +40,19 @@ const features = [
     description:
       'One plan across 2 to 5+ members. Each person chooses which accounts to share, and can hide any account from the household at any time.',
   },
+  {
+    icon: Bot,
+    title: 'Your Agent Can Do the Digging',
+    description:
+      'Connect BoostedBudget to Claude, Cursor, or VS Code through our MCP server. Your agent can read across your accounts, transactions, budgets, and portfolio — and every change it proposes waits for your confirmation.',
+  },
 ]
+
+/** Last card spans both columns only for an odd card count, so the grid closes cleanly. */
+// eslint-disable-next-line react-refresh/only-export-components
+export function cardSpanClass(index: number, total: number): string {
+  return index === total - 1 && total % 2 === 1 ? 'sm:col-span-2' : ''
+}
 
 export function FeaturesSection() {
   return (
@@ -66,9 +79,10 @@ export function FeaturesSection() {
           {features.map((feature, index) => (
             <div
               key={index}
-              className={`group relative rounded-3xl bg-slate-50 p-8 text-center shadow-sm transition-all hover:bg-slate-100 hover:shadow-md dark:bg-slate-800/50 dark:hover:bg-slate-800 lg:p-10 ${
-                index === features.length - 1 ? 'sm:col-span-2' : ''
-              }`}
+              className={`group relative rounded-3xl bg-slate-50 p-8 text-center shadow-sm transition-all hover:bg-slate-100 hover:shadow-md dark:bg-slate-800/50 dark:hover:bg-slate-800 lg:p-10 ${cardSpanClass(
+                index,
+                features.length
+              )}`}
             >
               {/* Icon */}
               <div className="mx-auto mb-6 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-500/25">
