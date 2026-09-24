@@ -169,6 +169,82 @@ cors_allow_origin_probe() {
 }
 
 # =============================================================================
+# Discovery-file checks (#1666)
+# =============================================================================
+#
+# WHY THESE EXIST. `/llms.txt` and `/llms-full.txt` are agent-discovery files. If
+# the host answers them with the SPA shell instead of the file, an agent silently
+# reads `<div id="root"></div>` and learns nothing — a soft 404, which is worse than
+# a hard one because nothing looks broken. `public/_redirects` is `/* /index.html
+# 200`, so this is a live risk, not a hypothetical.
+#
+# ⚠ GET, NEVER HEAD. The redirect/rewrite precedent and any Pages Function answer
+# HEAD differently from GET, and the failure mode (SPA shell body) is only visible
+# in the body. `curl -I` is therefore explicitly wrong here.
+#
+# ⚠ Fetch headers only via `-D`, and the body via `-o <file>`, rather than parsing
+# a single `-i` stream: it keeps the header/body split unambiguous and avoids piping
+# a large body into `head -c`, whose early close raises SIGPIPE under `set -o pipefail`.
+
+# GET $WEB_URL$path and require HTTP 200, `content-type: text/plain…`, and a body
+# whose first byte is `#` (the llms.txt H1). Retries transient failures.
+# On failure the caller can read DISCOVERY_STATUS / DISCOVERY_CTYPE / DISCOVERY_FIRST.
+check_discovery_file() {
+  local path=$1
+  local attempts=${2:-3}
+  local interval=${3:-2}
+  local i status ctype first hdr body
+  hdr=$(mktemp)
+  body=$(mktemp)
+
+  for i in $(seq 1 "$attempts"); do
+    status=$(curl -s -D "$hdr" -o "$body" -w '%{http_code}' "$WEB_URL$path" --max-time 10) || status="000"
+    ctype=$(tr -d '\r' < "$hdr" | sed -n 's/^[Cc]ontent-[Tt]ype: *//p' | head -1 || true)
+    first=$(head -c 1 "$body" 2>/dev/null || true)
+
+    if [ "$status" == "200" ] && [[ "$ctype" == text/plain* ]] && [ "$first" == "#" ]; then
+      DISCOVERY_STATUS="$status"; DISCOVERY_CTYPE="$ctype"; DISCOVERY_FIRST="$first"
+      rm -f "$hdr" "$body"
+      return 0
+    fi
+
+    if [ "$i" -lt "$attempts" ]; then sleep "$interval"; fi
+  done
+
+  DISCOVERY_STATUS="$status"; DISCOVERY_CTYPE="$ctype"; DISCOVERY_FIRST="$first"
+  rm -f "$hdr" "$body"
+  return 1
+}
+
+# GET (headers-only) and require HTTP 200 with a non-empty content-type that is NOT
+# text/html. Guards robots.txt and sitemap.xml against the same SPA-shell failure.
+# On failure the caller can read NOT_HTML_STATUS / NOT_HTML_CTYPE.
+check_not_html() {
+  local path=$1
+  local attempts=${2:-3}
+  local interval=${3:-2}
+  local i status ctype hdr
+  hdr=$(mktemp)
+
+  for i in $(seq 1 "$attempts"); do
+    status=$(curl -s -D "$hdr" -o /dev/null -w '%{http_code}' "$WEB_URL$path" --max-time 10) || status="000"
+    ctype=$(tr -d '\r' < "$hdr" | sed -n 's/^[Cc]ontent-[Tt]ype: *//p' | head -1 || true)
+
+    if [ "$status" == "200" ] && [ -n "$ctype" ] && [[ "$ctype" != text/html* ]]; then
+      NOT_HTML_STATUS="$status"; NOT_HTML_CTYPE="$ctype"
+      rm -f "$hdr"
+      return 0
+    fi
+
+    if [ "$i" -lt "$attempts" ]; then sleep "$interval"; fi
+  done
+
+  NOT_HTML_STATUS="$status"; NOT_HTML_CTYPE="$ctype"
+  rm -f "$hdr"
+  return 1
+}
+
+# =============================================================================
 # API Health Checks
 # =============================================================================
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -440,6 +516,29 @@ if [ -n "$WEB_URL" ]; then
     print_test "fail" "Frontend does not serve valid HTML"
     exit 1
   fi
+
+  # Test 5a (#1666): discovery files are served as text/plain, not the SPA shell.
+  # Fatal: an agent that gets `<div id="root"></div>` for /llms.txt has been handed a
+  # soft 404, and `_redirects`' catch-all makes that the failure this check exists for.
+  for discovery_path in "/llms.txt" "/llms-full.txt"; do
+    if check_discovery_file "$discovery_path"; then
+      print_test "pass" "$discovery_path is served as text/plain with a '#'-leading body"
+    else
+      print_test "fail" "$discovery_path returned HTTP ${DISCOVERY_STATUS:-000} content-type '${DISCOVERY_CTYPE:-<none>}' first-byte '${DISCOVERY_FIRST:-<empty>}' (expected 200 / text/plain / '#'). The SPA shell or a wrong content type is being served — see #1666 and the precedence verdict in .omo/evidence/1666/."
+      exit 1
+    fi
+  done
+
+  # Test 5b (#1666): robots.txt and sitemap.xml must not be HTML either — the same
+  # catch-all rewrite would break crawler policy, not just agent discovery.
+  for text_asset_path in "/robots.txt" "/sitemap.xml"; do
+    if check_not_html "$text_asset_path"; then
+      print_test "pass" "$text_asset_path is served as non-HTML (${NOT_HTML_CTYPE})"
+    else
+      print_test "fail" "$text_asset_path returned HTTP ${NOT_HTML_STATUS:-000} content-type '${NOT_HTML_CTYPE:-<none>}' (expected 200 / non-HTML). The SPA shell is being served — see #1666."
+      exit 1
+    fi
+  done
 
   # Test 6: Check for static assets (optional)
   if check_endpoint "$WEB_URL/assets" "200" 3 2 || check_endpoint "$WEB_URL/static" "200" 3 2; then
