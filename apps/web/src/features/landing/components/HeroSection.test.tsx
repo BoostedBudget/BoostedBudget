@@ -51,4 +51,31 @@ describe('HeroSection', () => {
     fireEvent.click(btn)
     expect(clerkMock.openSignUp).toHaveBeenCalledTimes(1)
   })
+
+  // Issue #1666 Wave 2 item 5: the hero carries the agentic story.
+  it('renders the agentic badge', () => {
+    renderHeroSection()
+    expect(screen.getByText('Now with an MCP server for your agent')).toBeInTheDocument()
+  })
+
+  it('renders the agentic subheadline verbatim', () => {
+    renderHeroSection()
+    expect(
+      screen.getByText(
+        'Connect every account, automate what you can, and hand the busywork to your AI agent. It can read everything — and changes nothing without your confirmation.'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('keeps the headline unchanged', () => {
+    renderHeroSection()
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      'Take Control of Your Money'
+    )
+  })
+
+  it('drops the unverifiable "thousands" adoption claim', () => {
+    const { container } = renderHeroSection()
+    expect(container.textContent ?? '').not.toContain('thousands')
+  })
 })

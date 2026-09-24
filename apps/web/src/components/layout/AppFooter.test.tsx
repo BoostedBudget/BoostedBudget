@@ -37,6 +37,15 @@ describe('AppFooter', () => {
     expect(screen.getByText('BoostedBudget')).toBeInTheDocument()
   })
 
+  // Issue #1666 item 8: the strapline carries the agentic story alongside the
+  // product's own positioning.
+  it('renders the agentic strapline', () => {
+    renderWithRouter(<AppFooter />)
+    expect(
+      screen.getByText('Smart budgeting for modern life — with a remote MCP server for your agent.')
+    ).toBeInTheDocument()
+  })
+
   it('renders the four group headings: Product, Developers, Legal, Support', () => {
     renderWithRouter(<AppFooter />)
     expect(screen.getByRole('heading', { name: 'Product' })).toBeInTheDocument()
@@ -45,16 +54,16 @@ describe('AppFooter', () => {
     expect(screen.getByRole('heading', { name: 'Support' })).toBeInTheDocument()
   })
 
-  it('renders "Features" link pointing to /#features', () => {
+  it('renders "Features" link pointing to /features', () => {
     renderWithRouter(<AppFooter />)
     const link = screen.getByRole('link', { name: /^features$/i })
-    expect(link).toHaveAttribute('href', '/#features')
+    expect(link).toHaveAttribute('href', '/features')
   })
 
-  it('renders "FAQ" link pointing to /#faq', () => {
+  it('renders "FAQ" link pointing to /faq', () => {
     renderWithRouter(<AppFooter />)
     const link = screen.getByRole('link', { name: /^faq$/i })
-    expect(link).toHaveAttribute('href', '/#faq')
+    expect(link).toHaveAttribute('href', '/faq')
   })
 
   it('renders "MCP Server" link pointing to /mcp', () => {

@@ -3,6 +3,7 @@
  */
 
 export { useTabState } from './useTabState'
+export { useDocumentHead } from './useDocumentHead'
 export { useCopyToClipboard } from './useCopyToClipboard'
 export { useRegions } from './useRegions'
 export { useUrlState } from './useUrlState'

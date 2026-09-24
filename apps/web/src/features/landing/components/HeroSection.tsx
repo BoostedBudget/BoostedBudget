@@ -63,7 +63,7 @@ export function HeroSection({ onScrollToHowItWorks }: HeroSectionProps) {
           {/* Badge */}
           <div className="mb-8 inline-flex items-center gap-2 rounded-full bg-blue-500/10 px-4 py-2 text-sm text-blue-400 ring-1 ring-blue-500/20">
             <Rocket className="h-4 w-4" aria-hidden="true" />
-            <span>Smart budgeting for modern life</span>
+            <span>Now with an MCP server for your agent</span>
           </div>
 
           {/* Main Headline */}
@@ -79,8 +79,8 @@ export function HeroSection({ onScrollToHowItWorks }: HeroSectionProps) {
 
           {/* Subheadline */}
           <p className="mx-auto mt-8 max-w-2xl text-lg leading-relaxed text-slate-300 sm:text-xl">
-            Automate your budget, connect all your accounts, and achieve your financial
-            goals. Join thousands who have transformed their relationship with money.
+            Connect every account, automate what you can, and hand the busywork to your AI
+            agent. It can read everything — and changes nothing without your confirmation.
           </p>
 
           {/* CTA Buttons */}

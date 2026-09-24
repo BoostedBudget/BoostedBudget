@@ -8,6 +8,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
 import { render, screen, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { McpPage } from './McpPage'
@@ -49,6 +50,11 @@ const SECTION_HEADINGS = [
     id: 'troubleshooting',
     heading: "If something doesn't connect",
     tocLabel: 'Troubleshooting'
+  },
+  {
+    id: 'agent-discovery',
+    heading: 'Discovery files for agents',
+    tocLabel: 'Agent discovery'
   }
 ]
 
@@ -60,6 +66,14 @@ const ACCESS_MATRIX_TEXT =
 
 function normalize(text: string | null): string {
   return (text ?? '').replace(/\s+/g, ' ').trim()
+}
+
+function renderPage() {
+  return render(
+    <MemoryRouter>
+      <McpPage />
+    </MemoryRouter>
+  )
 }
 
 describe('McpPage', () => {
@@ -83,17 +97,17 @@ describe('McpPage', () => {
   })
 
   it('renders exactly one h1', () => {
-    render(<McpPage />)
+    renderPage()
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
   })
 
   it('does not render a <main> element (App.tsx already provides one)', () => {
-    render(<McpPage />)
+    renderPage()
     expect(document.querySelector('main')).toBeNull()
   })
 
   it('sets document.title, meta description, and canonical link on mount', () => {
-    render(<McpPage />)
+    renderPage()
     expect(document.title).toBe('MCP Server — BoostedBudget')
     expect(document.querySelector('meta[name="description"]')).toHaveAttribute(
       'content',
@@ -108,14 +122,14 @@ describe('McpPage', () => {
   // would still pass for the old Cursor-containing description, so this asserts its
   // absence directly.
   it('does not name Cursor in the meta description (#1411 B2 fix)', () => {
-    render(<McpPage />)
+    renderPage()
     const description = document.querySelector('meta[name="description"]')?.getAttribute('content')
     expect(description).not.toBeNull()
     expect(description).not.toContain('Cursor')
   })
 
   it('restores document.title, meta description, and canonical link on unmount', () => {
-    const { unmount } = render(<McpPage />)
+    const { unmount } = renderPage()
     unmount()
     expect(document.title).toBe('Original Title')
     expect(document.querySelector('meta[name="description"]')).toHaveAttribute('content', 'Original description')
@@ -123,14 +137,14 @@ describe('McpPage', () => {
   })
 
   it('fires MCP_PAGE_VIEWED exactly once on mount', () => {
-    render(<McpPage />)
+    renderPage()
     const viewedCalls = mockTrackEvent.mock.calls.filter((call) => call[0] === ANALYTICS_EVENTS.MCP_PAGE_VIEWED)
     expect(viewedCalls).toHaveLength(1)
   })
 
   describe.each(SECTION_HEADINGS)('section "$heading"', ({ id, heading }) => {
     it(`has an h2 with id="${id}" wired to its section's aria-labelledby`, () => {
-      render(<McpPage />)
+      renderPage()
       const h2 = screen.getByRole('heading', { level: 2, name: heading })
       expect(h2).toHaveAttribute('id', id)
       const section = h2.closest('section')
@@ -140,7 +154,7 @@ describe('McpPage', () => {
   })
 
   it('renders the TOC with one anchor per section, matching ids and labels', () => {
-    render(<McpPage />)
+    renderPage()
     const nav = screen.getByRole('navigation', { name: 'On this page' })
     const links = within(nav).getAllByRole('link')
     expect(links).toHaveLength(SECTION_HEADINGS.length)
@@ -159,7 +173,7 @@ describe('McpPage', () => {
     HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
 
     try {
-      render(<McpPage />)
+      renderPage()
       // The Connect section's h2 carries id="connect" — confirm it exists and that
       // scrollIntoView fired exactly once (targeting that element, per the source).
       expect(screen.getByRole('heading', { level: 2, name: 'Connect your client' })).toHaveAttribute('id', 'connect')
@@ -175,7 +189,7 @@ describe('McpPage', () => {
     HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
 
     try {
-      render(<McpPage />)
+      renderPage()
       expect(scrollIntoViewMock).not.toHaveBeenCalled()
     } finally {
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView
@@ -183,18 +197,18 @@ describe('McpPage', () => {
   })
 
   it('renders the access-matrix paragraph verbatim', () => {
-    render(<McpPage />)
+    renderPage()
     const match = screen.getAllByText((_, node) => normalize(node?.textContent) === ACCESS_MATRIX_TEXT)
     expect(match.length).toBeGreaterThan(0)
   })
 
   it('never writes "requires a paid plan" anywhere on the page', () => {
-    render(<McpPage />)
+    renderPage()
     expect(document.body.textContent).not.toMatch(/requires a paid plan/i)
   })
 
   it('renders two illustrative transcripts, each with the exact base figcaption text', () => {
-    render(<McpPage />)
+    renderPage()
     const figures = document.querySelectorAll('figure[data-illustrative="true"]')
     expect(figures).toHaveLength(2)
     figures.forEach((figure) => {
@@ -206,13 +220,13 @@ describe('McpPage', () => {
   })
 
   it('renders the household-invite refusal transcript verbatim in §2', () => {
-    render(<McpPage />)
+    renderPage()
     expect(screen.getByText('My partner sent me a household invite. Accept it.')).toBeInTheDocument()
     expect(screen.getByText(/Accepting a household invite is consent to share financial data/)).toBeInTheDocument()
   })
 
   it('renders only the four user-facing MCP boundaries', () => {
-    render(<McpPage />)
+    renderPage()
 
     const boundaries = screen.getByRole('list', {
       name: 'Actions that stay in BoostedBudget'
@@ -225,7 +239,7 @@ describe('McpPage', () => {
   })
 
   it('does not expose internal MCP taxonomy or implementation details', () => {
-    render(<McpPage />)
+    renderPage()
     const text = document.body.textContent ?? ''
 
     expect(text).not.toMatch(/qa|testing endpoint|admin endpoint|webhook|internal service|follow-up issue/i)
@@ -234,12 +248,12 @@ describe('McpPage', () => {
   })
 
   it('renders the "not configured" state for the setup tabs by default (no MCP URL in test env)', () => {
-    render(<McpPage />)
+    renderPage()
     expect(screen.getByText(/not configured in this environment/i)).toBeInTheDocument()
   })
 
   it('renders the generated capability count from capabilitySummary.json, not a hand-typed literal', () => {
-    render(<McpPage />)
+    renderPage()
     // capabilitySummary.json is generated data; assert that the displayed number comes from
     // it rather than pinning a specific value (which would re-introduce drift risk).
     const chip = screen.getByText(`${capabilitySummary.allowedOperations} capabilities`)
@@ -252,7 +266,7 @@ describe('McpPage', () => {
   // "what can an agent do to my money" could not say that four of the capabilities it advertises
   // permanently delete something.
   it('tells the reader how many capabilities permanently delete data', () => {
-    render(<McpPage />)
+    renderPage()
     const n = capabilitySummary.destructiveWriteOperations
     expect(n).toBeGreaterThan(0) // a zero would make the sentence below vacuously satisfiable
     // The lookbehind matters: "134 capabilities" also ends in a 4, and a bare `4\\b` would match
@@ -274,63 +288,85 @@ describe('McpPage', () => {
   })
 
   it('does not claim the agent writes and runs code against your finances', () => {
-    render(<McpPage />)
+    renderPage()
     expect(document.body.textContent).not.toMatch(/writes and runs code/i)
   })
 
   it('does not claim tokens are bound to your OAuth grant', () => {
-    render(<McpPage />)
+    renderPage()
     expect(document.body.textContent).not.toMatch(/bound to your OAuth grant/i)
   })
 
   it('does not claim recipes are read-only', () => {
-    render(<McpPage />)
+    renderPage()
     expect(document.body.textContent).not.toMatch(/recipes are read-only/i)
   })
 
   it('does not claim disconnect is available from account settings or revocation is instant', () => {
-    render(<McpPage />)
+    renderPage()
     expect(document.body.textContent).not.toMatch(/disconnect from account settings/i)
     expect(document.body.textContent).not.toMatch(/revoked instantly/i)
   })
 
   it('does not claim recipes can be set up to run automatically', () => {
-    render(<McpPage />)
+    renderPage()
     expect(document.body.textContent).not.toMatch(/set up recipes to run automatically/i)
   })
 
   it('does not use unfalsifiable security adjectives', () => {
-    render(<McpPage />)
+    renderPage()
     expect(document.body.textContent).not.toMatch(/bank-grade|military-grade|zero-trust/i)
   })
 
   it('does not claim the agent can move money', () => {
-    render(<McpPage />)
+    renderPage()
     expect(document.body.textContent).not.toMatch(/let your agent move money/i)
   })
 
   it('states the rate limits are per session, not per account', () => {
-    render(<McpPage />)
+    renderPage()
     expect(screen.getByText(/60 requests\/minute/)).toBeInTheDocument()
     expect(document.body.textContent).toMatch(/per session, not per account/i)
   })
 
   it('describes saved reviews in plain language without internal tool names', () => {
-    render(<McpPage />)
+    renderPage()
     expect(screen.getByText(/A recipe is a named, saved financial review/i)).toBeInTheDocument()
     expect(document.body.textContent).not.toMatch(/recipe\.(save|list|run)/i)
   })
 
   it('describes account access without exposing implementation details', () => {
-    render(<McpPage />)
+    renderPage()
     expect(screen.getByText(/same permissions used in the app/i)).toBeInTheDocument()
     expect(document.body.textContent).not.toMatch(/worker|go backend|database|typed client/i)
   })
 
   it('states credentials are injected server-side and never shown to the agent', () => {
-    render(<McpPage />)
+    renderPage()
     const text = document.body.textContent ?? ''
     expect(text).toMatch(/credentials are injected server-side.*never visible to the agent/i)
     expect(text).not.toMatch(/the agent never stores them/i)
+  })
+
+  it('cross-links to the /features and /faq pages', () => {
+    renderPage()
+    expect(document.querySelector('a[href="/features"]')).not.toBeNull()
+    expect(document.querySelector('a[href="/faq"]')).not.toBeNull()
+  })
+
+  it('documents llms.txt / llms-full.txt as agent-readable documentation, not a ranking tactic', () => {
+    renderPage()
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('llms.txt')
+    expect(text).toContain('llms-full.txt')
+    expect(text).toMatch(/agent-readable documentation/i)
+    expect(text).toMatch(/not an AI-search-ranking tactic/i)
+  })
+
+  it('makes no AI-search-ranking claim about the discovery files', () => {
+    renderPage()
+    const text = document.body.textContent ?? ''
+    expect(text).not.toMatch(/(improve|boost|raise|increase).{0,40}(search )?ranking/i)
+    expect(text).not.toMatch(/rank higher/i)
   })
 })

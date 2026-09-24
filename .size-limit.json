@@ -150,6 +150,18 @@
     "gzip": true
   },
   {
+    "name": "features",
+    "path": "apps/web/dist/assets/features-*.js",
+    "limit": "2.2 KB",
+    "gzip": true
+  },
+  {
+    "name": "faq",
+    "path": "apps/web/dist/assets/faq-*.js",
+    "limit": "1.9 KB",
+    "gzip": true
+  },
+  {
     "name": "savings",
     "path": "apps/web/dist/assets/savings-*.js",
     "limit": "12 KB",

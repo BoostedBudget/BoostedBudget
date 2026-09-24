@@ -50,10 +50,13 @@ mode_headers=0
 method=GET
 wfmt=""
 url=""
+hfile=""
+ofile=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -w) wfmt="$2"; shift 2 ;;
-    -o) shift 2 ;;
+    -D) hfile="$2"; shift 2 ;;
+    -o) ofile="$2"; shift 2 ;;
     -X) method="$2"; shift 2 ;;
     -H) shift 2 ;;
     --max-time) shift 2 ;;
@@ -99,6 +102,38 @@ headers_for() {
 }
 time_for() { echo "0.100000"; }
 
+# Discovery-file defaults (#1666). Consulted ONLY for /llms.txt, /llms-full.txt, /robots.txt
+# and /sitemap.xml, through separate functions from headers_for/body_for. That separation is
+# deliberate: several cases below override headers_for wholesale (to model CORS-off, a
+# transport failure, a cf-mitigated webhook) and would otherwise inadvertently starve the
+# unrelated discovery checks of a Content-Type. A fixture may override discovery_headers_for
+# or discovery_body_for to model the SPA-shell failure.
+discovery_headers_for() {
+  case "$1" in
+    */sitemap.xml) echo "Content-Type: text/xml" ;;
+    *) echo "Content-Type: text/plain" ;;
+  esac
+}
+discovery_body_for() {
+  case "$1" in
+    */llms.txt|*/llms-full.txt) printf '# BoostedBudget\n\n> fixture discovery file\n' ;;
+    */robots.txt) printf 'User-agent: *\n' ;;
+    */sitemap.xml) printf '<?xml version="1.0"?><urlset/>\n' ;;
+  esac
+}
+is_discovery_path() {
+  case "$1" in
+    */llms.txt|*/llms-full.txt|*/robots.txt|*/sitemap.xml) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+get_headers() {
+  if is_discovery_path "$url"; then discovery_headers_for "$url"; else headers_for "$url" "$method"; fi
+}
+get_body() {
+  if is_discovery_path "$url"; then discovery_body_for "$url"; else body_for "$url"; fi
+}
+
 # shellcheck disable=SC1090
 . "$STUB_FIXTURE"
 
@@ -106,6 +141,9 @@ if [ "$wfmt" == "%{http_code}" ]; then
   out=$(status_for "$url")
   [ "$out" == "000" ] && exit 7
   printf '%s' "$out"
+  # smoke-test.sh's discovery helpers pass -D <file> and/or -o <file> alongside -w.
+  if [ -n "$hfile" ] && [ "$hfile" != "/dev/null" ]; then printf '%s\n' "$(get_headers)" > "$hfile"; fi
+  if [ -n "$ofile" ] && [ "$ofile" != "/dev/null" ]; then printf '%s\n' "$(get_body)" > "$ofile"; fi
   exit 0
 fi
 if [ "$wfmt" == "%{time_total}" ]; then
@@ -113,14 +151,18 @@ if [ "$wfmt" == "%{time_total}" ]; then
   exit 0
 fi
 if [ "$mode_headers" -eq 1 ]; then
-  hdrs=$(headers_for "$url" "$method")
+  hdrs=$(get_headers)
   if [ "$hdrs" == "__TRANSPORT_FAILURE__" ]; then exit 7; fi
   printf '%s\n' "$hdrs"
   printf '\n'
-  [ "$method" == "OPTIONS" ] || printf '%s\n' "$(body_for "$url")"
+  [ "$method" == "OPTIONS" ] || printf '%s\n' "$(get_body)"
   exit 0
 fi
-printf '%s\n' "$(body_for "$url")"
+if [ -n "$ofile" ] && [ "$ofile" != "/dev/null" ]; then
+  printf '%s\n' "$(get_body)" > "$ofile"
+else
+  printf '%s\n' "$(get_body)"
+fi
 exit 0
 STUB
 chmod +x "$BIN/curl"
@@ -472,6 +514,23 @@ if [ "$LAST_RC" -eq 0 ] && grep -q "webhooks/plaid is reachable" "$LAST_OUT"; th
   pass "healthy webhook endpoints pass and the run exits 0"
 else
   fail "expected a clean production run, got rc=$LAST_RC"
+fi
+
+echo ""
+echo "Test 16: a discovery file served as the SPA shell is FATAL (#1666)"
+# The failure this check exists for: `_redirects`' `/* /index.html 200` wins over the
+# static asset, so GET /llms.txt answers 200 text/html with the app shell. An agent reads
+# `<div id="root"></div>` and learns nothing. This case constructs exactly that and asserts
+# the deploy gate now fails on it.
+fixture <<'EOF'
+discovery_headers_for() { echo "Content-Type: text/html"; }
+discovery_body_for() { printf '<!DOCTYPE html><div id="root"></div>\n'; }
+EOF
+run_case "$F" production
+if [ "$LAST_RC" -ne 0 ] && grep -q "llms.txt returned HTTP 200 content-type 'text/html'" "$LAST_OUT"; then
+  pass "the SPA shell served for /llms.txt fails the production deploy gate"
+else
+  fail "expected a fatal SPA-shell response for /llms.txt, got rc=$LAST_RC"; cat "$LAST_OUT"
 fi
 
 echo ""

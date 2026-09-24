@@ -1,0 +1,22 @@
+# Pin the agent-discovery files to text/plain (#1666).
+#
+# `_headers` is parsed by Cloudflare Pages and is never served as a static asset.
+# Each unindented `/path` line STARTS a new rule, and the indented header lines
+# beneath it apply ONLY to that path. The header is therefore repeated under each
+# path; a single trailing header would leave the first path with no header at all.
+#
+# ⚠ This block only helps if the request reaches header processing. Cloudflare's
+# docs contradict themselves on sequencing: the redirects doc says redirects are
+# always followed "regardless of whether or not an asset matches the incoming
+# request", while the serving-pages doc says a matching asset wins. `_redirects`
+# in this directory is `/* /index.html 200`, so if redirect precedence wins these
+# paths get the SPA shell (text/html) and this Content-Type never applies. Which
+# precedence wins is settled at deploy time: `scripts/smoke-test.sh` GETs both
+# paths and fails the release if either returns the SPA shell or a non-text/plain
+# Content-Type, so the deploy itself is the check. If it fails, the fix is a
+# Pages Function (which must set its own Content-Type, since `_headers` is
+# documented as not applied to Function responses).
+/llms.txt
+  Content-Type: text/plain; charset=utf-8
+/llms-full.txt
+  Content-Type: text/plain; charset=utf-8
