@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useLocation } from 'react-router'
+import { Link, useLocation } from 'react-router'
 import { useAuth } from '@clerk/react-router'
 import { Award, Gem, Check, X, AlertTriangle, Gift } from 'lucide-react'
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
@@ -13,10 +13,62 @@ import { TierActionButton } from './components/TierActionButton'
 import { usePricingContext } from './hooks/usePricingContext'
 import type { PricingState } from './hooks/usePricingContext'
 import { usePostSignInCheckoutIntent } from './hooks/usePostSignInCheckoutIntent'
+import { useDocumentHead } from '../../shared/hooks/useDocumentHead'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 
 type BillingPeriod = 'monthly' | 'yearly'
+
+const PAGE_TITLE = 'Pricing — BoostedBudget'
+const PAGE_DESCRIPTION =
+  'Simple, transparent pricing for individuals and households. Every plan starts with a 60-day free trial — no credit card required.'
+const CANONICAL_URL = 'https://boostedbudget.com/pricing'
+
+interface PricingFaqItem {
+  question: string
+  answer: string
+  link?: { label: string; to: string }
+}
+
+const PRICING_FAQS: PricingFaqItem[] = [
+  {
+    question: 'Can I change plans anytime?',
+    answer: 'Yes! You can upgrade or downgrade your plan at any time. Changes take effect immediately.',
+  },
+  {
+    question: 'What payment methods do you accept?',
+    answer: 'We accept all major credit cards through our secure payment processor, Paddle.',
+  },
+  {
+    question: 'Is there a free trial?',
+    answer: 'Yes! Premium plans come with a 60-day free trial. No credit card required to start.',
+  },
+  {
+    question: 'Can I cancel anytime?',
+    answer: 'Absolutely. You can cancel your subscription at any time with no penalty.',
+  },
+  {
+    question: 'Can I connect an AI agent to BoostedBudget?',
+    answer:
+      'Yes. BoostedBudget runs a remote MCP server. Connect it to your own AI agent to read your accounts, transactions, budgets, and portfolio — every change waits for your confirmation, and it never moves money.',
+    link: { label: 'See how the MCP server works', to: '/mcp' },
+  },
+]
+
+function generatePricingFaqSchema(items: PricingFaqItem[]) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: items.map((item) => ({
+      '@type': 'Question',
+      name: item.question,
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: item.answer,
+      },
+    })),
+  }
+}
 
 function formatPrice(price: number | undefined): string {
   if (!price) return 'Free'
@@ -233,6 +285,8 @@ export function PricingPage() {
 
   usePostSignInCheckoutIntent()
 
+  useDocumentHead(PAGE_TITLE, PAGE_DESCRIPTION, CANONICAL_URL)
+
   const trackEvent = useTrackEvent()
   useEffect(() => {
     trackEvent(ANALYTICS_EVENTS.PRICING_VIEWED)
@@ -351,35 +405,31 @@ export function PricingPage() {
 
       <div className="mt-16 pt-12 border-t border-border">
         <h2 className="text-center text-3xl font-bold text-foreground mb-8">Frequently Asked Questions</h2>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(generatePricingFaqSchema(PRICING_FAQS)) }}
+        />
         <div className="grid grid-cols-1 sm:grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-8">
-          <div className="bg-muted/50 rounded-xl p-6">
-            <h3 className="text-base font-semibold text-foreground m-0 mb-3">Can I change plans anytime?</h3>
-            <p className="text-[0.9375rem] text-muted-foreground m-0 leading-relaxed">
-              Yes! You can upgrade or downgrade your plan at any time. Changes
-              take effect immediately.
-            </p>
-          </div>
-          <div className="bg-muted/50 rounded-xl p-6">
-            <h3 className="text-base font-semibold text-foreground m-0 mb-3">What payment methods do you accept?</h3>
-            <p className="text-[0.9375rem] text-muted-foreground m-0 leading-relaxed">
-              We accept all major credit cards through our secure payment
-              processor, Paddle.
-            </p>
-          </div>
-          <div className="bg-muted/50 rounded-xl p-6">
-            <h3 className="text-base font-semibold text-foreground m-0 mb-3">Is there a free trial?</h3>
-            <p className="text-[0.9375rem] text-muted-foreground m-0 leading-relaxed">
-              Yes! Premium plans come with a 60-day free trial. No credit card
-              required to start.
-            </p>
-          </div>
-          <div className="bg-muted/50 rounded-xl p-6">
-            <h3 className="text-base font-semibold text-foreground m-0 mb-3">Can I cancel anytime?</h3>
-            <p className="text-[0.9375rem] text-muted-foreground m-0 leading-relaxed">
-              Absolutely. You can cancel your subscription at any time with no
-              penalty.
-            </p>
-          </div>
+          {PRICING_FAQS.map((faq) => (
+            <div key={faq.question} className="bg-muted/50 rounded-xl p-6">
+              <h3 className="text-base font-semibold text-foreground m-0 mb-3">{faq.question}</h3>
+              <p className="text-[0.9375rem] text-muted-foreground m-0 leading-relaxed">
+                {faq.answer}
+                {faq.link ? (
+                  <>
+                    {' '}
+                    <Link
+                      to={faq.link.to}
+                      className="font-medium text-primary underline underline-offset-2 hover:text-primary/80"
+                    >
+                      {faq.link.label}
+                    </Link>
+                    .
+                  </>
+                ) : null}
+              </p>
+            </div>
+          ))}
         </div>
       </div>
     </div>

@@ -12,9 +12,11 @@
  */
 
 import { describe, it, expect } from 'bun:test'
-import { readFileSync, existsSync } from 'fs'
+import { readFileSync, existsSync, writeFileSync, rmSync } from 'fs'
 import { dirname, join } from 'path'
+import { tmpdir } from 'os'
 import { fileURLToPath } from 'url'
+import { POSTHOG_ENGAGEMENT_ROUTES } from '@/shared/posthog/routes'
 
 const currentDir = dirname(fileURLToPath(import.meta.url))
 const webRoot = join(currentDir, '..', '..') // apps/web
@@ -22,6 +24,109 @@ const webRoot = join(currentDir, '..', '..') // apps/web
 const robotsPath = join(webRoot, 'public', 'robots.txt')
 const sitemapPath = join(webRoot, 'public', 'sitemap.xml')
 const indexHtmlPath = join(webRoot, 'index.html')
+const ogImagePath = join(webRoot, 'public', 'og-image.png')
+const llmsTxtPath = join(webRoot, 'public', 'llms.txt')
+const appTsxPath = join(webRoot, 'src', 'App.tsx')
+
+/**
+ * #1666 Todo 12 — robots.txt ↔ App.tsx sync guard.
+ *
+ * robots.txt's own header claims its
+ * authenticated Disallow list is "derived from the routes wrapped in
+ * `<ProtectedRoute>` in apps/web/src/App.tsx -- not guessed". Nothing enforced
+ * that discipline: a new `<ProtectedRoute>` route could ship with no matching
+ * `Disallow` and no test would notice. These helpers close that gap.
+ *
+ * The parsing is deliberately pure-string (App.tsx is read as TEXT, never
+ * imported) and takes its inputs as parameters, so the meta-test below can feed
+ * it a scratch fixture without touching the real route table.
+ */
+
+// Reads a JSX opening tag starting at `start` (the `<` of `<Route`), respecting
+// brace nesting and string literals so a `>` inside an attribute value (e.g. an
+// arrow function in an `element={...}`) does not terminate the tag early.
+function readRouteOpeningTag(source: string, start: number): string {
+  let depth = 0
+  let quote: string | null = null
+  for (let i = start; i < source.length; i++) {
+    const ch = source[i]
+    if (quote !== null) {
+      if (ch === '\\') {
+        i++
+        continue
+      }
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      quote = ch
+      continue
+    }
+    if (ch === '{') {
+      depth++
+      continue
+    }
+    if (ch === '}') {
+      depth--
+      continue
+    }
+    if (ch === '>' && depth === 0) {
+      return source.slice(start, i + 1)
+    }
+  }
+  return source.slice(start)
+}
+
+// Every `<Route>` whose element wraps `<ProtectedRoute>`, resolved to a concrete
+// path. `path={POSTHOG_ENGAGEMENT_ROUTES.<key>}` is resolved through the imported
+// constant object (per the header's "not guessed" claim); a literal `path="<value>"`
+// is taken verbatim (that is how `/admin` is declared).
+function resolveProtectedPaths(
+  appSource: string,
+  routes: Readonly<Record<string, string>>
+): string[] {
+  const paths: string[] = []
+  const routeOpen = /<Route(?=[\s/>])/g
+  let match: RegExpExecArray | null
+  while ((match = routeOpen.exec(appSource)) !== null) {
+    const tag = readRouteOpeningTag(appSource, match.index)
+    if (!/<ProtectedRoute(?=[\s/>])/.test(tag)) continue
+
+    const constantRef = /path=\{POSTHOG_ENGAGEMENT_ROUTES\.([A-Za-z0-9_]+)\}/.exec(tag)
+    if (constantRef) {
+      const key = constantRef[1]
+      // An unresolved key must surface rather than vanish: it is reported as an
+      // uncovered route below, because no Disallow can match this token.
+      paths.push(routes[key] ?? `POSTHOG_ENGAGEMENT_ROUTES.${key}`)
+      continue
+    }
+
+    const literal = /path="([^"]+)"/.exec(tag)
+    if (literal) paths.push(literal[1])
+  }
+  return [...new Set(paths)]
+}
+
+function parseDisallowPaths(robots: string): string[] {
+  return Array.from(robots.matchAll(/^Disallow:\s*(\S+)\s*$/gm)).map((m) => m[1])
+}
+
+// Mirrors robots.txt's own matching semantics: a Disallow covers a route when the
+// route equals it or begins with it (`/accounts` covers `/accounts/reconnect`).
+function isCovered(disallowed: string, routePath: string): boolean {
+  return routePath === disallowed || routePath.startsWith(disallowed)
+}
+
+function findUncoveredProtectedRoutes(
+  appSource: string,
+  robots: string,
+  routes: Readonly<Record<string, string>>
+): string[] {
+  const disallows = parseDisallowPaths(robots)
+  return resolveProtectedPaths(appSource, routes).filter(
+    (routePath) => !disallows.some((disallowed) => isCovered(disallowed, routePath))
+  )
+}
 
 describe('robots.txt', () => {
   it('exists and is non-empty', () => {
@@ -55,6 +160,66 @@ describe('robots.txt', () => {
   })
 })
 
+// #1666 Todo 12: robots.txt header claims its Disallow list is derived from the
+// `<ProtectedRoute>` routes in App.tsx. This makes that claim testable instead of
+// aspirational. The happy path is expected to pass on the current tree; the value
+// is the meta-test, which proves the guard actually bites on a new route.
+describe('robots.txt <-> App.tsx protected-route sync (#1666)', () => {
+  const appSource = readFileSync(appTsxPath, 'utf-8')
+  const robotsSource = readFileSync(robotsPath, 'utf-8')
+
+  it('disallows every route wrapped in <ProtectedRoute>', () => {
+    const protectedPaths = resolveProtectedPaths(appSource, POSTHOG_ENGAGEMENT_ROUTES)
+
+    // A floor so a broken extractor that collects nothing cannot pass vacuously.
+    expect(protectedPaths.length).toBeGreaterThanOrEqual(15)
+
+    const uncovered = findUncoveredProtectedRoutes(
+      appSource,
+      robotsSource,
+      POSTHOG_ENGAGEMENT_ROUTES
+    )
+
+    // Reported on success so the resolved set is auditable, not just asserted.
+    console.log(
+      `[robots-sync] resolved protected-path set (${protectedPaths.length}): ` +
+        protectedPaths.join(', ')
+    )
+
+    expect(
+      uncovered,
+      `robots.txt does not Disallow protected route(s): ${uncovered.join(', ')}`
+    ).toEqual([])
+  })
+
+  it('fails on a route the Disallow list does not cover (meta-test)', () => {
+    const scratchRoute =
+      '<Route path="/scratch-not-covered" element={<ProtectedRoute><ScratchPage /></ProtectedRoute>} />'
+    const scratchFile = join(tmpdir(), `robots-sync-fixture-${Date.now()}.tsx`)
+
+    try {
+      // Copy App.tsx to a scratch fixture plus ONE extra protected route. The real
+      // App.tsx is never modified.
+      writeFileSync(scratchFile, `${appSource}\n${scratchRoute}\n`, 'utf-8')
+      const fixtureSource = readFileSync(scratchFile, 'utf-8')
+
+      const uncovered = findUncoveredProtectedRoutes(
+        fixtureSource,
+        robotsSource,
+        POSTHOG_ENGAGEMENT_ROUTES
+      )
+      console.log(`[robots-sync] fixture uncovered routes: ${uncovered.join(', ')}`)
+
+      expect(
+        uncovered,
+        `robots.txt does not Disallow protected route(s): ${uncovered.join(', ')}`
+      ).toEqual(['/scratch-not-covered'])
+    } finally {
+      rmSync(scratchFile, { force: true })
+    }
+  })
+})
+
 describe('sitemap.xml', () => {
   const content = readFileSync(sitemapPath, 'utf-8')
   const robotsContent = readFileSync(robotsPath, 'utf-8')
@@ -72,6 +237,12 @@ describe('sitemap.xml', () => {
     'https://boostedbudget.com/',
     'https://boostedbudget.com/pricing',
     'https://boostedbudget.com/mcp',
+    // #1666: the two public pages created by this plan. They are routable for
+    // signed-out and signed-in users alike (App.tsx declares them beside
+    // /pricing), so they belong in the sitemap exactly like the other public
+    // routes.
+    'https://boostedbudget.com/features',
+    'https://boostedbudget.com/faq',
     'https://boostedbudget.com/legal/privacy-policy',
     'https://boostedbudget.com/legal/terms',
     'https://boostedbudget.com/legal/cookie-policy',
@@ -129,5 +300,133 @@ describe('index.html metadata corrections (#1411)', () => {
 
   it('describes automation rules as user-defined', () => {
     expect(content).toContain('user-defined automation rules')
+  })
+})
+
+// #1666: the social unfurl image. Absent before this change, which meant every
+// link shared to Slack/X/Facebook unfurled with no image. A `public/` asset is
+// copied verbatim, not bundled, so there is no bundle-budget impact.
+describe('social unfurl image (#1666)', () => {
+  const content = readFileSync(indexHtmlPath, 'utf-8')
+  const ogImageUrl = 'https://boostedbudget.com/og-image.png'
+
+  it('ships a non-empty PNG at public/og-image.png', () => {
+    expect(existsSync(ogImagePath)).toBe(true)
+    const bytes = readFileSync(ogImagePath)
+    expect(bytes.length).toBeGreaterThan(0)
+    // PNG magic number: 0x89 "PNG" -- not an SVG, which social platforms do not render.
+    expect(bytes.subarray(0, 8).toString('latin1')).toBe('\x89PNG\r\n\x1a\n')
+  })
+
+  it('declares og:image with the absolute production URL', () => {
+    expect(content).toContain(`<meta property="og:image" content="${ogImageUrl}" />`)
+  })
+
+  it('declares the 1200x630 Open Graph image dimensions', () => {
+    expect(content).toContain('<meta property="og:image:width" content="1200" />')
+    expect(content).toContain('<meta property="og:image:height" content="630" />')
+  })
+
+  it('declares twitter:image with the absolute production URL', () => {
+    expect(content).toContain(`<meta name="twitter:image" content="${ogImageUrl}" />`)
+  })
+})
+
+// #1666 Todo 13: llms.txt is the agent-discovery index file, shaped per the
+// llmstxt.org convention: a single H1, a `>` summary, non-heading detail prose,
+// then `##` link-list sections ending with the conventional `## Optional`.
+// These assertions pin the SHAPE and that every advertised URL is one the site
+// actually publishes; they deliberately say nothing about AI-search benefit,
+// because none is measurable and the plan forbids claiming one.
+describe('llms.txt (#1666)', () => {
+  const content = readFileSync(llmsTxtPath, 'utf-8')
+  const lines = content.split('\n')
+  const nonEmptyLines = lines.filter((line) => line.trim().length > 0)
+
+  // The MCP endpoint is not a sitemap page -- it is a protocol endpoint a client
+  // connects to, so it is the one permitted link outside sitemap.xml.
+  const MCP_ENDPOINT = 'https://mcp.boostedbudget.com/mcp'
+  const sitemapUrls = Array.from(readFileSync(sitemapPath, 'utf-8').matchAll(/<loc>(.*?)<\/loc>/g)).map(
+    (m) => m[1]
+  )
+
+  it('exists and is non-empty', () => {
+    expect(existsSync(llmsTxtPath)).toBe(true)
+    expect(content.trim().length).toBeGreaterThan(0)
+  })
+
+  // Soft-404 failure mode: a redirect/shadowing rule serves index.html for
+  // /llms.txt, which looks healthy to a status-code check. The first meaningful
+  // character must be the H1 marker, and there must be no HTML shell at all.
+  it('is not an HTML shell', () => {
+    expect(nonEmptyLines[0].startsWith('#')).toBe(true)
+    expect(content).not.toMatch(/<html/i)
+    expect(content).not.toMatch(/<!doctype/i)
+  })
+
+  it('begins with a single H1 that starts the file (H1-first order)', () => {
+    const h1Indices = nonEmptyLines
+      .map((line, index) => ({ line: line.trim(), index }))
+      .filter(({ line }) => /^#\s/.test(line))
+      .map(({ index }) => index)
+
+    // Exactly one H1 -- the spec has a single document title.
+    expect(h1Indices).toHaveLength(1)
+    expect(nonEmptyLines[0].trim()).toBe('# BoostedBudget')
+
+    const firstH2 = nonEmptyLines.findIndex((line) => /^##\s/.test(line.trim()))
+    expect(firstH2).toBeGreaterThan(h1Indices[0])
+  })
+
+  it('carries a blockquote summary', () => {
+    expect(nonEmptyLines.some((line) => line.trim().startsWith('>'))).toBe(true)
+  })
+
+  it('has heading-free detail prose between the summary and the first section', () => {
+    const firstH2 = nonEmptyLines.findIndex((line) => /^##\s/.test(line.trim()))
+    const detailLines = nonEmptyLines
+      .slice(0, firstH2)
+      .filter((line) => !line.trim().startsWith('#') && !line.trim().startsWith('>'))
+    expect(detailLines.length).toBeGreaterThan(0)
+  })
+
+  it('every markdown link resolves to a sitemap URL or the MCP endpoint', () => {
+    const links = Array.from(content.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)).map((m) => m[1])
+    const allowed = new Set([...sitemapUrls, MCP_ENDPOINT])
+
+    // A floor so a broken parser collecting nothing cannot pass vacuously.
+    expect(links.length).toBeGreaterThanOrEqual(sitemapUrls.length)
+
+    const unresolved = links.filter((url) => !allowed.has(url))
+    expect(
+      unresolved,
+      `llms.txt links to URL(s) not published in sitemap.xml: ${unresolved.join(', ')}`
+    ).toEqual([])
+  })
+
+  it('lists every sitemap URL plus the MCP endpoint', () => {
+    const links = Array.from(content.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)).map((m) => m[1])
+    const missing = [...sitemapUrls, MCP_ENDPOINT].filter((url) => !links.includes(url))
+    expect(missing, `llms.txt is missing URL(s): ${missing.join(', ')}`).toEqual([])
+  })
+
+  it('ends with the conventional ## Optional section', () => {
+    const h2Headings = nonEmptyLines
+      .map((line) => line.trim())
+      .filter((line) => /^##\s/.test(line))
+    expect(h2Headings.length).toBeGreaterThan(0)
+    expect(h2Headings[h2Headings.length - 1]).toBe('## Optional')
+  })
+
+  it('makes no claim about AI-search visibility or rankings', () => {
+    expect(content).not.toMatch(/AI[- ]search|ranking|search visibility|SEO/i)
+  })
+
+  it('does not hand-type a capability count or name internal operations/services', () => {
+    // capabilitySummary.json is generated and drift-tested; restating its numbers
+    // here would create a second, unmaintained source. Internal tool names and
+    // service topology are forbidden by McpPage.tsx's claims discipline.
+    expect(content).not.toMatch(/readExecute|writeExecute|recipe\.templates/i)
+    expect(content).not.toMatch(/\b(?:dozen|hundreds|thousands)\b/)
   })
 })

@@ -9,7 +9,14 @@
  * keeps that rule intact for genuinely headerless bots while letting our
  * trusted subrequests through.
  *
- * NOTE: keep this free of AI-crawler signatures (e.g. "GPTBot", "Claude") — the
- * zone has `ai_bots_protection = block`, which would block such user agents.
+ * NOTE: keep this free of AI-crawler signatures (e.g. "GPTBot", "Claude"). The zone's
+ * AI-crawler policy is to ALLOW retrieval and DISALLOW training, expressed only at the
+ * Cloudflare zone via `ai_training = "disallow"` (#1666 Todo 17) — deliberately NOT via
+ * the legacy `ai_bots_protection`, whose `disabled` value would unblock training crawlers
+ * too. ⚠ That zone change is PENDING, not applied: the API read/write returned Cloudflare
+ * error 9109 "Unauthorized to access requested resource", so the zone's current posture is
+ * unknown and a signature-bearing UA must still be avoided. See
+ * docs/decisions/2026-09-24-ai-crawler-policy-retrieval-vs-training.md. UA rules are also
+ * spoofable, so this is hygiene, not a security boundary.
  */
 export const MCP_WORKER_USER_AGENT = 'BoostedBudget-MCP-Worker/1.0'
