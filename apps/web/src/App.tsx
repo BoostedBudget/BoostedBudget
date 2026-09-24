@@ -137,6 +137,12 @@ const PricingPage = lazy(() =>
 const McpPage = lazy(() =>
   import('./features/mcp').then(m => ({ default: m.McpPage }))
 )
+const FeaturesPage = lazy(() =>
+  import('./features/features').then(m => ({ default: m.FeaturesPage }))
+)
+const FaqPage = lazy(() =>
+  import('./features/faq').then(m => ({ default: m.FaqPage }))
+)
 const SubscriptionManagementPage = lazy(() =>
   import('./features/billing/SubscriptionManagementPage').then(m => ({ default: m.SubscriptionManagementPage }))
 )
@@ -548,6 +554,8 @@ function App({ analyticsPageViews }: AppProps = {}) {
             <Route path="/legal/cookie-policy" element={<Suspense fallback={<PageSkeleton />}><CookiePolicy /></Suspense>} />
             <Route path="/pricing" element={<Suspense fallback={<PageSkeleton />}><PricingPage /></Suspense>} />
             <Route path="/mcp" element={<Suspense fallback={<PageSkeleton />}><McpPage /></Suspense>} />
+            <Route path="/features" element={<Suspense fallback={<PageSkeleton />}><FeaturesPage /></Suspense>} />
+            <Route path="/faq" element={<Suspense fallback={<PageSkeleton />}><FaqPage /></Suspense>} />
             <Route
               path={POSTHOG_ENGAGEMENT_ROUTES.billingManage}
               element={

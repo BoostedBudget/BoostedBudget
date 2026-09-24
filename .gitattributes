@@ -1,0 +1,7 @@
+# Generated agent-discovery artifact (Issue #1666, Todo 14).
+#
+# llms-full.txt is generated and byte-compared against a fresh in-memory rebuild by
+# apps/web/src/features/landing/data/marketingContent.drift.test.ts. Pinning it to LF
+# keeps a Windows checkout with core.autocrlf=true from rewriting the working copy to
+# CRLF and failing that test for a reason that is not drift.
+apps/web/public/llms-full.txt eol=lf

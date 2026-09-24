@@ -19,8 +19,10 @@
  * internal operation names, implementation details, or unfinished roadmap items.
  */
 
-import { useEffect, useLayoutEffect } from 'react'
+import { useEffect } from 'react'
+import { Link } from 'react-router'
 import { Check } from 'lucide-react'
+import { useDocumentHead } from '@/shared/hooks/useDocumentHead'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
 import { McpHero } from './components/McpHero'
@@ -44,7 +46,8 @@ const TOC_SECTIONS = [
   { id: 'recipes', label: 'Recipes' },
   { id: 'data-and-access', label: 'Data and access' },
   { id: 'limits', label: 'Limits' },
-  { id: 'troubleshooting', label: 'Troubleshooting' }
+  { id: 'troubleshooting', label: 'Troubleshooting' },
+  { id: 'agent-discovery', label: 'Agent discovery' }
 ]
 
 const CAPABILITY_HIGHLIGHTS = [
@@ -93,52 +96,6 @@ const TRANSCRIPT_HOUSEHOLD_REFUSAL = [
     ]
   }
 ]
-
-/** Restores document.title / meta description / canonical link on unmount. Best-effort SEO: a
- * crawler that doesn't execute JavaScript still sees index.html's static "/" canonical — a real
- * fix needs prerendering (#1423). */
-function useDocumentHead(title: string, description: string, canonicalHref: string) {
-  useLayoutEffect(() => {
-    const previousTitle = document.title
-    document.title = title
-
-    let descriptionTag = document.querySelector<HTMLMetaElement>('meta[name="description"]')
-    const descriptionExisted = descriptionTag !== null
-    const previousDescription = descriptionTag?.getAttribute('content') ?? null
-    if (!descriptionTag) {
-      descriptionTag = document.createElement('meta')
-      descriptionTag.setAttribute('name', 'description')
-      document.head.appendChild(descriptionTag)
-    }
-    descriptionTag.setAttribute('content', description)
-
-    let canonicalTag = document.querySelector<HTMLLinkElement>('link[rel="canonical"]')
-    const canonicalExisted = canonicalTag !== null
-    const previousCanonical = canonicalTag?.getAttribute('href') ?? null
-    if (!canonicalTag) {
-      canonicalTag = document.createElement('link')
-      canonicalTag.setAttribute('rel', 'canonical')
-      document.head.appendChild(canonicalTag)
-    }
-    canonicalTag.setAttribute('href', canonicalHref)
-
-    return () => {
-      document.title = previousTitle
-
-      if (descriptionExisted) {
-        if (previousDescription !== null) descriptionTag?.setAttribute('content', previousDescription)
-      } else {
-        descriptionTag?.remove()
-      }
-
-      if (canonicalExisted) {
-        if (previousCanonical !== null) canonicalTag?.setAttribute('href', previousCanonical)
-      } else {
-        canonicalTag?.remove()
-      }
-    }
-  }, [title, description, canonicalHref])
-}
 
 function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
   return (
@@ -194,9 +151,9 @@ export function McpPage() {
             <Section id="overview" title="What the MCP server is">
               <p className="text-foreground">
                 BoostedBudget runs a remote MCP (Model Context Protocol) server at a single URL. Connect Claude Desktop,
-                Claude Code, or VS Code, sign in with your BoostedBudget account, and your agent can read your accounts,
-                transactions, budgets, and portfolio directly — no exporting statements, no copy-pasting numbers into a
-                chat window.
+                Claude Code, Cursor, VS Code, or any other MCP-compatible client, sign in with your BoostedBudget
+                account, and your agent can read your accounts, transactions, budgets, and portfolio directly — no
+                exporting statements, no copy-pasting numbers into a chat window.
               </p>
               <p className="text-foreground">
                 Every write — recategorizing a transaction, tagging it, saving a recipe — waits for you to confirm it
@@ -416,6 +373,30 @@ export function McpPage() {
                 >
                   Contact support
                 </a>
+                .
+              </p>
+            </Section>
+
+            <Section id="agent-discovery" title="Discovery files for agents">
+              <p className="text-foreground">
+                The site also publishes <code>llms.txt</code> and <code>llms-full.txt</code> — plain-text,
+                agent-readable documentation that summarizes what BoostedBudget does and where its public pages are.
+                They are there so an agent can understand the product from a compact file instead of scraping rendered
+                pages.
+              </p>
+              <p className="text-foreground">
+                To be explicit: these are agent-readable documentation, not an AI-search-ranking tactic. Publishing
+                them does not change how search engines rank or cite BoostedBudget.
+              </p>
+              <p className="text-foreground">
+                For the human-readable version, see the{' '}
+                <Link to="/features" className="text-primary underline underline-offset-2">
+                  Features
+                </Link>{' '}
+                page or read the{' '}
+                <Link to="/faq" className="text-primary underline underline-offset-2">
+                  FAQ
+                </Link>
                 .
               </p>
             </Section>

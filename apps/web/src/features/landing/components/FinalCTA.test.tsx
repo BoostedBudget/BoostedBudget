@@ -61,4 +61,18 @@ describe('FinalCTA', () => {
     fireEvent.click(btn)
     expect(mockTrackEvent).toHaveBeenCalledWith('landing_cta_clicked')
   })
+
+  it('renders the exact verbatim subhead copy', () => {
+    renderFinalCTA()
+    expect(
+      screen.getByText(
+        "Start with a 60-day free trial. Connect your accounts, automate your budget, and bring your agent along when you're ready. No credit card required."
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('does not make the unverifiable "thousands" claim', () => {
+    const { container } = renderFinalCTA()
+    expect(container.textContent).not.toMatch(/thousands/i)
+  })
 })

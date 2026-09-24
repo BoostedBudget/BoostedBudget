@@ -79,7 +79,7 @@ export function UserDropdown({ user, onLogout, className }: UserDropdownProps) {
             </Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
-            <Link to="/profile#privacy" className="cursor-pointer">
+            <Link to="/profile?tab=privacy" className="cursor-pointer">
               <Settings className="mr-2 h-4 w-4" />
               <span>Privacy Settings</span>
             </Link>

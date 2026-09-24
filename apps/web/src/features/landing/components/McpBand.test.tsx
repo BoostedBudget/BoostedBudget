@@ -37,9 +37,14 @@ describe('McpBand', () => {
     renderMcpBand()
     expect(
       screen.getByText(
-        'BoostedBudget runs a remote MCP server, so Claude or VS Code can read your finances directly — and change them only when you confirm.'
+        'BoostedBudget runs a remote MCP server. Point Claude, Cursor, VS Code, or any MCP-compatible client at one URL, sign in once, and your agent can read across your accounts, transactions, budgets, and portfolio — changing things only when you confirm each one.'
       )
     ).toBeInTheDocument()
+  })
+
+  it('does not make the unverifiable "thousands" claim', () => {
+    const { container } = renderMcpBand()
+    expect(container.textContent).not.toMatch(/thousands/i)
   })
 
   it('h2 id is the literal "mcp-band-heading" and matches the section aria-labelledby', () => {

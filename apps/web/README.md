@@ -87,3 +87,24 @@ Per-route chunk budgets are enforced by [`size-limit`](https://github.com/ai/siz
 *The `tanstack` and `rules` rows from earlier revisions of this table no longer correspond to real chunks: the `tanstack` split was reverted in #1288 (folded back into `vendor`), and `rules` was renamed to `boosts` in #1283.*
 
 Budgets were significantly tightened in issue #1225 after migrating from Vite 7 (Rollup `manualChunks`) to Vite 8 (Rolldown `codeSplitting.groups`). The new chunk taxonomy split node_modules more precisely: an isolated `tanstack` chunk (~44 kB) and `charts` (~215 kB) were carved out of the `vendor` catch-all, briefly taking `vendor` down to 357 kB gzip. That reduction didn't stick: the `tanstack` split was reverted in #1288 ("Fix staging blank page — drop Rolldown tanstack chunk split") for chunk-init stability, folding `@tanstack/*` back into `vendor`, and subsequent dependency growth pushed it further. `vendor` now measures 390.18 kB gzip against a 460 kB budget after #1650 moved the lazy `posthog` SDK out of it — see the stamped table above for current, single-source-of-truth numbers; don't reuse the 357 kB, 428.36 kB or 449.20 kB figures as current values. Two new source-level chunks — `shared` (app-wide utilities/hooks/UI primitives) and `api-client` (generated React Query hooks) — consolidate what would otherwise be dozens of small orphan chunks.
+
+## Public pages and agent discovery
+
+The public pages (routable signed-out), the Rolldown chunk each is assigned to in `apps/web/vite.config.ts`, and the test that guards it. A page whose source path matches no `codeSplitting.groups` entry lands in the eagerly-imported `entry` chunk, so an absent group name below means `entry`, not "ungrouped".
+
+| Route | Chunk group | Guard test |
+|-------|-------------|------------|
+| `/` | `entry` (LandingPage is imported eagerly) | `src/features/landing/LandingPage.test.tsx` |
+| `/pricing` | `billing` (`src/features/pricing/`) | `src/features/pricing/PricingPage.test.tsx` |
+| `/mcp` | `mcp` (`src/features/mcp/`) | `src/features/mcp/McpPage.test.tsx`, `src/features/mcp/clientNaming.test.ts` |
+| `/features` | `features` (`src/features/features/`) | `src/features/features/FeaturesPage.test.tsx` |
+| `/faq` | `faq` (`src/features/faq/`) | `src/features/faq/FaqPage.test.tsx` |
+| `/legal/privacy-policy` | `legal` (`src/legal/`) | `src/legal/PrivacyPolicy.test.tsx` |
+| `/legal/terms` | `legal` (`src/legal/`) | `src/legal/TermsOfService.test.tsx` |
+| `/legal/cookie-policy` | `legal` (`src/legal/`) | `src/legal/CookiePolicy.test.tsx` |
+
+Two guards cut across the whole set. `src/test/seo-statics.test.ts` pins `public/sitemap.xml`, `public/robots.txt`, `public/llms.txt`, the `index.html` metadata, and the sync between `robots.txt`'s `Disallow` list and the `<ProtectedRoute>` routes in `src/App.tsx`. `src/features/landing/data/marketingContent.drift.test.ts` pins the generated `public/llms-full.txt` to a byte-for-byte recompute of its source prose.
+
+**Adding a public page means updating three lists that must agree:** the route in `src/App.tsx`, the `<loc>` in `public/sitemap.xml`, and a link in `public/llms.txt` (then regenerate `llms-full.txt`). `seo-statics.test.ts` fails if a sitemap URL is missing from `llms.txt`, so the sitemap and the agent index cannot drift apart silently.
+
+**Stamp:** the route/chunk/test mapping above was verified on 2026-09-23 against #1666. It is a point-in-time snapshot, mirroring the bundle-size table above: re-derive a row rather than trusting the stamp if the route, its chunk group, or its guard test changes. The discovery files exist as agent-readable documentation only; see `docs/decisions/2026-09-23-agent-discovery-is-documentation-not-seo.md` for what they are and are not claimed to do.
