@@ -57,6 +57,24 @@ describe('UserDropdown', () => {
     })
   })
 
+  // Issue #1666: the privacy entry linked to `/profile#privacy`, a dead anchor —
+  // no element with `id="privacy"` exists, and ProfilePage drives its tabs through
+  // `useTabState('tab', 'profile', validTabs)`. Assert the real mechanism
+  // (`?tab=privacy`) so a future revert to the hash cannot pass silently.
+  it('links Privacy Settings to /profile?tab=privacy', async () => {
+    const user = userEvent.setup()
+    renderDropdown()
+
+    await user.click(screen.getByRole('button', { name: /user menu/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('menuitem', { name: /privacy settings/i })).toBeInTheDocument()
+    })
+
+    const privacyLink = screen.getByRole('menuitem', { name: /privacy settings/i })
+    expect(privacyLink).toHaveAttribute('href', '/profile?tab=privacy')
+  })
+
   it('calls onLogout when logout clicked', async () => {
     const user = userEvent.setup()
     renderDropdown()

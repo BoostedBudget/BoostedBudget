@@ -45,16 +45,16 @@ describe('AppFooter', () => {
     expect(screen.getByRole('heading', { name: 'Support' })).toBeInTheDocument()
   })
 
-  it('renders "Features" link pointing to /#features', () => {
+  it('renders "Features" link pointing to /features', () => {
     renderWithRouter(<AppFooter />)
     const link = screen.getByRole('link', { name: /^features$/i })
-    expect(link).toHaveAttribute('href', '/#features')
+    expect(link).toHaveAttribute('href', '/features')
   })
 
-  it('renders "FAQ" link pointing to /#faq', () => {
+  it('renders "FAQ" link pointing to /faq', () => {
     renderWithRouter(<AppFooter />)
     const link = screen.getByRole('link', { name: /^faq$/i })
-    expect(link).toHaveAttribute('href', '/#faq')
+    expect(link).toHaveAttribute('href', '/faq')
   })
 
   it('renders "MCP Server" link pointing to /mcp', () => {
