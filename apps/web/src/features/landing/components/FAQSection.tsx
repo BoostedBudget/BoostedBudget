@@ -6,11 +6,14 @@
  */
 
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { ChevronDown } from 'lucide-react'
 
 interface FAQItem {
   question: string
   answer: string
+  /** Optional inline link appended to the answer. The JSON-LD text stays the plain answer. */
+  link?: { label: string; to: string }
 }
 
 const faqs: FAQItem[] = [
@@ -48,6 +51,24 @@ const faqs: FAQItem[] = [
     question: 'Can my family share one subscription?',
     answer:
       'Yes. Household plans cover 2 to 5+ members on one subscription. Each member chooses which accounts to share, and can hide any account at any time. Accepting a household invite is always a deliberate action you take in the app.',
+  },
+  {
+    question: 'Can my AI agent help me manage my budget?',
+    answer:
+      'Yes. BoostedBudget runs a remote MCP server that lets an AI agent read across your accounts, transactions, budgets, and portfolio in plain language. It can recategorize, tag, and save repeatable reviews — but every proposed change waits for your explicit confirmation before it is applied, and each confirmation is single-use.',
+    link: { label: 'See how the MCP server works', to: '/mcp' },
+  },
+  {
+    question: 'Can an AI agent move my money?',
+    answer:
+      'No. BoostedBudget never moves money, with or without an agent. A connected agent can read your data and propose changes for you to review and confirm, but it has no ability to transfer funds, make payments, or act on your behalf without that confirmation step you control.',
+    link: { label: 'See how the MCP server works', to: '/mcp' },
+  },
+  {
+    question: 'Is it safe to let an AI agent see my finances?',
+    answer:
+      'Yes — and you stay in control. Your BoostedBudget credentials are injected server-side after you sign in, so they are never visible to the agent, and calls are recorded in an audit log on a best-effort basis. You can revoke the agent’s access at any time from your sign-in provider’s security dashboard; it can take about 30–60 seconds to take effect.',
+    link: { label: 'See how the MCP server works', to: '/mcp' },
   },
 ]
 
@@ -141,6 +162,17 @@ export function FAQSection() {
               >
                 <p className="min-h-0 px-6 leading-relaxed text-slate-600 dark:text-slate-400">
                   {faq.answer}
+                  {faq.link && (
+                    <>
+                      {' '}
+                      <Link
+                        to={faq.link.to}
+                        className="font-medium text-primary underline underline-offset-2 hover:text-primary/80"
+                      >
+                        {faq.link.label}
+                      </Link>
+                    </>
+                  )}
                 </p>
               </div>
             </div>

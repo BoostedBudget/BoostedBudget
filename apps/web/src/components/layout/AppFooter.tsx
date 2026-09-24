@@ -64,7 +64,7 @@ export function AppFooter() {
           <span className="font-semibold text-foreground">BoostedBudget</span>
         </div>
         <p className="mt-2 max-w-xs text-sm text-muted-foreground">
-          Smart budgeting for modern life.
+          Smart budgeting for modern life — with a remote MCP server for your agent.
         </p>
 
         <div className="mt-8 grid grid-cols-1 gap-8 sm:grid-cols-2 md:grid-cols-4">
