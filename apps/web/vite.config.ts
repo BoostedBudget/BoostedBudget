@@ -336,6 +336,20 @@ export default defineConfig({
               test: /\/apps\/web\/src\/features\/mcp\//,
               priority: 5,
             },
+            // Issue #1666: public /features marketing page. Priority 8 keeps it above the
+            // generic `shared` source group (priority 7), so the page is not swept into an
+            // eagerly-imported chunk; it stays behind App.tsx's React.lazy boundary.
+            {
+              name: 'features',
+              test: /\/apps\/web\/src\/features\/features\//,
+              priority: 8,
+            },
+            // Issue #1666: public /faq page. Same reasoning as the `features` group above.
+            {
+              name: 'faq',
+              test: /\/apps\/web\/src\/features\/faq\//,
+              priority: 8,
+            },
           ],
         },
       },
