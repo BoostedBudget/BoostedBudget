@@ -2,44 +2,36 @@
  * FeaturesSection Component
  *
  * Displays key product features with benefit-focused copy in a 2-column grid
- * (5th card spans full width to close the section, #1411).
+ * (the last card spans full width only when the card count is odd, #1411/#1666).
  * Issue #699: Create Marketing Landing Page for First-Time Visitors
  */
 
-import { Landmark, BarChart3, Zap, LayoutDashboard, Users } from 'lucide-react'
+import { Landmark, BarChart3, Zap, LayoutDashboard, Users, Bot } from 'lucide-react'
+import { MARKETING_FEATURES, type FeatureIconKey } from '../data/marketingContent'
 
-const features = [
-  {
-    icon: Landmark,
-    title: 'All Your Accounts in One Place',
-    description:
-      'Connect all your bank accounts, credit cards, and investments. Get a complete picture of your finances at a glance.',
-  },
-  {
-    icon: LayoutDashboard,
-    title: 'Customizable Dashboard',
-    description:
-      'Personalize your financial overview with a diverse library of widgets. Visualize and analyze your data the way you want.',
-  },
-  {
-    icon: BarChart3,
-    title: 'Categorization That Follows Your Rules',
-    description:
-      "Every transaction arrives with a category from Plaid. Write a rule for merchant, amount, or description, and it takes over for every match — unless you've already categorized or reviewed that transaction yourself.",
-  },
-  {
-    icon: Zap,
-    title: 'Automation You Can Audit',
-    description:
-      'Build rules that flag budget risks and suggest transfers. Every rule is one you wrote, so you always know why it fired.',
-  },
-  {
-    icon: Users,
-    title: 'Shared Household Budgeting',
-    description:
-      'One plan across 2 to 5+ members. Each person chooses which accounts to share, and can hide any account from the household at any time.',
-  },
-]
+// The ICONS live here, not in the data module: the generator imports marketingContent.ts
+// and must never pull `lucide-react` (an entire icon set) into a Node-side build.
+const FEATURE_ICONS: Record<FeatureIconKey, typeof Landmark> = {
+  accounts: Landmark,
+  dashboard: LayoutDashboard,
+  categorization: BarChart3,
+  automation: Zap,
+  household: Users,
+  agent: Bot,
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const features = MARKETING_FEATURES.map(({ key, title, description }) => ({
+  icon: FEATURE_ICONS[key],
+  title,
+  description,
+}))
+
+/** Last card spans both columns only for an odd card count, so the grid closes cleanly. */
+// eslint-disable-next-line react-refresh/only-export-components
+export function cardSpanClass(index: number, total: number): string {
+  return index === total - 1 && total % 2 === 1 ? 'sm:col-span-2' : ''
+}
 
 export function FeaturesSection() {
   return (
@@ -66,9 +58,10 @@ export function FeaturesSection() {
           {features.map((feature, index) => (
             <div
               key={index}
-              className={`group relative rounded-3xl bg-slate-50 p-8 text-center shadow-sm transition-all hover:bg-slate-100 hover:shadow-md dark:bg-slate-800/50 dark:hover:bg-slate-800 lg:p-10 ${
-                index === features.length - 1 ? 'sm:col-span-2' : ''
-              }`}
+              className={`group relative rounded-3xl bg-slate-50 p-8 text-center shadow-sm transition-all hover:bg-slate-100 hover:shadow-md dark:bg-slate-800/50 dark:hover:bg-slate-800 lg:p-10 ${cardSpanClass(
+                index,
+                features.length
+              )}`}
             >
               {/* Icon */}
               <div className="mx-auto mb-6 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-500/25">

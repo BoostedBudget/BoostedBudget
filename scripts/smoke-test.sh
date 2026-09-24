@@ -169,6 +169,115 @@ cors_allow_origin_probe() {
 }
 
 # =============================================================================
+# Discovery-file checks (#1666)
+# =============================================================================
+#
+# WHY THESE EXIST. `/llms.txt` and `/llms-full.txt` are agent-discovery files. If
+# the host answers them with the SPA shell instead of the file, an agent silently
+# reads `<div id="root"></div>` and learns nothing — a soft 404, which is worse than
+# a hard one because nothing looks broken. `public/_redirects` is `/* /index.html
+# 200`, so this is a live risk, not a hypothetical.
+#
+# ⚠ GET, NEVER HEAD. The redirect/rewrite precedent and any Pages Function answer
+# HEAD differently from GET, and the failure mode (SPA shell body) is only visible
+# in the body. `curl -I` is therefore explicitly wrong here.
+#
+# ⚠ Fetch headers only via `-D`, and the body via `-o <file>`, rather than parsing
+# a single `-i` stream: it keeps the header/body split unambiguous and avoids piping
+# a large body into `head -c`, whose early close raises SIGPIPE under `set -o pipefail`.
+
+# GET $WEB_URL$path and require HTTP 200, `content-type: text/plain…`, and a body
+# whose first byte is `#` (the llms.txt H1). Retries transient failures.
+# On failure the caller can read DISCOVERY_STATUS / DISCOVERY_CTYPE / DISCOVERY_FIRST.
+check_discovery_file() {
+  local path=$1
+  local attempts=${2:-3}
+  local interval=${3:-2}
+  local i status ctype first hdr body
+  hdr=$(mktemp)
+  body=$(mktemp)
+
+  for i in $(seq 1 "$attempts"); do
+    status=$(curl -s -D "$hdr" -o "$body" -w '%{http_code}' "$WEB_URL$path" --max-time 10) || status="000"
+    ctype=$(tr -d '\r' < "$hdr" | sed -n 's/^[Cc]ontent-[Tt]ype: *//p' | head -1 || true)
+    first=$(head -c 1 "$body" 2>/dev/null || true)
+
+    if [ "$status" == "200" ] && [[ "$ctype" == text/plain* ]] && [ "$first" == "#" ]; then
+      DISCOVERY_STATUS="$status"; DISCOVERY_CTYPE="$ctype"; DISCOVERY_FIRST="$first"
+      rm -f "$hdr" "$body"
+      return 0
+    fi
+
+    if [ "$i" -lt "$attempts" ]; then sleep "$interval"; fi
+  done
+
+  DISCOVERY_STATUS="$status"; DISCOVERY_CTYPE="$ctype"; DISCOVERY_FIRST="$first"
+  rm -f "$hdr" "$body"
+  return 1
+}
+
+# GET (headers-only) and require HTTP 200 with a non-empty content-type that is NOT
+# text/html. Guards robots.txt and sitemap.xml against the same SPA-shell failure.
+# On failure the caller can read NOT_HTML_STATUS / NOT_HTML_CTYPE.
+check_not_html() {
+  local path=$1
+  local attempts=${2:-3}
+  local interval=${3:-2}
+  local i status ctype hdr
+  hdr=$(mktemp)
+
+  for i in $(seq 1 "$attempts"); do
+    status=$(curl -s -D "$hdr" -o /dev/null -w '%{http_code}' "$WEB_URL$path" --max-time 10) || status="000"
+    ctype=$(tr -d '\r' < "$hdr" | sed -n 's/^[Cc]ontent-[Tt]ype: *//p' | head -1 || true)
+
+    if [ "$status" == "200" ] && [ -n "$ctype" ] && [[ "$ctype" != text/html* ]]; then
+      NOT_HTML_STATUS="$status"; NOT_HTML_CTYPE="$ctype"
+      rm -f "$hdr"
+      return 0
+    fi
+
+    if [ "$i" -lt "$attempts" ]; then sleep "$interval"; fi
+  done
+
+  NOT_HTML_STATUS="$status"; NOT_HTML_CTYPE="$ctype"
+  rm -f "$hdr"
+  return 1
+}
+
+# =============================================================================
+# AI-crawler User-Agent probe (#1666 Todo 17) — a SIGNAL, never proof
+# =============================================================================
+#
+# WHY THIS EXISTS. #1666's policy is allow-retrieval / disallow-training, expressed at the
+# Cloudflare zone via `ai_training = "disallow"`. A UA probe is the *weakest* possible check
+# for it and is included only as a secondary signal: live probes on this origin
+# (apps/web/nginx.conf:130-133) came from a SINGLE IP rotating GPTBot/ClaudeBot/OAI-SearchBot/
+# ChatGPT-User UAs, i.e. spoofed. Any rule keyed on the User-Agent string is trivially walked
+# around by sending a different one, so a curl that "looks right" proves nothing about the
+# configuration. The configuration (the Cloudflare API response) is the evidence of record.
+#
+# ⚠ DELIBERATELY NON-FATAL. A UA probe that disagreed with the zone could be either a real
+# misconfiguration or an ordinary spoofing/transport artefact; making it fatal would block
+# deploys on unprovable inputs. It reports a signal and never calls exit.
+#
+# GET $WEB_URL/ with a chosen User-Agent; expose CRAWLER_UA_STATUS / CRAWLER_UA_MITIGATED.
+check_crawler_ua() {
+  local ua=$1
+  local hdr status mitigated
+  hdr=$(mktemp)
+
+  status=$(curl -s -D "$hdr" -o /dev/null -w '%{http_code}' \
+    -H "User-Agent: $ua" "$WEB_URL/" --max-time 10) || status="000"
+  # cf-mitigated: challenge is the fingerprint of a Cloudflare Managed Challenge (the
+  # 2026-09-08 webhook incident shape) — absence of it on a 403 means the block came from
+  # elsewhere, so it is recorded separately rather than folded into the status.
+  mitigated=$(tr -d '\r' < "$hdr" | sed -n 's/^[Cc][Ff]-[Mm]itigated: *//p' | head -1 || true)
+
+  CRAWLER_UA_STATUS="$status"; CRAWLER_UA_MITIGATED="$mitigated"
+  rm -f "$hdr"
+}
+
+# =============================================================================
 # API Health Checks
 # =============================================================================
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -439,6 +548,60 @@ if [ -n "$WEB_URL" ]; then
   else
     print_test "fail" "Frontend does not serve valid HTML"
     exit 1
+  fi
+
+  # Test 5a (#1666): discovery files are served as text/plain, not the SPA shell.
+  # Fatal: an agent that gets `<div id="root"></div>` for /llms.txt has been handed a
+  # soft 404, and `_redirects`' catch-all makes that the failure this check exists for.
+  for discovery_path in "/llms.txt" "/llms-full.txt"; do
+    if check_discovery_file "$discovery_path"; then
+      print_test "pass" "$discovery_path is served as text/plain with a '#'-leading body"
+    else
+      print_test "fail" "$discovery_path returned HTTP ${DISCOVERY_STATUS:-000} content-type '${DISCOVERY_CTYPE:-<none>}' first-byte '${DISCOVERY_FIRST:-<empty>}' (expected 200 / text/plain / '#'). The SPA shell or a wrong content type is being served — see #1666. This is the exact SPA-shell failure this discovery-file check exists for."
+      exit 1
+    fi
+  done
+
+  # Test 5b (#1666): robots.txt and sitemap.xml must not be HTML either — the same
+  # catch-all rewrite would break crawler policy, not just agent discovery.
+  for text_asset_path in "/robots.txt" "/sitemap.xml"; do
+    if check_not_html "$text_asset_path"; then
+      print_test "pass" "$text_asset_path is served as non-HTML (${NOT_HTML_CTYPE})"
+    else
+      print_test "fail" "$text_asset_path returned HTTP ${NOT_HTML_STATUS:-000} content-type '${NOT_HTML_CTYPE:-<none>}' (expected 200 / non-HTML). The SPA shell is being served — see #1666."
+      exit 1
+    fi
+  done
+
+  # Test 5c (#1666): SECONDARY retrieval-vs-training UA probe.
+  # ⚠ SIGNAL, NOT PROOF. A retrieval UA (OAI-SearchBot) is expected to be served while a
+  # training UA (GPTBot) is expected to be challenged — but UAs are spoofable
+  # (apps/web/nginx.conf:130-133: one IP rotated both identities), so this can neither prove
+  # the zone is configured nor prove it is not. The Cloudflare API response (the zone's own
+  # setting value) is the evidence of record, not this probe. NOT fatal by design: a disagreement here
+  # is as likely to be spoofing or an Access/transport artefact as a real misconfiguration.
+  check_crawler_ua "OAI-SearchBot/1.0 (+https://openai.com/searchbot)"
+  retrieval_ua_status="$CRAWLER_UA_STATUS"; retrieval_ua_mitigated="$CRAWLER_UA_MITIGATED"
+  check_crawler_ua "GPTBot/1.1 (+https://openai.com/gptbot)"
+  training_ua_status="$CRAWLER_UA_STATUS"; training_ua_mitigated="$CRAWLER_UA_MITIGATED"
+
+  # A "challenge" is a 403 or any cf-mitigated response; anything else (200, 3xx to the
+  # Cloudflare Access login, 404) is "not challenged" for this signal.
+  retrieval_challenged=0
+  if [ "$retrieval_ua_status" == "403" ] || [ -n "$retrieval_ua_mitigated" ]; then
+    retrieval_challenged=1
+  fi
+  training_challenged=0
+  if [ "$training_ua_status" == "403" ] || [ -n "$training_ua_mitigated" ]; then
+    training_challenged=1
+  fi
+
+  if [ "$retrieval_challenged" -eq 1 ]; then
+    print_test "warn" "AI-crawler UA probe (SIGNAL ONLY, not proof): a RETRIEVAL UA was challenged (HTTP $retrieval_ua_status${retrieval_ua_mitigated:+ cf-mitigated:$retrieval_ua_mitigated}) — retrieval should be permitted. Could be spoofing/transport or a real misconfiguration; the zone config is the evidence of record."
+  elif [ "$training_challenged" -eq 1 ]; then
+    print_test "pass" "AI-crawler UA probe (SIGNAL ONLY, not proof): retrieval UA served, training UA challenged (HTTP $training_ua_status${training_ua_mitigated:+ cf-mitigated:$training_ua_mitigated}) — the intended retrieval/training split is visible."
+  else
+    print_test "pass" "AI-crawler UA probe (SIGNAL ONLY, not proof): neither UA was challenged (retrieval=$retrieval_ua_status, training=$training_ua_status) — no split seen, which is expected while the zone's ai_training=disallow is PENDING. Not proof the zone is configured."
   fi
 
   # Test 6: Check for static assets (optional)

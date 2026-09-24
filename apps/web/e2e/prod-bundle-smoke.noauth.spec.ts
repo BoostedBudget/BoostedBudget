@@ -57,4 +57,26 @@ test.describe('Production bundle smoke tests', () => {
     // null-render (AuthReadyGate returns null until isLoaded — root is briefly empty).
     await expect(page.locator('#root')).not.toBeEmpty({ timeout: 15_000 });
   });
+
+  // #1666: the discovery files exist in public/ and must be served as themselves, not as
+  // the SPA shell. This is the preview-time half of the served-content proof; the deployed
+  // half (where `_redirects`' catch-all and `_headers` precedence actually interact) is
+  // settled at deploy time by scripts/smoke-test.sh, which GETs both paths and fails the
+  // release if either returns the SPA shell or a non-text/plain Content-Type.
+  test('discovery files are served as non-HTML text, not the SPA shell', async ({ request }) => {
+    for (const path of ['/llms.txt', '/llms-full.txt']) {
+      const response = await request.get(path);
+      expect(response.status(), `${path} status`).toBe(200);
+      expect(response.headers()['content-type'] ?? '', `${path} content-type`).toContain('text/plain');
+      const body = await response.text();
+      expect(body.slice(0, 1), `${path} first character`).toBe('#');
+      expect(body, `${path} must not be the SPA shell`).not.toContain('<div id="root">');
+    }
+
+    for (const path of ['/robots.txt', '/sitemap.xml']) {
+      const response = await request.get(path);
+      expect(response.status(), `${path} status`).toBe(200);
+      expect(response.headers()['content-type'] ?? '', `${path} must not be HTML`).not.toContain('text/html');
+    }
+  });
 });
