@@ -1,0 +1,25 @@
+# BoostedBudget
+
+> BoostedBudget is a budgeting platform that connects your accounts, automates routine budgeting work, and runs a remote MCP server so your AI agent can work with your finances.
+
+BoostedBudget is a GDPR-compliant personal budgeting platform. It offers user-defined automation rules, envelope budgeting, savings goals, and spending analytics, and it never moves money.
+
+The MCP server lets MCP-compatible clients read across your accounts, transactions, budgets, and portfolio. Every change an agent proposes waits for your explicit confirmation, credentials are injected server-side and never visible to the agent, and access can be revoked at any time.
+
+## Public Pages
+
+- [Home](https://boostedbudget.com/): Product overview, benefits, and sign-up.
+- [Features](https://boostedbudget.com/features): The full feature surface, including the agentic capability.
+- [Pricing](https://boostedbudget.com/pricing): Subscription tiers and what each one includes.
+- [FAQ](https://boostedbudget.com/faq): Answers to common questions, including how agents stay safe.
+- [MCP Server](https://boostedbudget.com/mcp): How the remote MCP server works, how to connect, and its practical limits.
+
+## Legal
+
+- [Privacy Policy](https://boostedbudget.com/legal/privacy-policy): How personal and financial data is collected, used, and protected.
+- [Terms of Service](https://boostedbudget.com/legal/terms): The terms that govern use of BoostedBudget.
+- [Cookie Policy](https://boostedbudget.com/legal/cookie-policy): The cookies the site uses and why.
+
+## Optional
+
+- [MCP endpoint](https://mcp.boostedbudget.com/mcp): The remote MCP server URL for MCP-compatible clients.
