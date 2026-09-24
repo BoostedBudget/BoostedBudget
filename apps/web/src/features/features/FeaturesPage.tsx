@@ -21,8 +21,14 @@ import { useEffect } from 'react'
 import { Link } from 'react-router'
 import { useClerk } from '@clerk/react-router'
 import { ArrowRight, BarChart3, Bot, Check, Landmark, LayoutDashboard, Users, Zap } from 'lucide-react'
+import { useDocumentHead } from '@/shared/hooks/useDocumentHead'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
+
+const PAGE_TITLE = 'Features — BoostedBudget'
+const PAGE_DESCRIPTION =
+  'Connect every account, automate what you can, and hand the busywork to your AI agent. It can read everything — and changes nothing without your confirmation.'
+const CANONICAL_URL = 'https://boostedbudget.com/features'
 
 const CORE_FEATURES = [
   {
@@ -77,6 +83,8 @@ function Section({ id, title, children }: { id: string; title: string; children:
 export function FeaturesPage() {
   const trackEvent = useTrackEvent()
   const { openSignUp } = useClerk()
+
+  useDocumentHead(PAGE_TITLE, PAGE_DESCRIPTION, CANONICAL_URL)
 
   useEffect(() => {
     trackEvent(ANALYTICS_EVENTS.FEATURES_PAGE_VIEWED)

@@ -17,6 +17,7 @@
  */
 
 import { useRef, useCallback } from 'react'
+import { useDocumentHead } from '@/shared/hooks/useDocumentHead'
 import { LandingHeader } from './components/LandingHeader'
 import { HeroSection } from './components/HeroSection'
 import { FeaturesSection } from './components/FeaturesSection'
@@ -27,6 +28,11 @@ import { PricingPreview } from './components/PricingPreview'
 import { FAQSection } from './components/FAQSection'
 import { FinalCTA } from './components/FinalCTA'
 import './LandingPage.css'
+
+const PAGE_TITLE = 'BoostedBudget - Smart Budgeting & Expense Tracking | Free Trial'
+const PAGE_DESCRIPTION =
+  'Take control of your finances with BoostedBudget. Connect all your bank accounts, automate your budget, and achieve your financial goals. Start your free 60-day trial today.'
+const CANONICAL_URL = 'https://boostedbudget.com/'
 
 /**
  * Wave SVG divider component for smooth section transitions
@@ -51,6 +57,8 @@ function WaveDivider({ flip = false, className = '' }: { flip?: boolean; classNa
 }
 
 export function LandingPage() {
+  useDocumentHead(PAGE_TITLE, PAGE_DESCRIPTION, CANONICAL_URL)
+
   const howItWorksRef = useRef<HTMLDivElement>(null)
 
   const scrollToHowItWorks = useCallback(() => {

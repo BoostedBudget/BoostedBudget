@@ -30,8 +30,14 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { useClerk } from '@clerk/react-router'
 import { ChevronDown } from 'lucide-react'
+import { useDocumentHead } from '@/shared/hooks/useDocumentHead'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
+
+const PAGE_TITLE = 'FAQ — BoostedBudget'
+const PAGE_DESCRIPTION =
+  'Answers about security, billing, household sharing, and handing the busywork to your AI agent. BoostedBudget never moves money.'
+const CANONICAL_URL = 'https://boostedbudget.com/faq'
 
 interface FaqItem {
   question: string
@@ -118,6 +124,8 @@ export function FaqPage() {
   const trackEvent = useTrackEvent()
   const { openSignUp } = useClerk()
   const [openIndex, setOpenIndex] = useState<number | null>(null)
+
+  useDocumentHead(PAGE_TITLE, PAGE_DESCRIPTION, CANONICAL_URL)
 
   useEffect(() => {
     trackEvent(ANALYTICS_EVENTS.FAQ_PAGE_VIEWED)
