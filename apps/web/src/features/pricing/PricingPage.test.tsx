@@ -309,6 +309,37 @@ describe('PricingPage', () => {
       expect(screen.getByText(/60-day free trial/i)).toBeInTheDocument()
       expect(screen.getByText(/cancel your subscription at any time/i)).toBeInTheDocument()
     })
+
+    it('emits a single FAQPage JSON-LD block with one Question per rendered FAQ', () => {
+      renderWithProviders(<PricingPage />)
+
+      const scripts = document.querySelectorAll('script[type="application/ld+json"]')
+      expect(scripts).toHaveLength(1)
+
+      const schema = JSON.parse(scripts[0]!.textContent ?? '') as {
+        '@context': string
+        '@type': string
+        mainEntity: Array<{ '@type': string; name: string; acceptedAnswer: { '@type': string; text: string } }>
+      }
+      expect(schema['@context']).toBe('https://schema.org')
+      expect(schema['@type']).toBe('FAQPage')
+
+      const questionHeadings = screen
+        .getAllByRole('heading', { level: 3 })
+        .map((heading) => heading.textContent?.trim())
+      expect(schema.mainEntity).toHaveLength(questionHeadings.length)
+      for (const question of schema.mainEntity) {
+        expect(question['@type']).toBe('Question')
+        expect(question.acceptedAnswer['@type']).toBe('Answer')
+        expect(questionHeadings).toContain(question.name)
+      }
+    })
+
+    it('links to /mcp from the FAQ', () => {
+      renderWithProviders(<PricingPage />)
+
+      expect(document.querySelector('a[href="/mcp"]')).not.toBeNull()
+    })
   })
 
   describe('Header', () => {
