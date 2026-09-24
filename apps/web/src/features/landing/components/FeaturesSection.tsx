@@ -7,46 +7,25 @@
  */
 
 import { Landmark, BarChart3, Zap, LayoutDashboard, Users, Bot } from 'lucide-react'
+import { MARKETING_FEATURES, type FeatureIconKey } from '../data/marketingContent'
+
+// The ICONS live here, not in the data module: the generator imports marketingContent.ts
+// and must never pull `lucide-react` (an entire icon set) into a Node-side build.
+const FEATURE_ICONS: Record<FeatureIconKey, typeof Landmark> = {
+  accounts: Landmark,
+  dashboard: LayoutDashboard,
+  categorization: BarChart3,
+  automation: Zap,
+  household: Users,
+  agent: Bot,
+}
 
 // eslint-disable-next-line react-refresh/only-export-components
-export const features = [
-  {
-    icon: Landmark,
-    title: 'All Your Accounts in One Place',
-    description:
-      'Connect all your bank accounts, credit cards, and investments. Get a complete picture of your finances at a glance.',
-  },
-  {
-    icon: LayoutDashboard,
-    title: 'Customizable Dashboard',
-    description:
-      'Personalize your financial overview with a diverse library of widgets. Visualize and analyze your data the way you want.',
-  },
-  {
-    icon: BarChart3,
-    title: 'Categorization That Follows Your Rules',
-    description:
-      "Every transaction arrives with a category from Plaid. Write a rule for merchant, amount, or description, and it takes over for every match — unless you've already categorized or reviewed that transaction yourself.",
-  },
-  {
-    icon: Zap,
-    title: 'Automation You Can Audit',
-    description:
-      'Build rules that flag budget risks and suggest transfers. Every rule is one you wrote, so you always know why it fired.',
-  },
-  {
-    icon: Users,
-    title: 'Shared Household Budgeting',
-    description:
-      'One plan across 2 to 5+ members. Each person chooses which accounts to share, and can hide any account from the household at any time.',
-  },
-  {
-    icon: Bot,
-    title: 'Your Agent Can Do the Digging',
-    description:
-      'Connect BoostedBudget to Claude, Cursor, or VS Code through our MCP server. Your agent can read across your accounts, transactions, budgets, and portfolio — and every change it proposes waits for your confirmation.',
-  },
-]
+export const features = MARKETING_FEATURES.map(({ key, title, description }) => ({
+  icon: FEATURE_ICONS[key],
+  title,
+  description,
+}))
 
 /** Last card spans both columns only for an odd card count, so the grid closes cleanly. */
 // eslint-disable-next-line react-refresh/only-export-components
