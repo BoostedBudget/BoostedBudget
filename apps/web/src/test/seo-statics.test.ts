@@ -12,9 +12,11 @@
  */
 
 import { describe, it, expect } from 'bun:test'
-import { readFileSync, existsSync } from 'fs'
+import { readFileSync, existsSync, writeFileSync, rmSync } from 'fs'
 import { dirname, join } from 'path'
+import { tmpdir } from 'os'
 import { fileURLToPath } from 'url'
+import { POSTHOG_ENGAGEMENT_ROUTES } from '@/shared/posthog/routes'
 
 const currentDir = dirname(fileURLToPath(import.meta.url))
 const webRoot = join(currentDir, '..', '..') // apps/web
@@ -23,6 +25,107 @@ const robotsPath = join(webRoot, 'public', 'robots.txt')
 const sitemapPath = join(webRoot, 'public', 'sitemap.xml')
 const indexHtmlPath = join(webRoot, 'index.html')
 const ogImagePath = join(webRoot, 'public', 'og-image.png')
+const appTsxPath = join(webRoot, 'src', 'App.tsx')
+
+/**
+ * #1666 Todo 12 — robots.txt ↔ App.tsx sync guard.
+ *
+ * robots.txt's own header claims its
+ * authenticated Disallow list is "derived from the routes wrapped in
+ * `<ProtectedRoute>` in apps/web/src/App.tsx -- not guessed". Nothing enforced
+ * that discipline: a new `<ProtectedRoute>` route could ship with no matching
+ * `Disallow` and no test would notice. These helpers close that gap.
+ *
+ * The parsing is deliberately pure-string (App.tsx is read as TEXT, never
+ * imported) and takes its inputs as parameters, so the meta-test below can feed
+ * it a scratch fixture without touching the real route table.
+ */
+
+// Reads a JSX opening tag starting at `start` (the `<` of `<Route`), respecting
+// brace nesting and string literals so a `>` inside an attribute value (e.g. an
+// arrow function in an `element={...}`) does not terminate the tag early.
+function readRouteOpeningTag(source: string, start: number): string {
+  let depth = 0
+  let quote: string | null = null
+  for (let i = start; i < source.length; i++) {
+    const ch = source[i]
+    if (quote !== null) {
+      if (ch === '\\') {
+        i++
+        continue
+      }
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      quote = ch
+      continue
+    }
+    if (ch === '{') {
+      depth++
+      continue
+    }
+    if (ch === '}') {
+      depth--
+      continue
+    }
+    if (ch === '>' && depth === 0) {
+      return source.slice(start, i + 1)
+    }
+  }
+  return source.slice(start)
+}
+
+// Every `<Route>` whose element wraps `<ProtectedRoute>`, resolved to a concrete
+// path. `path={POSTHOG_ENGAGEMENT_ROUTES.<key>}` is resolved through the imported
+// constant object (per the header's "not guessed" claim); a literal `path="<value>"`
+// is taken verbatim (that is how `/admin` is declared).
+function resolveProtectedPaths(
+  appSource: string,
+  routes: Readonly<Record<string, string>>
+): string[] {
+  const paths: string[] = []
+  const routeOpen = /<Route(?=[\s/>])/g
+  let match: RegExpExecArray | null
+  while ((match = routeOpen.exec(appSource)) !== null) {
+    const tag = readRouteOpeningTag(appSource, match.index)
+    if (!/<ProtectedRoute(?=[\s/>])/.test(tag)) continue
+
+    const constantRef = /path=\{POSTHOG_ENGAGEMENT_ROUTES\.([A-Za-z0-9_]+)\}/.exec(tag)
+    if (constantRef) {
+      const key = constantRef[1]
+      // An unresolved key must surface rather than vanish: it is reported as an
+      // uncovered route below, because no Disallow can match this token.
+      paths.push(routes[key] ?? `POSTHOG_ENGAGEMENT_ROUTES.${key}`)
+      continue
+    }
+
+    const literal = /path="([^"]+)"/.exec(tag)
+    if (literal) paths.push(literal[1])
+  }
+  return [...new Set(paths)]
+}
+
+function parseDisallowPaths(robots: string): string[] {
+  return Array.from(robots.matchAll(/^Disallow:\s*(\S+)\s*$/gm)).map((m) => m[1])
+}
+
+// Mirrors robots.txt's own matching semantics: a Disallow covers a route when the
+// route equals it or begins with it (`/accounts` covers `/accounts/reconnect`).
+function isCovered(disallowed: string, routePath: string): boolean {
+  return routePath === disallowed || routePath.startsWith(disallowed)
+}
+
+function findUncoveredProtectedRoutes(
+  appSource: string,
+  robots: string,
+  routes: Readonly<Record<string, string>>
+): string[] {
+  const disallows = parseDisallowPaths(robots)
+  return resolveProtectedPaths(appSource, routes).filter(
+    (routePath) => !disallows.some((disallowed) => isCovered(disallowed, routePath))
+  )
+}
 
 describe('robots.txt', () => {
   it('exists and is non-empty', () => {
@@ -53,6 +156,66 @@ describe('robots.txt', () => {
     expect(content).toMatch(/^Disallow:\s*\/cancel-deletion\s*$/m)
     expect(content).toMatch(/^Disallow:\s*\/households\/\s*$/m)
     expect(content).toMatch(/^Disallow:\s*\/household\/\s*$/m)
+  })
+})
+
+// #1666 Todo 12: robots.txt header claims its Disallow list is derived from the
+// `<ProtectedRoute>` routes in App.tsx. This makes that claim testable instead of
+// aspirational. The happy path is expected to pass on the current tree; the value
+// is the meta-test, which proves the guard actually bites on a new route.
+describe('robots.txt <-> App.tsx protected-route sync (#1666)', () => {
+  const appSource = readFileSync(appTsxPath, 'utf-8')
+  const robotsSource = readFileSync(robotsPath, 'utf-8')
+
+  it('disallows every route wrapped in <ProtectedRoute>', () => {
+    const protectedPaths = resolveProtectedPaths(appSource, POSTHOG_ENGAGEMENT_ROUTES)
+
+    // A floor so a broken extractor that collects nothing cannot pass vacuously.
+    expect(protectedPaths.length).toBeGreaterThanOrEqual(15)
+
+    const uncovered = findUncoveredProtectedRoutes(
+      appSource,
+      robotsSource,
+      POSTHOG_ENGAGEMENT_ROUTES
+    )
+
+    // Reported on success so the resolved set is auditable, not just asserted.
+    console.log(
+      `[robots-sync] resolved protected-path set (${protectedPaths.length}): ` +
+        protectedPaths.join(', ')
+    )
+
+    expect(
+      uncovered,
+      `robots.txt does not Disallow protected route(s): ${uncovered.join(', ')}`
+    ).toEqual([])
+  })
+
+  it('fails on a route the Disallow list does not cover (meta-test)', () => {
+    const scratchRoute =
+      '<Route path="/scratch-not-covered" element={<ProtectedRoute><ScratchPage /></ProtectedRoute>} />'
+    const scratchFile = join(tmpdir(), `robots-sync-fixture-${Date.now()}.tsx`)
+
+    try {
+      // Copy App.tsx to a scratch fixture plus ONE extra protected route. The real
+      // App.tsx is never modified.
+      writeFileSync(scratchFile, `${appSource}\n${scratchRoute}\n`, 'utf-8')
+      const fixtureSource = readFileSync(scratchFile, 'utf-8')
+
+      const uncovered = findUncoveredProtectedRoutes(
+        fixtureSource,
+        robotsSource,
+        POSTHOG_ENGAGEMENT_ROUTES
+      )
+      console.log(`[robots-sync] fixture uncovered routes: ${uncovered.join(', ')}`)
+
+      expect(
+        uncovered,
+        `robots.txt does not Disallow protected route(s): ${uncovered.join(', ')}`
+      ).toEqual(['/scratch-not-covered'])
+    } finally {
+      rmSync(scratchFile, { force: true })
+    }
   })
 })
 
