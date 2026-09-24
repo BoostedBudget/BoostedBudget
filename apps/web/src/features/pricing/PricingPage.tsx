@@ -13,10 +13,16 @@ import { TierActionButton } from './components/TierActionButton'
 import { usePricingContext } from './hooks/usePricingContext'
 import type { PricingState } from './hooks/usePricingContext'
 import { usePostSignInCheckoutIntent } from './hooks/usePostSignInCheckoutIntent'
+import { useDocumentHead } from '../../shared/hooks/useDocumentHead'
 import { useTrackEvent } from '../../shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '../../shared/analytics'
 
 type BillingPeriod = 'monthly' | 'yearly'
+
+const PAGE_TITLE = 'Pricing — BoostedBudget'
+const PAGE_DESCRIPTION =
+  'Simple, transparent pricing for individuals and households. Every plan starts with a 60-day free trial — no credit card required.'
+const CANONICAL_URL = 'https://boostedbudget.com/pricing'
 
 function formatPrice(price: number | undefined): string {
   if (!price) return 'Free'
@@ -232,6 +238,8 @@ export function PricingPage() {
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly')
 
   usePostSignInCheckoutIntent()
+
+  useDocumentHead(PAGE_TITLE, PAGE_DESCRIPTION, CANONICAL_URL)
 
   const trackEvent = useTrackEvent()
   useEffect(() => {
