@@ -245,6 +245,39 @@ check_not_html() {
 }
 
 # =============================================================================
+# AI-crawler User-Agent probe (#1666 Todo 17) — a SIGNAL, never proof
+# =============================================================================
+#
+# WHY THIS EXISTS. #1666's policy is allow-retrieval / disallow-training, expressed at the
+# Cloudflare zone via `ai_training = "disallow"`. A UA probe is the *weakest* possible check
+# for it and is included only as a secondary signal: live probes on this origin
+# (apps/web/nginx.conf:130-133) came from a SINGLE IP rotating GPTBot/ClaudeBot/OAI-SearchBot/
+# ChatGPT-User UAs, i.e. spoofed. Any rule keyed on the User-Agent string is trivially walked
+# around by sending a different one, so a curl that "looks right" proves nothing about the
+# configuration. The configuration (the Cloudflare API response) is the evidence of record.
+#
+# ⚠ DELIBERATELY NON-FATAL. A UA probe that disagreed with the zone could be either a real
+# misconfiguration or an ordinary spoofing/transport artefact; making it fatal would block
+# deploys on unprovable inputs. It reports a signal and never calls exit.
+#
+# GET $WEB_URL/ with a chosen User-Agent; expose CRAWLER_UA_STATUS / CRAWLER_UA_MITIGATED.
+check_crawler_ua() {
+  local ua=$1
+  local hdr status mitigated
+  hdr=$(mktemp)
+
+  status=$(curl -s -D "$hdr" -o /dev/null -w '%{http_code}' \
+    -H "User-Agent: $ua" "$WEB_URL/" --max-time 10) || status="000"
+  # cf-mitigated: challenge is the fingerprint of a Cloudflare Managed Challenge (the
+  # 2026-09-08 webhook incident shape) — absence of it on a 403 means the block came from
+  # elsewhere, so it is recorded separately rather than folded into the status.
+  mitigated=$(tr -d '\r' < "$hdr" | sed -n 's/^[Cc][Ff]-[Mm]itigated: *//p' | head -1 || true)
+
+  CRAWLER_UA_STATUS="$status"; CRAWLER_UA_MITIGATED="$mitigated"
+  rm -f "$hdr"
+}
+
+# =============================================================================
 # API Health Checks
 # =============================================================================
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -539,6 +572,37 @@ if [ -n "$WEB_URL" ]; then
       exit 1
     fi
   done
+
+  # Test 5c (#1666): SECONDARY retrieval-vs-training UA probe.
+  # ⚠ SIGNAL, NOT PROOF. A retrieval UA (OAI-SearchBot) is expected to be served while a
+  # training UA (GPTBot) is expected to be challenged — but UAs are spoofable
+  # (apps/web/nginx.conf:130-133: one IP rotated both identities), so this can neither prove
+  # the zone is configured nor prove it is not. The Cloudflare API response is the evidence of
+  # record (.omo/evidence/1666/zone-ai-policy.txt). NOT fatal by design: a disagreement here
+  # is as likely to be spoofing or an Access/transport artefact as a real misconfiguration.
+  check_crawler_ua "OAI-SearchBot/1.0 (+https://openai.com/searchbot)"
+  retrieval_ua_status="$CRAWLER_UA_STATUS"; retrieval_ua_mitigated="$CRAWLER_UA_MITIGATED"
+  check_crawler_ua "GPTBot/1.1 (+https://openai.com/gptbot)"
+  training_ua_status="$CRAWLER_UA_STATUS"; training_ua_mitigated="$CRAWLER_UA_MITIGATED"
+
+  # A "challenge" is a 403 or any cf-mitigated response; anything else (200, 3xx to the
+  # Cloudflare Access login, 404) is "not challenged" for this signal.
+  retrieval_challenged=0
+  if [ "$retrieval_ua_status" == "403" ] || [ -n "$retrieval_ua_mitigated" ]; then
+    retrieval_challenged=1
+  fi
+  training_challenged=0
+  if [ "$training_ua_status" == "403" ] || [ -n "$training_ua_mitigated" ]; then
+    training_challenged=1
+  fi
+
+  if [ "$retrieval_challenged" -eq 1 ]; then
+    print_test "warn" "AI-crawler UA probe (SIGNAL ONLY, not proof): a RETRIEVAL UA was challenged (HTTP $retrieval_ua_status${retrieval_ua_mitigated:+ cf-mitigated:$retrieval_ua_mitigated}) — retrieval should be permitted. Could be spoofing/transport or a real misconfiguration; the zone config is the evidence of record."
+  elif [ "$training_challenged" -eq 1 ]; then
+    print_test "pass" "AI-crawler UA probe (SIGNAL ONLY, not proof): retrieval UA served, training UA challenged (HTTP $training_ua_status${training_ua_mitigated:+ cf-mitigated:$training_ua_mitigated}) — the intended retrieval/training split is visible."
+  else
+    print_test "pass" "AI-crawler UA probe (SIGNAL ONLY, not proof): neither UA was challenged (retrieval=$retrieval_ua_status, training=$training_ua_status) — no split seen, which is expected while the zone's ai_training=disallow is PENDING. Not proof the zone is configured."
+  fi
 
   # Test 6: Check for static assets (optional)
   if check_endpoint "$WEB_URL/assets" "200" 3 2 || check_endpoint "$WEB_URL/static" "200" 3 2; then
