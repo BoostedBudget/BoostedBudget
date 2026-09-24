@@ -11,6 +11,8 @@
  *   - apps/web/src/features/mcp/components/McpSetupTabs.tsx
  *   - apps/web/src/features/pricing/PricingPage.tsx
  *   - apps/mcp-server/README.md
+ *   - apps/web/src/features/features/FeaturesPage.tsx  (created by #1666)
+ *   - apps/web/public/llms-full.txt  (created by #1666 — generated from marketingContent.ts)
  *
  * It asserts a *declared vocabulary*, not byte-identical sentences: the surfaces
  * are structurally different (prose lists vs a tab-label array vs a README
@@ -84,7 +86,9 @@ const SURFACES: Record<string, string> = {
   'McpPage.tsx': './McpPage.tsx',
   'McpSetupTabs.tsx': './components/McpSetupTabs.tsx',
   'PricingPage.tsx': '../pricing/PricingPage.tsx',
-  'apps/mcp-server/README.md': '../../../../mcp-server/README.md'
+  'apps/mcp-server/README.md': '../../../../mcp-server/README.md',
+  'FeaturesPage.tsx': '../features/FeaturesPage.tsx',
+  'apps/web/public/llms-full.txt': '../../../public/llms-full.txt'
 }
 
 const SURFACE_TEXT: Record<string, string> = Object.fromEntries(
@@ -143,6 +147,21 @@ describe('client naming — matcher semantics (regression proof)', () => {
     expect(occurrences('Zed is an editor', 'Zed')).toBe(1)
     expect(occurrences('Click Continue to proceed', 'Continue')).toBe(1)
     expect(occurrences('Use VS Code for this', 'VS Code')).toBe(1)
+  })
+
+  it('does not false-fail on the ordinary words the live surfaces actually contain', () => {
+    // The false-fails are NOT hypothetical: the scanned files carry these words
+    // today, so a matcher regression would turn the denylist suite red on files
+    // that are already correct. Pin the real files, not just synthetic strings.
+    expect(occurrences(SURFACE_TEXT['McpPage.tsx'], 'Zed')).toBe(0)
+    expect(occurrences(SURFACE_TEXT['apps/mcp-server/README.md'], 'Zed')).toBe(0)
+    expect(occurrences(SURFACE_TEXT['apps/mcp-server/README.md'], 'Continue')).toBe(0)
+    expect(occurrences(SURFACE_TEXT['PricingPage.tsx'], 'Continue')).toBe(0)
+    // ...and the words really are in those files, so the check above is not vacuous.
+    expect(SURFACE_TEXT['McpPage.tsx']).toMatch(/dramatized/)
+    expect(SURFACE_TEXT['McpPage.tsx']).toMatch(/miscategorized/)
+    expect(SURFACE_TEXT['apps/mcp-server/README.md']).toMatch(/recategorized/)
+    expect(SURFACE_TEXT['apps/mcp-server/README.md']).toMatch(/continue/)
   })
 })
 

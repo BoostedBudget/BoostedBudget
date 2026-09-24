@@ -29,6 +29,7 @@ import {
 import { mockUseGetPrivacySettings, mockUseUpdatePrivacySettings } from '@/test/mocks/privacy-api'
 import { mockTrackEvent } from '@/test/mocks/track-event'
 import { ANALYTICS_EVENTS, isValidAnalyticsEventPayload } from '@/shared/analytics'
+import { MARKETING_FEATURES } from '@/features/landing/data/marketingContent'
 import { FeaturesPage } from './FeaturesPage'
 
 function renderPage() {
@@ -44,11 +45,21 @@ describe('FeaturesPage', () => {
     mockTrackEvent.mockClear()
     mockUseClerk.mockClear()
     mockUseClerk.mockReturnValue(createMockClerk())
+    mockUseAuth.mockClear()
+    mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: false, isLoaded: true }))
   })
 
   it('renders exactly one h1', () => {
     renderPage()
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+  })
+
+  it('renders the non-agentic feature titles and descriptions from the shared source', () => {
+    renderPage()
+    for (const feature of MARKETING_FEATURES.filter((entry) => entry.key !== 'agent')) {
+      expect(screen.getByRole('heading', { level: 3, name: feature.title })).toBeInTheDocument()
+      expect(screen.getByText(feature.description)).toBeInTheDocument()
+    }
   })
 
   it('links to /mcp', () => {
@@ -81,6 +92,28 @@ describe('FeaturesPage', () => {
     renderPage()
     fireEvent.click(screen.getByRole('button', { name: /start free/i }))
     expect(clerkMock.openSignUp).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends a signed-in visitor to /dashboard rather than opening sign-up', () => {
+    mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: true, isLoaded: true }))
+    const clerkMock = createMockClerk()
+    mockUseClerk.mockReturnValue(clerkMock)
+
+    render(
+      <MemoryRouter>
+        <FeaturesPage />
+        <LocationProbe />
+      </MemoryRouter>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /start free/i }))
+
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/dashboard')
+    expect(clerkMock.openSignUp).not.toHaveBeenCalled()
+    // The event fires in BOTH branches — only the destination differs.
+    const ctaCalls = mockTrackEvent.mock.calls.filter(
+      (call) => (call as unknown[])[0] === ANALYTICS_EVENTS.FEATURES_CTA_CLICKED,
+    )
+    expect(ctaCalls).toHaveLength(1)
   })
 
   it('exposes both events as valid catalogued zero-property analytics contracts', () => {

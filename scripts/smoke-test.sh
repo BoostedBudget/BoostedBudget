@@ -557,7 +557,7 @@ if [ -n "$WEB_URL" ]; then
     if check_discovery_file "$discovery_path"; then
       print_test "pass" "$discovery_path is served as text/plain with a '#'-leading body"
     else
-      print_test "fail" "$discovery_path returned HTTP ${DISCOVERY_STATUS:-000} content-type '${DISCOVERY_CTYPE:-<none>}' first-byte '${DISCOVERY_FIRST:-<empty>}' (expected 200 / text/plain / '#'). The SPA shell or a wrong content type is being served — see #1666 and the precedence verdict in .omo/evidence/1666/."
+      print_test "fail" "$discovery_path returned HTTP ${DISCOVERY_STATUS:-000} content-type '${DISCOVERY_CTYPE:-<none>}' first-byte '${DISCOVERY_FIRST:-<empty>}' (expected 200 / text/plain / '#'). The SPA shell or a wrong content type is being served — see #1666. This is the exact SPA-shell failure this discovery-file check exists for."
       exit 1
     fi
   done
@@ -577,8 +577,8 @@ if [ -n "$WEB_URL" ]; then
   # ⚠ SIGNAL, NOT PROOF. A retrieval UA (OAI-SearchBot) is expected to be served while a
   # training UA (GPTBot) is expected to be challenged — but UAs are spoofable
   # (apps/web/nginx.conf:130-133: one IP rotated both identities), so this can neither prove
-  # the zone is configured nor prove it is not. The Cloudflare API response is the evidence of
-  # record (.omo/evidence/1666/zone-ai-policy.txt). NOT fatal by design: a disagreement here
+  # the zone is configured nor prove it is not. The Cloudflare API response (the zone's own
+  # setting value) is the evidence of record, not this probe. NOT fatal by design: a disagreement here
   # is as likely to be spoofing or an Access/transport artefact as a real misconfiguration.
   check_crawler_ua "OAI-SearchBot/1.0 (+https://openai.com/searchbot)"
   retrieval_ua_status="$CRAWLER_UA_STATUS"; retrieval_ua_mitigated="$CRAWLER_UA_MITIGATED"

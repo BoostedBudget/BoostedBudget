@@ -5,10 +5,7 @@
 **Issue:** #1666 (Todo 17)
 **Related:** `docs/decisions/2026-09-23-agent-discovery-is-documentation-not-seo.md` (the sibling
 decision that `llms.txt` is documentation, not an SEO tactic — this ADR owns the crawler policy it
-defers to); `.omo/plans/1666-missing-pages-and-agentic-copy.md` (Wave 5, item 17);
-`.omo/evidence/1666/zone-ai-policy.txt` (the read/apply attempt transcript);
-`.omo/evidence/1666/zone-robots-consistency.txt` and `.omo/evidence/1666/zone-robots-state.txt`
-(the zone↔`robots.txt` consistency reads).
+defers to); issue #1666 (Todo 17).
 **Files this decision governs:** the Cloudflare zone for `boostedbudget.com` (outside the repo);
 `apps/mcp-server/src/client/user-agent.ts`; `apps/web/public/robots.txt`.
 
@@ -42,7 +39,7 @@ Four facts shape the decision.
    fight. So the committed file deliberately carries **no AI-crawler groups** — the retrieval/
    training split is expressed at the zone and appears in the *served* file via Cloudflare's
    managed block. "Absent from the committed file, present at the zone" is the intended
-   architecture, not a contradiction. (See `zone-robots-consistency.txt`.)
+   architecture, not a contradiction.
 
 3. **UA-based rules are spoofable, so a UA probe is never proof.** Live probes on the origin
    (`apps/web/nginx.conf:130-133`, 2026-09-08) came from a **single IP rotating** `GPTBot`,
@@ -80,8 +77,7 @@ GET  /zones/…/bot_management   -> {"code":10000,"message":"Authentication erro
 ```
 
 Cause: the only available credential (a wrangler OAuth token with `zone:read`) is authorized to
-read the zone record but **not** zone settings. Full transcript:
-`.omo/evidence/1666/zone-ai-policy.txt`. **No value was read, none was fabricated, and no change
+read the zone record but **not** zone settings. **No value was read, none was fabricated, and no change
 was applied.** The `ai_training = "disallow"` PATCH did not take effect. Re-running the probe
 with a token carrying `zone_settings:read` + `zone_settings:edit` (and Bot Management read) for
 zone `237fcc86cbd5635cbcacb51cfe5122a6` is the action that will move this from PENDING to
@@ -123,7 +119,7 @@ describes the new policy (see Consequences).
   and the zone agree) cannot run from this environment: the zone flags are unreadable (9109) and
   the apex `/robots.txt` currently 302-redirects to a Cloudflare Access login, so the served file
   cannot be fetched either. The consistency statement is therefore "cannot be asserted yet —
-  PENDING", never "passed". See `zone-robots-consistency.txt`.
+  PENDING", never "passed".
 - **The deferred, higher-leverage lever remains #1423** (prerender the public marketing routes):
   most AI crawlers do not execute JavaScript, so retrieval quality depends on server-rendered
   HTML, not on the zone policy. #1423 is named in the sibling ADR and is not absorbed here.

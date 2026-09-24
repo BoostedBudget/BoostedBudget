@@ -92,8 +92,17 @@ export function FAQSection() {
                 length or viewport width. `min-h-0` on the inner element is what lets the grid
                 track shrink to zero.
               */}
+              {/*
+                `inert` while collapsed (WCAG 2.4.7): an answer with an inline link keeps a
+                focusable `<Link>` in the layout even when the `grid-rows-[0fr]` row has zero
+                height, so without this a keyboard user could tab to an invisible link. `inert`
+                removes the subtree from the tab order and the accessibility tree; it is dropped
+                when the row opens, so the link is reachable again. The collapse animation is
+                unaffected — `inert` is a boolean attribute, not a display change.
+              */}
               <div
                 id={`faq-answer-${index}`}
+                inert={openIndex !== index}
                 className={`grid overflow-hidden transition-all duration-200 ${
                   openIndex === index ? 'grid-rows-[1fr] pb-6' : 'grid-rows-[0fr]'
                 }`}
