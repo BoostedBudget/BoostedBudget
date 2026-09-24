@@ -89,6 +89,10 @@ export const ANALYTICS_EVENTS = {
   DATA_EXPORT_DOWNLOADED: 'data_export_downloaded',
   // Tracks a failed GDPR Article 20 download attempt without financial values, table names, or export contents.
   DATA_EXPORT_FAILED: 'data_export_failed',
+  // Fires when a visitor activates the primary sign-up CTA on the public /features page. Zero-property: the page's conversion action is fully described by the event name.
+  FEATURES_CTA_CLICKED: 'features_cta_clicked',
+  // Fires once when the public /features page mounts. /features exists because the landing page's #features anchor is unreachable to a signed-in user, so this is the real destination the footer links to.
+  FEATURES_PAGE_VIEWED: 'features_page_viewed',
   FIRST_ACCOUNT_LINKED: 'first_account_linked',
   FIRST_BUDGET_CREATED: 'first_budget_created',
   GETTING_STARTED_COMPLETED: 'getting_started_completed',
@@ -303,6 +307,8 @@ export interface AnalyticsEventProperties {
   'datatable_column_visibility_toggled': Record<string, unknown>
   'data_export_downloaded': Record<string, unknown>
   'data_export_failed': Record<string, unknown>
+  'features_cta_clicked': Record<string, never>
+  'features_page_viewed': Record<string, never>
   'first_account_linked': Record<string, never>
   'first_budget_created': Record<string, unknown>
   'getting_started_completed': Record<string, unknown>
@@ -784,6 +790,10 @@ export const ANALYTICS_EVENT_CONTRACTS: Readonly<Record<
   'data_export_downloaded': {
   },
   'data_export_failed': {
+  },
+  'features_cta_clicked': {
+  },
+  'features_page_viewed': {
   },
   'first_account_linked': {
   },
