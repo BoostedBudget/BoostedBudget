@@ -25,6 +25,7 @@ const robotsPath = join(webRoot, 'public', 'robots.txt')
 const sitemapPath = join(webRoot, 'public', 'sitemap.xml')
 const indexHtmlPath = join(webRoot, 'index.html')
 const ogImagePath = join(webRoot, 'public', 'og-image.png')
+const llmsTxtPath = join(webRoot, 'public', 'llms.txt')
 const appTsxPath = join(webRoot, 'src', 'App.tsx')
 
 /**
@@ -328,5 +329,104 @@ describe('social unfurl image (#1666)', () => {
 
   it('declares twitter:image with the absolute production URL', () => {
     expect(content).toContain(`<meta name="twitter:image" content="${ogImageUrl}" />`)
+  })
+})
+
+// #1666 Todo 13: llms.txt is the agent-discovery index file, shaped per the
+// llmstxt.org convention: a single H1, a `>` summary, non-heading detail prose,
+// then `##` link-list sections ending with the conventional `## Optional`.
+// These assertions pin the SHAPE and that every advertised URL is one the site
+// actually publishes; they deliberately say nothing about AI-search benefit,
+// because none is measurable and the plan forbids claiming one.
+describe('llms.txt (#1666)', () => {
+  const content = readFileSync(llmsTxtPath, 'utf-8')
+  const lines = content.split('\n')
+  const nonEmptyLines = lines.filter((line) => line.trim().length > 0)
+
+  // The MCP endpoint is not a sitemap page -- it is a protocol endpoint a client
+  // connects to, so it is the one permitted link outside sitemap.xml.
+  const MCP_ENDPOINT = 'https://mcp.boostedbudget.com/mcp'
+  const sitemapUrls = Array.from(readFileSync(sitemapPath, 'utf-8').matchAll(/<loc>(.*?)<\/loc>/g)).map(
+    (m) => m[1]
+  )
+
+  it('exists and is non-empty', () => {
+    expect(existsSync(llmsTxtPath)).toBe(true)
+    expect(content.trim().length).toBeGreaterThan(0)
+  })
+
+  // Soft-404 failure mode: a redirect/shadowing rule serves index.html for
+  // /llms.txt, which looks healthy to a status-code check. The first meaningful
+  // character must be the H1 marker, and there must be no HTML shell at all.
+  it('is not an HTML shell', () => {
+    expect(nonEmptyLines[0].startsWith('#')).toBe(true)
+    expect(content).not.toMatch(/<html/i)
+    expect(content).not.toMatch(/<!doctype/i)
+  })
+
+  it('begins with a single H1 that starts the file (H1-first order)', () => {
+    const h1Indices = nonEmptyLines
+      .map((line, index) => ({ line: line.trim(), index }))
+      .filter(({ line }) => /^#\s/.test(line))
+      .map(({ index }) => index)
+
+    // Exactly one H1 -- the spec has a single document title.
+    expect(h1Indices).toHaveLength(1)
+    expect(nonEmptyLines[0].trim()).toBe('# BoostedBudget')
+
+    const firstH2 = nonEmptyLines.findIndex((line) => /^##\s/.test(line.trim()))
+    expect(firstH2).toBeGreaterThan(h1Indices[0])
+  })
+
+  it('carries a blockquote summary', () => {
+    expect(nonEmptyLines.some((line) => line.trim().startsWith('>'))).toBe(true)
+  })
+
+  it('has heading-free detail prose between the summary and the first section', () => {
+    const firstH2 = nonEmptyLines.findIndex((line) => /^##\s/.test(line.trim()))
+    const detailLines = nonEmptyLines
+      .slice(0, firstH2)
+      .filter((line) => !line.trim().startsWith('#') && !line.trim().startsWith('>'))
+    expect(detailLines.length).toBeGreaterThan(0)
+  })
+
+  it('every markdown link resolves to a sitemap URL or the MCP endpoint', () => {
+    const links = Array.from(content.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)).map((m) => m[1])
+    const allowed = new Set([...sitemapUrls, MCP_ENDPOINT])
+
+    // A floor so a broken parser collecting nothing cannot pass vacuously.
+    expect(links.length).toBeGreaterThanOrEqual(sitemapUrls.length)
+
+    const unresolved = links.filter((url) => !allowed.has(url))
+    expect(
+      unresolved,
+      `llms.txt links to URL(s) not published in sitemap.xml: ${unresolved.join(', ')}`
+    ).toEqual([])
+  })
+
+  it('lists every sitemap URL plus the MCP endpoint', () => {
+    const links = Array.from(content.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)).map((m) => m[1])
+    const missing = [...sitemapUrls, MCP_ENDPOINT].filter((url) => !links.includes(url))
+    expect(missing, `llms.txt is missing URL(s): ${missing.join(', ')}`).toEqual([])
+  })
+
+  it('ends with the conventional ## Optional section', () => {
+    const h2Headings = nonEmptyLines
+      .map((line) => line.trim())
+      .filter((line) => /^##\s/.test(line))
+    expect(h2Headings.length).toBeGreaterThan(0)
+    expect(h2Headings[h2Headings.length - 1]).toBe('## Optional')
+  })
+
+  it('makes no claim about AI-search visibility or rankings', () => {
+    expect(content).not.toMatch(/AI[- ]search|ranking|search visibility|SEO/i)
+  })
+
+  it('does not hand-type a capability count or name internal operations/services', () => {
+    // capabilitySummary.json is generated and drift-tested; restating its numbers
+    // here would create a second, unmaintained source. Internal tool names and
+    // service topology are forbidden by McpPage.tsx's claims discipline.
+    expect(content).not.toMatch(/readExecute|writeExecute|recipe\.templates/i)
+    expect(content).not.toMatch(/\b(?:dozen|hundreds|thousands)\b/)
   })
 })
