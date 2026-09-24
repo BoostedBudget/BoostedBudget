@@ -4,7 +4,6 @@
 **Status:** Accepted
 **Issue:** #1666
 **Related:** `apps/web/src/shared/hooks/useDocumentHead.ts` (the #1423 prerendering caveat it carries);
-`.omo/plans/1666-missing-pages-and-agentic-copy.md` (the plan that made this decision);
 the AI-crawler zone policy is owned by #1666 Todo 17 and recorded in its own ADR, not here.
 
 ---

@@ -61,7 +61,8 @@ test.describe('Production bundle smoke tests', () => {
   // #1666: the discovery files exist in public/ and must be served as themselves, not as
   // the SPA shell. This is the preview-time half of the served-content proof; the deployed
   // half (where `_redirects`' catch-all and `_headers` precedence actually interact) is
-  // settled separately — see .omo/evidence/1666/llms-precedence-verdict.txt.
+  // settled at deploy time by scripts/smoke-test.sh, which GETs both paths and fails the
+  // release if either returns the SPA shell or a non-text/plain Content-Type.
   test('discovery files are served as non-HTML text, not the SPA shell', async ({ request }) => {
     for (const path of ['/llms.txt', '/llms-full.txt']) {
       const response = await request.get(path);

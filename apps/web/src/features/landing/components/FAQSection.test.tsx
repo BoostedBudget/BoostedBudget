@@ -167,6 +167,20 @@ describe('FAQSection', () => {
       }
     })
 
+    it('keeps the collapsed answer inert until it is opened (WCAG 2.4.7)', () => {
+      renderFaq()
+      const heading = screen.getByRole('heading', { level: 3, name: AGENTIC_QUESTIONS[0] })
+      const button = heading.closest('button')!
+      const region = document.getElementById(button.getAttribute('aria-controls')!)!
+
+      // Collapsed: the inline `<Link>` must not be focusable, so the whole answer
+      // region is `inert` and its link is out of the tab order.
+      expect(region).toHaveAttribute('inert')
+
+      fireEvent.click(button)
+      expect(region).not.toHaveAttribute('inert')
+    })
+
     // Claims discipline: the four promises every agentic answer must keep.
     it('states confirmation, no money movement, server-side credentials, and revocability', () => {
       renderFaq()

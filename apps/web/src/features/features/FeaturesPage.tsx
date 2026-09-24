@@ -11,6 +11,12 @@
  * plus a dedicated section for the agentic capability (the remote MCP server at
  * /mcp).
  *
+ * Prose comes from the single source (`features/landing/data/marketingContent.ts`),
+ * exactly as `FeaturesSection.tsx` does it: the six title/description pairs live
+ * there, and the lucide icon COMPONENTS are composed here, keyed by the stable
+ * `key`. Duplicating the sentences here is what this page used to do, and it is
+ * how the landing copy and this page could drift apart.
+ *
  * Claims discipline (mirrors McpPage): describe account access, confirmation and
  * practical limits without exposing service topology, internal operation names,
  * implementation details, or unfinished roadmap items. Never promise that an
@@ -18,50 +24,39 @@
  */
 
 import { useEffect } from 'react'
-import { Link } from 'react-router'
-import { useClerk } from '@clerk/react-router'
+import { Link, useNavigate } from 'react-router'
+import { useAuth, useClerk } from '@clerk/react-router'
 import { ArrowRight, BarChart3, Bot, Check, Landmark, LayoutDashboard, Users, Zap } from 'lucide-react'
 import { useDocumentHead } from '@/shared/hooks/useDocumentHead'
 import { useTrackEvent } from '@/shared/hooks/useTrackEvent'
 import { ANALYTICS_EVENTS } from '@/shared/analytics'
+import { MARKETING_FEATURES, type FeatureIconKey } from '@/features/landing/data/marketingContent'
 
 const PAGE_TITLE = 'Features — BoostedBudget'
 const PAGE_DESCRIPTION =
   'Connect every account, automate what you can, and hand the busywork to your AI agent. It can read everything — and changes nothing without your confirmation.'
 const CANONICAL_URL = 'https://boostedbudget.com/features'
 
-const CORE_FEATURES = [
-  {
-    icon: Landmark,
-    title: 'All Your Accounts in One Place',
-    description:
-      'Connect all your bank accounts, credit cards, and investments. Get a complete picture of your finances at a glance.',
-  },
-  {
-    icon: LayoutDashboard,
-    title: 'Customizable Dashboard',
-    description:
-      'Personalize your financial overview with a diverse library of widgets. Visualize and analyze your data the way you want.',
-  },
-  {
-    icon: BarChart3,
-    title: 'Categorization That Follows Your Rules',
-    description:
-      "Every transaction arrives with a category from Plaid. Write a rule for merchant, amount, or description, and it takes over for every match — unless you've already categorized or reviewed that transaction yourself.",
-  },
-  {
-    icon: Zap,
-    title: 'Automation You Can Audit',
-    description:
-      'Build rules that flag budget risks and suggest transfers. Every rule is one you wrote, so you always know why it fired.',
-  },
-  {
-    icon: Users,
-    title: 'Shared Household Budgeting',
-    description:
-      'One plan across 2 to 5+ members. Each person chooses which accounts to share, and can hide any account from the household at any time.',
-  },
-]
+// The ICONS live here, not in the data module: the llms-full.txt generator imports
+// marketingContent.ts and must never pull `lucide-react` into a Node-side build.
+const FEATURE_ICONS: Record<FeatureIconKey, typeof Landmark> = {
+  accounts: Landmark,
+  dashboard: LayoutDashboard,
+  categorization: BarChart3,
+  automation: Zap,
+  household: Users,
+  agent: Bot,
+}
+
+// The five non-agentic feature cards, prose sourced from marketingContent.ts and
+// paired with this page's icons. The agentic copy is rendered in its own section.
+const CORE_FEATURES = MARKETING_FEATURES.filter((feature) => feature.key !== 'agent').map(
+  ({ key, title, description }) => ({
+    icon: FEATURE_ICONS[key],
+    title,
+    description,
+  }),
+)
 
 const AGENT_HIGHLIGHTS = [
   'Read across your accounts, transactions, budgets, and portfolio',
@@ -83,6 +78,8 @@ function Section({ id, title, children }: { id: string; title: string; children:
 export function FeaturesPage() {
   const trackEvent = useTrackEvent()
   const { openSignUp } = useClerk()
+  const { isSignedIn } = useAuth()
+  const navigate = useNavigate()
 
   useDocumentHead(PAGE_TITLE, PAGE_DESCRIPTION, CANONICAL_URL)
 
@@ -92,7 +89,13 @@ export function FeaturesPage() {
 
   const handlePrimaryCtaClick = () => {
     trackEvent(ANALYTICS_EVENTS.FEATURES_CTA_CLICKED)
-    openSignUp()
+    // This page is reachable signed in, so a signed-in visitor gets the app
+    // instead of a sign-up modal for an account they already have.
+    if (isSignedIn) {
+      navigate('/dashboard')
+    } else {
+      openSignUp()
+    }
   }
 
   return (

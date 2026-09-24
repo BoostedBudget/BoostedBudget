@@ -152,13 +152,13 @@
   {
     "name": "features",
     "path": "apps/web/dist/assets/features-*.js",
-    "limit": "2.5 KB",
+    "limit": "2.2 KB",
     "gzip": true
   },
   {
     "name": "faq",
     "path": "apps/web/dist/assets/faq-*.js",
-    "limit": "3.7 KB",
+    "limit": "1.9 KB",
     "gzip": true
   },
   {

@@ -84,6 +84,8 @@ describe('FaqPage', () => {
     mockTrackEvent.mockClear()
     mockUseClerk.mockClear()
     mockUseClerk.mockReturnValue(createMockClerk())
+    mockUseAuth.mockClear()
+    mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: false, isLoaded: true }))
   })
 
   it('renders exactly one h1', () => {
@@ -144,6 +146,22 @@ describe('FaqPage', () => {
     expect(first).toHaveAttribute('aria-expanded', 'false')
   })
 
+  it('keeps a collapsed answer out of the tab order (WCAG 2.4.7) and restores it when opened', () => {
+    renderPage()
+    const agentic = questionButtons().find(
+      (button) => button.textContent?.includes('Can my AI agent help me manage my budget?'),
+    )!
+    const region = document.getElementById(agentic.getAttribute('aria-controls') as string)!
+
+    // Collapsed: the inline `<Link>` must not be reachable by keyboard. The region
+    // is `inert`, which removes it and every descendant from the tab order and the
+    // accessibility tree.
+    expect(region).toHaveAttribute('inert')
+
+    fireEvent.click(agentic)
+    expect(region).not.toHaveAttribute('inert')
+  })
+
   it('collapses answers by grid row rather than a fixed max-height cap', () => {
     renderPage()
     const first = questionButtons()[0]
@@ -179,6 +197,28 @@ describe('FaqPage', () => {
     renderPage()
     fireEvent.click(screen.getByRole('button', { name: /start free/i }))
     expect(clerkMock.openSignUp).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends a signed-in visitor to /dashboard rather than opening sign-up', () => {
+    mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: true, isLoaded: true }))
+    const clerkMock = createMockClerk()
+    mockUseClerk.mockReturnValue(clerkMock)
+
+    render(
+      <MemoryRouter>
+        <FaqPage />
+        <LocationProbe />
+      </MemoryRouter>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /start free/i }))
+
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/dashboard')
+    expect(clerkMock.openSignUp).not.toHaveBeenCalled()
+    // The event fires in BOTH branches — only the destination differs.
+    const ctaCalls = mockTrackEvent.mock.calls.filter(
+      (call) => (call as unknown[])[0] === ANALYTICS_EVENTS.FAQ_CTA_CLICKED,
+    )
+    expect(ctaCalls).toHaveLength(1)
   })
 
   it('exposes both events as valid catalogued zero-property analytics contracts', () => {
