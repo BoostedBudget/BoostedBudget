@@ -37,6 +37,15 @@ describe('AppFooter', () => {
     expect(screen.getByText('BoostedBudget')).toBeInTheDocument()
   })
 
+  // Issue #1666 item 8: the strapline carries the agentic story alongside the
+  // product's own positioning.
+  it('renders the agentic strapline', () => {
+    renderWithRouter(<AppFooter />)
+    expect(
+      screen.getByText('Smart budgeting for modern life — with a remote MCP server for your agent.')
+    ).toBeInTheDocument()
+  })
+
   it('renders the four group headings: Product, Developers, Legal, Support', () => {
     renderWithRouter(<AppFooter />)
     expect(screen.getByRole('heading', { name: 'Product' })).toBeInTheDocument()
