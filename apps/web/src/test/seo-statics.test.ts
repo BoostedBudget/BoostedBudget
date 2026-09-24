@@ -73,6 +73,12 @@ describe('sitemap.xml', () => {
     'https://boostedbudget.com/',
     'https://boostedbudget.com/pricing',
     'https://boostedbudget.com/mcp',
+    // #1666: the two public pages created by this plan. They are routable for
+    // signed-out and signed-in users alike (App.tsx declares them beside
+    // /pricing), so they belong in the sitemap exactly like the other public
+    // routes.
+    'https://boostedbudget.com/features',
+    'https://boostedbudget.com/faq',
     'https://boostedbudget.com/legal/privacy-policy',
     'https://boostedbudget.com/legal/terms',
     'https://boostedbudget.com/legal/cookie-policy',
