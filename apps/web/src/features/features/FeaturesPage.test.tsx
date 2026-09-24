@@ -102,11 +102,8 @@ describe('FeaturesPage', () => {
  * `AuthReadyGate` gates every route on Clerk loading, so the whole app is stuck
  * on `auth-loading` there. This is the strongest in-env equivalent.)
  */
-let probedPath = ''
-
 function LocationProbe() {
-  probedPath = useLocation().pathname
-  return null
+  return <div data-testid="location-probe">{useLocation().pathname}</div>
 }
 
 function appWrapper(initialEntries: string[]) {
@@ -126,7 +123,6 @@ describe('FeaturesPage routing for a signed-in user (#1666 defect)', () => {
     mockUseAuth.mockClear()
     mockUseUser.mockClear()
     mockUseClerk.mockClear()
-    probedPath = ''
 
     mockUseAuth.mockReturnValue(createMockClerkAuth({ isSignedIn: true, isLoaded: true }))
     mockUseUser.mockReturnValue(
@@ -171,6 +167,6 @@ describe('FeaturesPage routing for a signed-in user (#1666 defect)', () => {
 
     // The regression guard: the URL stays on /features, so the `/` → /dashboard
     // Navigate never fires for the page the footer links to.
-    expect(probedPath).toBe('/features')
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/features')
   })
 })
