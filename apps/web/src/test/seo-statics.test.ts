@@ -22,6 +22,7 @@ const webRoot = join(currentDir, '..', '..') // apps/web
 const robotsPath = join(webRoot, 'public', 'robots.txt')
 const sitemapPath = join(webRoot, 'public', 'sitemap.xml')
 const indexHtmlPath = join(webRoot, 'index.html')
+const ogImagePath = join(webRoot, 'public', 'og-image.png')
 
 describe('robots.txt', () => {
   it('exists and is non-empty', () => {
@@ -129,5 +130,34 @@ describe('index.html metadata corrections (#1411)', () => {
 
   it('describes automation rules as user-defined', () => {
     expect(content).toContain('user-defined automation rules')
+  })
+})
+
+// #1666: the social unfurl image. Absent before this change, which meant every
+// link shared to Slack/X/Facebook unfurled with no image. A `public/` asset is
+// copied verbatim, not bundled, so there is no bundle-budget impact.
+describe('social unfurl image (#1666)', () => {
+  const content = readFileSync(indexHtmlPath, 'utf-8')
+  const ogImageUrl = 'https://boostedbudget.com/og-image.png'
+
+  it('ships a non-empty PNG at public/og-image.png', () => {
+    expect(existsSync(ogImagePath)).toBe(true)
+    const bytes = readFileSync(ogImagePath)
+    expect(bytes.length).toBeGreaterThan(0)
+    // PNG magic number: 0x89 "PNG" -- not an SVG, which social platforms do not render.
+    expect(bytes.subarray(0, 8).toString('latin1')).toBe('\x89PNG\r\n\x1a\n')
+  })
+
+  it('declares og:image with the absolute production URL', () => {
+    expect(content).toContain(`<meta property="og:image" content="${ogImageUrl}" />`)
+  })
+
+  it('declares the 1200x630 Open Graph image dimensions', () => {
+    expect(content).toContain('<meta property="og:image:width" content="1200" />')
+    expect(content).toContain('<meta property="og:image:height" content="630" />')
+  })
+
+  it('declares twitter:image with the absolute production URL', () => {
+    expect(content).toContain(`<meta name="twitter:image" content="${ogImageUrl}" />`)
   })
 })
