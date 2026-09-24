@@ -44,8 +44,8 @@ export function FinalCTA() {
 
         {/* Subheading */}
         <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-blue-100">
-          Join thousands of users who have transformed their relationship with money.
-          Start your free trial today and see the difference.
+          Start with a 60-day free trial. Connect your accounts, automate your budget, and
+          bring your agent along when you're ready. No credit card required.
         </p>
 
         {/* CTA Button */}

@@ -35,8 +35,10 @@ export function McpBand() {
               Connect It to Your Agent
             </h2>
             <p className="mt-6 text-lg leading-relaxed text-slate-600 dark:text-slate-400">
-              BoostedBudget runs a remote MCP server, so Claude or VS Code can read your
-              finances directly — and change them only when you confirm.
+              BoostedBudget runs a remote MCP server. Point Claude, Cursor, VS Code, or any
+              MCP-compatible client at one URL, sign in once, and your agent can read across
+              your accounts, transactions, budgets, and portfolio — changing things only when
+              you confirm each one.
             </p>
             <div className="mt-8">
               <Link
