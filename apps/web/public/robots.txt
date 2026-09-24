@@ -12,9 +12,21 @@
 # Tokenized paths below are the unprotected routes in that same file whose
 # path segment is a one-time token: /cancel-deletion/:token,
 # /households/invites/:token, /household/invite/:token (issue #1411 N2 fix).
+# Legacy redirects below are the ForwardSearch routes in that same file
+# (issue #1300) that forward into a target this file already disallows --
+# without them the redirect's destination is excluded while its source stays
+# crawlable (issue #1666).
+#
+# This file deliberately carries NO AI-crawler user-agent groups. The
+# retrieval/training policy is owned by the Cloudflare zone (issue #1666
+# Todo 17), which publishes it into the served robots.txt via Bot Preference
+# Sync; adding groups here would duplicate Cloudflare's managed block.
 
 User-agent: *
 Allow: /
+# Explicit rather than relying on "Allow: /": /llms.txt is the agent-discovery
+# entry point this work publishes, so its crawl permission is stated directly.
+Allow: /llms.txt
 Disallow: /dashboard
 Disallow: /oauth-callback
 Disallow: /accounts
@@ -28,6 +40,18 @@ Disallow: /boosts
 Disallow: /profile
 Disallow: /billing
 Disallow: /admin
+# /reports forwards to /insights?tab=spending, and /insights is disallowed above.
+Disallow: /reports
+# /net-worth forwards to /insights?tab=net-worth, and /insights is disallowed above.
+Disallow: /net-worth
+# /savings forwards to /planning?tab=savings, and /planning is disallowed above.
+Disallow: /savings
+# /callback forwards to /dashboard, which is disallowed above.
+Disallow: /callback
+# /sign-in is a Clerk auth entry point that redirects to / and exposes nothing indexable.
+Disallow: /sign-in
+# /sign-up is a Clerk auth entry point that redirects to / and exposes nothing indexable.
+Disallow: /sign-up
 Disallow: /cancel-deletion
 Disallow: /households/
 Disallow: /household/
