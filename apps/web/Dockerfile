@@ -3,7 +3,7 @@
 # Note: Bun crashes under QEMU x86 emulation due to AVX instruction requirements
 # #1514: digest-pinned to node:22-alpine (multi-arch manifest list digest, resolved from
 # Docker Hub on 2026-08-12). Re-resolve this digest if the node major/tag is bumped.
-FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS builder
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS builder
 
 WORKDIR /build
 
