@@ -13,32 +13,38 @@ concurrency:
 jobs:
   promote-staging-to-main:
     name: Promote Staging to Production
-    runs-on: [self-hosted, macOS, mac-mini]
+    if: github.repository == 'BoostedBudget/BoostedBudget'
+    runs-on: ubicloud-standard-2
     permissions:
       contents: write
       actions: read
-    env:
-      UNIQUE_WORKSPACE: workspace-promote-${{ github.run_id }}
 
     steps:
-      - name: Clean workspace
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+      - name: Authorize actor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: context.actor,
+            });
+            if (!['admin', 'write'].includes(data.permission)) {
+              core.setFailed(`Unauthorized actor '${context.actor}' (permission: ${data.permission})`);
+            }
 
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          path: ${{ env.UNIQUE_WORKSPACE }}
           ref: staging
           fetch-depth: 0  # Full history needed for validation and merge
 
       - name: Configure git
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Validate staging branch state
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         id: validate
         run: |
           echo "🔍 Validating staging branch..."
@@ -81,7 +87,6 @@ jobs:
           fi
 
       - name: Merge staging into main
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           echo "🔀 Merging staging into main..."
 
@@ -107,7 +112,6 @@ jobs:
           echo "✅ Merge successful"
 
       - name: Push to main
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           echo "📤 Pushing to main..."
           for i in 1 2 3; do
@@ -119,7 +123,6 @@ jobs:
           done
 
       - name: Sync staging with main (inline)
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           echo "🔄 Syncing staging with main (inline back-sync)..."
           # Inline back-sync avoids GITHUB_TOKEN push→workflow trigger limitation.
@@ -147,7 +150,6 @@ jobs:
           done
 
       - name: Verify sync
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           git fetch origin main staging
           DIVERGENCE=$(git rev-list --left-right --count staging...origin/main)
@@ -190,7 +192,3 @@ jobs:
           echo "git push origin main" >> $GITHUB_STEP_SUMMARY
           echo "git checkout staging && git merge origin/main && git push origin staging" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-
-      - name: Final workspace cleanup
-        if: always()
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true

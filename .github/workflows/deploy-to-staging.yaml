@@ -41,7 +41,8 @@ jobs:
   # =============================================================================
   detect-changes:
     name: Detect Component Changes
-    runs-on: [self-hosted, macOS, mac-mini]
+    if: github.repository == 'BoostedBudget/BoostedBudget'
+    runs-on: ubicloud-standard-2
     permissions:
       contents: read
     outputs:
@@ -55,6 +56,18 @@ jobs:
       mcp_prior_sha:        ${{ steps.resolve-tags.outputs.mcp_prior_sha }}
 
     steps:
+      - name: Authorize actor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: context.actor,
+            });
+            if (!['admin', 'write'].includes(data.permission)) {
+              core.setFailed(`Unauthorized actor '${context.actor}' (permission: ${data.permission})`);
+            }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: staging

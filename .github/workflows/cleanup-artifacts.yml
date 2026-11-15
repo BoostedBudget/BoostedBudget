@@ -13,11 +13,25 @@ on:
 
 jobs:
   delete-artifacts:
-    runs-on: [self-hosted, macOS, mac-mini]
+    if: github.repository == 'BoostedBudget/BoostedBudget'
+    runs-on: ubicloud-standard-2
     permissions:
       actions: write
 
     steps:
+      - name: Authorize actor
+        if: github.event_name != 'schedule'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: context.actor,
+            });
+            if (!['admin', 'write'].includes(data.permission)) {
+              core.setFailed(`Unauthorized actor '${context.actor}' (permission: ${data.permission})`);
+            }
       - name: Determine retention days
         id: retention
         env:
