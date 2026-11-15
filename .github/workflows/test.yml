@@ -22,7 +22,7 @@ jobs:
   detect-changes:
     name: Detect Changes
     if: github.repository == 'BoostedBudget/BoostedBudget' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
@@ -149,7 +149,7 @@ jobs:
     name: PostHog Contract Validation
     needs: detect-changes
     if: needs.detect-changes.outputs.posthog_contract == 'true'
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     env:
       UNIQUE_WORKSPACE: workspace-posthog-contract-${{ github.run_id }}
     steps:
@@ -185,7 +185,7 @@ jobs:
   e2e-test:
     name: E2E Tests
     if: always() && !cancelled()
-    runs-on: ubicloud-standard-2
+    runs-on: ubuntu-latest
     # Least-privilege token, scoped to this job rather than the whole workflow (#1598). This is
     # one of only two jobs that now run on an ephemeral cloud VM, which is the entire reason the
     # restriction is worth stating -- and neither writes with GITHUB_TOKEN.
@@ -1051,7 +1051,7 @@ jobs:
     # Also run on `api` changes so a hand-edited / stale api/openapi.yaml is re-validated
     # against the backend (the spec must always match the Huma routes — #1247).
     if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.api == 'true' || needs.detect-changes.outputs.workflow == 'true'
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     env:
       UNIQUE_WORKSPACE: workspace-openapi-validate-${{ github.run_id }}
 
@@ -1130,7 +1130,7 @@ jobs:
        needs.detect-changes.outputs.frontend == 'true' ||
        needs.detect-changes.outputs.backend == 'true' ||
        needs.detect-changes.outputs.workflow == 'true')
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     env:
       UNIQUE_WORKSPACE: workspace-ts-client-validate-${{ github.run_id }}
 
@@ -1232,7 +1232,7 @@ jobs:
        needs.detect-changes.outputs.api == 'true' ||
        needs.detect-changes.outputs.deps == 'true' ||
        needs.detect-changes.outputs.workflow == 'true')
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     env:
       UNIQUE_WORKSPACE: workspace-mcp-validate-${{ github.run_id }}
 
@@ -1547,7 +1547,7 @@ jobs:
        needs.detect-changes.outputs.api == 'true' ||
        needs.detect-changes.outputs.deps == 'true' ||
        needs.detect-changes.outputs.workflow == 'true')
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     env:
       UNIQUE_WORKSPACE: workspace-mcp-integration-${{ github.run_id }}
 
@@ -1645,7 +1645,7 @@ jobs:
     # catalogues — see the `config` filter's own comment above for why this isn't folded into
     # the `backend` condition instead.
     if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.api == 'true' || needs.detect-changes.outputs.workflow == 'true' || needs.detect-changes.outputs.config == 'true'
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     env:
       UNIQUE_WORKSPACE: workspace-backend-test-${{ github.run_id }}
 
@@ -1851,7 +1851,7 @@ jobs:
     name: Backend Integration Tests
     needs: detect-changes
     if: needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.workflow == 'true'
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     # This job is COMPILE-bound, not test-bound. The integration tests themselves run in
     # ~8s against a warm local Postgres; the "Run integration tests" step spends almost all
     # its time compiling every package's test binary with -tags integration from the
@@ -2187,13 +2187,13 @@ jobs:
           # executing the binary — the previous `releases/latest` URL was mutable and
           # unverified.
           MIGRATE_VERSION: v4.19.1
-          MIGRATE_SHA256: a8cc8657afd1c2c93c78e8b77fd2275d150c29ebc1fff0e8fe0be68751503468
+          MIGRATE_SHA256: 2ac648fbd1b127b69ab5a7b33cf96212178f71e22379fc50573630c6f4c7ce18
         run: |
           # Install into a job-local dir under RUNNER_TEMP to avoid write-racing
           # the migration-tests job which also installs migrate into $HOME/bin.
           mkdir -p "$RUNNER_TEMP/bin-integ"
-          curl -sSfL -o "$RUNNER_TEMP/migrate.tar.gz" "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.darwin-arm64.tar.gz"
-          (cd "$RUNNER_TEMP" && echo "${MIGRATE_SHA256}  migrate.tar.gz" | shasum -a 256 -c -)
+          curl -sSfL -o "$RUNNER_TEMP/migrate.tar.gz" "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz"
+          (cd "$RUNNER_TEMP" && echo "${MIGRATE_SHA256}  migrate.tar.gz" | sha256sum -c -)
           tar -xz -f "$RUNNER_TEMP/migrate.tar.gz" -C "$RUNNER_TEMP/bin-integ" migrate
           rm -f "$RUNNER_TEMP/migrate.tar.gz"
           echo "$RUNNER_TEMP/bin-integ" >> $GITHUB_PATH
@@ -2397,7 +2397,7 @@ jobs:
     name: Mobile Build Scaffold
     needs: detect-changes
     if: needs.detect-changes.outputs.mobile == 'true'
-    runs-on: ubicloud-standard-2
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 20
@@ -2482,7 +2482,7 @@ jobs:
     name: Frontend Tests
     needs: detect-changes
     if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.api == 'true' || needs.detect-changes.outputs.workflow == 'true'
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     env:
       UNIQUE_WORKSPACE: workspace-frontend-test-${{ github.run_id }}
 
@@ -2619,17 +2619,8 @@ jobs:
           LC_ALL: C
           LANG: C
         run: |
-          # Self-hosted macOS runners may not have Homebrew in PATH at step launch.
-          # Probe standard locations and prepend before any command-v check.
-          for BREW_DIR in /opt/homebrew/bin /usr/local/bin; do
-            if [ -x "$BREW_DIR/brew" ]; then
-              export PATH="$BREW_DIR:$PATH"
-              echo "$BREW_DIR" >> "$GITHUB_PATH"
-              break
-            fi
-          done
           if ! command -v lcov >/dev/null 2>&1; then
-            brew install lcov
+            sudo apt-get update && sudo apt-get install -y lcov
           fi
           lcov --version
 
@@ -2698,7 +2689,7 @@ jobs:
     name: Migration Tests
     needs: detect-changes
     if: needs.detect-changes.outputs.migrations == 'true' || needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.workflow == 'true'
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     env:
       UNIQUE_WORKSPACE: workspace-migration-tests-${{ github.run_id }}
 
@@ -2920,11 +2911,11 @@ jobs:
           # executing the binary — the previous `releases/latest` URL was mutable and
           # unverified.
           MIGRATE_VERSION: v4.19.1
-          MIGRATE_SHA256: a8cc8657afd1c2c93c78e8b77fd2275d150c29ebc1fff0e8fe0be68751503468
+          MIGRATE_SHA256: 2ac648fbd1b127b69ab5a7b33cf96212178f71e22379fc50573630c6f4c7ce18
         run: |
           mkdir -p $HOME/bin
-          curl -sSfL -o migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.darwin-arm64.tar.gz"
-          echo "${MIGRATE_SHA256}  migrate.tar.gz" | shasum -a 256 -c -
+          curl -sSfL -o migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz"
+          echo "${MIGRATE_SHA256}  migrate.tar.gz" | sha256sum -c -
           tar -xz -f migrate.tar.gz migrate
           rm -f migrate.tar.gz
           mv migrate $HOME/bin/
@@ -3069,7 +3060,7 @@ jobs:
   # - Dockerfiles: Hadolint (Dockerfile best practices linter)
   security-scan:
     name: Security Scan (${{ matrix.component }})
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         component: [backend, frontend]
@@ -3160,7 +3151,7 @@ jobs:
       needs.detect-changes.outputs.frontend == 'true' ||
       needs.detect-changes.outputs.workflow == 'true' ||
       needs.detect-changes.outputs.scanconfig == 'true'
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         component: [backend, frontend]
@@ -3206,8 +3197,8 @@ jobs:
       - name: Ensure Grype is installed
         run: |
           if ! command -v grype &> /dev/null; then
-            echo "Installing Grype via Homebrew..."
-            brew install grype
+            echo "Installing Grype..."
+            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sudo sh -s -- -b /usr/local/bin
           fi
           grype version
 
@@ -3249,7 +3240,7 @@ jobs:
     name: Lighthouse CI Audit
     needs: detect-changes
     if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.workflow == 'true'
-    runs-on: ubicloud-standard-2
+    runs-on: ubuntu-latest
     # Least-privilege token, scoped to this job rather than the whole workflow (#1598). This is
     # one of only two jobs that now run on an ephemeral cloud VM, which is the entire reason the
     # restriction is worth stating -- and neither writes with GITHUB_TOKEN.
@@ -3474,7 +3465,7 @@ jobs:
     name: Bundle Size Check
     needs: detect-changes
     if: needs.detect-changes.outputs.frontend == 'true' || needs.detect-changes.outputs.workflow == 'true'
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     env:
       UNIQUE_WORKSPACE: workspace-bundle-size-${{ github.run_id }}
 

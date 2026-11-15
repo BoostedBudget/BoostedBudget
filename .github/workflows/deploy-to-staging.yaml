@@ -42,7 +42,7 @@ jobs:
   detect-changes:
     name: Detect Component Changes
     if: github.repository == 'BoostedBudget/BoostedBudget'
-    runs-on: ubicloud-standard-2
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:

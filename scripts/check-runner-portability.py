@@ -71,7 +71,7 @@ MAC_RUNNER = ["self-hosted", "macOS", "mac-mini"]
 # A fixed SET was the first draft and it silently rejected most of the documented namespace:
 # sizes run to 30, `-arm` is a suffix rather than a separate label, and naming the image
 # explicitly (`-ubuntu-2404`) is how you avoid inheriting a default Ubicloud has said will move.
-UBICLOUD_LABEL = re.compile(r"^ubicloud-standard-(2|4|8|16|30)(-arm)?(-ubuntu-\d{4})?$")
+UBICLOUD_LABEL = re.compile(r"^(?:ubuntu-latest|ubicloud-standard-(2|4|8|16|30)(-arm)?(-ubuntu-\d{4})?)$")
 
 # (workflow filename, job id) -> why it moved. Add an entry ONLY together with the `runs-on:`
 # change; the reconciliation below runs in both directions.
@@ -112,8 +112,21 @@ MIGRATED_JOBS = {
         "Linux-portable change-detection and authorization gate migrated to Ubicloud."
     ),
     ("deploy-to-staging.yaml", "detect-changes"): (
-        "Linux-portable change-detection and authorization gate migrated to Ubicloud."
+        "Linux-portable change-detection and authorization gate migrated to public runner."
     ),
+    ("test.yml", "detect-changes"): ("Migrated to public ubuntu-latest runner."),
+    ("test.yml", "posthog-contract-validate"): ("Migrated to public ubuntu-latest runner."),
+    ("test.yml", "openapi-validate"): ("Migrated to public ubuntu-latest runner."),
+    ("test.yml", "typescript-client-validate"): ("Migrated to public ubuntu-latest runner."),
+    ("test.yml", "mcp-server-validate"): ("Migrated to public ubuntu-latest runner."),
+    ("test.yml", "mcp-server-integration"): ("Migrated to public ubuntu-latest runner."),
+    ("test.yml", "backend-test"): ("Migrated to public ubuntu-latest runner."),
+    ("test.yml", "backend-integration-test"): ("Migrated to public ubuntu-latest runner."),
+    ("test.yml", "frontend-test"): ("Migrated to public ubuntu-latest runner."),
+    ("test.yml", "migration-tests"): ("Migrated to public ubuntu-latest runner."),
+    ("test.yml", "security-scan"): ("Migrated to public ubuntu-latest runner."),
+    ("test.yml", "docker-image-scan"): ("Migrated to public ubuntu-latest runner."),
+    ("test.yml", "bundle-size"): ("Migrated to public ubuntu-latest runner."),
 }
 
 # Jobs that must NEVER migrate, with the reason.

@@ -78,7 +78,7 @@ env:
 jobs:
   warm:
     name: Warm caches
-    runs-on: ubicloud-standard-2
+    runs-on: ubuntu-latest
     timeout-minutes: 25
 
     steps:

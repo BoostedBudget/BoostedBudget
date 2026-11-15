@@ -17,7 +17,7 @@ jobs:
   sync-staging:
     name: Sync staging branch with main
     if: github.repository == 'BoostedBudget/BoostedBudget'
-    runs-on: ubicloud-standard-2
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
