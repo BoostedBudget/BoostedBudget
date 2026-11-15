@@ -16,31 +16,37 @@ concurrency:
 jobs:
   sync-staging:
     name: Sync staging branch with main
-    runs-on: [self-hosted, macOS, mac-mini]
+    if: github.repository == 'BoostedBudget/BoostedBudget'
+    runs-on: ubicloud-standard-2
     permissions:
       contents: write
-    env:
-      UNIQUE_WORKSPACE: workspace-sync-staging-${{ github.run_id }}
 
     steps:
-      - name: Clean workspace
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true
+      - name: Authorize actor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: context.actor,
+            });
+            if (!['admin', 'write'].includes(data.permission)) {
+              core.setFailed(`Unauthorized actor '${context.actor}' (permission: ${data.permission})`);
+            }
 
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          path: ${{ env.UNIQUE_WORKSPACE }}
           ref: main
           fetch-depth: 0  # Full history needed for merge
 
       - name: Configure git
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Fetch and merge main into staging
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           echo "📥 Fetching latest staging..."
           for i in 1 2 3; do
@@ -65,7 +71,6 @@ jobs:
           done
 
       - name: Verify sync
-        working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           DIVERGENCE=$(git rev-list --left-right --count staging...origin/main)
           echo "Branch divergence: $DIVERGENCE"
@@ -97,7 +102,3 @@ jobs:
           echo "git merge origin/main --no-edit" >> $GITHUB_STEP_SUMMARY
           echo "git push origin staging" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-
-      - name: Final workspace cleanup
-        if: always()
-        run: sudo rm -rf "$GITHUB_WORKSPACE/${{ env.UNIQUE_WORKSPACE }}" 2>/dev/null || true

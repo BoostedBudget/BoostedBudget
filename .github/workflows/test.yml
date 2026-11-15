@@ -21,6 +21,7 @@ jobs:
   # =============================================================================
   detect-changes:
     name: Detect Changes
+    if: github.repository == 'BoostedBudget/BoostedBudget' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, macOS, mac-mini]
     outputs:
       backend: ${{ steps.filter.outputs.backend }}

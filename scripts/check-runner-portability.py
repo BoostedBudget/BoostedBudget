@@ -99,6 +99,21 @@ MIGRATED_JOBS = {
         "(workflow_dispatch), run by hand after a quiet week lets the shared pool's entries age "
         "out past Ubicloud's 7-day unaccessed-entry eviction."
     ),
+    ("cleanup-artifacts.yml", "delete-artifacts"): (
+        "Linux-portable artifact cleanup job migrated to Ubicloud."
+    ),
+    ("sync-staging.yml", "sync-staging"): (
+        "Linux-portable git sync job migrated to Ubicloud."
+    ),
+    ("promote-to-production.yml", "promote-staging-to-main"): (
+        "Linux-portable git promotion job migrated to Ubicloud."
+    ),
+    ("deploy-production.yml", "detect-changes"): (
+        "Linux-portable change-detection and authorization gate migrated to Ubicloud."
+    ),
+    ("deploy-to-staging.yaml", "detect-changes"): (
+        "Linux-portable change-detection and authorization gate migrated to Ubicloud."
+    ),
 }
 
 # Jobs that must NEVER migrate, with the reason.
