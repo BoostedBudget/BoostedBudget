@@ -28,7 +28,7 @@ page.on('requestfailed', request => {
 
 console.log("Navigating to dashboard...");
 try {
-    await page.goto('https://qa.example.ts.net:3443/dashboard', {
+    await page.goto('https://localhost:3443/dashboard', {
         waitUntil: 'networkidle',
         timeout: 30000
     });

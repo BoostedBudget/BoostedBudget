@@ -122,7 +122,7 @@ tailscale status | grep "$(hostname)" | awk '{print $1}'
 
 **Result**: You should see output like:
 ```
-100.x.x.x   mac-mini.tailnet-name.ts.net   runner@  macOS   -
+100.x.x.x   mac-mini.tailnet-name.ts.net   runner@      macOS   -
 ```
 
 ### 1.2 Configure Static Local IP (Optional but Recommended)
@@ -133,7 +133,7 @@ To prevent IP changes after reboot:
 2. Select **Ethernet** (or Wi-Fi) → **Details**
 3. Go to **TCP/IP** tab
 4. Change **Configure IPv4** from "Using DHCP" to "Manually"
-5. Set **IPv4 Address**: `192.0.2.10` (current IP)
+5. Set **IPv4 Address**: `192.0.2.10` (example static LAN IP)
 6. Set **Subnet Mask**: `255.255.255.0`
 7. Set **Router**: `192.168.1.1` (your router's IP)
 8. Click **OK** → **Apply**
