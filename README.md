@@ -1,279 +1,243 @@
-# 🚀 BoostedBudget
-
-**Supercharge your finances with intelligent automation**
-
-[![Test Suite](https://github.com/maxnussbaum/BoostedBudget/actions/workflows/test.yml/badge.svg)](https://github.com/maxnussbaum/BoostedBudget/actions/workflows/test.yml)
-
-BoostedBudget is a global budgeting platform that helps users optimize their finances through customizable automation rules, GDPR-compliant data handling, and intelligent insights.
-
-## 📋 Project Status
-
-**Phase 0: Foundation** ✅ (In Progress)
-- ✅ Backend API with health endpoint
-- ✅ OpenAPI specification
-- ✅ Frontend skeleton (React + TypeScript + Vite)
-- ✅ Docker development environment
-- ✅ Clerk authentication (Issue #593)
-- ⏳ Database & migrations (Issue #7)
-- ⏳ GDPR components (Issue #8)
-
-## 🏗️ Architecture
-
-### Technology Stack
-
-**Backend:**
-- Go 1.26.6+ with Echo framework
-- PostgreSQL 17
-- Redis 7
-- RabbitMQ 3
-- OpenAPI 3.1 specification
-
-**Frontend:**
-- React 19 + TypeScript 5
-- Vite 7 build tool
-- Redux Toolkit for state management
-- Clerk React SDK
-
-**Infrastructure:**
-- Docker + Docker Compose (development)
-- Fly.io (production deployment)
-- Single region (us-east-1) for MVP
-- Multi-region expansion planned for Phase 7+
-
-### Business Model
-
-No free tier. New users get a **60-day Premium trial** (no payment required).
-
-| Tier | Users | Price | Limits |
-|------|-------|-------|--------|
-| `premium` | 1 | $8.99/mo | Unlimited boosts/accounts, 730-day history |
-| `household_2` | 2 | $12.99/mo | Same |
-| `household_3` | 3 | $14.99/mo | Same |
-| `household_4` | 4 | $16.99/mo | Same |
-| `household_5` | 5+ | $18.99/mo | Same |
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- **Docker** and **Docker Compose** (required)
-- **Go 1.26.6+** (for local backend development)
-- **Node.js 20+** (for local frontend development)
-- **Make** (optional, for convenience commands)
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/maxnussbaum/BoostedBudget.git
-cd BoostedBudget
-```
-
-### 2. Configure Environment
-
-```bash
-cp .env.example .env
-# Edit .env and add your credentials
-```
-
-**Required Configuration**:
-- **Clerk**: Authentication (publishable key, secret key) - See [Clerk Dashboard](https://dashboard.clerk.com/)
-- **Database**: PostgreSQL connection string (auto-configured with Docker Compose)
-- **Redis**: Cache connection (auto-configured with Docker Compose)
-- **Plaid**: Financial account linking (client ID, secret) - [Get keys](https://dashboard.plaid.com/)
-- **Stripe**: Payment processing (publishable/secret keys, webhook secret) - [Get keys](https://dashboard.stripe.com/)
-
-**Optional Configuration**:
-- **Email**: SMTP settings for notifications (SendGrid, Mailgun, AWS SES)
-- **Sentry**: Error tracking DSN
-- **Feature Flags**: Enable/disable features
-
-**For CI/CD**: See [docs/GITHUB_SECRETS_SETUP.md](./docs/GITHUB_SECRETS_SETUP.md)
-
-### 3. Start Development Environment
-
-```bash
-# Using Make
-make dev
-
-# OR using Docker Compose directly
-docker-compose up
-```
-
-### 4. Run Database Migrations
-
-```bash
-# Apply all migrations
-make migrate-up
-
-# Check migration status
-make migrate-status
-```
-
-This will start:
-- **Backend API** on http://localhost:8080
-- **Frontend** on http://localhost:3000
-- **PostgreSQL** on localhost:5432
-- **Redis** on localhost:6379
-- **RabbitMQ** on localhost:5672 (Management UI: http://localhost:15672)
-
-### 5. Verify Everything Works
-
-```bash
-# Check backend health
-curl http://localhost:8080/health
-
-# Verify database schema
-make migrate-status
-
-# Open frontend in browser
-open http://localhost:3000
-```
-
-## 🧪 Development
-
-### Backend Development
-
-```bash
-# Run tests with coverage
-make backend-test
-
-# Or directly with go
-cd backend
-go test ./... -v -cover
-
-# Build backend
-make backend-build
-
-# Run backend locally (without Docker)
-make backend-run
-```
-
-### Frontend Development
-
-```bash
-# Install dependencies
-make frontend-install
-
-# Run dev server locally (without Docker)
-make frontend-dev
-
-# Run tests
-make frontend-test
-
-# Build for production
-make frontend-build
-```
-
-### Running Tests
-
-```bash
-# All backend tests
-cd backend && go test ./... -v
-
-# Specific package
-cd backend && go test ./internal/handlers/... -v
-
-# With coverage
-cd backend && go test ./... -cover
-
-# Frontend tests
-cd apps/web && bun run test
-```
-
-### API Testing
-
-```bash
-# Validate OpenAPI spec
-npx @redocly/cli lint api/openapi.yaml
-
-# Run Prism mock server (test API without backend)
-npx @stoplight/prism-cli mock api/openapi.yaml --port 4010
-
-# Test mock endpoints
-curl http://localhost:4010/health
-curl -H "Authorization: Bearer mock-token" http://localhost:4010/user/profile
-```
-
-## 📚 Documentation
-
-- **[Complete Plan](./boosted-budget-complete-plan.md)** - Full project roadmap (Phases 0-7+)
-- **[Deployment Guide](./boosted-budget-fly-deployment.md)** - Fly.io deployment instructions
-- **[CLAUDE.md](./CLAUDE.md)** - Development guidelines and patterns
-- **[GitHub Secrets Setup](./docs/GITHUB_SECRETS_SETUP.md)** - CI/CD secrets configuration
-- **[Self-hosted runner maintenance](./infra/runners/README.md)** - disk-guard, post-job cleanup, and maintenance scripts for the self-hosted CI runners
-- **[OpenAPI Spec](./api/openapi.yaml)** - API documentation
-
-## 🔧 Project Structure
-
-```
-boostedbudget/
-├── api/                    # OpenAPI specification
-├── backend/               # Go backend
-│   ├── cmd/server/       # Entry point
-│   ├── internal/         # Business logic
-│   │   ├── handlers/    # HTTP handlers
-│   │   ├── services/    # Business services
-│   │   ├── repository/  # Data access
-│   │   ├── middleware/  # Clerk auth, logging, etc.
-│   │   └── config/      # Configuration
-│   ├── migrations/       # Database migrations
-│   └── tests/           # Integration tests
-├── apps/
-│   └── web/              # React frontend
-│       ├── src/
-│       │   ├── features/ # Feature modules
-│       │   ├── auth/     # Clerk integration
-│       │   └── shared/   # Shared components
-│       └── public/       # Static assets
-├── packages/
-│   ├── api-client/       # Orval-generated API hooks
-│   └── shared-types/     # Shared TypeScript types
-├── infrastructure/       # K8s, Terraform, Docker configs
-├── scripts/             # Build and deployment scripts
-├── legal/               # Privacy policy, ToS, GDPR docs
-└── docker-compose.yml   # Local development environment
-```
-
-## 🔐 Security & Compliance
-
-- **GDPR Compliant:** From day one for all users worldwide
-- **Clerk:** Enterprise-grade authentication
-- **Data Encryption:** At rest and in transit
-- **Single Region MVP:** us-east-1 (USA), multi-region expansion in Phase 7+
-- **Privacy by Design:** Default opt-out, granular consent management
-- **30-day Deletion Grace Period:** GDPR right to erasure
-
-## 🤝 Contributing
-
-This project follows strict development guidelines:
-
-1. **TDD (Test-Driven Development):** Red-Green-Refactor for all business logic
-2. **Issue-Driven:** Every change needs Issue → Branch → PR
-3. **Test Coverage:** Backend ≥74% statements (hard gate), Frontend ≥82% lines (hard gate). Aspirational goal: ≥80% on both sides.
-4. **Code Review:** All PRs require review before merge
-
-See [CLAUDE.md](./CLAUDE.md) for detailed development guidelines.
-
-## 🐛 Issues & Support
-
-- **Issues:** https://github.com/maxnussbaum/BoostedBudget/issues
-- **Discussions:** https://github.com/maxnussbaum/BoostedBudget/discussions
-
-## 📝 License
-
-Proprietary - All rights reserved
-
-## 🎯 Roadmap
-
-- **Phase 0:** ✅ Foundation (Current)
-- **Phase 1:** User Profile & Subscription Management
-- **Phase 2:** Plaid Integration & Financial Accounts
-- **Phase 3:** Core Budgeting System
-- **Phase 4:** Rules Engine MVP
-- **Phase 5:** Monetization (Paddle)
-- **Phase 6:** Advanced Features & AI Insights
-- **Phase 7+:** Multi-Region Expansion
+# BoostedBudget
+
+**Personal finance, budgeting, and automation platform — now open as a public engineering showcase.**
+
+> **Project Status — Archived / Showcase (November 2026)**
+>
+> Active product development has been sunset. Major AI platforms (Gemini, OpenAI/Codex, and Anthropic/Claude) now integrate directly with Plaid, and Monarch Money released an official MCP server—making a standalone paid budgeting + MCP SaaS non-viable.
+>
+> The repository is public to showcase the architecture, engineering practices, and full-stack implementation. It is licensed under the **PolyForm Noncommercial License 1.0.0** (free for personal, learning, and noncommercial use; commercial/for-profit use requires prior written approval and a commercial license).
 
 ---
 
-**Built with ❤️ using Test-Driven Development**
+## Highlights for Developers & Reviewers
+
+- **OpenAPI-First End-to-End Type Safety**: Go **Huma** handlers generate [`api/openapi.yaml`](./api/openapi.yaml) as the single source of truth, and **Orval** generates React Query hooks in [`packages/api-client`](./packages/api-client).
+- **Multi-Client Monorepo**:
+  - [`apps/web`](./apps/web) — React 19, TypeScript 5, Vite 8, Bun, TanStack Query & TanStack Table v8
+  - [`apps/mobile`](./apps/mobile) — React Native / Expo / NativeWind mobile client
+  - [`apps/mcp-server`](./apps/mcp-server) — Model Context Protocol server exposing financial context
+- **Transactional Job Queue**: **River** (PostgreSQL-backed) handles Plaid transaction/investment sync, balance snapshots, webhook processing, and dead-letter recovery.
+- **Financial Data Integrity & GDPR Compliance**:
+  - Architectural Decision Records in [`docs/decisions/`](./docs/decisions) (e.g., *Financial History Is Retained by Default*, *Household Scope Is a Share-Gated Subset*, *GDPR Erasure Hard Delete*).
+  - Field-level encryption with blind indexes, 30-day deletion grace period, data export, and privacy consent controls.
+- **High-Bar CI & Verification Suite**:
+  - Backend & frontend unit/integration tests with coverage gates (`go test`, `bun test`)
+  - **5 database migration test suites** (`./scripts/test-migrations.sh`: idempotency, performance, data, schema, rollback) + **Squawk** migration linting
+  - **27 shell guard suites** (`make test-scripts`) enforcing CI/runner portability, bundle/route weight budgets, nginx secret-path blocking, and schema invariants
+  - **Playwright E2E** tests, **Lighthouse CI**, and **`.size-limit.json`** bundle budgets
+
+---
+
+## Architecture & Key Flows
+
+### System Overview
+
+```mermaid
+flowchart LR
+    subgraph Clients["Clients"]
+        Web["Web App (React 19 + Vite 8)"]
+        Mobile["Mobile App (Expo)"]
+        MCP["MCP Server (apps/mcp-server)"]
+    end
+
+    subgraph Auth["Auth & Edge"]
+        Clerk["Clerk JWT"]
+    end
+
+    subgraph Backend["Go Backend (Huma API)"]
+        API["Huma Operations & Middleware"]
+        Services["Services & Automation Rules"]
+        Workers["River Background Workers"]
+    end
+
+    subgraph Data["Data & State"]
+        PG["PostgreSQL 17 (Ledger + River Queue)"]
+        Redis["Redis 7 (Cache + Rate Limit)"]
+    end
+
+    subgraph External["External Services"]
+        Plaid["Plaid (Bank & Investments)"]
+        Billing["Paddle & RevenueCat"]
+        Obs["PostHog & Sentry"]
+    end
+
+    Web --> Clerk
+    Mobile --> Clerk
+    MCP --> Clerk
+    Clerk --> API
+    API --> Services
+    Services --> PG
+    Services --> Redis
+    Services --> Workers
+    Workers --> PG
+    Workers --> Plaid
+    API --> Billing
+    Services --> Obs
+```
+
+### OpenAPI-First Type-Safe Pipeline
+
+```mermaid
+flowchart LR
+    Huma["Go Huma Handlers (backend/internal/huma)"] -->|"make generate-openapi"| Spec["api/openapi.yaml"]
+    Spec -->|"make generate-api-client (Orval)"| Client["packages/api-client (React Query Hooks)"]
+    Client --> Web["apps/web"]
+    Client --> Mobile["apps/mobile"]
+```
+
+### Financial Sync & Automation Rules Flow
+
+```mermaid
+sequenceDiagram
+    participant Plaid as Plaid API / Webhooks
+    participant API as Go Huma API
+    participant River as River Job Queue
+    participant Worker as Sync & Rules Worker
+    participant DB as PostgreSQL 17
+
+    Plaid->>API: Webhook (SYNC_UPDATES_AVAILABLE)
+    API->>River: Enqueue PlaidSyncJob
+    River->>Worker: Dequeue & execute with cursor
+    Worker->>Plaid: Fetch incremental transactions & holdings
+    Worker->>DB: Upsert encrypted records & tombstone removals
+    Worker->>DB: Evaluate automation rules (suggestions only)
+```
+
+---
+
+## Technology Stack
+
+| Layer | Technologies |
+| :--- | :--- |
+| **Backend** | Go 1.26.6+, Huma, River (job queue), `golang-migrate`, Squawk |
+| **Database & Cache** | PostgreSQL 17, Redis 7 (cache + rate limiting) |
+| **Web Frontend** | React 19, TypeScript 5, Vite 8, Bun, TanStack Query, TanStack Table v8 |
+| **Mobile & AI** | Expo / React Native (`apps/mobile`), MCP Server (`apps/mcp-server`) |
+| **Integrations** | Clerk (JWT auth), Plaid (accounts, transactions, investments), Paddle & RevenueCat (billing), PostHog & Sentry (observability) |
+| **Deployment** | Docker, GitHub Actions, GHCR, Fly.io |
+
+---
+
+## Project Structure
+
+```text
+BoostedBudget/
+├── api/                     # Generated OpenAPI 3.1 spec (source of truth)
+├── apps/
+│   ├── web/                 # React 19 + Vite 8 web application & Playwright E2E
+│   ├── mobile/              # Expo / React Native mobile app
+│   └── mcp-server/          # Model Context Protocol (MCP) server
+├── backend/
+│   ├── cmd/server/          # API server entrypoint
+│   ├── internal/
+│   │   ├── huma/            # Huma API operations, inputs, errors, middleware
+│   │   ├── services/        # Domain business logic
+│   │   ├── repository/      # PostgreSQL data access layer
+│   │   ├── integration/     # Clerk, Plaid, Paddle, RevenueCat, PostHog clients
+│   │   ├── rules/           # Automation rule engine
+│   │   ├── matching/        # Transaction matching logic
+│   │   ├── queue/           # River queue setup
+│   │   └── workers/         # Background job workers
+│   ├── migrations/          # Idempotent .up.sql / .down.sql pairs
+│   └── scripts/             # QA data populator & test scenario tooling
+├── packages/
+│   ├── api-client/          # Orval-generated React Query hooks
+│   ├── design-tokens/       # Shared UI design tokens
+│   └── shared-types/        # Shared TypeScript types
+├── config/                  # Subscription tiers, dashboard layout, admin ACL config
+├── docs/                    # Architecture, ADRs, runbooks, security, and planning docs
+├── infra/                   # Self-hosted runner maintenance scripts
+├── scripts/                 # CI/migration/guard scripts & shell test suites
+├── docker-compose.yml       # Local development stack
+└── Makefile                 # Build, test, codegen, migration, and perf targets
+```
+
+---
+
+## Local Quick Start
+
+### Prerequisites
+
+- **Docker** and **Docker Compose**
+- **Go 1.26.6+**
+- **Bun** (and **Node.js 20+** for Orval OpenAPI codegen)
+- **Make** (optional, for convenience targets)
+
+### 1. Clone & Configure Environment
+
+```bash
+git clone https://github.com/BoostedBudget/BoostedBudget.git
+cd BoostedBudget
+cp .env.example .env
+# Populate .env with your Clerk, Plaid, and optional Paddle/Sentry/PostHog sandbox keys
+```
+
+### 2. Start Local Services
+
+```bash
+make dev
+# Or: docker-compose up
+```
+
+### 3. Run Migrations
+
+```bash
+make migrate-up
+make migrate-status
+```
+
+---
+
+## Testing & Verification
+
+```bash
+# Fast backend + frontend unit tests (no E2E)
+make test-fast
+
+# Backend unit tests
+cd backend && go test ./...
+
+# Backend integration tests (requires standing Postgres & Redis containers)
+DATABASE_URL="postgres://devuser:devpass@localhost:5432/freshcheck?sslmode=disable" \
+CACHE_REDIS_TEST_URL="redis://localhost:6380" \
+REDIS_TEST_URL="redis://localhost:6379" \
+./scripts/summarize-go-test.sh go test -tags integration -p 1 -count=1 ./internal/...
+
+# Frontend unit tests & lint
+cd apps/web && bun run test && bun run lint
+
+# Playwright E2E tests
+cd apps/web && bun run test:e2e
+
+# Migration test suites (idempotency, perf, data, schema, rollback)
+./scripts/test-migrations.sh
+
+# All 27 shell guard suites
+make test-scripts
+
+# Regenerate OpenAPI spec & TypeScript API client
+make generate-all
+```
+
+---
+
+## Documentation
+
+All project documentation is consolidated under [`docs/`](./docs):
+
+- **Architecture & Decisions**: [`docs/architecture/`](./docs/architecture) & [`docs/decisions/`](./docs/decisions)
+- **Security & Privacy**: [`docs/security/`](./docs/security) & [`docs/SECRETS_REFERENCE.md`](./docs/SECRETS_REFERENCE.md)
+- **Operations & Runbooks**: [`docs/operations/`](./docs/operations), [`docs/runbooks/`](./docs/runbooks), [`docs/FLYIO_SETUP.md`](./docs/FLYIO_SETUP.md), [`docs/CLERK_SETUP.md`](./docs/CLERK_SETUP.md)
+- **CI/CD & Scripts**: [`docs/GITHUB_SECRETS_SETUP.md`](./docs/GITHUB_SECRETS_SETUP.md), [`.github/workflows/README.md`](./.github/workflows/README.md), [`scripts/README.md`](./scripts/README.md)
+- **Planning & Specs**: [`docs/planning/`](./docs/planning), [`docs/plans/`](./docs/plans), [`docs/designs/`](./docs/designs)
+- **AI Agent Guidelines**: [`CLAUDE.md`](./CLAUDE.md) / [`AGENTS.md`](./AGENTS.md) / [`GEMINI.md`](./GEMINI.md)
+
+---
+
+## License
+
+Licensed under the **[PolyForm Noncommercial License 1.0.0](./LICENSE)** (`PolyForm-Noncommercial-1.0.0`).
+
+- **Noncommercial use** (personal use, learning, research, evaluation) is permitted under the license terms.
+- **Commercial or for-profit use** requires prior written approval and a separate commercial license from **Max Nussbaum**. Open an issue or reach out to the repository owner for commercial licensing inquiries.

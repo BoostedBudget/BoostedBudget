@@ -1,6 +1,6 @@
 # Self-hosted GitHub Actions runner maintenance — incident record
 
-**These scripts are host-specific, with hardcoded `/Users/yingyueliu` paths. They are a record of
+**These scripts are host-specific, with hardcoded `/Users/runner` paths. They are a record of
 one machine's configuration, not a portable tool. Do not deploy them blind onto another host —
 every path, launchd label, and cron entry assumes this exact Mac Mini's layout.**
 
@@ -27,7 +27,7 @@ The broken entries (preserved in `crontab.bak-b66a4a6f` on the runner host)  emb
 'gsub(/%/,"")'` directly in the crontab command line:
 
 ```
-0 */4 * * * [ $(df -h / | awk 'NR==2 {gsub(/%/,""); print $5}') -gt 70 ] && /Users/yingyueliu/github-runners/runner-maintenance.sh
+0 */4 * * * [ $(df -h / | awk 'NR==2 {gsub(/%/,""); print $5}') -gt 70 ] && /Users/runner/github-runners/runner-maintenance.sh
 0 */4 * * * [ $(df -h / | awk 'NR==2 {gsub(/%/,""); print $5}') -gt 70 ] && echo "DISK WARNING: ..." >> ~/github-runners/disk-alerts.log
 ```
 
@@ -43,7 +43,7 @@ hours for just over 9 months:
 
 Quote that exact string — `/bin/sh: -c: line 0: unexpected EOF while looking for matching` — it is
 what makes this failure recognisable if it recurs on another host or another cron entry. It arrived
-2,600+ times in `/var/mail/yingyueliu`, unnoticed because nothing was reading that mailbox (the
+2,600+ times in `/var/mail/runner`, unnoticed because nothing was reading that mailbox (the
 count rests on host state no longer inspectable from this repo, not on any imported script).
 
 **Fix:** move all `%`-bearing logic out of the crontab line entirely. `disk-guard.sh` now does its
@@ -51,7 +51,7 @@ own threshold check and its own alert-log write internally; the crontab entry is
 no inline shell metacharacters:
 
 ```
-0 */4 * * * /Users/yingyueliu/github-runners/disk-guard.sh
+0 */4 * * * /Users/runner/github-runners/disk-guard.sh
 ```
 
 ### 2. The APFS volume trap — `df -h /` lies about how full the disk is

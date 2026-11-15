@@ -1,4 +1,4 @@
-# SDD ledger — plan: /Users/yingyueliu/coding/BoostedBudget2/docs/superpowers/plans/1464-codex-round5-residuals.md
+# SDD ledger — plan: docs/superpowers/plans/1464-codex-round5-residuals.md
 
 Plan verified before writing: all 4 review findings checked against code. 2 of the
 review's proposed fixes rejected with evidence (as-of query change would break 000112's

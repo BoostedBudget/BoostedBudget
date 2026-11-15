@@ -26,7 +26,7 @@ grep -E "^(QA_BYPASS_SECRET|FRONTEND_URL|BACKEND_URL)" .env.qa 2>/dev/null
 
 Extract:
 - `QA_BYPASS_SECRET` — the shared secret for the bypass endpoint
-- `BACKEND_URL` — backend base URL (e.g., `https://yingyues-mac-mini.tailce219d.ts.net:3443`)
+- `BACKEND_URL` — backend base URL (e.g., `https://qa.example.ts.net:3443`)
 - `FRONTEND_URL` — frontend base URL (same host for QA)
 
 If `.env.qa` is missing or `QA_BYPASS_SECRET` is empty, stop and tell the user to configure `.env.qa` (see `.env.qa.example`).
@@ -43,7 +43,7 @@ rtk proxy curl -s -X POST "<BACKEND_URL>/api/v1/qa/auth/bypass" \
 
 Parse the `url` field from the JSON response:
 ```json
-{"url":"https://direct-caiman-78.accounts.dev/sign-in?__clerk_ticket=...","email":"qa-<role>@boostedbudget.com","tier":"premium"}
+{"url":"https://<clerk-instance>.accounts.dev/sign-in?__clerk_ticket=...","email":"qa-<role>@boostedbudget.com","tier":"premium"}
 ```
 
 **Error handling:**

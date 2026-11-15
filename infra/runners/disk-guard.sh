@@ -13,7 +13,7 @@
 #     /bin/sh: -c: line 0: unexpected EOF while looking for matching `''
 #
 # every 4 hours from 2025-10-24 through 2026-08-04 (thousands of such mails in
-# /var/mail/yingyueliu). Consequences: ~/github-runners/disk-alerts.log was never even
+# /var/mail/runner). Consequences: ~/github-runners/disk-alerts.log was never even
 # created, and the emergency cleanup never fired — maintenance.log shows runs only at
 # 02:00/14:00 (the one crontab entry containing no '%'), never at the */4 times. The host
 # therefore had NO working disk safety net, and on 2026-08-04 CI died with

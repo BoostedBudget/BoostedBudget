@@ -932,7 +932,7 @@ func (m *MockTrialGranter) GrantTrial(ctx context.Context, userID string) error 
 func TestRegisterUser_PlaintextEmailFallback_PreventsaDuplicate(t *testing.T) {
 	ctx := context.Background()
 	clerkUserID := "user_37a3Q6ZvNSpsQsbrsnGSCccN3cP"
-	email := "mbnuss27@gmail.com"
+	email := "user@example.com"
 	existingUserID := "466b7577-537c-4317-ac7b-63d24efe1e13"
 
 	mockProfileRepo := new(MockProfileRepository)

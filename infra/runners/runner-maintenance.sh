@@ -11,7 +11,7 @@ set -euo pipefail
 # cron environment while `timeout` resolved fine. The host-GC lock below therefore silently
 # took the "flock unavailable" branch on every cron run and serialized nothing — it only
 # appeared to work when tested from an interactive shell, which has util-linux on PATH.
-export PATH="/opt/homebrew/bin:/opt/homebrew/opt/util-linux/bin:/Users/yingyueliu/.nvm/versions/node/v22.21.0/bin:/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+export PATH="/opt/homebrew/bin:/opt/homebrew/opt/util-linux/bin:/Users/runner/.nvm/versions/node/v22.21.0/bin:/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 

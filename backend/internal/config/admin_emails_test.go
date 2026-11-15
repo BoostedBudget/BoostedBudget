@@ -31,9 +31,9 @@ import (
 // ownerAdminEmails are the platform-owner addresses that must hold admin access in every
 // environment, production included.
 var ownerAdminEmails = []string{
-	"mbnuss27@gmail.com",
-	"maxnussbaum@live.com",
-	"yingyuemaggieliu@gmail.com",
+	"owner-1@example.com",
+	"owner-2@example.com",
+	"owner-3@example.com",
 }
 
 // testAccountAdminEmails are the CI/QA accounts that must NOT be admins in production.

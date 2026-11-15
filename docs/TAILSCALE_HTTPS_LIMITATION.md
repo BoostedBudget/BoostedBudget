@@ -4,7 +4,7 @@
 
 Authentication SDKs (including Clerk) require HTTPS for all non-localhost origins for security reasons. This means:
 - ✅ **http://localhost:3000** - Works perfectly (localhost is exempt)
-- ❌ **http://yingyues-mac-mini.tailce219d.ts.net:3000** - Blocked by security requirements
+- ❌ **http://qa.example.ts.net:3000** - Blocked by security requirements
 
 Error: Authentication must run on a secure origin (HTTPS) for non-localhost domains.
 
@@ -12,7 +12,7 @@ Error: Authentication must run on a secure origin (HTTPS) for non-localhost doma
 
 Tailscale free tier doesn't support automatic HTTPS certificate provisioning:
 ```bash
-$ tailscale cert yingyues-mac-mini.tailce219d.ts.net
+$ tailscale cert qa.example.ts.net
 500 Internal Server Error: your Tailscale account does not support getting TLS certs
 ```
 
@@ -34,7 +34,7 @@ This works for:
 Upgrade to Tailscale plan with HTTPS support:
 1. Visit https://login.tailscale.com/admin/billing
 2. Upgrade to plan with HTTPS certificates
-3. Run: `tailscale cert yingyues-mac-mini.tailce219d.ts.net`
+3. Run: `tailscale cert qa.example.ts.net`
 4. Configure Vite to use HTTPS (see Option 4 below)
 
 **Cost**: Varies by plan (~$5-20/month)
@@ -73,10 +73,10 @@ Create self-signed certificate for development:
 ```bash
 # Generate certificate
 openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes \
-  -subj "/CN=yingyues-mac-mini.tailce219d.ts.net"
+  -subj "/CN=qa.example.ts.net"
 
 # Move to project
-mv key.pem cert.pem /Users/yingyueliu/coding/BoostedBudget/apps/web/
+mv key.pem cert.pem /Users/runner/coding/BoostedBudget/apps/web/
 ```
 
 Update `apps/web/vite.config.ts`:
@@ -104,7 +104,7 @@ Update docker-compose.staging.yml ports: `3000:3000` → `3443:3443`
 Access staging from any machine via SSH tunnel:
 ```bash
 # From remote machine
-ssh -L 3000:localhost:3000 yingyueliu@mac-mini-ip
+ssh -L 3000:localhost:3000 runner@mac-mini-ip
 
 # Then access http://localhost:3000 in browser
 ```

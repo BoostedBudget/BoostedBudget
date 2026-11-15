@@ -122,7 +122,7 @@ tailscale status | grep "$(hostname)" | awk '{print $1}'
 
 **Result**: You should see output like:
 ```
-100.x.x.x   mac-mini.tailnet-name.ts.net   yingyueliu@  macOS   -
+100.x.x.x   mac-mini.tailnet-name.ts.net   runner@      macOS   -
 ```
 
 ### 1.2 Configure Static Local IP (Optional but Recommended)
@@ -133,7 +133,7 @@ To prevent IP changes after reboot:
 2. Select **Ethernet** (or Wi-Fi) → **Details**
 3. Go to **TCP/IP** tab
 4. Change **Configure IPv4** from "Using DHCP" to "Manually"
-5. Set **IPv4 Address**: `192.168.1.79` (current IP)
+5. Set **IPv4 Address**: `192.0.2.10` (example static LAN IP)
 6. Set **Subnet Mask**: `255.255.255.0`
 7. Set **Router**: `192.168.1.1` (your router's IP)
 8. Click **OK** → **Apply**
@@ -221,7 +221,7 @@ Add these secrets to your repository:
 On your Mac Mini:
 
 ```bash
-cd /Users/yingyueliu/coding/BoostedBudget
+cd /Users/runner/coding/BoostedBudget
 
 # Copy template
 cp .env.qa.example .env.qa
@@ -256,7 +256,7 @@ sed -i '' "s|mac-mini.tailnet-name.ts.net|$TAILSCALE_HOSTNAME|g" .env.qa
 Run the first deployment manually to verify everything works:
 
 ```bash
-cd /Users/yingyueliu/coding/BoostedBudget
+cd /Users/runner/coding/BoostedBudget
 
 # Make sure you're on staging branch
 git checkout staging

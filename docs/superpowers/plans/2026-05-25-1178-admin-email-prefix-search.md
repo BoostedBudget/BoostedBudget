@@ -646,7 +646,7 @@ git commit -m "#1178: Write failing prefix search integration tests for admin us
 - [ ] **Step 0: Check for existing pgxmock tests that reference the old SQL**
 
 ```bash
-grep -n "email_blind_idx\|buildFilterClause" /Users/yingyueliu/coding/BoostedBudget2/backend/internal/repository/admin_user_repository*test* 2>/dev/null || echo "none found"
+grep -n "email_blind_idx\|buildFilterClause" backend/internal/repository/admin_user_repository*test* 2>/dev/null || echo "none found"
 ```
 
 If any unit tests (non-integration) reference `email_blind_idx` or the old exact-match SQL, update their `ExpectQuery`/`ExpectExec` expectations to use the new `EXISTS (SELECT 1 FROM user_email_prefix_indices ...)` pattern before changing the production code. The existing integration test only tests sort order — there are no pgxmock search-filter expectations to update — but verify this.

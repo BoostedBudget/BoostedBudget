@@ -41,8 +41,8 @@ func TestGetCORSConfig(t *testing.T) {
 		},
 		{
 			name:            "Tailscale URL for staging",
-			allowedOrigins:  "https://yingyues-mac-mini.tailce219d.ts.net:3443,https://localhost:3443",
-			expectedOrigins: []string{"https://yingyues-mac-mini.tailce219d.ts.net:3443", "https://localhost:3443"},
+			allowedOrigins:  "https://qa.example.ts.net:3443,https://localhost:3443",
+			expectedOrigins: []string{"https://qa.example.ts.net:3443", "https://localhost:3443"},
 		},
 	}
 
