@@ -993,7 +993,7 @@ Expected: all tests pass, no failures
 - [ ] **Step 4: Run lint**
 
 ```bash
-make -C /Users/runner/coding/BoostedBudget/backend lint
+make -C backend lint
 ```
 
 Expected: no lint errors

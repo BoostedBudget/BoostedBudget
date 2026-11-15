@@ -1,4 +1,4 @@
-# SDD ledger — plan: /Users/runner/.claude/plans/analyze-every-ticket-1432-cryptic-starfish.md (Round 5, batches T0-T4)
+# SDD ledger — plan: analyze-every-ticket-1432-cryptic-starfish.md (Round 5, batches T0-T4)
 
 T0: implemented (opus) commit fca65d1b. BASE 6dccd4b4.
 T0: DEVIATION from the user-approved mechanism, and it is JUSTIFIED. The plan said "split into two
