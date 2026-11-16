@@ -1229,7 +1229,7 @@ func TestStampMissingPlaidCleanupMarkers_Integration_Idempotent(t *testing.T) {
 	var secondStamp *time.Time
 	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&secondStamp))
 	require.NotNil(t, secondStamp)
-	assert.True(t, firstStamp.Equal(*secondStamp), "a second backstop run must not re-stamp (and thus re-arm the grace window for) a marker that is already set")
+	assert.True(t, firstStamp.Truncate(time.Microsecond).Equal(secondStamp.Truncate(time.Microsecond)), "a second backstop run must not re-stamp (and thus re-arm the grace window for) a marker that is already set")
 }
 
 // ─── Issue #1413 Finding 1 (Codex review, PR #1443 follow-up, headline finding):
@@ -1336,7 +1336,7 @@ func TestClearCompletedPlaidCleanupMarkers_Integration_KeepsMarkerWithZeroLinked
 	var marker *time.Time
 	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
 	require.NotNil(t, marker, "the #1453 allowance: a user with ZERO linked_items rows at all must KEEP their marker")
-	assert.True(t, staleMarker.Equal(*marker), "the marker's VALUE must be completely untouched, not just non-NULL")
+	assert.True(t, staleMarker.Truncate(time.Microsecond).Equal(marker.Truncate(time.Microsecond)), "the marker's VALUE must be completely untouched, not just non-NULL")
 }
 
 // TestClearCompletedPlaidCleanupMarkers_Integration_ExcludesUserWithLiveItem proves the clear never
@@ -1377,7 +1377,7 @@ func TestClearCompletedPlaidCleanupMarkers_Integration_ExcludesUserWithLiveItem(
 	var marker *time.Time
 	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
 	require.NotNil(t, marker, "a user with at least one LIVE linked item must never have their marker cleared — cleanup is still genuinely outstanding")
-	assert.True(t, staleMarker.Equal(*marker))
+	assert.True(t, staleMarker.Truncate(time.Microsecond).Equal(marker.Truncate(time.Microsecond)))
 }
 
 // TestClearCompletedPlaidCleanupMarkers_Integration_ClearsRegardlessOfActiveOverride proves the
@@ -1556,7 +1556,7 @@ func TestClearMarkersOnEligibleStatus_Integration_ExcludesIneligibleStatus(t *te
 	var marker *time.Time
 	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
 	require.NotNil(t, marker, "an ineligible-status (cancelled) user's marker must be untouched by this backstop")
-	assert.True(t, staleMarker.Equal(*marker))
+	assert.True(t, staleMarker.Truncate(time.Microsecond).Equal(marker.Truncate(time.Microsecond)))
 }
 
 // TestClearMarkersOnEligibleStatus_Integration_ClearsRegardlessOfActiveOverride pins the Issue
@@ -1609,7 +1609,7 @@ func TestClearMarkersOnEligibleStatus_Integration_ExcludesSoftDeletedUser(t *tes
 	var marker *time.Time
 	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
 	require.NotNil(t, marker, "a soft-deleted user must be untouched by this backstop")
-	assert.True(t, staleMarker.Equal(*marker))
+	assert.True(t, staleMarker.Truncate(time.Microsecond).Equal(marker.Truncate(time.Microsecond)))
 }
 
 // TestClearMarkersOnEligibleStatus_Integration_Idempotent proves this backstop is safe to run on
@@ -1783,7 +1783,7 @@ func TestPlaidDisconnectRepair_Integration_1453ZeroRowsCase_KeepsMarkerAndIsNeve
 	var marker *time.Time
 	require.NoError(t, pool.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", user.ID).Scan(&marker))
 	require.NotNil(t, marker, "the #1453 allowance: a zero-linked-items user keeps their marker through BOTH backstop halves")
-	assert.True(t, staleMarker.Equal(*marker), "the marker's value must be completely untouched")
+	assert.True(t, staleMarker.Truncate(time.Microsecond).Equal(marker.Truncate(time.Microsecond)), "the marker's value must be completely untouched")
 
 	candidates, err := repo.GetUsersNeedingPlaidDisconnectRepair(ctx, testGracePeriod)
 	require.NoError(t, err)
