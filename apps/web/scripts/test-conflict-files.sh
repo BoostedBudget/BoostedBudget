@@ -235,6 +235,7 @@ GROUP_I_FILES=(
     "src/features/budgets/components/BudgetsPage.test.tsx"
     "src/features/transactions/components/TransactionTable.test.tsx"
     "src/features/transactions/review/components/TriageDetailView.test.tsx"
+    "src/features/auto-categorization/components/AutoCategorizationPage.test.tsx"
 )
 idx=1
 for f in "${GROUP_I_FILES[@]}"; do
