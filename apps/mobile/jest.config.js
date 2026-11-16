@@ -1,5 +1,11 @@
+const jestExpoPreset = require('jest-expo/jest-preset')
+
 module.exports = {
   preset: 'jest-expo',
+  transform: {
+    ...jestExpoPreset.transform,
+    '^.+\\.mjs$': jestExpoPreset.transform['\\.[jt]sx?$'],
+  },
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
   moduleNameMapper: {
     '^@babel/runtime/(.*)$': '<rootDir>/../../node_modules/@babel/runtime/$1',
@@ -32,7 +38,7 @@ module.exports = {
   // conventional node_modules path. Keep both layers transformable by Expo's
   // Babel preset while retaining Jest's normal dependency exclusion.
   transformIgnorePatterns: [
-    '/node_modules/(?!\\.bun/|react-native|@react-native|expo|@expo|@clerk|expo-router|@tanstack|nanoid|standard-navigation|decode-uri-component|query-string|split-on-first|filter-obj)',
+    '/node_modules/(?!\\.bun/|.*node_modules/magic-string|react-native|@react-native|expo|@expo|@clerk|expo-router|@tanstack|nanoid|standard-navigation|decode-uri-component|query-string|split-on-first|filter-obj|magic-string)',
   ],
   // `/e2e/` holds the Playwright visual/accessibility suite (Todo 22). `jest-expo` sets no
   // `testMatch`, so jest's default `**/?(*.)+(spec|test).[jt]s?(x)` would discover
