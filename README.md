@@ -2,11 +2,11 @@
 
 **Personal finance, budgeting, and automation platform — now open as a public engineering showcase.**
 
-> **Project Status — Archived / Showcase (November 2026)**
+> **Project Status — Public Engineering Showcase (November 2026)**
 >
-> Active product development has been sunset. Major AI platforms (Gemini, OpenAI/Codex, and Anthropic/Claude) now integrate directly with Plaid, and Monarch Money released an official MCP server—making a standalone paid budgeting + MCP SaaS non-viable.
+> BoostedBudget is no longer being pursued as a commercial SaaS product—major AI platforms (Gemini, OpenAI/Codex, and Anthropic/Claude) now integrate directly with Plaid, and Monarch Money released an official MCP server.
 >
-> The repository is public to showcase the architecture, engineering practices, and full-stack implementation. It is licensed under the **PolyForm Noncommercial License 1.0.0** (free for personal, learning, and noncommercial use; commercial/for-profit use requires prior written approval and a commercial license).
+> The repository is now public to showcase its architecture, engineering practices, and full-stack implementation, while remaining open for ongoing personal experimentation, tweaks, and new builds. It is licensed under the **PolyForm Noncommercial License 1.0.0** (free for personal, learning, and noncommercial use; commercial/for-profit use requires prior written approval and a commercial license).
 
 ---
 
