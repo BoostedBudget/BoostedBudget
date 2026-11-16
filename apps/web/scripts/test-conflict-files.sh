@@ -231,6 +231,10 @@ GROUP_I_FILES=(
     "src/features/tags/hooks/useTags.test.tsx"
     "src/features/profile/ProfileForm.test.tsx"
     "src/features/profile/ProfilePage.test.tsx"
+    "src/features/auto-categorization/components/AutoCategorizationRuleEditor.test.tsx"
+    "src/features/budgets/components/BudgetsPage.test.tsx"
+    "src/features/transactions/components/TransactionTable.test.tsx"
+    "src/features/transactions/review/components/TriageDetailView.test.tsx"
 )
 idx=1
 for f in "${GROUP_I_FILES[@]}"; do

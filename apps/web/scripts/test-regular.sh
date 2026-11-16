@@ -45,6 +45,10 @@ EXCLUDE_PATTERNS=(
     "src/features/tags/hooks/useTags.test.tsx"
     "src/features/profile/ProfileForm.test.tsx"
     "src/features/profile/ProfilePage.test.tsx"
+    "src/features/auto-categorization/components/AutoCategorizationRuleEditor.test.tsx"
+    "src/features/budgets/components/BudgetsPage.test.tsx"
+    "src/features/transactions/components/TransactionTable.test.tsx"
+    "src/features/transactions/review/components/TriageDetailView.test.tsx"
     # Real-implementation hook tests
     "src/features/dashboard/hooks/useDashboardData.test.tsx"
     "src/features/dashboard/hooks/useCashFlowData.test.tsx"
