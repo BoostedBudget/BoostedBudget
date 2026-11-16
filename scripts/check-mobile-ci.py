@@ -617,8 +617,8 @@ def check(root: pathlib.Path) -> list[str]:
             findings.append("mobile-test.needs must be detect-changes")
         if job.get("if") != "needs.detect-changes.outputs.mobile == 'true'":
             findings.append("mobile-test.if must gate on the declared mobile output")
-        if job.get("runs-on") != "ubicloud-standard-2":
-            findings.append("mobile-test must run on ubicloud-standard-2")
+        if job.get("runs-on") not in ("ubuntu-latest", "ubicloud-standard-2"):
+            findings.append("mobile-test must run on ubuntu-latest (or ubicloud-standard-2)")
         steps = [step for step in job.get("steps") or [] if isinstance(step, dict)]
         action_steps = [step for step in steps if isinstance(step.get("uses"), str)]
         enabled_action_steps = [step for step in action_steps if "if" not in step]

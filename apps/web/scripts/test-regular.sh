@@ -33,8 +33,14 @@ EXCLUDE_PATTERNS=(
     # Inline mock.module() pollution (see feedback_bun_test_mock_module_global.md)
     "src/features/accounts/AccountsPage.test.tsx"
     "src/features/auto-categorization/components/MerchantsTab.test.tsx"
+    "src/features/dashboard/widgets/AccountCardsWidget.test.tsx"
+    "src/features/dashboard/widgets/BalanceHistoryWidget.test.tsx"
+    "src/features/dashboard/widgets/BalanceOverviewWidget.test.tsx"
+    "src/features/budgets/components/category-management/BudgetCategoryCard.test.tsx"
+    "src/features/budgets/components/category-management/BudgetCategoryManager.test.tsx"
     # Real-implementation hook tests
     "src/features/dashboard/hooks/useDashboardData.test.tsx"
+    "src/features/dashboard/hooks/useCashFlowData.test.tsx"
     "src/features/dashboard/hooks/useNetWorthData.test.tsx"
     "src/features/dashboard/hooks/useDashboardLayout.test.tsx"
     "src/features/dashboard/hooks/useDashboardOnboarding.test.ts"

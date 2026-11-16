@@ -215,4 +215,28 @@ run_group F "Real savings-goals hooks + real query cache" "${GROUP_F_PRELOAD_ARG
 run_group G "SankeyViewModeControl against real Radix toggle-group" "${GROUP_G_PRELOAD_ARGS[@]}" "${GROUP_G_FILES[@]}"
 run_group H "Real PostHog SDK sessionStorage privacy" "${GROUP_H_PRELOAD_ARGS[@]}" "${GROUP_H_FILES[@]}"
 
+# Group I: Inline mock.module() widget/budget tests + useCashFlowData isolated per-file from
+# $FRONTEND_DIR so they inherit bunfig.toml preloads without polluting test-regular.sh.
+GROUP_I_FILES=(
+    "src/features/dashboard/hooks/useCashFlowData.test.tsx"
+    "src/features/dashboard/widgets/AccountCardsWidget.test.tsx"
+    "src/features/dashboard/widgets/BalanceHistoryWidget.test.tsx"
+    "src/features/dashboard/widgets/BalanceOverviewWidget.test.tsx"
+    "src/features/budgets/components/category-management/BudgetCategoryCard.test.tsx"
+    "src/features/budgets/components/category-management/BudgetCategoryManager.test.tsx"
+)
+idx=1
+for f in "${GROUP_I_FILES[@]}"; do
+    echo "Running Group I-$idx: $f..."
+    if [ "$COVERAGE" = true ]; then
+        (cd "$FRONTEND_DIR" && bun test --timeout 30000 \
+            --coverage --coverage-reporter=lcov \
+            --coverage-dir="$FRONTEND_DIR/coverage-conflict/group-i-$idx" \
+            "$f")
+    else
+        (cd "$FRONTEND_DIR" && bun test --timeout 30000 "$f")
+    fi
+    idx=$((idx + 1))
+done
+
 echo "Process-isolated test groups completed!"

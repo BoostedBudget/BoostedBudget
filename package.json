@@ -59,7 +59,9 @@
     "compression": ">=1.8.2",
     "decode-uri-component": ">=0.5.1",
     "happy-dom": ">=21.0.4",
-    "zod": ">=4.6.6"
+    "zod": ">=4.6.6",
+    "@modelcontextprotocol/client": ">=2.2.0",
+    "@modelcontextprotocol/server": ">=2.3.0"
   },
   "dependencies": {
     "axios": "^1.19.0",
