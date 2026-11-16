@@ -11,8 +11,8 @@
 # govulncheck: GO-2026-6218 (net/url), GO-2026-6091 (html/template), GO-2026-6090
 # (crypto/tls), GO-2026-6089 (net/http), GO-2026-6088 (encoding/xml), GO-2026-5972
 # (encoding/asn1) and GO-2026-5026 (net/http via x/net/idna). All are fixed in go1.26.6.
-ARG GO_VERSION=1.26.6
-FROM golang:${GO_VERSION}-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS builder
+ARG GO_VERSION=1.26.11
+FROM golang:${GO_VERSION}-alpine@sha256:ae52b5bc6ed045a9ed26ab03dc19327a802a9cc9aa8b27ed57f5c6b60579b0bb AS builder
 
 # Install build dependencies
 RUN echo "Installing build dependencies..." && \
