@@ -3103,7 +3103,34 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
+          # GO-2026-6872 (Echo RateLimiter X-Forwarded-For) and GO-2026-6875 (Echo ReverseProxy
+          # X-Real-IP) both report "Fixed in: N/A" on echo/v4@v4.16.5 (latest release) and this
+          # service uses neither middleware. Fail on any other called vulnerability.
+          govulncheck -format json ./... | python3 -c '
+          import json, sys
+          ALLOW_UNFIXED = {"GO-2026-6872", "GO-2026-6875"}
+          dec = json.JSONDecoder()
+          raw = sys.stdin.read()
+          idx, n = 0, len(raw)
+          called = set()
+          while idx < n:
+              while idx < n and raw[idx].isspace():
+                  idx += 1
+              if idx >= n:
+                  break
+              obj, idx = dec.raw_decode(raw, idx)
+              f = obj.get("finding")
+              if f and any("function" in t for t in f.get("trace", [])):
+                  called.add(f["osv"])
+          unexpected = sorted(called - ALLOW_UNFIXED)
+          ignored = sorted(called & ALLOW_UNFIXED)
+          if ignored:
+              print("Ignoring unfixed Echo middleware advisories (Fixed in: N/A):", ", ".join(ignored))
+          if unexpected:
+              print("ERROR: unexpected called Go vulnerabilities:", ", ".join(unexpected), file=sys.stderr)
+              sys.exit(1)
+          print("govulncheck: OK (0 unexpected called vulnerabilities)")
+          '
 
       # =========================================================================
       # Frontend Security: npm audit (Bun uses npm-compatible packages)
