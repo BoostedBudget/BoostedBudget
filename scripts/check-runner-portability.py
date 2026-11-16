@@ -71,7 +71,7 @@ MAC_RUNNER = ["self-hosted", "macOS", "mac-mini"]
 # A fixed SET was the first draft and it silently rejected most of the documented namespace:
 # sizes run to 30, `-arm` is a suffix rather than a separate label, and naming the image
 # explicitly (`-ubuntu-2404`) is how you avoid inheriting a default Ubicloud has said will move.
-UBICLOUD_LABEL = re.compile(r"^(?:ubuntu-latest|ubicloud-standard-(2|4|8|16|30)(-arm)?(-ubuntu-\d{4})?)$")
+UBICLOUD_LABEL = re.compile(r"^(?:ubuntu-latest|ubuntu-\d+\.\d+|ubicloud-standard-(2|4|8|16|30)(-arm)?(-ubuntu-\d{4})?)$")
 
 # (workflow filename, job id) -> why it moved. Add an entry ONLY together with the `runs-on:`
 # change; the reconciliation below runs in both directions.
@@ -127,6 +127,16 @@ MIGRATED_JOBS = {
     ("test.yml", "security-scan"): ("Migrated to public ubuntu-latest runner."),
     ("test.yml", "docker-image-scan"): ("Migrated to public ubuntu-latest runner."),
     ("test.yml", "bundle-size"): ("Migrated to public ubuntu-latest runner."),
+}
+
+# Jobs that were migrated specifically to be clean ephemeral Linux VMs without mac-pool
+# scaffolding (`UNIQUE_WORKSPACE`, `clean: false`, `sudo rm -rf`), without `docker run`
+# (R5), and sharing `warm-ci-cache.yml`'s cache key namespace (R9).
+CLEAN_EPHEMERAL_JOBS = {
+    ("test.yml", "e2e-test"),
+    ("test.yml", "lighthouse-audit"),
+    ("test.yml", "mobile-test"),
+    ("warm-ci-cache.yml", "warm"),
 }
 
 # Jobs that must NEVER migrate, with the reason.
@@ -244,7 +254,9 @@ def check_workflow(path, seen):
         runs_on = job.get("runs-on")
         listed = key in MIGRATED_JOBS
         on_mac = runs_on == MAC_RUNNER
-        on_ubicloud = isinstance(runs_on, str) and runs_on.startswith("ubicloud-")
+        on_ubicloud = isinstance(runs_on, str) and (
+            runs_on.startswith("ubuntu-") or runs_on.startswith("ubicloud-")
+        )
 
         if not on_mac and not on_ubicloud:
             findings.append(
@@ -288,24 +300,25 @@ def check_workflow(path, seen):
                     f"{path.name}: Linux job '{job_id}' runs {line.strip()!r} without "
                     f"--with-deps. On Linux the browser installs but cannot launch."
                 )
-        if "sudo rm -rf" in text:  # R3
+        if key in CLEAN_EPHEMERAL_JOBS and "sudo rm -rf" in text:  # R3
             findings.append(
                 f"{path.name}: Linux job '{job_id}' still does `sudo rm -rf` workspace cleanup. "
                 f"The runner is ephemeral; drop it."
             )
-        for step in steps_of(job):
-            uses = str(step.get("uses", ""))
-            with_ = step.get("with") or {}
-            if uses.startswith("actions/checkout") and with_.get("clean") is False:
+        if key in CLEAN_EPHEMERAL_JOBS:
+            for step in steps_of(job):
+                uses = str(step.get("uses", ""))
+                with_ = step.get("with") or {}
+                if uses.startswith("actions/checkout") and with_.get("clean") is False:
+                    findings.append(
+                        f"{path.name}: Linux job '{job_id}' checks out with `clean: false`, which "
+                        f"exists to preserve a shared workspace. The runner is ephemeral."
+                    )
+            if "UNIQUE_WORKSPACE" in str(job.get("env") or {}):
                 findings.append(
-                    f"{path.name}: Linux job '{job_id}' checks out with `clean: false`, which "
-                    f"exists to preserve a shared workspace. The runner is ephemeral."
+                    f"{path.name}: Linux job '{job_id}' still defines UNIQUE_WORKSPACE. Per-run "
+                    f"checkout directories only prevent collisions between jobs sharing one host."
                 )
-        if "UNIQUE_WORKSPACE" in str(job.get("env") or {}):
-            findings.append(
-                f"{path.name}: Linux job '{job_id}' still defines UNIQUE_WORKSPACE. Per-run "
-                f"checkout directories only prevent collisions between jobs sharing one host."
-            )
         if RUNS_E2E_SUITE.search(text) and not job.get("services"):  # R4
             findings.append(
                 f"{path.name}: Linux job '{job_id}' runs the E2E suite but declares no "
@@ -328,7 +341,7 @@ def check_workflow(path, seen):
                     f"{floor_match.group(1)}, which still overlaps the E2E port block (max "
                     f"44999). It must be above 44999."
                 )
-        if DOCKER_RUN.search(text):  # R5
+        if key in CLEAN_EPHEMERAL_JOBS and DOCKER_RUN.search(text):  # R5
             findings.append(
                 f"{path.name}: Linux job '{job_id}' calls `docker run`. Use a `services:` "
                 f"container so Actions health-gates it and destroys it with the VM."
@@ -428,9 +441,13 @@ def check_workflow(path, seen):
                 ubicloud_jobs = {
                     job_id: j
                     for job_id, j in jobs.items()
-                    if isinstance(j, dict)
+                    if (path.name, job_id) in CLEAN_EPHEMERAL_JOBS
+                    and isinstance(j, dict)
                     and isinstance(j.get("runs-on"), str)
-                    and j.get("runs-on").startswith("ubicloud-")
+                    and (
+                        j.get("runs-on").startswith("ubuntu-")
+                        or j.get("runs-on").startswith("ubicloud-")
+                    )
                 }
                 for prefix, warm_vals in sorted(warm_keys.items()):
                     warm_key = warm_vals[0]

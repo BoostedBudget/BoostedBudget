@@ -58,6 +58,58 @@ jobs:
     steps:
       - run: bun run --cwd apps/mobile export:web
   backend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: go test ./...
+  detect-changes:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo changes
+  posthog-contract-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo posthog
+  openapi-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo openapi
+  typescript-client-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ts
+  mcp-server-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo mcp
+  mcp-server-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo mcp-int
+  backend-integration-test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo backend-int
+  frontend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo fe
+  migration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo mig
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo sec
+  docker-image-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo scan
+  bundle-size:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo bundle
+  mac-smoke:
     runs-on: [self-hosted, macOS, mac-mini]
     steps:
       - run: sudo rm -rf x && shasum -a 256 y && docker run --rm hello-world
@@ -81,6 +133,51 @@ jobs:
     runs-on: [self-hosted, macOS, mac-mini]
     steps:
       - run: echo deploy
+YAML
+  cat > "$dir/cleanup-artifacts.yml" <<'YAML'
+name: ca
+on: workflow_dispatch
+jobs:
+  delete-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo cleanup
+YAML
+  cat > "$dir/sync-staging.yml" <<'YAML'
+name: ss
+on: workflow_dispatch
+jobs:
+  sync-staging:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo sync
+YAML
+  cat > "$dir/promote-to-production.yml" <<'YAML'
+name: ptp
+on: workflow_dispatch
+jobs:
+  promote-staging-to-main:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo promote
+YAML
+  cat > "$dir/deploy-production.yml" <<'YAML'
+name: dp
+on: workflow_dispatch
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo changes
+YAML
+  cat > "$dir/deploy-to-staging.yaml" <<'YAML'
+name: dts
+on: workflow_dispatch
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo changes
 YAML
 }
 
@@ -129,9 +226,9 @@ if guard_passes "$TMP/c2"; then bad "accepted a migrated job back on mac"; else 
 
 echo "3/17: an unlisted job on a ubicloud label is caught"
 write_clean "$TMP/c3"
-mutate "$TMP/c3/test.yml" "  backend-test:
-    runs-on: [self-hosted, macOS, mac-mini]" "  backend-test:
-    runs-on: ubicloud-standard-2"
+mutate "$TMP/c3/test.yml" "  mac-smoke:
+    runs-on: [self-hosted, macOS, mac-mini]" "  mac-smoke:
+    runs-on: ubuntu-latest"
 if guard_passes "$TMP/c3"; then bad "accepted an unlisted ubicloud job"; else ok "detected"; fi
 
 echo "4/17: a RENAMED listed job is caught (the one-directional-reconciliation hole)"

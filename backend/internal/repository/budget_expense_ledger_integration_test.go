@@ -40,18 +40,20 @@ func TestBudgetExpenseLedgerPostedNonTransferAndPartialSavings(t *testing.T) {
 	food := "FOOD_AND_DRINK"
 	primary := "TRANSFER_OUT"
 	ids := []string{}
+	now := time.Now().UTC()
+	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	txDate := start.AddDate(0, 0, 11).Format("2006-01-02")
 	for _, v := range []struct {
 		pending bool
 		primary string
 	}{{false, food}, {true, food}, {false, primary}} {
 		id := uuid.NewString()
 		ids = append(ids, id)
-		_, err = tx.Exec(ctx, `INSERT INTO transactions (id,user_id,account_id,linked_item_id,source,amount,name,date,pending,category_override_kind,pfc_primary_override) VALUES ($1,$2,$3,$4,'manual',100,'Fixture','2026-09-12',$5,'pfc',$6)`, id, user, account, item, v.pending, v.primary)
+		_, err = tx.Exec(ctx, `INSERT INTO transactions (id,user_id,account_id,linked_item_id,source,amount,name,date,pending,category_override_kind,pfc_primary_override) VALUES ($1,$2,$3,$4,'manual',100,'Fixture',$5,$6,'pfc',$7)`, id, user, account, item, txDate, v.pending, v.primary)
 		require.NoError(t, err)
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO savings_goal_contributions (savings_goal_id,transaction_id,amount,source,status,occurred_on,flow_kind) VALUES ($1,$2,30,'manual','confirmed','2026-09-12','contribution')`, goal, ids[0])
+	_, err = tx.Exec(ctx, `INSERT INTO savings_goal_contributions (savings_goal_id,transaction_id,amount,source,status,occurred_on,flow_kind) VALUES ($1,$2,30,'manual','confirmed',$3,'contribution')`, goal, ids[0], txDate)
 	require.NoError(t, err)
-	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	ledger, err := ReadBudgetExpenseLedger(ctx, tx, user, []domain.BudgetCategory{{ID: "food", CategoryKind: "pfc", PFCPrimary: &food}, {ID: "other", CategoryKind: "remainder"}}, start, start.AddDate(0, 1, -1))
 	require.NoError(t, err)
 	require.Equal(t, 70.0, *ledger.Lines["food"].Amount)
@@ -120,7 +122,7 @@ func TestBudgetExpenseLedgerPostedNonTransferAndPartialSavings(t *testing.T) {
 	for _, cat := range []*domain.BudgetCategory{{BudgetID: budget.ID, CategoryKind: "pfc", PFCPrimary: &food, AllocatedAmount: 500, SpentAmount: 7}, {BudgetID: budget.ID, CategoryKind: "savings", SavingsGoalID: &goal, AllocatedAmount: 100}} {
 		require.NoError(t, br.CreateCategory(ctx, cat))
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO savings_goal_contributions (savings_goal_id,amount,source,status,occurred_on) VALUES ($1,20,'manual','confirmed','2026-09-12')`, goal)
+	_, err = tx.Exec(ctx, `INSERT INTO savings_goal_contributions (savings_goal_id,amount,source,status,occurred_on) VALUES ($1,20,'manual','confirmed',$2)`, goal, txDate)
 	require.NoError(t, err)
 	_, err = br.(*budgetRepository).RecalculateBudgetActuals(ctx, user, budget.ID, true)
 	require.NoError(t, err, "an ambiguous savings reason retains that line instead of aborting the whole sibling refresh")

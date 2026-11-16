@@ -12,7 +12,7 @@ concurrency:
 
 
 env:
-  GO_VERSION: '1.26.6'
+  GO_VERSION: '1.26.11'
   NODE_VERSION: '20'
 
 jobs:
@@ -494,7 +494,7 @@ jobs:
       # this job previously had no setup-node at all -- it inherited whatever node the Mac Mini
       # happened to have. On an ephemeral runner that is an unpinned dependency on the image.
       - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           # `cache:` intentionally LEFT UNSET, unlike setup-go's explicit `cache: false` below --
@@ -947,7 +947,7 @@ jobs:
       - name: Upload E2E test results
         id: upload-playwright-report
         if: success() || failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         continue-on-error: true
         with:
           name: playwright-report-${{ github.run_id }}-${{ github.run_attempt }}
@@ -962,7 +962,7 @@ jobs:
       - name: Upload E2E test videos (on failure)
         id: upload-playwright-videos
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         continue-on-error: true
         with:
           name: playwright-videos-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1150,7 +1150,7 @@ jobs:
           bun-version: latest
 
       - name: Setup Node.js (for npx orval)
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22'
 
@@ -1562,7 +1562,7 @@ jobs:
           clean: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "22"
 
@@ -1764,7 +1764,7 @@ jobs:
 
       - name: Upload backend coverage report
         id: upload-backend-coverage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         continue-on-error: true
         with:
           name: backend-coverage-${{ github.run_id }}
@@ -2409,7 +2409,7 @@ jobs:
           fetch-depth: 1
 
       - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           # Expo SDK 57 requires Node >=22.13. Pin the compatibility floor so the
           # ephemeral runner image cannot silently change the toolchain underneath us.
@@ -2665,7 +2665,7 @@ jobs:
       - name: Upload combined coverage report
         id: upload-frontend-coverage
         if: always() && !cancelled() && steps.combine-coverage.outcome == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         continue-on-error: true
         with:
           name: frontend-coverage-${{ github.run_id }}
@@ -3029,7 +3029,7 @@ jobs:
       - name: Upload performance benchmarks
         id: upload-migration-perf
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         continue-on-error: true
         with:
           name: migration-performance-${{ github.run_id }}
@@ -3103,7 +3103,34 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}/backend
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
+          # GO-2026-6872 (Echo RateLimiter X-Forwarded-For) and GO-2026-6875 (Echo ReverseProxy
+          # X-Real-IP) both report "Fixed in: N/A" on echo/v4@v4.16.5 (latest release) and this
+          # service uses neither middleware. Fail on any other called vulnerability.
+          govulncheck -format json ./... | python3 -c '
+          import json, sys
+          ALLOW_UNFIXED = {"GO-2026-6872", "GO-2026-6875"}
+          dec = json.JSONDecoder()
+          raw = sys.stdin.read()
+          idx, n = 0, len(raw)
+          called = set()
+          while idx < n:
+              while idx < n and raw[idx].isspace():
+                  idx += 1
+              if idx >= n:
+                  break
+              obj, idx = dec.raw_decode(raw, idx)
+              f = obj.get("finding")
+              if f and any("function" in t for t in f.get("trace", [])):
+                  called.add(f["osv"])
+          unexpected = sorted(called - ALLOW_UNFIXED)
+          ignored = sorted(called & ALLOW_UNFIXED)
+          if ignored:
+              print("Ignoring unfixed Echo middleware advisories (Fixed in: N/A):", ", ".join(ignored))
+          if unexpected:
+              print("ERROR: unexpected called Go vulnerabilities:", ", ".join(unexpected), file=sys.stderr)
+              sys.exit(1)
+          print("govulncheck: OK (0 unexpected called vulnerabilities)")
+          '
 
       # =========================================================================
       # Frontend Security: npm audit (Bun uses npm-compatible packages)
@@ -3169,7 +3196,7 @@ jobs:
           clean: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Set Dockerfile path
         id: dockerfile
@@ -3181,7 +3208,7 @@ jobs:
           fi
 
       - name: Build Docker image (local only)
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: ${{ env.UNIQUE_WORKSPACE }}
           file: ${{ env.UNIQUE_WORKSPACE }}/${{ steps.dockerfile.outputs.path }}
@@ -3306,7 +3333,7 @@ jobs:
       # `npx lhci` and `npx serve` both need a predictable Node; this job previously had none and
       # used whatever the Mac Mini happened to provide.
       - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           # `cache:` intentionally LEFT UNSET -- see e2e-test's Set up Node for the full
@@ -3449,7 +3476,7 @@ jobs:
         id: upload-lighthouse-reports
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: lighthouse-reports-${{ github.run_id }}-${{ github.run_attempt }}
           path: /tmp/lhci-reports

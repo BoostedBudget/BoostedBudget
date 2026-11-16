@@ -231,7 +231,7 @@ func TestMigration000127_BackfillMalformedTierOverrideAndMarkerResidue(t *testin
 		require.NoError(t, tx.QueryRow(ctx,
 			"SELECT deletion_requested_at FROM users WHERE id = $1", userID).Scan(&requestedAt))
 		require.NotNil(t, requestedAt, "the migration must not disturb a pending deletion")
-		assert.True(t, deletionRequestedAt.Equal(*requestedAt))
+		assert.True(t, deletionRequestedAt.Truncate(time.Microsecond).Equal(requestedAt.Truncate(time.Microsecond)))
 	})
 
 	// ─── Scenario E: a user with AT LEAST ONE linked_items row (even a disconnected one) must be
@@ -258,7 +258,7 @@ func TestMigration000127_BackfillMalformedTierOverrideAndMarkerResidue(t *testin
 		var pendingAt *time.Time
 		require.NoError(t, tx.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", userID).Scan(&pendingAt))
 		require.NotNil(t, pendingAt, "a user with at least one linked_items row must not be touched by this one-time migration")
-		assert.True(t, staleMarker.Equal(*pendingAt))
+		assert.True(t, staleMarker.Truncate(time.Microsecond).Equal(pendingAt.Truncate(time.Microsecond)))
 	})
 
 	// ─── Scenario F: an ACTIVE-status user's marker must never be touched, regardless of
@@ -279,7 +279,7 @@ func TestMigration000127_BackfillMalformedTierOverrideAndMarkerResidue(t *testin
 		var pendingAt *time.Time
 		require.NoError(t, tx.QueryRow(ctx, "SELECT plaid_cleanup_pending_at FROM users WHERE id = $1", userID).Scan(&pendingAt))
 		require.NotNil(t, pendingAt, "an active-status user must never be touched by this migration")
-		assert.True(t, staleMarker.Equal(*pendingAt))
+		assert.True(t, staleMarker.Truncate(time.Microsecond).Equal(pendingAt.Truncate(time.Microsecond)))
 	})
 
 	// ─── Scenario G: idempotency — running the up SQL twice must not error and must leave an

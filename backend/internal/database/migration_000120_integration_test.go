@@ -138,7 +138,7 @@ func TestMigration000120_FixPlaidCleanupPendingAtBackfill(t *testing.T) {
 
 		got := getMig120PlaidCleanupPendingAt(t, tx, userID)
 		require.NotNil(t, got)
-		assert.True(t, got.Equal(stray), "an active user's marker must be left completely untouched by this migration")
+		assert.True(t, got.Truncate(time.Microsecond).Equal(stray.Truncate(time.Microsecond)), "an active user's marker must be left completely untouched by this migration")
 	})
 
 	// ─── Scenario D: a LAPSED (expired, never cleared) manual tier override must NOT exempt a
@@ -186,7 +186,7 @@ func TestMigration000120_FixPlaidCleanupPendingAtBackfill(t *testing.T) {
 
 		got := getMig120PlaidCleanupPendingAt(t, tx, userID)
 		require.NotNil(t, got)
-		assert.True(t, got.Equal(stale), "a user with a CURRENTLY-ACTIVE override must be left untouched by this migration")
+		assert.True(t, got.Truncate(time.Microsecond).Equal(stale.Truncate(time.Microsecond)), "a user with a CURRENTLY-ACTIVE override must be left untouched by this migration")
 	})
 
 	// ─── Scenario F: idempotency — running the up SQL twice must not error and must leave a

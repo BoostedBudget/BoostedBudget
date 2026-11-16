@@ -51,6 +51,9 @@ excluded_rules = [
   "require-concurrent-index-deletion",  # Acceptable for small tables
   "renaming-column",                    # Intentional schema evolutions
   "changing-column-type",               # Intentional schema evolutions
+  "ban-drop-constraint",                # Squawk 2.73+: legacy migrations drop/replace constraints
+  "renaming-object",                    # Squawk 2.73+: legacy migrations rename indexes
+  "ban-drop-function",                  # Squawk 2.73+: legacy migrations drop superseded helper functions
 ]
 
 # Note: The following critical safety rules remain ENABLED:
