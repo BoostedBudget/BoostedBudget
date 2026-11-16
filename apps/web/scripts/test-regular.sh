@@ -38,6 +38,13 @@ EXCLUDE_PATTERNS=(
     "src/features/dashboard/widgets/BalanceOverviewWidget.test.tsx"
     "src/features/budgets/components/category-management/BudgetCategoryCard.test.tsx"
     "src/features/budgets/components/category-management/BudgetCategoryManager.test.tsx"
+    "src/features/admin/components/UsersPage.test.tsx"
+    "src/features/auto-categorization/components/AutoCategorizationPageWrapper.test.tsx"
+    "src/features/dashboard/components/DashboardPage.test.tsx"
+    "src/shared/components/HierarchicalCategoryTreeSelect/HierarchicalCategoryTreeSelect.test.tsx"
+    "src/features/tags/hooks/useTags.test.tsx"
+    "src/features/profile/ProfileForm.test.tsx"
+    "src/features/profile/ProfilePage.test.tsx"
     # Real-implementation hook tests
     "src/features/dashboard/hooks/useDashboardData.test.tsx"
     "src/features/dashboard/hooks/useCashFlowData.test.tsx"

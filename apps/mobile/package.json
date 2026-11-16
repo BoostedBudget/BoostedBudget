@@ -72,5 +72,18 @@
     "postcss": "^8.5.8",
     "tailwindcss": "^4.2.2",
     "typescript": "~6.0.3"
+  },
+  "expo": {
+    "install": {
+      "exclude": [
+        "expo",
+        "expo-auth-session",
+        "expo-constants",
+        "expo-crypto",
+        "expo-linking",
+        "expo-router",
+        "jest-expo"
+      ]
+    }
   }
 }

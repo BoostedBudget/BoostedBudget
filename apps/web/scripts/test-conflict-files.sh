@@ -224,6 +224,13 @@ GROUP_I_FILES=(
     "src/features/dashboard/widgets/BalanceOverviewWidget.test.tsx"
     "src/features/budgets/components/category-management/BudgetCategoryCard.test.tsx"
     "src/features/budgets/components/category-management/BudgetCategoryManager.test.tsx"
+    "src/features/admin/components/UsersPage.test.tsx"
+    "src/features/auto-categorization/components/AutoCategorizationPageWrapper.test.tsx"
+    "src/features/dashboard/components/DashboardPage.test.tsx"
+    "src/shared/components/HierarchicalCategoryTreeSelect/HierarchicalCategoryTreeSelect.test.tsx"
+    "src/features/tags/hooks/useTags.test.tsx"
+    "src/features/profile/ProfileForm.test.tsx"
+    "src/features/profile/ProfilePage.test.tsx"
 )
 idx=1
 for f in "${GROUP_I_FILES[@]}"; do
