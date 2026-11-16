@@ -57,7 +57,12 @@ export function PlaidLinkButton({ onSuccess, onExit, className, disabled = false
   }, [])
 
   // Handle successful Plaid Link flow
-  const handleOnSuccess = async (public_token: string, metadata: PlaidLinkOnSuccessMetadata) => {
+  const handleOnSuccess = async (public_token: string | null, metadata: PlaidLinkOnSuccessMetadata) => {
+    if (!public_token) {
+      trackEvent(ANALYTICS_EVENTS.PLAID_LINK_FAILED)
+      setError('Plaid Link completed without returning an authorization token. Please try again.')
+      return
+    }
     try {
       setError(null)
 
