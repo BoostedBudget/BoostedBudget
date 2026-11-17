@@ -287,7 +287,7 @@ jobs:
     name: Build backend Image
     needs: detect-changes
     if: ${{ needs.detect-changes.outputs.backend_changed == 'true' }}
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         component: [backend]
@@ -416,7 +416,7 @@ jobs:
     name: Push backend to Fly.io
     needs: [detect-changes, build-images]
     if: ${{ needs.detect-changes.outputs.backend_changed == 'true' && needs.build-images.result == 'success' }}
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     environment:
       name: production
     env:
@@ -510,7 +510,7 @@ jobs:
     name: Deploy backend to Fly.io
     needs: [detect-changes, build-images, push-to-fly-registry]
     if: always() && !cancelled() && needs.detect-changes.result == 'success' && (needs.build-images.result == 'success' || needs.build-images.result == 'skipped') && (needs.push-to-fly-registry.result == 'success' || needs.push-to-fly-registry.result == 'skipped')
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     environment:
       name: production
       url: https://api.boostedbudget.com
@@ -622,7 +622,7 @@ jobs:
     name: Deploy Frontend to Cloudflare Pages
     needs: detect-changes
     if: ${{ needs.detect-changes.outputs.frontend_changed == 'true' }}
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     environment:
       name: production
       url: https://boostedbudget.com
@@ -681,16 +681,12 @@ jobs:
         env:
           # Pin + verify, per the golang-migrate pattern in test.yml (#1514 F13).
           SENTRY_CLI_VERSION: '3.6.2'
-          SENTRY_CLI_SHA256: 5a497deb1e388cc6445c09ddd6d2da4fc2aae8295405d6393c2e0ee635ca3687
+          SENTRY_CLI_SHA256: 3a4bbf2c0d06378d4e59b337647483751a0a2b1603db5fd4991847d0cfd6478c
         run: |
           set -euo pipefail
           mkdir -p "$HOME/bin"
-          # Assumes this job runs on the [self-hosted, macOS, mac-mini] Apple Silicon
-          # runner (see runs-on: above). If that runner pool ever changes architecture
-          # or OS, this asset name must change too, or the curl below will 404 —
-          # a loud, understandable failure (caught by continue-on-error, not silent).
-          curl -sSfL -o "$HOME/bin/sentry-cli" "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Darwin-arm64"
-          echo "${SENTRY_CLI_SHA256}  $HOME/bin/sentry-cli" | shasum -a 256 -c -
+          curl -sSfL -o "$HOME/bin/sentry-cli" "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Linux-x86_64"
+          echo "${SENTRY_CLI_SHA256}  $HOME/bin/sentry-cli" | sha256sum -c -
           chmod +x "$HOME/bin/sentry-cli"
           echo "$HOME/bin" >> "$GITHUB_PATH"
           "$HOME/bin/sentry-cli" --version
@@ -764,7 +760,7 @@ jobs:
     # The backend deploy reuses its prior image when the build is skipped on MCP-only changes.
     needs: [detect-changes, deploy-to-fly]
     if: ${{ always() && !cancelled() && needs.detect-changes.result == 'success' && needs.deploy-to-fly.result == 'success' && needs.detect-changes.outputs.mcp_changed == 'true' }}
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     environment:
       name: production
       url: https://mcp.boostedbudget.com
@@ -854,7 +850,7 @@ jobs:
     name: Production Smoke Tests
     needs: [detect-changes, deploy-to-fly, deploy-frontend, deploy-mcp-worker]
     if: always() && !cancelled() && needs.deploy-to-fly.result == 'success' && (needs.deploy-frontend.result == 'success' || needs.deploy-frontend.result == 'skipped') && (needs.deploy-mcp-worker.result == 'success' || needs.deploy-mcp-worker.result == 'skipped')
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     env:
       UNIQUE_WORKSPACE: workspace-smoke-tests-${{ github.run_id }}
 
@@ -907,7 +903,7 @@ jobs:
     name: Update Release Tags
     needs: [detect-changes, build-images, deploy-to-fly, deploy-frontend, deploy-mcp-worker, smoke-tests]
     if: always() && !cancelled() && needs.smoke-tests.result == 'success' && needs.deploy-to-fly.result == 'success'
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     env:

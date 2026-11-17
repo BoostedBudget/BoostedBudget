@@ -111,9 +111,30 @@ MIGRATED_JOBS = {
     ("deploy-production.yml", "detect-changes"): (
         "Linux-portable change-detection and authorization gate migrated to Ubicloud."
     ),
+    ("deploy-production.yml", "build-images"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-production.yml", "push-to-fly-registry"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-production.yml", "deploy-to-fly"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-production.yml", "deploy-frontend"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-production.yml", "deploy-mcp-worker"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-production.yml", "smoke-tests"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-production.yml", "update-release-tags"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-qa.yml", "deployment-metadata"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-qa.yml", "build-images"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-qa.yml", "deploy-to-mac-mini"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-qa.yml", "smoke-tests"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-qa.yml", "deployment-summary"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-qa.yml", "notify-pr"): ("Migrated to public ubuntu-latest runner."),
     ("deploy-to-staging.yaml", "detect-changes"): (
         "Linux-portable change-detection and authorization gate migrated to public runner."
     ),
+    ("deploy-to-staging.yaml", "build-backend"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-to-staging.yaml", "push-to-fly-registry"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-to-staging.yaml", "deploy-backend"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-to-staging.yaml", "deploy-frontend"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-to-staging.yaml", "deploy-mcp-worker"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-to-staging.yaml", "smoke-tests"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-to-staging.yaml", "update-release-tags"): ("Migrated to public ubuntu-latest runner."),
+    ("deploy-to-staging.yaml", "deployment-summary"): ("Migrated to public ubuntu-latest runner."),
     ("test.yml", "detect-changes"): ("Migrated to public ubuntu-latest runner."),
     ("test.yml", "posthog-contract-validate"): ("Migrated to public ubuntu-latest runner."),
     ("test.yml", "openapi-validate"): ("Migrated to public ubuntu-latest runner."),
@@ -139,13 +160,8 @@ CLEAN_EPHEMERAL_JOBS = {
     ("warm-ci-cache.yml", "warm"),
 }
 
-# Jobs that must NEVER migrate, with the reason.
-PINNED_TO_MAC = {
-    ("deploy-qa.yml", "deploy-to-mac-mini"): (
-        "Deploys to the QA environment hosted on this Mac Mini. There is nothing to deploy to "
-        "from a cloud VM."
-    ),
-}
+# Jobs that must NEVER migrate, with the reason (none currently pinned).
+PINNED_TO_MAC: dict[tuple[str, str], str] = {}
 
 PLAYWRIGHT_INSTALL = re.compile(r"playwright\s+install\b")
 DARWIN_ARTEFACT = re.compile(r"darwin-(amd64|arm64|386)|\bshasum\b")
