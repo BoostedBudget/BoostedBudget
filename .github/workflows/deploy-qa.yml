@@ -43,7 +43,7 @@ jobs:
   deployment-metadata:
     name: Fetch Deployment Metadata
     if: github.repository == 'BoostedBudget/BoostedBudget'
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     outputs:
       head_sha: ${{ steps.deploy-info.outputs.head_sha }}
       head_ref: ${{ steps.deploy-info.outputs.head_ref }}
@@ -224,7 +224,7 @@ jobs:
     name: Build ${{ matrix.component }} Image
     needs: [deployment-metadata]
     if: ${{ needs.deployment-metadata.result == 'success' }}
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         component: [backend, frontend]
@@ -416,7 +416,7 @@ jobs:
     name: Deploy to Mac Mini QA
     needs: [deployment-metadata, build-images]
     if: ${{ needs.build-images.result == 'success' }}
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     environment:
       name: qa
       url: https://localhost:3000
@@ -626,7 +626,7 @@ jobs:
     name: QA Smoke Tests
     needs: [deployment-metadata, build-images, deploy-to-mac-mini]
     if: ${{ needs.deploy-to-mac-mini.result == 'success' }}
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     env:
       UNIQUE_WORKSPACE: workspace-smoke-tests-${{ github.run_id }}
 
@@ -689,7 +689,7 @@ jobs:
   deployment-summary:
     name: Deployment Summary
     needs: [deployment-metadata, build-images, deploy-to-mac-mini, smoke-tests]
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     if: ${{ always() && needs.smoke-tests.result == 'success' }}
 
     steps:
@@ -751,7 +751,7 @@ jobs:
     # Only run when deployment_mode=pr AND smoke tests pass
     # Branch deployments don't need PR comments
     if: ${{ needs.smoke-tests.result == 'success' && github.event.inputs.deployment_mode == 'pr' }}
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
 
     steps:
       - name: Comment on PR

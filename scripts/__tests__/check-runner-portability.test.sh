@@ -129,10 +129,30 @@ YAML
 name: q
 on: workflow_dispatch
 jobs:
+  deployment-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo meta
+  build-images:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo build
   deploy-to-mac-mini:
-    runs-on: [self-hosted, macOS, mac-mini]
+    runs-on: ubuntu-latest
     steps:
       - run: echo deploy
+  smoke-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo smoke
+  deployment-summary:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo summary
+  notify-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo notify
 YAML
   cat > "$dir/cleanup-artifacts.yml" <<'YAML'
 name: ca
@@ -169,6 +189,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo changes
+  build-images:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo build
+  push-to-fly-registry:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo push
+  deploy-to-fly:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo deploy
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo frontend
+  deploy-mcp-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo mcp
+  smoke-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo smoke
+  update-release-tags:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo tags
 YAML
   cat > "$dir/deploy-to-staging.yaml" <<'YAML'
 name: dts
@@ -178,6 +226,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo changes
+  build-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo build
+  push-to-fly-registry:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo push
+  deploy-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo backend
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo frontend
+  deploy-mcp-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo mcp
+  smoke-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo smoke
+  update-release-tags:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo tags
+  deployment-summary:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo summary
 YAML
 }
 
