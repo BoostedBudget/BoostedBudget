@@ -3226,7 +3226,9 @@ jobs:
         working-directory: ${{ env.UNIQUE_WORKSPACE }}
         run: |
           bun install --frozen-lockfile
-          bun audit --audit-level=high
+          # GHSA-fc5q-39xc-vjpf (picomatch <=4.0.7 ReDoS): no patched version (>4.0.7) is published on npm yet;
+          # picomatch is only present in build/test/CLI devDependencies (vite, vitest, expo, jest, orval, size-limit).
+          bun audit --audit-level=high --ignore=GHSA-fc5q-39xc-vjpf
 
       # =========================================================================
       # Dockerfile Linting: Hadolint (pre-installed on Mac Mini runner)
