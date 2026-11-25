@@ -22,7 +22,7 @@
     "basic-ftp": ">=6.2.4",
     "serve": "^14.2.6",
     "size-limit": "^12.1.0",
-    "turbo": "^2.11.11",
+    "turbo": "^2.11.13",
     "yaml": "2.8.3"
   },
   "overrides": {
