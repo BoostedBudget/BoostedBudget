@@ -173,7 +173,7 @@ jobs:
           restore-keys: |
             bun-store-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-bun.outputs.bun-version }}-
       - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Install workspace dependencies
@@ -579,7 +579,7 @@ jobs:
         run: bunx playwright install --with-deps chromium webkit
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version: ${{ env.GO_VERSION }}
           # ⚠ EXPLICIT false, and it is NOT a no-op: this input DEFAULTS TO TRUE (verified in
@@ -1074,7 +1074,7 @@ jobs:
           clean: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version: ${{ env.GO_VERSION }}
         # Note: go clean -cache is intentionally omitted — it is destructive on
@@ -1695,7 +1695,7 @@ jobs:
           clean: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version: ${{ env.GO_VERSION }}
         # Note: go clean -cache is intentionally omitted — it is destructive on
@@ -1965,7 +1965,7 @@ jobs:
         run: bash scripts/__tests__/check-ci-env-drift.test.sh
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version: ${{ env.GO_VERSION }}
         # Note: go clean -cache is intentionally omitted — it is destructive on
@@ -3152,7 +3152,7 @@ jobs:
       # =========================================================================
       - name: Setup Go
         if: matrix.component == 'backend'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: ${{ env.UNIQUE_WORKSPACE }}/backend/go.mod
           cache-dependency-path: ${{ env.UNIQUE_WORKSPACE }}/backend/go.sum
